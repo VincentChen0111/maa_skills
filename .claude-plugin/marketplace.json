@@ -1,0 +1,5 @@
+{
+  "name": "maa-skills",
+  "owner": { "name": "VincentChen0111" },
+  "plugins": [{ "name": "maa-skills", "source": "./", "description": "MAA skill set for Windows and Arknights CN" }]
+}
