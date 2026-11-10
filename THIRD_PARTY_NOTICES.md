@@ -49,6 +49,8 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 
 运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 的固定游戏表和 [arkntools/arknights-toolbox-data](https://github.com/arkntools/arknights-toolbox-data) 的固定核对表；完整提交、字段与内容 SHA-256 见同一记录。镜像/整理者是资料来源，不是本工具作者或产品背书。游戏数据版权不因本仓库 MIT 许可而转移；不随 skill 分发游戏表、图像或上游源代码。当前成本/库存差额不需要材料价值和掉率，因此不取一图流、企鹅物流的数据，也不声称使用其估值。
 
+加工与材料凭证缺口由 `skills/maa-core/scripts/cultivation-gaps.ts` 独立实现，复用已声明的成本公共接口及维护者原型的通用配方/关系思路；新增公开表、解释与未证实事实见[加工来源记录](docs/crafting-sources.md)。不复制游戏数据或原项目私人策略，不引入新的第三方算法源代码。固定资料来源不代表本工具获得游戏背书；源表版权继续归原权利人。
+
 ## 基建技能查询
 
 `skills/maa-core/scripts/base-query.ts` 参考维护者自有原型，剥离个人路径、名册、生产规则及依赖后重写；原型 SHA256、范围和隐私核对见 [base 来源记录](docs/base-sources.md)。未引入原项目历史或第三方排班代码。
