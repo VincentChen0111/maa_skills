@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#10](https://github.com/VincentChen0111/maa_skills/issues/10)
 Blocked by: [07: setup 接入现有环境](07-setup-existing-environment.md)
 
 ## 背景与目标

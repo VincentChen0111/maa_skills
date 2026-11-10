@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#26](https://github.com/VincentChen0111/maa_skills/issues/26)
 Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [14: 加工与材料凭证后的缺口](14-crafting-voucher-gaps.md), [21: 基建技能查询](21-base-skill-query.md)
 
 ## 背景与目标

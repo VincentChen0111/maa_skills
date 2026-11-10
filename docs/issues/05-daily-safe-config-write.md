@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#7](https://github.com/VincentChen0111/maa_skills/issues/7)
 Blocked by: [04: 可安装的 help 与偏好设置](04-install-help-preferences.md)
 
 ## 背景与目标

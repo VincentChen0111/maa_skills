@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#25](https://github.com/VincentChen0111/maa_skills/issues/25)
 Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [22: 基建建议与排班生成](22-base-report-and-plan.md)
 
 ## 背景与目标

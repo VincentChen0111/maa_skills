@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#22](https://github.com/VincentChen0111/maa_skills/issues/22)
 Blocked by: [14: 加工与材料凭证后的缺口](14-crafting-voucher-gaps.md), [18: NGA 调研闭环](18-nga-research.md)
 
 ## 背景与目标

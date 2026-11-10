@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#4](https://github.com/VincentChen0111/maa_skills/issues/4)
 Blocked by: [01: 修正三项规则来源](01-spec-rule-provenance.md)
 
 ## 背景与目标

@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#18](https://github.com/VincentChen0111/maa_skills/issues/18)
 Blocked by: [06: doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md), [15: 指定关卡作业准备](15-stage-job-preparation.md)
 
 ## 背景与目标

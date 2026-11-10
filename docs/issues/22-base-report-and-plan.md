@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#24](https://github.com/VincentChen0111/maa_skills/issues/24)
 Blocked by: [20: 带独立审查的培养建议](20-reviewed-cultivation-report.md), [21: 基建技能查询](21-base-skill-query.md)
 
 ## 背景与目标

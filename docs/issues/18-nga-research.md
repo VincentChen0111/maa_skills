@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#20](https://github.com/VincentChen0111/maa_skills/issues/20)
 Blocked by: [09: 用户手动设置凭据](09-manual-credentials.md)
 
 ## 背景与目标

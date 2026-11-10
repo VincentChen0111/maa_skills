@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#28](https://github.com/VincentChen0111/maa_skills/issues/28)
 Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [25: MAA 版本核对与升级提醒](25-maa-version-verification.md)
 
 ## 背景与目标

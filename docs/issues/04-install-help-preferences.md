@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#6](https://github.com/VincentChen0111/maa_skills/issues/6)
 Blocked by: [03: 双宿主行为评测](03-cross-host-evaluation.md)
 
 ## 背景与目标

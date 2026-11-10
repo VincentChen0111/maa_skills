@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#5](https://github.com/VincentChen0111/maa_skills/issues/5)
 Blocked by: [02: 仓库开发与公开检查闭环](02-repository-workflow.md)
 
 ## 背景与目标

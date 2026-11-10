@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#16](https://github.com/VincentChen0111/maa_skills/issues/16)
 Blocked by: [13: 单干员培养成本查询](13-operator-cost-query.md)
 
 ## 背景与目标

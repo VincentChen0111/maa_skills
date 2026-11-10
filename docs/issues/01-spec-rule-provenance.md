@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#3](https://github.com/VincentChen0111/maa_skills/issues/3)
 Blocked by: None (can start immediately)
 
 ## 背景与目标

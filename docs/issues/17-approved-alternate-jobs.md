@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#19](https://github.com/VincentChen0111/maa_skills/issues/19)
 Blocked by: [16: 跟踪关卡运行结果](16-stage-run-tracking.md)
 
 ## 背景与目标

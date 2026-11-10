@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#23](https://github.com/VincentChen0111/maa_skills/issues/23)
 Blocked by: [11: MAA 识别结果转账号快照](11-maa-account-snapshot.md)
 
 ## 背景与目标

@@ -5,6 +5,7 @@ Labels: task
 Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
+GitHub Issue: [#27](https://github.com/VincentChen0111/maa_skills/issues/27)
 Blocked by: [10: doctor 完整检查与转介](10-doctor-checks-referral.md)
 
 ## 背景与目标
