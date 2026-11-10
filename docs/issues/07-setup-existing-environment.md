@@ -10,7 +10,9 @@ Blocked by: [06: doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md)
 
 ## 背景与目标
 
-实施进度：未开始。
+实施进度：进行中。
+
+PR [#42](https://github.com/VincentChen0111/maa_skills/pull/42) 为草稿，独立 R1 的三项产品错误和一项 Windows CI 夹具路径错误均接受，正在集中修复。最终整合、独立复核、固定原生与改后模型尝试尚未完成，不解除 08/09 依赖。
 
 已有 MAA 的用户不应重复安装。首次接入也要尊重已关闭 MAA 可能由用户操作的状态。
 
