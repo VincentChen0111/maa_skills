@@ -14,7 +14,7 @@ const scenarios: Record<ScenarioName, string> = {
 };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 export type ScenarioDefinition = { id: string; prompt: string; policy: Omit<Policy, 'secrets'>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; commands?: string[] };
-export type RunOptions = { host: Host; model: string; scenario: ScenarioName | ScenarioDefinition; executable?: string; timeoutMs?: number; reviewBrief?: string; skillDirectory?: string };
+export type RunOptions = { host: Host; model: string; scenario: ScenarioName | ScenarioDefinition; executable?: string; timeoutMs?: number; reviewBrief?: string; skillDirectory?: string; companionSkills?: Record<string, string> };
 export type RunOutcome = { record: RunRecord; reason: string; artifactDirectory: string; fixtureDirectory: string };
 
 /** A separate CLI invocation always starts a fresh context; no resume/session ID is accepted. */
@@ -25,7 +25,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
   const artifactParent = resolve('.tmp/evaluations');
   await mkdir(artifactParent, { recursive: true });
   const artifactDirectory = await mkdtemp(join(artifactParent, 'run-'));
-  const fixture = await createFixture({ ...(options.skillDirectory ? { skillDirectory: options.skillDirectory } : {}),
+  const fixture = await createFixture({ companionSkills: options.companionSkills, ...(options.skillDirectory ? { skillDirectory: options.skillDirectory } : {}),
     ...(custom?.jsonInputs ? { jsonInputs: custom.jsonInputs } : {}), ...(custom?.jsonFiles ? { jsonFiles: custom.jsonFiles } : {}) });
   try {
     if (custom) fixture.policy = { ...structuredClone(custom.policy), secrets: fixture.policy.secrets };
