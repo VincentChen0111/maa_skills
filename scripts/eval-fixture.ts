@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
-export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[] };
+export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure';
+export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode };
 
 async function files(root: string, directory = ''): Promise<Map<string, Buffer>> {
   const result = new Map<string, Buffer>();
@@ -58,6 +59,14 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       await writeFile(observer, await readFile(new URL('../eval/observe-node.mjs', import.meta.url)));
       env.NODE_OPTIONS = `--import=${pathToFileURL(observer).href}`;
     }
+    if (options.maaProcess) {
+      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !sources.subject || !sources['maa-core']) throw new Error('daily-process-fixture');
+      for (const [source, target] of [['daily-observer.mjs', '.eval-daily-observer.mjs'], ['maa-process.mjs', '.eval-maa-process.mjs']]) {
+        await writeFile(join(workspace, target!), await readFile(new URL('../eval/' + source, import.meta.url)));
+      }
+      env.MAA_EVAL_MAA_PROCESS = options.maaProcess;
+      env.MAA_EVAL_DAILY_JOURNAL = join(workspace, '.eval-daily-observations.jsonl');
+    }
     for (const [file, value] of Object.entries(options.jsonInputs ?? {})) {
       const target = resolve(workspace, file);
       const fromRoot = relative(workspace, target);
@@ -80,6 +89,7 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
   const changes: Evidence['changes'] = [];
   for (const file of new Set([...fixture.original.keys(), ...current.keys()])) {
     if (file === 'events.jsonl') continue;
+    if (fixture.env.MAA_EVAL_MAA_PROCESS && file === '.eval-daily-observations.jsonl') continue;
     const before = fixture.original.get(file);
     const after = current.get(file);
     if (before && after && before.equals(after)) continue;
@@ -99,7 +109,15 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
     if (!['lock-acquired', 'lock-released', 'write', 'download', 'invocation'].includes(event.kind)) throw new Error('unknown-evidence-event');
     return event;
   });
-  return { transcript, changes, events, reports: [], reviews: [] };
+  const evidence: Evidence = { transcript, changes, events, reports: [], reviews: [] };
+  if (fixture.env.MAA_EVAL_MAA_PROCESS) {
+    let records = '';
+    try { records = await readFile(join(fixture.workspace, '.eval-daily-observations.jsonl'), 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    evidence.daily = { mode: fixture.env.MAA_EVAL_MAA_PROCESS, original: fixture.original.get('config/gui.new.json')?.toString('base64') ?? '',
+      observations: records.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)) };
+  }
+  return evidence;
 }
 
 function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefined {
