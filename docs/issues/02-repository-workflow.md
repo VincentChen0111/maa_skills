@@ -12,7 +12,7 @@ Blocked by: [01: 修正三项规则来源](01-spec-rule-provenance.md)
 
 实施进度：已完成。
 
-已建立离线入口、类型检查、tracker、隐私检查、插件描述和贡献说明；GitHub 配置已只读核实。[独立审查](../reviews/2026-11-10-02-workflow.md)第三轮通过；交付随实现分支 PR 经 squash 合并，GitHub 镜像同步验收记录。
+已建立离线入口、类型检查、tracker、隐私检查、插件描述和贡献说明；GitHub 配置已只读核实。[独立审查](../reviews/2026-11-10-02-workflow.md)第三轮通过；[Windows CI 修复审查](../reviews/2026-11-10-ci-paths.md)第一轮通过。[PR #30](https://github.com/VincentChen0111/maa_skills/pull/30)已 squash 合并，Linux 与 Windows CI 全通过，GitHub 镜像的验收与实施进度已同步。
 
 仓库目前只有许可证、简介、规格和术语表。接手者需要可执行的开发、检查和审查入口，才能把后续功能独立交付。
 

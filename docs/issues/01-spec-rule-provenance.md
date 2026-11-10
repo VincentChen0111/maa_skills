@@ -12,7 +12,7 @@ Blocked by: None (can start immediately)
 
 实施进度：已完成。
 
-验证与审查：[01 审查记录](../reviews/2026-11-10-01-provenance.md)。交付随实现分支的 PR，经 squash 合并；GitHub 镜像在交付时同步。
+验证与审查：[01 审查记录](../reviews/2026-11-10-01-provenance.md)。已由 [PR #30](https://github.com/VincentChen0111/maa_skills/pull/30) squash 合并，GitHub 镜像的验收与实施进度已同步。
 
 合并的规格已审查通过，但保留了三项来源归属问题。本票先把现有决定的来源写准，后续实现不必把 agent 的推导误认成维护者原话。
 

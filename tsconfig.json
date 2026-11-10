@@ -10,5 +10,5 @@
     "erasableSyntaxOnly": true,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts", "tests/**/*.ts", "skills/**/*.ts"]
+  "include": ["scripts/**/*.ts", "tests/**/*.ts", "skills/**/*.ts", "eval/**/*.ts"]
 }
