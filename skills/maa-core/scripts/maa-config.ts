@@ -4,13 +4,14 @@ import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readSettings } from './preferences.ts';
+import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
   maaDirectory: string; privateDirectory: string; host: 'codex' | 'claude';
   expectedRevision: string;
   closedConfirmed?: boolean;
-  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number };
+  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan };
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
@@ -72,6 +73,12 @@ function prepare(config: RecordValue, request: WriteRequest) {
     let value = change.value;
     let nullableBoolean = false;
     let allowed = path.length === 2 && path[0] === 'Timers' && path[1] === 'NotifyBeforeScheduledStart' && typeof change.value === 'boolean';
+    if (path.length === 4 && path[0] === 'Configurations' && path[2] === 'Copilot' && request.authorization.jobPlan) {
+      if (path[1] !== config.Current) throw new Error('job-profile-not-current');
+      if (path[3] === 'TaskList') allowed = JSON.stringify(value) === JSON.stringify(approvedJobList(request.authorization.jobPlan, request.privateDirectory));
+      if (path[3] === 'EnableUserAdditional') allowed = value === false;
+      dependencies.push(['Current'], ['Configurations', String(path[1]), 'Copilot']);
+    }
     if (path.length === 2 && path[0] === 'Timers') {
       if (['CustomConfig', 'ForceScheduledStart', 'ShowWindowBeforeForceScheduledStart', 'NotifyBeforeScheduledStart'].includes(String(path[1]))) allowed = typeof value === 'boolean';
       if (path[1] === 'ScheduledStartNotificationMinutes') allowed = Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 1439;
@@ -108,6 +115,11 @@ function prepare(config: RecordValue, request: WriteRequest) {
     if (!allowed || (!nullableBoolean && old !== null && typeof old !== typeof value)) throw new Error('change-not-allowed');
     const parent = at(next, path.slice(0, -1)) as Record<string | number, unknown>;
     parent[path.at(-1)!] = value;
+  }
+  if (request.authorization.jobPlan) {
+    const changes = request.changes;
+    if (changes.length !== 2 || !changes.some(change => change.path[2] === 'Copilot' && change.path[3] === 'TaskList')
+      || !changes.some(change => change.path[2] === 'Copilot' && change.path[3] === 'EnableUserAdditional' && change.value === false)) throw new Error('job-plan-change-mismatch');
   }
   if (request.changes.some(change => change.path[0] === 'Timers' && !['NotifyBeforeScheduledStart', 'ScheduledStartNotificationMinutes', 'ShowWindowBeforeForceScheduledStart'].includes(String(change.path[1])))) {
     const timers = object(next.Timers);
@@ -371,7 +383,8 @@ export async function inspectConfiguration(maaDirectory: string) {
     currentProfile: names.indexOf(String(config.Current)),
     profiles: names.map((name, index) => {
       const profile = object(object(config.Configurations)[name]);
-      return { index, queue: Array.isArray(profile.TaskQueue) ? profile.TaskQueue.map(value => {
+      const copilot = profile.Copilot && typeof profile.Copilot === 'object' && !Array.isArray(profile.Copilot) ? object(profile.Copilot) : null;
+      return { index, jobCount: Array.isArray(copilot?.TaskList) ? copilot.TaskList.length : null, queue: Array.isArray(profile.TaskQueue) ? profile.TaskQueue.map(value => {
         const task = object(value);
         return { type: knownTaskType(task) ?? 'OtherTask', enabled: safeBoolean(task.IsEnable) };
       }) : [] };
@@ -441,6 +454,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
         const name = names[change.value]; if (!name) return rejected('profile-invalid'); change.value = name;
       }
     }
+    if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     const prepared = prepare(original, request);
     targets = request.changes.map(change => {
       const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
@@ -505,6 +519,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await mkdir(join(request.privateDirectory, 'maa-config-backups'), { recursive: true });
     const backup = await open(join(request.privateDirectory, 'maa-config-backups', `${id}.json`), 'wx', 0o600);
     try { await backup.writeFile(before); await backup.sync(); } finally { await backup.close(); }
+    if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     await phase('write');
     checkBeforeRestart();
     if (!(await maa.inspect()).treeExited) throw new Error('process-tree-running');
@@ -520,6 +535,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (reopened > deadline || !checkMaintenanceWindow(original, closeStarted, reopened) || !checkMaintenanceWindow(config, closeStarted, reopened)) throw new Error('maintenance-window-exceeded');
     await phase('readback');
     const readback = await readConfiguration(request.maaDirectory);
+    if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     for (const change of request.changes) {
       if (comparableAt(readback, change.path) !== comparableAt(config, change.path)) throw new Error('readback-mismatch');
     }
