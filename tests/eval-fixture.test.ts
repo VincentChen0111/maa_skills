@@ -74,11 +74,11 @@ test('companion skills install beside the subject in both isolated hosts', async
   const source = await mkdtemp(join(tmpdir(), 'maa-companion-'));
   t.after(() => rm(source, { recursive: true, force: true }));
   await writeFile(join(source, 'SKILL.md'), 'synthetic companion');
-  const fixture = await createFixture({ skillDirectory: source, companionSkills: { 'maa-help': source } });
+  const fixture = await createFixture({ skillDirectory: source, companionSkills: { 'maa-core': source } });
   t.after(() => fixture.dispose());
   for (const host of ['.agents', '.claude']) {
-    assert.equal(await readFile(join(fixture.workspace, host, 'skills/maa-help/SKILL.md'), 'utf8'), 'synthetic companion');
-    assert.ok(fixture.original.has(`${host}/skills/maa-help/SKILL.md`));
+    assert.equal(await readFile(join(fixture.workspace, host, 'skills/maa-core/SKILL.md'), 'utf8'), 'synthetic companion');
+    assert.ok(fixture.original.has(`${host}/skills/maa-core/SKILL.md`));
   }
   for (const name of ['../outside', 'subject', 'maa-eval-probe', 'MixedCase']) {
     await assert.rejects(createFixture({ skillDirectory: source, companionSkills: { [name]: source } }), /companion-name/);
