@@ -1,4 +1,4 @@
-import { test, type TestContext } from 'node:test';
+import { after, before, test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +10,38 @@ import { createMaaProcess, type ProcessControl, type ProcessIdentity } from '../
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 
 const fake = fileURLToPath(new URL('./fixtures/fake-maa-process.mjs', import.meta.url));
+const nativeEnvironmentKeys = ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'TMPDIR'] as const;
+let nativeRuntimeRoot: string | undefined;
+const previousNativeEnvironment = new Map<string, string | undefined>();
+after(async () => {
+  if (!nativeRuntimeRoot) return;
+  for (const [key, previous] of previousNativeEnvironment) {
+    if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+  }
+  await rm(nativeRuntimeRoot, { recursive: true, force: true });
+});
+before(async () => {
+  if (process.platform === 'win32') {
+    nativeRuntimeRoot = await mkdtemp(join(tmpdir(), 'maa-native-runtime-'));
+    for (const name of ['home', 'appdata', 'localappdata', 'tmp']) await mkdir(join(nativeRuntimeRoot, name));
+    const locations = { HOME: 'home', USERPROFILE: 'home', APPDATA: 'appdata', LOCALAPPDATA: 'localappdata', TEMP: 'tmp', TMP: 'tmp', TMPDIR: 'tmp' };
+    for (const key of nativeEnvironmentKeys) {
+      previousNativeEnvironment.set(key, process.env[key]);
+      process.env[key] = join(nativeRuntimeRoot, locations[key]);
+    }
+    // Prepare the OS facility once, separately from the product's unchanged five-second command budget.
+    // No product call is retried: a failed preparation or later observation fails this test run.
+    const began = performance.now();
+    const shell = join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const preparation = spawnSync(shell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference = 'Stop'; $null = Get-CimInstance Win32_Process; Write-Output 'cim-ready'"], {
+      cwd: nativeRuntimeRoot, env: { ...process.env, PSModuleAnalysisCachePath: join(tmpdir(), `maa-process-${process.pid}.cache`) },
+      encoding: 'utf8', windowsHide: true, timeout: 60_000,
+    });
+    console.log(`Native CIM fixture preparation: ${Math.round(performance.now() - began)} ms; status=${preparation.status}; error=${preparation.error?.message ? 'command-failed' : 'none'}`);
+    assert.equal(preparation.status, 0, 'native CIM fixture preparation must succeed without retry');
+    assert.equal(preparation.stdout.trim(), 'cim-ready');
+  }
+}, { timeout: 60_000 });
 async function fixture(t: TestContext, mode = 'ready', closeDelay = 0) {
   const root = await mkdtemp(join(tmpdir(), 'maa-process-'));
   const directory = join(root, 'target');
@@ -149,7 +181,7 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   const shell = join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const executable = join(root, 'MAA.exe');
   const source = fileURLToPath(new URL('./fixtures/fake-maa-window.cs', import.meta.url));
-  const env = { ...process.env, HOME: root, USERPROFILE: root, MAA_TEST_EXE: executable, MAA_TEST_SOURCE: source, PSModuleAnalysisCachePath: join(root, 'powershell.cache') };
+  const env = { ...process.env, MAA_TEST_EXE: executable, MAA_TEST_SOURCE: source, PSModuleAnalysisCachePath: join(root, 'powershell.cache') };
   t.after(async () => {
     // Only the synthetic executable under the newly created temporary directory is eligible for test cleanup.
     spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:MAA_TEST_EXE } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'], { env, windowsHide: true, stdio: 'ignore', timeout: 5000 });
