@@ -37,3 +37,13 @@ Codex 原生 skill-installer 已从固定提交 `1bc3f8ca98e970dd064d494aed14d82
 Claude CLI 2.1.322 在全新隔离 home 中，通过原生 `plugin marketplace add` 添加候选分支、`plugin install` 安装 maa-skills。原生市场刷新和插件更新命令成功，更新结果为当前版本已最新；未模拟跨版本升级。实际缓存中的偏好脚本与上述提交一致，并独立执行 `set`、`read`、`append` 成功。
 
 两种原生安装载荷及更新入口已验证；模型驱动的 help 响应、路由及边界行为仍须通过上述真模型基线。离线实现经三轮[独立审查](reviews/2026-11-10-04-help.md)通过，最终实现提交 `538c8ae` 的 Windows/Linux CI 均通过。交付为 [PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)。2026-11-10 维护者要求完成 04 并继续并行实施，本次将未验证的模型项目明确移交 26；[收口审查](reviews/2026-11-10-04-closeout.md)仅审查此交付安排，不重开产品实现的第四轮审查。
+
+## 2026-11-11 已交付能力说明维护
+
+本维护包承接 [13](issues/13-operator-cost-query.md) 登记的 help 说明更新，以包含 13、21 的 main 提交 `370ed68809ca12c920fd25054276c797157a4749` 为基点。按实际[账号导入接口](../skills/maa-account/references/import.md)、[单干员成本接口](../skills/maa-account/references/cost.md)和[基建技能查询接口](../skills/maa-core/references/base-query.md)，明确本地账号快照、单干员原始成本/不加工已知库存差额及基建技能查询已交付；森空岛、培养/基建排班建议、加工及凭证缺口决策仍未交付。偏好路由改指已交付的 maa-account。help 继续只用文字回答，不读设置、不运行脚本、不写文件；05 尚未合入，daily 仍列为规划入口。本包不增加产品限制或脚本行为，也不修改 account/core 实现。
+
+13 合入前曾冻结 help 并调用原三场景 × 两宿主六次，全部 unverified。13 的网络评测支持改变了运行器与场景指纹，因此保留旧批，只将其作为历史记录。在合入后的最终框架、help 未修改时重新冻结并运行六次 before，完成后才修改 help，再冻结最终载荷运行六次 after；场景保持 `help-routing`、`help-preference`、`help-boundary`，未新增场景。
+
+两批固定 Codex CLI `0.167.0-alpha.3.2` / `gpt-6`，Claude Code `2.1.322` / `claude-sonnet-4-6`。每项宿主版本、模型、场景指纹逐一相同；框架指纹为 `1366d00f89b78f0b14f57dfad9a57423f63463287619ba3d3a90aec9fc850fcd`。改前载荷指纹 `bb494afef0a281fef1f2829641f001d8648a616efc7b8ebc0d8e219802df2484`，改后为 `e095a3890b9574ed02e725b639aa7ed295707170c3550bc300d1c2768c46a19a`。十二次调用全部结束：Codex 隔离认证返回 401，Claude 未登录，均为 unverified；比较器同样 unverified，没有可用于判定分数不下降的通过分数。所有运行使用新的临时 home，未复制用户认证。原始调用、逐文件 hash、执行窗口和重算一致的 evidenceHash 留在本机忽略目录。
+
+作者完整离线入口 88/88、类型检查、tracker、隐私、metadata、评分自检和 diff 检查通过；逐文件人工检查未引入私人数据。现有纯文字布局检查和三场景仍保留；这些离线检查不证明能力表述的模型语义已通过。本包独立审查、最终远程固定版本的原生安装及 CI 尚待完成，不借用旧 help 或 13 载荷的通过记录，真实模型语义和分数不下降仍为发布未验证项。
