@@ -59,7 +59,9 @@ test('Windows short-path aliases execute the installed preferences entrypoint', 
   const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-help', import.meta.url)) });
   t.after(() => fixture.dispose());
   const alias = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:MAA_TEST_LONG_PATH).ShortPath'], {
-    env: { ...fixture.env, MAA_TEST_LONG_PATH: fixture.workspace }, encoding: 'utf8', windowsHide: true,
+    cwd: fixture.workspace,
+    env: { ...fixture.env, MAA_TEST_LONG_PATH: fixture.workspace, PSModuleAnalysisCachePath: join(fixture.root, 'home/tmp/powershell-cache') },
+    encoding: 'utf8', windowsHide: true,
   });
   assert.equal(alias.status, 0, alias.stderr);
   const shortWorkspace = alias.stdout.trim();
