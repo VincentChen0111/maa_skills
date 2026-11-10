@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、11、13、14、21。当前可开始：06、15、24。
+当前已完成：01、02、03、04、05、06、11、13、14、21。当前可开始：07、15、24。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -17,7 +17,7 @@
 | 03 | [双宿主行为评测](03-cross-host-evaluation.md) | [#5](https://github.com/VincentChen0111/maa_skills/issues/5) | 02 | 已完成 |
 | 04 | [可安装的 help 与偏好设置](04-install-help-preferences.md) | [#6](https://github.com/VincentChen0111/maa_skills/issues/6) | 03 | 已完成 |
 | 05 | [daily 安全修改配置](05-daily-safe-config-write.md) | [#7](https://github.com/VincentChen0111/maa_skills/issues/7) | 04 | 已完成 |
-| 06 | [doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md) | [#8](https://github.com/VincentChen0111/maa_skills/issues/8) | 05 | 未开始 |
+| 06 | [doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md) | [#8](https://github.com/VincentChen0111/maa_skills/issues/8) | 05 | 已完成 |
 | 07 | [setup 接入现有环境](07-setup-existing-environment.md) | [#9](https://github.com/VincentChen0111/maa_skills/issues/9) | 06 | 未开始 |
 | 08 | [setup 下载并补齐环境](08-setup-program-downloads.md) | [#10](https://github.com/VincentChen0111/maa_skills/issues/10) | 07 | 未开始 |
 | 09 | [用户手动设置凭据](09-manual-credentials.md) | [#11](https://github.com/VincentChen0111/maa_skills/issues/11) | 07 | 未开始 |
@@ -26,7 +26,7 @@
 | 12 | [森空岛账号快照](12-skland-account-snapshot.md) | [#14](https://github.com/VincentChen0111/maa_skills/issues/14) | 09、11 | 未开始 |
 | 13 | [单干员培养成本查询](13-operator-cost-query.md) | [#15](https://github.com/VincentChen0111/maa_skills/issues/15) | 11 | 已完成 |
 | 14 | [加工与材料凭证后的缺口](14-crafting-voucher-gaps.md) | [#16](https://github.com/VincentChen0111/maa_skills/issues/16) | 13 | 已完成 |
-| 15 | [指定关卡作业准备](15-stage-job-preparation.md) | [#17](https://github.com/VincentChen0111/maa_skills/issues/17) | 05、11 | 未开始 |
+| 15 | [指定关卡作业准备](15-stage-job-preparation.md) | [#17](https://github.com/VincentChen0111/maa_skills/issues/17) | 05、11 | 进行中 |
 | 16 | [跟踪关卡运行结果](16-stage-run-tracking.md) | [#18](https://github.com/VincentChen0111/maa_skills/issues/18) | 06、15 | 未开始 |
 | 17 | [批准范围内切换备选作业](17-approved-alternate-jobs.md) | [#19](https://github.com/VincentChen0111/maa_skills/issues/19) | 16 | 未开始 |
 | 18 | [NGA 调研闭环](18-nga-research.md) | [#20](https://github.com/VincentChen0111/maa_skills/issues/20) | 09 | 未开始 |
@@ -35,7 +35,7 @@
 | 21 | [基建技能查询](21-base-skill-query.md) | [#23](https://github.com/VincentChen0111/maa_skills/issues/23) | 11 | 已完成 |
 | 22 | [基建建议与排班生成](22-base-report-and-plan.md) | [#24](https://github.com/VincentChen0111/maa_skills/issues/24) | 20、21 | 未开始 |
 | 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 未开始 |
-| 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 未开始 |
+| 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 进行中 |
 | 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 未开始 |
 | 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24 | 未开始 |
 

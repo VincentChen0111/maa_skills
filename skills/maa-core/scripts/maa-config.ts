@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { access, appendFile, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -189,6 +189,152 @@ async function existingLock(file: string) {
   } catch { /* An incomplete or malformed lock still represents an unknown result. */ }
   return 'unknown';
 }
+
+export type RecoveryContext = { maaDirectory: string; privateDirectory: string };
+export type RecoveryInspection = {
+  lock: 'none' | 'active' | 'stale' | 'unknown'; comparison: 'applied' | 'unchanged' | 'unknown';
+  evidenceRevision: string; configuration: 'valid' | 'invalid'; backup: 'matched-latest' | 'unavailable';
+  process: 'ready' | 'closed' | 'unverified'; canReconcile: boolean; canRestore: boolean;
+  changes: { key: string; state: 'applied' | 'unchanged' | 'unknown' }[];
+};
+const operationId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
+
+function transactionFields(value: unknown, required: string[], optional: string[] = []): RecordValue {
+  const record = object(value);
+  if (required.some(key => !Object.hasOwn(record, key)) || Object.keys(record).some(key => !required.includes(key) && !optional.includes(key))) throw new Error('unsupported-transaction');
+  return record;
+}
+
+function transactionMetadata(value: unknown, pending = false): RecordValue {
+  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
+  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor')
+    || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
+    || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
+    || typeof record.phase !== 'string' || !(pending ? ['check'] : ['check', 'close', 'backup', 'write', 'restart', 'readback', 'record', 'release']).includes(record.phase)) throw new Error('transaction-metadata-invalid');
+  return record;
+}
+
+function transactionPending(value: unknown): RecordValue {
+  const record = transactionMetadata(value, true);
+  const authorization = transactionFields(record.authorization, ['source', 'reference'], ['medicineCount']);
+  if ((authorization.source !== 'current-request' && authorization.source !== 'approved-report')
+    || typeof authorization.reference !== 'string' || !authorization.reference.trim()
+    || Object.hasOwn(authorization, 'medicineCount') && (!Number.isInteger(authorization.medicineCount) || Number(authorization.medicineCount) < 0 || Number(authorization.medicineCount) > 2147483647)) throw new Error('transaction-authorization-invalid');
+  if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
+  for (const item of record.changes) {
+    const change = transactionFields(item, ['path', 'value']);
+    if (!Array.isArray(change.path) || !change.path.length || change.path.some(part => typeof part !== 'string' && (!Number.isSafeInteger(part) || Number(part) < 0))) throw new Error('transaction-change-invalid');
+  }
+  return record;
+}
+
+async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
+  const lockFile = join(context.maaDirectory, 'config', '.maa-skills.lock');
+  const read = async (file: string) => { try { return await readFile(file, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } };
+  const rawLock = await read(lockFile); const rawCurrent = await read(join(context.maaDirectory, 'config', 'gui.new.json'));
+  const summary: RecoveryInspection = { lock: rawLock === null ? 'none' : 'unknown', comparison: 'unknown', evidenceRevision: '',
+    configuration: 'invalid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [] };
+  let current: RecordValue | undefined; let metadata: RecordValue | undefined;
+  let backup: RecordValue | undefined; let pending: WriteRequest | undefined; let rawBackup: string | null = null; let rawPending: string | null = null;
+  try { current = object(JSON.parse((rawCurrent ?? '').replace(/^\uFEFF/, ''))); await inspectConfiguration(context.maaDirectory); summary.configuration = 'valid'; } catch { /* A damaged configuration cannot be restored automatically. */ }
+  if (rawLock !== null) {
+    try {
+      metadata = object(JSON.parse(rawLock));
+      if (Number.isSafeInteger(metadata.pid) && Number(metadata.pid) > 0) {
+        try { process.kill(Number(metadata.pid), 0); summary.lock = 'active'; }
+        catch (error) { summary.lock = (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'stale' : 'active'; }
+      }
+    } catch { /* Preserve unrecognizable locks. */ }
+  }
+  if (summary.lock === 'stale') {
+    try {
+      const state = await maa.inspect();
+      summary.process = state.running && state.ready && state.idle && !state.treeExited ? 'ready'
+        : !state.running && state.treeExited ? 'closed' : 'unverified';
+      metadata = transactionMetadata(metadata);
+      const directory = join(context.privateDirectory, 'maa-config-backups');
+      const backups = await Promise.all((await readdir(directory)).filter(file => operationId(file.slice(0, -5)) && file.endsWith('.json'))
+        .map(async file => ({ file, modified: (await stat(join(directory, file))).mtimeMs })));
+      backups.sort((a, b) => b.modified - a.modified || b.file.localeCompare(a.file));
+      if (backups[0]?.file !== metadata.id + '.json') throw new Error('latest-backup-mismatch');
+      if (backups[1]?.modified === backups[0].modified) throw new Error('latest-backup-ambiguous');
+      rawBackup = await read(join(directory, metadata.id + '.json'));
+      backup = object(JSON.parse((rawBackup ?? '').replace(/^\uFEFF/, '')));
+      rawPending = await read(join(context.privateDirectory, 'daily-pending.jsonl'));
+      const records = (rawPending ?? '').trim().split('\n').filter(Boolean).map(line => object(JSON.parse(line)));
+      const matches = records.filter(record => record.id === metadata!.id);
+      if (matches.length !== 1 || records.at(-1)?.id !== metadata.id) throw new Error('pending-record-mismatch');
+      const record = transactionPending(matches[0]);
+      for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
+      pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
+      const expected = prepare(backup, pending).config;
+      summary.backup = 'matched-latest';
+      if (!current || summary.configuration !== 'valid') throw new Error('current-invalid');
+      summary.comparison = revision(current) === revision(backup) ? 'unchanged' : revision(current) === revision(expected) ? 'applied' : 'unknown';
+      summary.changes = pending.changes.map(change => ({ key: changedKey(change.path),
+        state: comparableAt(current!, change.path) === comparableAt(backup!, change.path) ? 'unchanged'
+          : comparableAt(current!, change.path) === comparableAt(expected, change.path) ? 'applied' : 'unknown' }));
+      summary.canReconcile = summary.comparison !== 'unknown' && (summary.process === 'ready' || summary.process === 'closed' && summary.comparison === 'unchanged');
+      summary.canRestore = summary.comparison === 'applied' && summary.process !== 'unverified';
+    } catch { /* Evidence remains unknown; no heuristic repair is allowed. */ }
+  }
+  const stable = rawLock === await read(lockFile) && rawCurrent === await read(join(context.maaDirectory, 'config', 'gui.new.json'));
+  if (!stable) { summary.comparison = 'unknown'; summary.canReconcile = false; summary.canRestore = false; }
+  summary.evidenceRevision = createHash('sha256').update(JSON.stringify([rawLock, rawCurrent, rawBackup, rawPending, summary])).digest('hex');
+  return { summary, rawLock, rawCurrent, rawBackup, rawPending, metadata, backup, pending, current };
+}
+
+/** Safe evidence only; no account names, paths, raw settings or authorization text. */
+export async function inspectConfigRecovery(context: RecoveryContext, maa: MaaProcess): Promise<RecoveryInspection> {
+  return (await recoveryEvidence(context, maa)).summary;
+}
+
+export type RecoveryRequest = RecoveryContext & { host: 'codex' | 'claude'; action: 'reconcile-lock' | 'restore-config';
+  evidenceRevision: string; reference: string; closedConfirmed?: boolean; medicineCount?: number };
+
+/** Recovery is owned by the same writer as ordinary configuration changes. */
+export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaProcess) {
+  const rejected = (reason: string) => ({ status: 'rejected', reason });
+  if (!['codex', 'claude'].includes(request.host) || !['reconcile-lock', 'restore-config'].includes(request.action)
+    || typeof request.reference !== 'string' || !request.reference.trim() || !/^[a-f0-9]{64}$/.test(request.evidenceRevision)) return rejected('approval-required');
+  const guardFile = join(request.maaDirectory, 'config', '.maa-skills-recovery.lock');
+  const guardId = randomUUID(); let guard;
+  try { guard = await open(guardFile, 'wx', 0o600); } catch { return rejected('recovery-busy-or-unknown'); }
+  try {
+    await guard.writeFile(JSON.stringify({ id: guardId, pid: process.pid })); await guard.sync();
+    const evidence = await recoveryEvidence(request, maa);
+    if (evidence.summary.evidenceRevision !== request.evidenceRevision) return rejected('evidence-changed');
+    if (request.action === 'reconcile-lock' ? !evidence.summary.canReconcile : !evidence.summary.canRestore) return rejected('reconciliation-unproven');
+    const directory = join(request.privateDirectory, 'maa-config-reconciliations');
+    await mkdir(directory, { recursive: true });
+    const archive = await open(join(directory, `${guardId}.json`), 'wx', 0o600);
+    try { await archive.writeFile(JSON.stringify({ checkedAt: new Date().toISOString(), action: request.action,
+      reference: request.reference, evidence: evidence.summary, lock: evidence.rawLock, current: evidence.rawCurrent,
+      backup: evidence.rawBackup, pending: evidence.rawPending })); await archive.sync(); } finally { await archive.close(); }
+    // Keep the retained lock until configuration, backup, process and ownership are rechecked.
+    if ((await recoveryEvidence(request, maa)).summary.evidenceRevision !== request.evidenceRevision) return rejected('evidence-changed');
+    if (request.action === 'restore-config') {
+      const changes = evidence.pending!.changes.map(change => {
+        // A queue reorder request carries old positions, not the full private task objects.
+        const reorder = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' && change.path.length === 3;
+        return { path: change.path, value: reorder ? (change.value as number[]).map((_, index, order) => order.indexOf(index)) : at(evidence.backup!, change.path) };
+      });
+      const lock = await open(join(request.maaDirectory, 'config', '.maa-skills.lock'), 'r+');
+      try {
+        return await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
+          expectedRevision: revision(evidence.current!), closedConfirmed: request.closedConfirmed,
+          authorization: { source: 'current-request', reference: request.reference, ...(request.medicineCount === undefined ? {} : { medicineCount: request.medicineCount }) }, changes }, maa,
+        { lock, rawLock: evidence.rawLock! });
+      } finally { await lock.close(); }
+    }
+    await unlink(join(request.maaDirectory, 'config', '.maa-skills.lock'));
+    return { status: 'complete', reason: null };
+  } catch { return { status: 'unknown', reason: 'reconciliation-required' }; }
+  finally {
+    await guard.close();
+    try { if (object(JSON.parse(await readFile(guardFile, 'utf8'))).id === guardId) await unlink(guardFile); } catch { /* Retain a guard whose ownership cannot be proved. */ }
+  }
+}
 /** MAA's native local-time timer is active for true (recurring) and null (one-shot). */
 export function checkMaintenanceWindow(config: unknown, start: Date, end: Date): boolean {
   try {
@@ -263,7 +409,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     console.log(JSON.stringify({ ok: false, status: 'check-required' })); process.exitCode = 1;
   }
 }
-export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess) {
+export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess) { return writeConfiguration(request, maa); }
+
+async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string }) {
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
@@ -306,6 +454,7 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
   const file = join(request.maaDirectory, 'config', 'gui.new.json');
   const lockFile = join(request.maaDirectory, 'config', '.maa-skills.lock');
   const locked = async () => {
+    if (recovery) return await readFile(lockFile, 'utf8').catch(() => null) === recovery.rawLock ? null : rejected('evidence-changed');
     const status = await existingLock(lockFile);
     return status ? { ...rejected('lock-requires-reconciliation'), status } : null;
   };
@@ -316,9 +465,10 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
   if (!initial.running && !request.closedConfirmed) return rejected('closed-confirmation-required');
   if (initial.running && !initial.idle) return rejected('maa-not-idle');
   let lock;
-  try { lock = await open(lockFile, 'wx', 0o600); }
+  try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
-  const metadata = { id, skill: 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
+  if (recovery) { const changed = await locked(); if (changed) return changed; }
+  const metadata = { id, skill: recovery ? 'maa-doctor' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
     await lock.truncate(0); await lock.write(JSON.stringify(metadata), 0, 'utf8'); await lock.sync();

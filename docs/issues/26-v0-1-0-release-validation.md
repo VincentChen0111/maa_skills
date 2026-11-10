@@ -18,6 +18,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 05 的模型延期由根代理于 2026-11-11 单独决定，依据维护者授权自行判断推进问题及本次要求“R5 通过后继续按依赖顺序实施”；独立产品复核、离线/类型、双平台 CI 和固定载荷原生安装通过后才可交付实现。七个 daily 场景的真实基线、语义和分数不降仍在本票硬阻塞发布。当前模型尝试的实际传输失败、未登录及清理失败/恢复如实保留，不将 unverified 记为通过，也不将真实模型失败自动延期，见 [daily 验证](../daily-verification.md)。
 
+06 的延期由根代理于 2026-11-11 依据既有常规推进授权和继续按依赖实施的要求单独决定，不从 05 自动继承，也不称维护者明确免测。只有 R1 错误修复并完整独立复核、离线/类型、双平台 CI 和固定远程双宿主原生恢复验证全部通过，且所有实际模型尝试如实留存后，才可交付实现。缺认证可以延期，实际完成后的行为失败或回归不能改记 unverified 或自动延期；doctor 真实基线与恢复语义、此次受影响 help/daily/core 的真实分数不降均由本票硬阻塞发布。旧候选 c0b916 的 62 次调用全部 unverified，不是新候选通过证明，见 [doctor 验证](../doctor-verification.md)及 [06 审查](../reviews/2026-11-11-06-doctor.md)。
+
 11 在独立产品、原生安装及正向评测支持验证后，也以单独交付决定将模型验收移交本票。四场景真实调用均因隔离认证缺失而 unverified；2026-11-11 改为 maa-core 载荷后的新尝试与新原生安装按验证记录单独核对；实现交付不能替代模型验收，见 [account 验证记录](../account-verification.md)。
 
 21 在功能、两轮独立审查与固定候选的双宿主原生安装验证后，由根代理依据持续并行实施及常规判断授权单独决定交付实现。前态、初次后态、最终后态共 42 份完整批次记录及另留的中断 6 份全部 unverified；七场景基线和条件／收益语义验收仍是本票发布门禁，见 [base 验证记录](../base-verification.md)。
@@ -41,6 +43,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。
 
 - [ ] 在最终发布载荷上完成 05 的 Codex/Claude 各七场景 `daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure` 的真实基线和同版本前后验证。固定 CLI、模型、场景/评分器/进程夹具与载荷指纹，核真实 CLI 调用、动态授权和锁/备份/记录；人工核实语言、当次授权、禁写边界、关闭确认、部分执行/结果未知的报告和不重放语义。脚本成功、合成 GUI 或机器断言不代替模型验收。unverified、失败、不稳定或分数不降未核实时不得发布；pass→fail 独立重跑三次，更换模型或评分语义需重建基线，保留所有原始中断与恢复记录。
+
+- [ ] 在最终发布载荷上完成 06 的 Codex/Claude 各五场景 `doctor-inspect`、`doctor-corrupt`、`doctor-unknown-lock`、`doctor-named-unproven`、`doctor-broad-refusal` 的真实基线，并核对具名批准、正确交接未知结果、恢复不重放及不清除不明锁的语义；补充正向恢复的真实模型语义验收，不能由安装 CLI smoke 或这五条诊断/拒绝场景替代。同时完成本次受影响 help 三场景、daily 七场景、core 三场景的固定模型前后分数不降验证，固定 CLI/场景/评分器/载荷并保留旧尝试。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布；pass→fail 按三次独立重跑规则处理，不能因实现延期决定改写真实失败。
 
 - [ ] 在最终发布载荷上补齐 21 的 Codex/Claude 各七场景真实基线：重跑 11 上述四场景，并加入 `base-unknown-training`、`base-room-query`、`base-cross-check`。固定 CLI、模型、场景和评分器，留存证据摘要；人工核实同名歧义、未知持有／练度、当前及后续解锁、完整条件、文本百分比不等于最终收益、来源和交叉差异的语义表现。仅实际 CLI 调用与只读断言不能代替语义验收。认证缺失、unverified、失败或不稳定时不得发布；更换模型或评分语义时重建基线，保留 21 的初次、最终和中断记录。
 
