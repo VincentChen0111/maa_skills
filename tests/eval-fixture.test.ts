@@ -57,3 +57,15 @@ test('authorized non-MAA settings changes do not require the MAA write lock', as
   assert.equal(grade(policy, evidence).status, 'pass');
   assert.ok(grade({ ...policy, lockFiles: undefined }, evidence).failed.includes('write-lock'), 'unspecified scope remains fail-closed');
 });
+
+test('a custom JSON input is rendered inside the temporary fixture and observed by field', async (t) => {
+  const fixture = await createFixture({ jsonInputs: { 'private/config.json': { language: null, privateDirectory: '{{private}}' } }, jsonFiles: ['private/config.json'] });
+  t.after(() => fixture.dispose());
+  const file = join(fixture.workspace, 'private/config.json');
+  const config = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(config.privateDirectory, join(fixture.workspace, 'private'));
+  await writeFile(file, JSON.stringify({ ...config, language: 'en' }));
+  const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+  assert.deepEqual(evidence.changes, [{ file: 'private/config.json', key: 'language', before: null, after: 'en' }]);
+  await assert.rejects(createFixture({ jsonInputs: { '../outside.json': {} } }), /fixture-path/);
+});

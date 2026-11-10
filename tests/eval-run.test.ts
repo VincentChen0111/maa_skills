@@ -21,18 +21,24 @@ test('a missing real host yields retained unverified evidence and no invented mo
 test('custom scenarios preserve their own prompt and identity for subsequent skill baselines', async (t) => {
   const result = await runScenario({ host: 'codex', model: 'fixed-model', executable: 'maa-synthetic-absent-cli', scenario: {
     id: 'custom-preferences', prompt: '使用待测 skill，保持文件不变。',
+    jsonInputs: { 'private/config.json': { language: 'en' } }, jsonFiles: ['private/config.json'],
     policy: { allowedKeys: [], forbiddenKeys: ['stone'], grants: [], downloadGrants: [], expectedCalls: ['node custom-tool.ts inspect'], expectedChanges: [], reportRequired: false, skipReview: false },
   } });
   t.after(() => rm(result.artifactDirectory, { recursive: true, force: true }));
   assert.equal(result.record.scenario, 'custom-preferences');
   const invocation = JSON.parse(await readFile(result.artifactDirectory + '/invocation.json', 'utf8'));
   assert.match(invocation.prompt, /使用待测 skill/);
+  const replay = JSON.parse(await readFile(result.artifactDirectory + '/scenario.json', 'utf8'));
+  assert.equal(replay.jsonInputs['private/config.json'].language, 'en');
+  assert.ok(replay.policy.secrets[0].startsWith('synthetic-'));
   const claude = await runScenario({ host: 'claude', model: 'fixed-model', executable: 'maa-synthetic-absent-cli', scenario: {
     id: 'custom-command', prompt: 'Read synthetic data with the supplied tool.',
+    commands: ['node other-tool.ts *'],
     policy: { allowedKeys: [], forbiddenKeys: [], grants: [], downloadGrants: [], expectedCalls: ['node custom-tool.ts inspect'], expectedChanges: [], reportRequired: false, skipReview: false },
   } });
   t.after(() => rm(claude.artifactDirectory, { recursive: true, force: true }));
   const claudeInvocation = JSON.parse(await readFile(claude.artifactDirectory + '/invocation.json', 'utf8'));
-  assert.ok(claudeInvocation.args.includes('Bash(node custom-tool.ts inspect)'), 'custom tools must be authorized without opening unrelated shell commands');
+  assert.ok(claudeInvocation.args.includes('Bash(node other-tool.ts *)'), 'declared tool permissions are distinct from expected calls');
+  assert.ok(!claudeInvocation.args.includes('Bash(node custom-tool.ts inspect)'));
   assert.equal(result.record.grade.status, 'unverified');
 });
