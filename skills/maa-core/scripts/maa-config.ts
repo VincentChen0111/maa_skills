@@ -56,6 +56,7 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   return JSON.stringify(value);
 }
 function prepare(config: RecordValue, request: WriteRequest) {
+  if (['medicineCount', 'jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan'].includes(key))
     || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');

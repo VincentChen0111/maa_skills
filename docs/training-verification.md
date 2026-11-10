@@ -1,5 +1,19 @@
 # 24 训练工具验证记录
 
+## 当前整合候选
+
+已将原 `6a0ba41` 实现和 `151c76c` 的全部 R1 修复重放到实际 main `3ff455595c4a3dc68817151a5e82f26dfb420c7a`（含 06 与 15）。保留 06 严格事务 schema、恢复锁与未知附加资产拒绝；15 的三次双资产核对及作业配置范围不变。训练资产仍只在统一 writer 持锁且关停后安装，重开后同时校验引用和内容。CLI、原生 smoke 输入和训练 fixture 未改，R1 的状态/归属/形态实现逐文件与 151c 比较相同。
+
+本次新增 `training-integration.test.ts` 先红后绿：机械合并时合法 jobPlan 夹带 medicineCount 仍被接受，原始红测 `.tmp/24-integration-red.log` 为 1 pass / 1 fail；明确三种窄授权互斥后为 2 pass。另一个公开接缝用真实子进程产生重启失败的训练事务，进程退出后 doctor 仍判 stale / unknown，点名 restore 和 reconcile 都拒绝，配置与原锁逐字节保留。测试只替代 MAA 进程，不 mock 文件系统、时间或内部函数；互斥选择同步规格两张来源表。
+
+最终完整 `node scripts/check.ts` 正常权限退出 0：328 tests / 326 pass / 0 fail / 2 skip，tracker/privacy/metadata 空错误，7 rules / 14 samples 通过；类型检查通过。跳过项为本机没有 Windows 8.3 别名、当前 Windows 不适用非 Windows 适配器。受限环境的首次完整入口为 172 pass / 155 fail / 1 skip，包含临时文件 rename EPERM、junction、GUI 与 loopback 限制，原日志 `.tmp/24-integrated-check-sandbox.log` 保留；正常权限第一次产品测试已为 326 pass / 2 skip，但新增类型注解触发隐私启发式误报，所以该入口仍是 exit 1。仅改为等价 Pick 类型后，最终入口 `.tmp/24-integrated-check-final.log` 才 exit 0，没有改产品掩盖环境或检查失败。`npm run typecheck`、隐私、metadata、tracker 和实际 main 到候选的 diff-check 均通过。
+
+公开前保留原作者/R1 的全包逐文件检查，本次再检查共享 writer、skill 合并、规格两表、工单/来源/验证和新增合成集成测试；没有真实账号、私人路径或原始设备日志进入新增内容。INDEX 仅由 tracker 重新生成。15 当前状态同步为 PR41 实际 squash 和最终文档 CI，不改写 R1–R3 历史失败。
+
+根任务已报告新增整合回归改前批次 `.tmp/24-integration-before-evidence/frozen-models-GhliUO`：固定框架/载荷 3ff4555、框架 hash `3fee12fdc597846e813a230624aef7fcee5b67132fbef817205c89329910deed`，doctor 10 + stage 12 共 22 次实际尝试全部 unverified（11 Codex 401 / 11 Claude 未登录），0 完成/runner failure/残留；本整合工作者未重跑模型。旧 daily/core 20 次仍保留；另一个中断批次 Rbw9G1 只核验 1 份 Codex 401，原始损坏 batch 和空运行目录情况另记，不能称为完整 23 次批次。最终候选完整 R2、双平台 CI、固定原生正向 apply 与改后模型/新基线仍由根任务完成，本票保持进行中。
+
+## 原作者与 R1 历史
+
 基点 `ddd0ca80a3367b589866efde73aa1c0205732c3a`，作者验证日期 2026-11-11。候选独立审查、真模型与固定远程载荷原生安装尚待根代理执行；本记录不把这些项记为通过。
 
 ## 作者证据

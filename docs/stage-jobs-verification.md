@@ -8,7 +8,7 @@
 
 最终改后 32 次真实模型尝试在 `.tmp/15-r4-model-evidence/frozen-models-4852eK`，与改前 MZjbhO 保持框架 `1f2a3e89`、模型、CLI 和 32 对场景指纹相同；各批均 16 次 Codex 401、16 次 Claude 未登录，全部 unverified。连同 9c、8e 两个历史改后批次，共保存 128 份实际尝试（64 Codex 401 / 64 Claude 未登录），0 完成事件和 runner failure。R4 独立审计最终前后 64 份及载荷，旧批次分别经 R2/R3 审计。认证不可用不能证明基线、语义或分数不降，仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。
 
-15 单票有条件交付决定的产品和证据前提已满足；[PR41](https://github.com/VincentChen0111/maa_skills/pull/41) 待最终文档提交 CI 后 squash。此次验收登记不改产品，最终文档 head 另跑 CI。未运行真实 MaaCore parser、MAA、模拟器、游戏或全站作业抽样；合成 GUI 和源码推导不写成实机成功。下文“待验证 / 工单进行中”等措辞均为所标旧候选的历史状态。
+15 单票有条件交付决定的产品和证据前提已满足；[PR41](https://github.com/VincentChen0111/maa_skills/pull/41) 已 squash 合入 main `3ff455595c4a3dc68817151a5e82f26dfb420c7a`。最终文档 head `5beb40f378a250b9a68af4cb8ad411586ce82dbf` 不改产品，[该 head 的 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42921934089) Windows / Ubuntu 均通过。未运行真实 MaaCore parser、MAA、模拟器、游戏或全站作业抽样；合成 GUI 和源码推导不写成实机成功。下文“待验证 / 工单进行中”等措辞均为所标旧候选的历史状态。
 
 ## 固定 8e 旧候选的根验收（历史）
 
