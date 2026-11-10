@@ -12,7 +12,7 @@ Blocked by: [04: 可安装的 help 与偏好设置](04-install-help-preferences.
 
 实施进度：已完成。
 
-2026-11-11 当前结论：完整产品 R5 对固定候选 `818778ed2e74c859be8119ecab591e24a797951a` 通过，Standards 与 Spec 均无真实错误；独立完整检查 197 通过、1 跳过，额外组合探针 7/7、类型检查通过，并重新核验固定原生安装与模型原始证据。该候选双平台 CI 通过。实现通过 [PR #35](https://github.com/VincentChen0111/maa_skills/pull/35) 待 squash 交付；下方记录保留各历史候选状态。真实基线、语义和分数不降仍未验证，按本票单独决定留为 [26 发布硬门禁](26-v0-1-0-release-validation.md)。见 [R5 完整报告](../reviews/2026-11-11-05-daily-r5.md)。
+2026-11-11 当前结论：完整产品 R5 对固定候选 `818778ed2e74c859be8119ecab591e24a797951a` 通过，Standards 与 Spec 均无真实错误；独立完整检查 197 通过、1 跳过，额外组合探针 7/7、类型检查通过，并重新核验固定原生安装与模型原始证据。该候选双平台 CI 通过。实现已通过 [PR #35](https://github.com/VincentChen0111/maa_skills/pull/35) squash 合并为 `ddd0ca80a3367b589866efde73aa1c0205732c3a`；下方记录保留各历史候选状态。真实基线、语义和分数不降仍未验证，按本票单独决定留为 [26 发布硬门禁](26-v0-1-0-release-validation.md)。见 [R5 完整报告](../reviews/2026-11-11-05-daily-r5.md)。
 
 2026-11-11 从已合并的 04（PR #32）开始。统一写入脚本、定时保护与 daily 入口在独立分支实现；验证使用临时 home、合成配置和假 MAA 进程。真实模型基线单列记录，不以离线测试替代。
 
