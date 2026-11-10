@@ -1,4 +1,4 @@
-import { mkdir, readFile, open, rename, unlink } from 'node:fs/promises';
+import { mkdir, readFile, open, rename, unlink, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -98,7 +98,8 @@ export async function appendPreference(value: unknown, home = settingsHome()): P
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
   try {
     let raw = ''; for await (const chunk of process.stdin) raw += chunk;
     const input = record(JSON.parse(raw || '{}'));

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, rm, symlink, unlink, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
@@ -27,4 +29,41 @@ test('both temporary native layouts can execute the single packaged preferences 
     const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs });
     assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence).status, 'pass');
   }
+});
+
+test('the documented development directory junction executes the preferences CLI', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-help-junction-'));
+  const installed = join(root, 'skills/maa-help');
+  await mkdir(join(root, 'skills'));
+  await symlink(fileURLToPath(new URL('../skills/maa-help', import.meta.url)), installed, 'junction');
+  t.after(async () => { await unlink(installed); await rm(root, { recursive: true, force: true }); });
+  const result = spawnSync(process.execPath, [join(installed, 'scripts/preferences.ts'), 'read'], {
+    input: '{"currentLanguage":"en"}', encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root, MAA_SKILLS_HOME: join(root, 'settings') },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).language, 'en');
+});
+
+test('the exported preferences interface remains importable from standard input', () => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-'], {
+    input: "import { readSettings } from './skills/maa-help/scripts/preferences.ts'; console.log(typeof readSettings);",
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'function');
+});
+
+test('help grading rejects expected file changes made without the preferences script', async (t) => {
+  const scenario = helpScenarios[0]!;
+  const fixture = await createFixture({ jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
+  t.after(() => fixture.dispose());
+  const configFile = join(fixture.workspace, 'private/config.json');
+  const config = JSON.parse(await readFile(configFile, 'utf8'));
+  await writeFile(configFile, JSON.stringify({ ...config, language: 'en', languageAsked: true }));
+  const expected = scenario.policy.expectedChanges.find((change) => change.file === 'private/preferences.jsonl')!;
+  await writeFile(join(fixture.workspace, expected.file), Buffer.from(String(expected.value), 'base64'));
+  const evidence = await collectEvidence(fixture, { completed: true, calls: [{ tool: 'file_change', input: 'direct edits', succeeded: true }], outputs: [] });
+  const result = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
+  assert.equal(result.status, 'fail');
+  assert.deepEqual(result.failed, ['expected-behavior']);
 });

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
@@ -45,6 +46,9 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
         const target = join(workspace, host, 'skills/subject', file);
         await mkdir(dirname(target), { recursive: true }); await writeFile(target, bytes);
       }
+      const observer = join(workspace, '.eval-node-observer.mjs');
+      await writeFile(observer, await readFile(new URL('../eval/observe-node.mjs', import.meta.url)));
+      env.NODE_OPTIONS = `--import=${pathToFileURL(observer).href}`;
     }
     for (const [file, value] of Object.entries(options.jsonInputs ?? {})) {
       const target = resolve(workspace, file);
@@ -78,7 +82,7 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
   }
   const events = (current.get('events.jsonl')?.toString('utf8') ?? '').split(/\r?\n/).filter(Boolean).map((line) => {
     const event: EvidenceEvent = JSON.parse(line);
-    if (!['lock-acquired', 'lock-released', 'write', 'download'].includes(event.kind)) throw new Error('unknown-evidence-event');
+    if (!['lock-acquired', 'lock-released', 'write', 'download', 'invocation'].includes(event.kind)) throw new Error('unknown-evidence-event');
     return event;
   });
   return { transcript, changes, events, reports: [], reviews: [] };

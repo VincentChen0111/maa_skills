@@ -65,7 +65,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     const record: RunRecord = {
       id: randomUUID(), host: options.host, hostVersion: version.status === 0 ? version.stdout.trim() : 'unavailable', model: options.model,
       scenario: options.reviewBrief ? 'independent-review-smoke' : custom?.id ?? options.scenario as ScenarioName,
-      scenarioHash: digest(JSON.stringify({ prompt, evaluator, policy: { ...fixture.policy, secrets: ['<synthetic-secret>'] }, jsonInputs: custom?.jsonInputs, jsonFiles: fixture.jsonFiles, commands: custom?.commands })),
+      scenarioHash: digest(JSON.stringify({ prompt, evaluator, observer: fixture.original.get('.eval-node-observer.mjs')?.toString(), policy: { ...fixture.policy, secrets: ['<synthetic-secret>'] }, jsonInputs: custom?.jsonInputs, jsonFiles: fixture.jsonFiles, commands: custom?.commands })),
       skillVersion: digest(skill + fixture.original.get('probe.ts')), evidenceHash: digest(JSON.stringify(evidence) + raw + stderr), grade: grade(fixture.policy, evidence),
     };
     if (!transcript.completed && reason === 'completed') reason = 'incomplete-transcript';
