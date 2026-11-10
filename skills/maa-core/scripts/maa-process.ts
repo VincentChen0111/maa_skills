@@ -69,8 +69,13 @@ async function sessionState(directory: string, root: ProcessIdentity): Promise<{
     const match = /^\[([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3})\]\[[A-Z]{3}\]\[(\w+)\]\s+<\d+> (.*)$/.exec(line);
     if (!match) continue;
     const time = new Date(match[1]!.replace(' ', 'T')).getTime();
-    if (time < root.startedAt || time > Date.now()) continue;
+    if (time < root.startedAt) continue;
     const [name, message] = [match[2], match[3]!];
+    if (time > Date.now()) {
+      // A current-session transition with an unconfirmed time cannot preserve an older safe state.
+      if (session && (name === 'RunningState' || name === 'Bootstrapper' || name === 'AsstProxy')) broken = true;
+      continue;
+    }
     if (name === 'Bootstrapper' && message === 'MaaAssistantArknights GUI started') { session = true; ready = false; idle = true; stopping = false; interruptDepth = 0; broken = false; }
     if (!session) continue;
     if (name === 'Bootstrapper' && message === 'MaaAssistantArknights GUI exited') { session = false; ready = false; }

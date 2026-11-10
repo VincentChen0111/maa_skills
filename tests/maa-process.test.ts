@@ -236,6 +236,42 @@ test('a new busy state is checked again before sending a normal close request', 
   assert.equal(child.child.exitCode, null);
 });
 
+function stateLine(at: number, component: string, message: string): string {
+  const date = new Date(at), pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  const stamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+  return `[${stamp}][INF][${component}] <1> ${message}\n`;
+}
+
+test('future state evidence in the current session cannot preserve readiness or permit normal close', async (t) => {
+  for (const [component, message] of [
+    ['RunningState', 'Idle: True to False (called from BeginRun)'],
+    ['RunningState', 'Idle: False to True (called from SetStopped)'],
+    ['RunningState', 'Init: False to True (called from Init)'],
+    ['Bootstrapper', 'MaaAssistantArknights GUI started'],
+    ['AsstProxy', 'Resource loading failed, loaded: False, handle created: True'],
+  ]) {
+    const f = await fixture(t); const child = await f.spawnFake();
+    const maa = createMaaProcess(f.directory, { processControl: f.control });
+    assert.equal((await maa.inspect()).idle, true);
+    // Real log input from the permitted synthetic MAA boundary; neither Date nor filesystem is mocked.
+    await appendFile(join(f.directory, 'debug/gui.log'), stateLine(Date.now() + 60_000, component!, message!));
+    await assert.rejects(maa.close(), /^Error: maa-not-idle$/, message);
+    assert.equal(child.child.exitCode, null);
+    assert.deepEqual(await maa.inspect(), { running: true, treeExited: false, ready: false, idle: false }, message);
+  }
+});
+
+test('a new observed session can establish current state after an older session contained future evidence', async (t) => {
+  const f = await fixture(t); const child = await f.spawnFake();
+  const path = join(f.directory, 'debug/gui.log'), current = await readFile(path, 'utf8');
+  const old = stateLine(child.identity.startedAt - 10_000, 'Bootstrapper', 'MaaAssistantArknights GUI started')
+    + stateLine(Date.now() + 60_000, 'RunningState', 'Idle: True to False (called from BeginRun)');
+  await writeFile(path, old + current);
+  const maa = createMaaProcess(f.directory, { processControl: f.control });
+  assert.deepEqual(await maa.inspect(), { running: true, treeExited: false, ready: true, idle: true });
+  await maa.close(); assert.equal(child.child.exitCode, 0);
+});
+
 test('a descendant with an unreadable creation time cannot be silently omitted from exit verification', async (t) => {
   const f = await fixture(t); const root = await f.spawnFake();
   const childDirectory = join(f.root, 'worker'); await mkdir(childDirectory);
