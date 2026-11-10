@@ -169,7 +169,11 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   const configuration = { Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [], Gui: { StartUpSettings: { RunDirectly: false } } } }, Timers: { List: [], NotifyBeforeScheduledStart: false }, untouched: 'synthetic-private-value' };
   await writeFile(join(configDirectory, 'gui.new.json'), JSON.stringify(configuration));
   const command = fileURLToPath(new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url));
-  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 40_000, input: JSON.stringify({ host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }) });
+  const read = spawnSync(process.execPath, [command, 'read'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 10_000 });
+  assert.equal(read.status, 0, read.stdout);
+  const expectedRevision = JSON.parse(read.stdout).configuration.revision;
+  assert.match(expectedRevision, /^[a-f0-9]{64}$/);
+  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 40_000, input: JSON.stringify({ host: 'codex', expectedRevision, closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }) });
   assert.equal(result.status, 0, result.stdout);
   assert.deepEqual(Object.fromEntries(Object.entries(JSON.parse(result.stdout)).filter(([key]) => key !== 'operation')), { ok: true, status: 'complete', phase: 'complete', changedKeys: ['Timers.NotifyBeforeScheduledStart'], reason: null });
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-private-value|Synthetic|MAA_TEST_EXE/);

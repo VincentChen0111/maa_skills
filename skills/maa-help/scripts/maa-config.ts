@@ -1,13 +1,14 @@
 import { access, appendFile, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readSettings } from './preferences.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
   maaDirectory: string; privateDirectory: string; host: 'codex' | 'claude';
+  expectedRevision: string;
   closedConfirmed?: boolean;
   authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number };
   changes: Change[];
@@ -20,6 +21,7 @@ export interface MaaProcess {
   start(): Promise<void>;
 }
 type RecordValue = Record<string, unknown>;
+function revision(config: RecordValue): string { return createHash('sha256').update(JSON.stringify(config)).digest('hex'); }
 function object(value: unknown): RecordValue {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('configuration-invalid');
   return value as RecordValue;
@@ -65,8 +67,8 @@ function prepare(config: RecordValue, request: WriteRequest) {
     }
     if (path.length === 3 && path[0] === 'Configurations' && typeof path[1] === 'string' && path[2] === 'TaskQueue') {
       if (Array.isArray(old) && Array.isArray(value) && old.length === value.length && new Set(value).size === old.length
-        && old.every(task => value instanceof Array && value.includes(object(task).TaskType))) {
-        const order = value; value = order.map(type => old.find(task => object(task).TaskType === type)); allowed = true;
+        && value.every(index => Number.isInteger(index) && index >= 0 && index < old.length)) {
+        const order = value; value = order.map(index => old[index]); allowed = true;
       }
     }
     if (path.length === 5 && path[0] === 'Configurations' && typeof path[1] === 'string' && path[2] === 'TaskQueue'
@@ -78,8 +80,8 @@ function prepare(config: RecordValue, request: WriteRequest) {
       }
       if (task.TaskType === 'Fight' && ['UseMedicine', 'MedicineCount'].includes(String(path[4]))) {
         const amount = request.authorization.medicineCount;
-        allowed = request.authorization.source === 'current-request' && Number.isSafeInteger(amount) && Number(amount) >= 0
-          && (path[4] === 'UseMedicine' ? change.value === (Number(amount) > 0) : change.value === amount);
+        allowed = request.authorization.source === 'current-request' && Number.isSafeInteger(amount) && Number(amount) >= 0 && Number(amount) <= 2147483647
+          && (path[4] === 'UseMedicine' ? typeof value === 'boolean' : Number.isInteger(value) && Number(value) >= 0 && Number(value) <= Number(amount));
         medicineTasks.add(JSON.stringify(path.slice(0, 4)));
       }
     }
@@ -101,16 +103,41 @@ function prepare(config: RecordValue, request: WriteRequest) {
       queue.forEach((task, index) => { if (object(task).IsEnable !== false) enabledTasks.push([...queuePath, index]); });
     }
   }
-  for (const path of [...enabledTasks, ...[...medicineTasks].map(value => JSON.parse(value) as (string | number)[])]) {
+  const consumingTasks = new Map<string, number>();
+  const checkedTasks = [...enabledTasks, ...[...medicineTasks].map(value => JSON.parse(value) as (string | number)[])];
+  const consumingProfiles = new Set(checkedTasks.filter(path => { const task = object(at(next, path)); return task.TaskType === 'Fight' && task.UseMedicine !== false; }).map(path => String(path[1])));
+  for (const profile of consumingProfiles) {
+    const queue = at(next, ['Configurations', profile, 'TaskQueue']);
+    if (!Array.isArray(queue)) throw new Error('configuration-invalid');
+    queue.forEach((value, index) => { const task = object(value); if (task.TaskType === 'Fight' && task.IsEnable !== false) checkedTasks.push(['Configurations', profile, 'TaskQueue', index]); });
+  }
+  for (const path of checkedTasks) {
     const task = object(at(next, path));
     if (!['Fight', 'Infrast', 'Recruit', 'Mall', 'Award', 'UserDataUpdate', 'CloseDown'].includes(String(task.TaskType))) throw new Error('unsafe-task-settings');
     if (task.TaskType === 'Fight') {
       if (task.UseStone !== false || task.UseExpiringMedicine !== false || task.UseExpireMedicineForActivity !== false) throw new Error('unsafe-task-settings');
-      if (task.UseMedicine !== false && (request.authorization.source !== 'current-request' || !Number.isSafeInteger(request.authorization.medicineCount)
-        || request.authorization.medicineCount !== task.MedicineCount)) throw new Error('medicine-authorization-required');
+      if (task.UseMedicine !== false && (task.UseMedicine !== true || request.authorization.source !== 'current-request' || !Number.isSafeInteger(request.authorization.medicineCount)
+        || !Number.isInteger(task.MedicineCount) || Number(task.MedicineCount) <= 0 || Number(task.MedicineCount) > Number(request.authorization.medicineCount))) throw new Error('medicine-authorization-required');
+      if (task.UseMedicine === true) consumingTasks.set(JSON.stringify(path), Number(task.MedicineCount));
     }
     if (task.TaskType === 'Award' && (task.FreeGacha !== false || task.SpecialAccess === true)) throw new Error('unsafe-task-settings');
   }
+  let scheduledMedicine = 0;
+  const timers = object(next.Timers);
+  if (!Array.isArray(timers.List)) throw new Error('configuration-invalid');
+  for (const value of timers.List) {
+    const timer = object(value); if (timer.IsEnabled === false) continue;
+    const profile = String(timers.CustomConfig === true ? timer.Config : next.Current);
+    if (!consumingProfiles.has(profile)) continue;
+    const amount = [...consumingTasks].filter(([key]) => {
+      const path = JSON.parse(key) as (string | number)[];
+      return path[1] === profile && object(at(next, path)).IsEnable !== false;
+    }).reduce((sum, [, count]) => sum + count, 0);
+    if (amount > 0 && timer.IsEnabled !== null) throw new Error('recurring-medicine-not-authorized');
+    scheduledMedicine += amount;
+  }
+  const configuredMedicine = [...consumingTasks.values()].reduce((sum, count) => sum + count, 0);
+  if (Math.max(configuredMedicine, scheduledMedicine) > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
   return { config: next, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
 async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
@@ -155,6 +182,7 @@ export async function inspectConfiguration(maaDirectory: string) {
   const safeBoolean = (value: unknown) => typeof value === 'boolean' ? value : null;
   const integer = (value: unknown, max: number) => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= max ? value : null;
   return {
+    revision: revision(config),
     currentProfile: names.indexOf(String(config.Current)),
     profiles: names.map((name, index) => {
       const profile = object(object(config.Configurations)[name]);
@@ -183,7 +211,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       let input = '';
       for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
       const body = object(JSON.parse(input));
-      if (Object.keys(body).some(key => !['host', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
+      if (Object.keys(body).some(key => !['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
@@ -200,13 +228,21 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
+  let targets: { path: (string | number)[]; value: string | undefined }[];
+  const checkTargets = (config: RecordValue) => {
+    if (targets.some(target => JSON.stringify(at(config, target.path)) !== target.value)) throw new Error('authorized-target-changed');
+  };
   try {
     request = structuredClone(request);
     if (request.closedConfirmed !== undefined && typeof request.closedConfirmed !== 'boolean') return rejected('request-invalid');
+    const medicine = request.authorization?.medicineCount;
+    if (medicine !== undefined && (!Number.isInteger(medicine) || medicine < 0 || medicine > 2147483647)) return rejected('medicine-quantity-invalid');
     if (!['codex', 'claude'].includes(request.host) || !['current-request', 'approved-report'].includes(request.authorization.source)
       || typeof request.authorization.reference !== 'string' || !request.authorization.reference.trim()
       || !Array.isArray(request.changes) || !request.changes.length) return rejected('authorization-invalid');
     original = await readConfiguration(request.maaDirectory);
+    if (typeof request.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedRevision)) return rejected('revision-required');
+    if (request.expectedRevision !== revision(original)) return rejected('configuration-changed');
     const names = Object.keys(object(original.Configurations));
     for (const change of request.changes) {
       if (change.path[0] === 'Configurations' && typeof change.path[1] === 'number') {
@@ -219,6 +255,11 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
       }
     }
     const prepared = prepare(original, request);
+    targets = request.changes.map(change => {
+      const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
+        : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
+      return { path, value: JSON.stringify(at(original, path)) };
+    });
     const now = new Date(); const end = new Date(now.getTime() + 120000);
     if (!checkMaintenanceWindow(original, now, end) || !checkMaintenanceWindow(prepared.config, now, end)) return rejected('timer-window');
   } catch { return rejected('request-invalid'); }
@@ -253,6 +294,7 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
     const { authorization, changes } = request;
     await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
+    checkTargets(original);
     const preview = prepare(original, request);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
@@ -262,7 +304,9 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
     if (!(await maa.inspect()).treeExited) throw new Error('process-tree-running');
     await phase('backup');
     const before = await readFile(file);
-    const prepared = prepare(object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, ''))), request);
+    const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
+    checkTargets(stoppedConfiguration);
+    const prepared = prepare(stoppedConfiguration, request);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');

@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-help/scripts/preferences.ts';
-import { executeConfigWrite, inspectConfiguration, checkMaintenanceWindow, type MaaProcess } from '../skills/maa-help/scripts/maa-config.ts';
+import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-help/scripts/maa-config.ts';
+
+async function executeConfigWrite(request: Omit<WriteRequest, 'expectedRevision'> & { expectedRevision?: string }, maa: MaaProcess) {
+  const expectedRevision = request.expectedRevision ?? (await inspectConfiguration(request.maaDirectory)).revision;
+  return writeConfig({ ...request, expectedRevision }, maa);
+}
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await mkdtemp(join(tmpdir(), 'maa-config-'));
@@ -180,7 +185,7 @@ test('existing queue order and timer slots can change without replacing task or 
   await writeFile(f.file, JSON.stringify(config));
   const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
   const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic timer and order' }, changes: [
-    { path: ['Configurations', 'Synthetic profile', 'TaskQueue'], value: ['Award', 'Infrast', 'Fight'] },
+    { path: ['Configurations', 'Synthetic profile', 'TaskQueue'], value: [2, 1, 0] },
     { path: ['Timers', 'List', 0, 'IsEnabled'], value: null },
     { path: ['Timers', 'ScheduledStartNotificationMinutes'], value: 10 },
   ] }, maa);
@@ -214,7 +219,7 @@ test('the CLI reads only settings-selected MAA summaries and never prints secret
   assert.equal(summary.ok, true); assert.equal(summary.configuration.currentProfile, 0);
   assert.deepEqual(summary.configuration.profiles[0].queue.map((task: { type: string }) => task.type), ['Fight', 'Infrast', 'Award']);
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-secret|Synthetic profile/);
-  const forbidden = invoke('write', { host: 'codex', authorization: { source: 'current-request', reference: 'synthetic' }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'UseStone'], value: true }] });
+  const forbidden = invoke('write', { host: 'codex', expectedRevision: summary.configuration.revision, authorization: { source: 'current-request', reference: 'synthetic' }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'UseStone'], value: true }] });
   assert.equal(forbidden.status, 1);
   assert.equal(JSON.parse(forbidden.stdout).status, 'rejected');
   assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
@@ -264,4 +269,104 @@ test('only a boolean user confirmation is accepted from runtime JSON', async (t)
   const result = await executeConfigWrite(request, maa);
   assert.equal(result.status, 'rejected'); assert.equal(result.reason, 'request-invalid');
   assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+});
+
+test('the authorized task cannot change identity while MAA is closing', async (t) => {
+  const f = await fixture(t); let running = true;
+  const config = structuredClone(f.config);
+  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [{ TaskType: 'Infrast', IsEnable: false }, { TaskType: 'Mall', IsEnable: false }] });
+  await writeFile(f.file, JSON.stringify(config));
+  const reordered = structuredClone(config);
+  reordered.Configurations['Synthetic profile'].TaskQueue.reverse();
+  const maa: MaaProcess = {
+    inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+    close: async () => { running = false; await writeFile(f.file, JSON.stringify(reordered)); }, start: async () => { running = true; },
+  };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'enable Infrast' }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'IsEnable'], value: true }] }, maa);
+  assert.equal(result.status, 'unknown'); assert.equal(result.phase, 'backup');
+  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), reordered);
+});
+
+test('a stale read summary cannot authorize a task at a newly occupied index', async (t) => {
+  const f = await fixture(t);
+  const summary = await inspectConfiguration(f.maa);
+  const configuration = structuredClone(f.config); configuration.Configurations['Synthetic profile'].TaskQueue.reverse();
+  await writeFile(f.file, JSON.stringify(configuration));
+  const request = JSON.parse(JSON.stringify({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, expectedRevision: summary.revision, authorization: { source: 'current-request', reference: 'enable Fight from the earlier summary' }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'IsEnable'], value: true }] }));
+  const maa: MaaProcess = { inspect: async () => { assert.fail('stale request must not inspect processes'); }, close: async () => {}, start: async () => {} };
+  const result = await executeConfigWrite(request, maa);
+  assert.equal(result.status, 'rejected'); assert.equal(result.reason, 'configuration-changed');
+});
+
+test('duplicate Fight tasks can be reordered independently by their bound positions', async (t) => {
+  const f = await fixture(t); let running = false;
+  const config = structuredClone(f.config);
+  const first = { ...config.Configurations['Synthetic profile'].TaskQueue[0]!, StagePlan: ['1-7'] };
+  const second = { ...first, StagePlan: ['CE-6'] };
+  const base = config.Configurations['Synthetic profile'].TaskQueue[1]!;
+  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [first, second, base] });
+  await writeFile(f.file, JSON.stringify(config));
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'base then second Fight then first Fight' }, changes: [{ path: ['Configurations', 0, 'TaskQueue'], value: [2, 1, 0] }] }, maa);
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')).Configurations['Synthetic profile'].TaskQueue, [base, second, first]);
+});
+
+test('medicine authorization cannot exceed the native signed 32-bit configuration field', async (t) => {
+  const f = await fixture(t); const before = await readFile(f.file);
+  let running = false;
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic', medicineCount: 2147483648 }, changes: [
+    { path: ['Configurations', 0, 'TaskQueue', 0, 'UseMedicine'], value: true },
+    { path: ['Configurations', 0, 'TaskQueue', 0, 'MedicineCount'], value: 2147483648 },
+  ] }, maa);
+  assert.equal(result.status, 'rejected');
+  assert.deepEqual(await readFile(f.file), before);
+});
+
+test('one medicine budget cannot be reused by two Fight tasks when enabling a timer', async (t) => {
+  const f = await fixture(t); let running = false;
+  const config = structuredClone(f.config);
+  const fight = { ...config.Configurations['Synthetic profile'].TaskQueue[0]!, IsEnable: true, UseMedicine: true, MedicineCount: 2 };
+  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [fight, { ...fight, StagePlan: ['CE-6'] }] });
+  Object.assign(config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' }] });
+  await writeFile(f.file, JSON.stringify(config));
+  const before = await readFile(f.file);
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'at most two medicines', medicineCount: 2 }, changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }] }, maa);
+  assert.equal(result.status, 'rejected'); assert.deepEqual(await readFile(f.file), before);
+});
+
+test('a current medicine budget can be allocated across two distinct Fight tasks once', async (t) => {
+  const f = await fixture(t); let running = false;
+  const config = structuredClone(f.config);
+  const fight = config.Configurations['Synthetic profile'].TaskQueue[0]!;
+  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [fight, { ...fight, StagePlan: ['CE-6'] }] });
+  await writeFile(f.file, JSON.stringify(config));
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'one medicine for each Fight, two total', medicineCount: 2 }, changes: [0, 1].flatMap(index => [
+    { path: ['Configurations', 0, 'TaskQueue', index, 'UseMedicine'], value: true },
+    { path: ['Configurations', 0, 'TaskQueue', index, 'MedicineCount'], value: 1 },
+    { path: ['Configurations', 0, 'TaskQueue', index, 'IsEnable'], value: true },
+  ]) }, maa);
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')).Configurations['Synthetic profile'].TaskQueue.map((task: { MedicineCount: number }) => task.MedicineCount), [1, 1]);
+});
+
+test('existing Fight allocations and repeated timer runs cannot reuse a current medicine budget', async (t) => {
+  for (const mode of ['other-fight', 'two-timers', 'recurring']) {
+    const f = await fixture(t); let running = false;
+    const config = structuredClone(f.config);
+    const fight = { ...config.Configurations['Synthetic profile'].TaskQueue[0]!, IsEnable: true, UseMedicine: true, MedicineCount: 2 };
+    Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: mode === 'other-fight' ? [fight, { ...fight, IsEnable: false, StagePlan: ['CE-6'] }] : [fight] });
+    const timer = { IsEnabled: false as boolean | null, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' };
+    Object.assign(config.Timers, { List: mode === 'two-timers' ? [{ ...timer, IsEnabled: null, Minute: 1 }, timer] : [timer] });
+    await writeFile(f.file, JSON.stringify(config));
+    const before = await readFile(f.file);
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+    const changes = mode === 'other-fight' ? [{ path: ['Configurations', 0, 'TaskQueue', 1, 'IsEnable'], value: true }]
+      : [{ path: ['Timers', 'List', mode === 'two-timers' ? 1 : 0, 'IsEnabled'], value: mode === 'recurring' ? true : null }];
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'at most two medicines', medicineCount: 2 }, changes }, maa);
+    assert.equal(result.status, 'rejected', mode); assert.deepEqual(await readFile(f.file), before);
+  }
 });

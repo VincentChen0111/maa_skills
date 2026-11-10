@@ -4,13 +4,14 @@
 
 ## 读取与写入
 
-`read` 输出配置序号、任务类型/启用状态、定时槽和提醒字段。未知类型显示 `OtherTask`；不输出配置名称、任务名称、连接地址、账号或完整配置。序号只用于这次读取后的请求；若现场变化，重新读取再取得本次授权。
+`read` 输出配置序号、任务类型/启用状态、定时槽、提醒字段与 revision 指纹。未知类型显示 `OtherTask`；不输出配置名称、任务名称、连接地址、账号或完整配置。`write.expectedRevision` 必须使用此次摘要的 `configuration.revision`，不能临时读取新值来绕过变更提示。开始时版本不符返回 configuration-changed；关停后任务/定时槽对象变化则保留 unknown，不按旧下标写入。重新核对目标与当次授权后才可重新准备请求。
 
 `write` 输入示例：
 
 ```json
 {
   "host": "codex",
+  "expectedRevision": "<read 返回的 configuration.revision>",
   "authorization": {
     "source": "current-request",
     "reference": "用户本次要求开启定时提醒"
@@ -26,14 +27,16 @@
 | path（方括号为数组元素） | value |
 | --- | --- |
 | `["Configurations",配置序号,"TaskQueue",任务位置,"IsEnable"]` | 布尔值；启用仅支持已核的普通任务，未知类型和 StartUp 等入口不自动启用 |
-| `["Configurations",配置序号,"TaskQueue"]` | 现有全部 TaskType 的排列；每种只出现一次，保留原任务对象，不与同队列的字段改动混用 |
-| `["Configurations",配置序号,"TaskQueue",Fight位置,"UseMedicine"]` / `"MedicineCount"` | 当次 `authorization.medicineCount` 的精确数量及对应开关，来源必须为 current-request；启用药剂时同时设置这两个字段 |
+| `["Configurations",配置序号,"TaskQueue"]` | 原队列位置的完整排列，例如 `[2,1,0]`；每个位置只出现一次，重复 TaskType 也可独立排序，保留原任务对象，不与同队列字段改动混用 |
+| `["Configurations",配置序号,"TaskQueue",Fight位置,"UseMedicine"]` / `"MedicineCount"` | 当次 `authorization.medicineCount` 为本次总上限（0–2147483647）；各任务按用户明确的分配设置数量和开关，来源必须为 current-request；启用药剂时同时设置这两个字段 |
 | `["Timers","List",槽位,"IsEnabled"]` | true 为每日定时、null 为原生单次、false 为关闭 |
 | 同一路径末项为 `"Hour"` / `"Minute"` / `"Config"` | 本机时间小时 0–23、分钟 0–59、目标配置序号；槽位 0–7 且必须已存在 |
 | `["Timers","CustomConfig"]` / `"ForceScheduledStart"` / `"ShowWindowBeforeForceScheduledStart"` / `"NotifyBeforeScheduledStart"` | 布尔值 |
 | `["Timers","ScheduledStartNotificationMinutes"]` | 1–1439 分钟 |
 
 启用 Fight 或定时还会检查其实际启用的任务，拒绝间接激活源石、免费抽卡、特殊礼包和无当次数量的药剂。不会为通过检查擅自关闭既有设置；先报告原因。临期药等无数量限制的入口不在授权通道内。未知或缺失字段停下核对；不会用猜测补键。
+
+药剂按相关配置中所有启用 Fight 的合计核对，包含原有启用任务；不能让多个任务各自复用同一个数量。相关单次定时重复执行同一配置时按次数累计；每日重复无法由一次有限数量授权覆盖，故有药剂消耗时拒绝启用或改配该重复计划，不擅自关掉用户原有定时。
 
 ## 事务与失败
 
