@@ -5,6 +5,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSettings, startup } from './preferences.ts';
+import { readPublicJson, type PublicJsonResult } from './public-data.ts';
 
 export type BaseSkill = { id: string; name: string; room: string | null; text: string; slot: number;
   unlock: { elite: number; level: number } | null; status: 'active' | 'locked' | 'superseded' | 'unknown'; supersededBy: string | null };
@@ -12,9 +13,9 @@ export type BaseOperator = { id: string; name: string; ownership: 'owned' | 'unk
 export type BaseTables = { characters: unknown; building: unknown; crossCheck?: unknown };
 export type BaseQuery = { operators?: string[]; room?: string };
 type ComparisonSkill = { name: string; room: string | null; elite: number | null; level: number | null; text: string };
-type CrossCheck = { status: 'not-requested' | 'compared'; differences: { operatorId: string; onlyIn: 'game' | 'cross-check'; skill: ComparisonSkill }[]; issues: string[] };
+type CrossCheck = { status: 'not-requested' | 'compared' | 'unavailable'; differences: { operatorId: string; onlyIn: 'game' | 'cross-check'; skill: ComparisonSkill }[]; issues: string[] };
 export type BaseResult = { operators: BaseOperator[]; warnings: string[]; snapshotReadAt: string; limits: string[]; crossCheck: CrossCheck;
-  source: { mode: 'supplied' | 'public'; files: { repository: string; commit: string; file: string; url: string; sha256: string; bytes: number; readAt: string }[] } };
+  source: { mode: 'supplied' | 'public'; files: PublicJsonResult['source'][] } };
 const limits = ['Unlock status does not prove current assignment or that effect conditions are met.',
   'Faction combinations, global effects, morale, products and other conditions are not modelled.',
   'Final yield is not calculated; percentages remain source text, never a ranking or total.',
@@ -23,6 +24,10 @@ const rooms: Record<string, string> = { CONTROL: '控制中枢', MANUFACTURE: '�
   MEETING: '会客室', HIRE: '办公室', WORKSHOP: '加工站', TRAINING: '训练室', DORMITORY: '宿舍', RECYCLE: '回收站' };
 const crossRooms: Record<string, string> = { control_center: 'CONTROL', factory: 'MANUFACTURE', trading_post: 'TRADING', power_plant: 'POWER',
   reception_room: 'MEETING', office: 'HIRE', workshop: 'WORKSHOP', training_room: 'TRAINING', dormitory: 'DORMITORY', recycle_station: 'RECYCLE' };
+class AmbiguousName extends Error {
+  candidates: string[];
+  constructor(candidates: string[]) { super(`base-name-ambiguous:${candidates.join(',')}`); this.candidates = candidates; }
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('base-data-invalid');
@@ -113,7 +118,7 @@ export function queryBaseSkills(input: unknown, tables: BaseTables, query: BaseQ
   for (const requested of query.operators ?? []) {
     const candidates = { ...Object.fromEntries(snapshot.operators.map(row => [row.id, row])), ...characters };
     const ids = Object.hasOwn(candidates, requested) ? [requested] : Object.entries(candidates).filter(([, row]) => object(row).name === requested).map(([id]) => id);
-    if (ids.length > 1) throw new Error(`base-name-ambiguous:${ids.join(',')}`);
+    if (ids.length > 1) throw new AmbiguousName(ids);
     if (!ids.length) warnings.push(`operator-not-found:${requested}`);
     ids.forEach(id => selected.add(id));
   }
@@ -134,6 +139,29 @@ export function queryBaseSkills(input: unknown, tables: BaseTables, query: BaseQ
     if (!room) operators.push({ id: own.id, name: own.name, ownership: 'owned', elite: own.elite, level: own.level, skills: [] });
   }
   return { operators, warnings, snapshotReadAt: snapshot.readAt, limits: [...limits], crossCheck: crossCheckSkills(operators, tables.crossCheck, room), source: { mode: 'supplied', files: [] } };
+}
+
+/** Fetch only the fixed public tables; no game data is bundled, cached or written. */
+export async function queryPublicBaseSkills(snapshot: unknown, query: BaseQuery, fetcher: typeof fetch = fetch): Promise<BaseResult> {
+  accountInput(snapshot);
+  const game = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff' };
+  const [characters, building, crossCheck] = await Promise.allSettled([
+    readPublicJson({ ...game, file: 'zh_CN/gamedata/excel/character_table.json' }, fetcher),
+    readPublicJson({ ...game, file: 'zh_CN/gamedata/excel/building_data.json' }, fetcher),
+    readPublicJson({ repository: 'KayChung17/arknights-base-skill', commit: '368ea6d83d14409a3e7354df4359960adba6b36b', file: 'skills/ark-base-schedule/assets/operator-skills.json' }, fetcher),
+  ]);
+  if (characters.status === 'rejected') throw characters.reason;
+  if (building.status === 'rejected') throw building.reason;
+  const result = queryBaseSkills(snapshot, { characters: characters.value.value, building: building.value.value }, query);
+  result.source = { mode: 'public', files: [characters.value.source, building.value.source] };
+  if (crossCheck.status === 'fulfilled') {
+    result.source.files.push(crossCheck.value.source);
+    try {
+      const room = query.room ? Object.keys(rooms).find(key => key === query.room || rooms[key] === query.room) : undefined;
+      result.crossCheck = crossCheckSkills(result.operators, crossCheck.value.value, room);
+    } catch { result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-invalid'] }; }
+  } else result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-unavailable'] };
+  return result;
 }
 
 const cell = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('|', '&#124;');
@@ -165,12 +193,11 @@ export function formatBaseSkills(result: BaseResult, language = 'zh-CN'): string
   return lines.join('\n');
 }
 
-type Request = BaseQuery & { tablesFile: string; snapshotFile?: string; format?: 'json' | 'markdown'; currentLanguage?: string };
+type Request = BaseQuery & { tablesFile?: string; snapshotFile?: string; format?: 'json' | 'markdown'; currentLanguage?: string };
 function request(value: unknown): Request {
   const data = object(value);
   for (const key of Object.keys(data)) if (!['operators', 'room', 'tablesFile', 'snapshotFile', 'format', 'currentLanguage'].includes(key)) throw new Error('base-input-invalid');
   for (const key of ['room', 'tablesFile', 'snapshotFile', 'currentLanguage']) if (data[key] !== undefined) label(data[key]);
-  label(data.tablesFile);
   if (data.operators !== undefined && (!Array.isArray(data.operators) || data.operators.some(value => typeof value !== 'string' || !value.trim()))) throw new Error('base-input-invalid');
   if (data.format !== undefined && !['json', 'markdown'].includes(String(data.format))) throw new Error('base-input-invalid');
   return data as Request;
@@ -185,13 +212,19 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const snapshotFile = input.snapshotFile ?? (settings?.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null);
     if (!snapshotFile) throw new Error('base-snapshot-required');
     const snapshot: unknown = JSON.parse(await readFile(snapshotFile, 'utf8'));
-    const supplied = object(JSON.parse(await readFile(input.tablesFile, 'utf8')));
-    const result = queryBaseSkills(snapshot, { characters: supplied.characters, building: supplied.building, crossCheck: supplied.crossCheck }, input);
+    let result: BaseResult;
+    if (input.tablesFile) {
+      const supplied = object(JSON.parse(await readFile(input.tablesFile, 'utf8')));
+      result = queryBaseSkills(snapshot, { characters: supplied.characters, building: supplied.building, crossCheck: supplied.crossCheck }, input);
+    } else result = await queryPublicBaseSkills(snapshot, input);
     const summary = formatBaseSkills(result, language);
     if (input.format === 'markdown') process.stdout.write(summary);
     else process.stdout.write(JSON.stringify({ ok: true, result, summary }));
-  } catch {
-    console.error(JSON.stringify({ ok: false, error: 'base-query-check-required' }));
+  } catch (error) {
+    const stable = new Set(['base-data-invalid', 'base-input-invalid', 'base-snapshot-invalid', 'base-snapshot-required', 'base-room-invalid', 'base-cross-check-invalid',
+      'public-data-input-invalid', 'public-data-network-failed', 'public-data-http-failed', 'public-data-too-large', 'public-data-json-invalid']);
+    console.error(JSON.stringify(error instanceof AmbiguousName ? { ok: false, error: 'base-name-ambiguous', candidates: error.candidates }
+      : { ok: false, error: error instanceof Error && stable.has(error.message) ? error.message : 'base-query-check-required' }));
     process.exitCode = 1;
   }
 }

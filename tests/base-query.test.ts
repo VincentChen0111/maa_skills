@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { parseMaaSnapshot } from '../skills/maa-core/scripts/account-snapshot.ts';
-import { queryBaseSkills, formatBaseSkills } from '../skills/maa-core/scripts/base-query.ts';
+import { queryBaseSkills, formatBaseSkills, queryPublicBaseSkills } from '../skills/maa-core/scripts/base-query.ts';
 
 const characters = { char_alpha: { name: '合成甲' }, char_beta: { name: '合成乙' } };
 const building = {
@@ -137,4 +139,38 @@ test('CLI emits the same JSON and Markdown from supplied tables and leaves snaps
   const invalid = run({ tablesFile: 'missing-synthetic-secret.json' });
   assert.equal(invalid.status, 1);
   assert.doesNotMatch(invalid.stderr, /missing-synthetic-secret|Error:|stack|[A-Z]:\\/);
+  await writeFile(join(root, 'tables.json'), JSON.stringify({ characters: { ...characters, char_twin: { name: '合成甲' } }, building }));
+  const ambiguous = run({ tablesFile: 'tables.json', operators: ['合成甲'] });
+  assert.equal(ambiguous.status, 1);
+  assert.deepEqual(JSON.parse(ambiguous.stderr), { ok: false, error: 'base-name-ambiguous', candidates: ['char_alpha', 'char_twin'] });
+});
+
+test('public query uses fixed commits, records hashes, and reports unavailable cross-check without inventing agreement', async (t) => {
+  let crossAvailable = true;
+  const server = createServer((request, response) => {
+    if (request.url?.endsWith('character_table.json')) response.end(JSON.stringify(characters));
+    else if (request.url?.endsWith('building_data.json')) response.end(JSON.stringify(building));
+    else if (crossAvailable) response.end(JSON.stringify({ operators: [] }));
+    else { response.statusCode = 503; response.end('synthetic-private-response'); }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const urls: string[] = [];
+  const network: typeof fetch = async (input, init) => {
+    const url = String(input); urls.push(url);
+    return fetch(`http://127.0.0.1:${address.port}${new URL(url).pathname}`, init);
+  };
+  const result = await queryPublicBaseSkills(snapshot(2, 1), { operators: ['合成甲'] }, network);
+  assert.equal(result.source.mode, 'public');
+  assert.equal(result.source.files.length, 3);
+  assert.ok(result.source.files.every(source => /^[0-9a-f]{64}$/.test(source.sha256) && source.bytes > 0));
+  assert.ok(urls.some(url => url.includes('/Kengxxiao/ArknightsGameData/6f63c14e27b847ef74b53b00fe51fc322b3cd7ff/')));
+  assert.ok(urls.some(url => url.includes('/KayChung17/arknights-base-skill/368ea6d83d14409a3e7354df4359960adba6b36b/')));
+  crossAvailable = false;
+  const partial = await queryPublicBaseSkills(snapshot(2, 1), {}, network);
+  assert.equal(partial.crossCheck.status, 'unavailable');
+  assert.equal(partial.operators[0]!.skills[1]!.status, 'active');
+  assert.match(formatBaseSkills(partial), /cross-check-unavailable/);
+  assert.doesNotMatch(JSON.stringify(partial), /synthetic-private-response/);
 });

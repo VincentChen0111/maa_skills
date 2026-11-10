@@ -12,6 +12,8 @@ Blocked by: [11: MAA 识别结果转账号快照](11-maa-account-snapshot.md)
 
 实施进度：进行中。
 
+实现候选已具备共享 CLI、Markdown 与离线合成演示；固定来源见 [base 来源核对](../base-sources.md)，验证及模型未验证项见 [base 验证](../base-verification.md)。待[独立审查](../reviews/2026-11-11-21-base-query.md)与 PR 交付后记完成。
+
 基建排班前需要知道账号实际持有哪些干员，以及当前精英阶段解锁了哪些基建技能。简单按技能文字中的百分比排序无法代表完整收益。
 
 ## 要交付的行为
