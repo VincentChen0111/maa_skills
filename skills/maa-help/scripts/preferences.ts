@@ -1,4 +1,4 @@
-import { mkdir, readFile, open, rename, unlink, realpath, stat } from 'node:fs/promises';
+import { mkdir, readFile, open, rename, unlink, realpath, stat, link } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,18 +58,35 @@ const staleLockMs = 30_000;
  * A writer that died cannot leave settings half-written: config.json is replaced by rename and an
  * entry is a single append. Its lock therefore needs no reconciliation, unlike the MAA write lock.
  */
-async function lockIsStale(lockFile: string): Promise<boolean> {
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
+const identity = (file: { ino: number; birthtimeMs: number }) => `${file.ino}:${file.birthtimeMs}`;
+
+/** Identifies the lock file when its writer is gone; undefined while a writer may still hold it or once it has disappeared. */
+async function staleLock(lockFile: string): Promise<string | undefined> {
   try {
-    const modified = (await stat(lockFile)).mtimeMs;
+    const file = await stat(lockFile);
     let holder: Record<string, unknown> = {};
     try { holder = record(JSON.parse(await readFile(lockFile, 'utf8'))); } catch { /* holder not recorded yet, or cut short */ }
     const started = typeof holder.startedAt === 'string' ? Date.parse(holder.startedAt) : Number.NaN;
-    if (Date.now() - (Number.isNaN(started) ? modified : started) > staleLockMs) return true;
+    if (Date.now() - (Number.isNaN(started) ? file.mtimeMs : started) > staleLockMs) return identity(file);
     const pid = holder.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
-    try { process.kill(pid, 0); return false; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
-  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+    try { process.kill(pid, 0); return undefined; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' ? identity(file) : undefined; }
+  } catch (error) { if (missing(error)) return undefined; throw error; }
+}
+
+/**
+ * Removes only the file that was judged stale. Renaming it aside has a single winner; a writer that
+ * finds it moved a different, live lock puts that lock back. Returns whether the stale file is gone.
+ */
+async function removeStaleLock(lockFile: string, judged: string): Promise<boolean> {
+  const aside = `${lockFile}.${randomUUID()}.stale`;
+  try { await rename(lockFile, aside); } catch (error) { if (missing(error)) return false; throw error; }
+  const same = identity(await stat(aside)) === judged;
+  if (!same) await link(aside, lockFile).catch(() => undefined);
+  await unlink(aside);
+  return same;
 }
 
 async function withSettingsWrite<T>(home: string, action: () => Promise<T>): Promise<T> {
@@ -80,9 +97,9 @@ async function withSettingsWrite<T>(home: string, action: () => Promise<T>): Pro
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined; throw error; }
   };
   let handle = await acquire();
-  if (!handle && await lockIsStale(lockFile)) {
-    try { await unlink(lockFile); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    handle = await acquire();
+  if (!handle) {
+    const judged = await staleLock(lockFile);
+    if (judged !== undefined && await removeStaleLock(lockFile, judged)) handle = await acquire();
   }
   if (!handle) throw new Error('preferences-busy');
   try {

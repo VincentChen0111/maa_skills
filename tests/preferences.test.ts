@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, readdir, mkdir, writeFile, chmod, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings, readSettings } from '../skills/maa-help/scripts/preferences.ts';
 
@@ -151,4 +151,31 @@ test('rejected input is reported as not written, apart from failures that need a
   assert.equal(unreadable.status, 1);
   assert.deepEqual(JSON.parse(unreadable.stderr), { ok: false, error: 'preferences-check-required' });
   assert.equal(await readFile(join(home, 'config.json'), 'utf8'), '{"language":');
+});
+
+test('writers racing to take over a stale lock never lose a reported change', async (t) => {
+  const run = (home: string, input: unknown) => new Promise<{ status: number | null; stderr: string }>((done) => {
+    const child = spawn(process.execPath, [command, 'set'], { env: { ...process.env, HOME: home, USERPROFILE: home, MAA_SKILLS_HOME: home } });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (status) => done({ status, stderr }));
+    child.stdin.end(JSON.stringify(input));
+  });
+  const exited = spawnSync(process.execPath, ['-e', '']).pid;
+  for (let trial = 0; trial < 20; trial += 1) {
+    const home = await mkdtemp(join(tmpdir(), 'maa-preferences-'));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    await writeFile(lockOf(home), JSON.stringify({ pid: exited, startedAt: new Date().toISOString() }));
+    const patches = [{ language: 'en' }, { maaDirectory: join(home, 'sample-maa') }];
+    const results = await Promise.all(patches.map((patch) => run(home, patch)));
+    for (const [index, result] of results.entries()) {
+      if (result.status === 0) continue;
+      assert.deepEqual(JSON.parse(result.stderr), { ok: false, error: 'preferences-busy' }, `trial ${trial}`);
+      assert.equal(cli(home, 'set', patches[index]).status, 0);
+    }
+    const settings = await readSettings(home);
+    assert.equal(settings.language, 'en', `trial ${trial}`);
+    assert.equal(settings.maaDirectory, join(home, 'sample-maa'), `trial ${trial}`);
+    assert.deepEqual((await readdir(home)).sort(), ['config.json']);
+  }
 });
