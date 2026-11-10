@@ -42,6 +42,7 @@ function prepare(config: RecordValue, request: WriteRequest) {
   const keys = new Set<string>();
   const medicineTasks = new Set<string>();
   const enabledTasks: (string | number)[][] = [];
+  const dependencies: (string | number)[][] = [];
   for (const change of request.changes) {
     if (!Array.isArray(change.path) || !change.path.length) throw new Error('change-not-allowed');
     const path = change.path;
@@ -91,6 +92,8 @@ function prepare(config: RecordValue, request: WriteRequest) {
   }
   if (request.changes.some(change => change.path[0] === 'Timers' && !['NotifyBeforeScheduledStart', 'ScheduledStartNotificationMinutes', 'ShowWindowBeforeForceScheduledStart'].includes(String(change.path[1])))) {
     const timers = object(next.Timers);
+    dependencies.push(['Timers']);
+    if (timers.CustomConfig !== true) dependencies.push(['Current']);
     if (!Array.isArray(timers.List)) throw new Error('configuration-invalid');
     for (const item of timers.List) {
       const timer = object(item);
@@ -98,6 +101,7 @@ function prepare(config: RecordValue, request: WriteRequest) {
       const profile = timers.CustomConfig === true ? timer.Config : next.Current;
       if (typeof profile !== 'string') throw new Error('configuration-invalid');
       const queuePath = ['Configurations', profile, 'TaskQueue'];
+      dependencies.push(queuePath);
       const queue = at(next, queuePath);
       if (!Array.isArray(queue)) throw new Error('configuration-invalid');
       queue.forEach((task, index) => { if (object(task).IsEnable !== false) enabledTasks.push([...queuePath, index]); });
@@ -106,7 +110,12 @@ function prepare(config: RecordValue, request: WriteRequest) {
   const consumingTasks = new Map<string, number>();
   const checkedTasks = [...enabledTasks, ...[...medicineTasks].map(value => JSON.parse(value) as (string | number)[])];
   const consumingProfiles = new Set(checkedTasks.filter(path => { const task = object(at(next, path)); return task.TaskType === 'Fight' && task.UseMedicine !== false; }).map(path => String(path[1])));
+  if (consumingProfiles.size) {
+    dependencies.push(['Timers']);
+    if (object(next.Timers).CustomConfig !== true) dependencies.push(['Current']);
+  }
   for (const profile of consumingProfiles) {
+    dependencies.push(['Configurations', profile, 'TaskQueue']);
     const queue = at(next, ['Configurations', profile, 'TaskQueue']);
     if (!Array.isArray(queue)) throw new Error('configuration-invalid');
     queue.forEach((value, index) => { const task = object(value); if (task.TaskType === 'Fight' && task.IsEnable !== false) checkedTasks.push(['Configurations', profile, 'TaskQueue', index]); });
@@ -122,7 +131,7 @@ function prepare(config: RecordValue, request: WriteRequest) {
     }
     if (task.TaskType === 'Award' && (task.FreeGacha !== false || task.SpecialAccess === true)) throw new Error('unsafe-task-settings');
   }
-  let scheduledMedicine = 0;
+  const scheduledRuns = new Map<string, number>();
   const timers = object(next.Timers);
   if (!Array.isArray(timers.List)) throw new Error('configuration-invalid');
   for (const value of timers.List) {
@@ -134,11 +143,15 @@ function prepare(config: RecordValue, request: WriteRequest) {
       return path[1] === profile && object(at(next, path)).IsEnable !== false;
     }).reduce((sum, [, count]) => sum + count, 0);
     if (amount > 0 && timer.IsEnabled !== null) throw new Error('recurring-medicine-not-authorized');
-    scheduledMedicine += amount;
+    scheduledRuns.set(profile, (scheduledRuns.get(profile) ?? 0) + 1);
   }
-  const configuredMedicine = [...consumingTasks.values()].reduce((sum, count) => sum + count, 0);
-  if (Math.max(configuredMedicine, scheduledMedicine) > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
-  return { config: next, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
+  const requiredMedicine = [...consumingTasks].reduce((sum, [key, count]) => {
+    const path = JSON.parse(key) as (string | number)[];
+    const repetitions = object(at(next, path)).IsEnable !== false ? scheduledRuns.get(String(path[1])) ?? 0 : 0;
+    return sum + count * Math.max(1, repetitions);
+  }, 0);
+  if (requiredMedicine > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
+  return { config: next, dependencies, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
 async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
   return object(JSON.parse((await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')).replace(/^\uFEFF/, '')));
@@ -167,9 +180,12 @@ export function checkMaintenanceWindow(config: unknown, start: Date, end: Date):
       if (timer.IsEnabled === false) continue;
       if ((timer.IsEnabled !== true && timer.IsEnabled !== null) || !Number.isInteger(timer.Hour) || !Number.isInteger(timer.Minute)
         || Number(timer.Hour) < 0 || Number(timer.Hour) > 23 || Number(timer.Minute) < 0 || Number(timer.Minute) > 59) return false;
-      for (let offset = -1; offset <= 2; offset++) {
-        const trigger = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset, Number(timer.Hour), Number(timer.Minute)).getTime();
-        if (start.getTime() < trigger + 60000 && end.getTime() >= trigger - 120000) return false;
+      // Visit actual instants rather than constructing a local time, which chooses
+      // only the first occurrence of an hour repeated by a daylight-saving rollback.
+      for (let instant = Math.floor(start.getTime() / 60000) * 60000; instant <= end.getTime(); instant += 60000) {
+        const local = new Date(instant);
+        const untilTrigger = (Number(timer.Hour) * 60 + Number(timer.Minute) - local.getHours() * 60 - local.getMinutes() + 1440) % 1440;
+        if (untilTrigger <= 2) return false;
       }
     }
     return true;
@@ -260,6 +276,7 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
         : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
       return { path, value: JSON.stringify(at(original, path)) };
     });
+    targets.push(...prepared.dependencies.map(path => ({ path, value: JSON.stringify(at(original, path)) })));
     const now = new Date(); const end = new Date(now.getTime() + 120000);
     if (!checkMaintenanceWindow(original, now, end) || !checkMaintenanceWindow(prepared.config, now, end)) return rejected('timer-window');
   } catch { return rejected('request-invalid'); }

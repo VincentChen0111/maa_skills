@@ -370,3 +370,55 @@ test('existing Fight allocations and repeated timer runs cannot reuse a current 
     assert.equal(result.status, 'rejected', mode); assert.deepEqual(await readFile(f.file), before);
   }
 });
+
+test('a timer authorization binds its effective profile and task queue across shutdown', async (t) => {
+  for (const change of ['current-profile', 'timer-mode', 'target-queue']) {
+    const f = await fixture(t); let running = true;
+    const config = structuredClone(f.config);
+    Object.assign(config.Configurations, { 'Synthetic second': structuredClone(config.Configurations['Synthetic profile']) });
+    Object.assign(config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic second' }] });
+    await writeFile(f.file, JSON.stringify(config));
+    const saved = structuredClone(config);
+    if (change === 'current-profile') saved.Current = 'Synthetic second';
+    if (change === 'timer-mode') saved.Timers.CustomConfig = true;
+    if (change === 'target-queue') saved.Configurations['Synthetic profile'].TaskQueue.reverse();
+    const maa: MaaProcess = {
+      inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+      close: async () => { running = false; await writeFile(f.file, JSON.stringify(saved)); }, start: async () => { running = true; },
+    };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'run the current profile once' }, changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }] }, maa);
+    assert.equal(result.status, 'unknown', change); assert.equal(result.phase, 'backup', change);
+    assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), saved);
+  }
+});
+
+test('medicine budgets sum each profile after accounting for its own timer count', async (t) => {
+  for (const budget of [4, 6]) {
+    const f = await fixture(t); let running = false;
+    const config = structuredClone(f.config);
+    const fight = { ...config.Configurations['Synthetic profile'].TaskQueue[0]!, IsEnable: true, UseMedicine: true, MedicineCount: 2 };
+    Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [fight] });
+    Object.assign(config.Configurations, { 'Synthetic second': { TaskQueue: [{ ...fight, StagePlan: ['CE-6'] }] } });
+    const timer = { IsEnabled: null, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' };
+    Object.assign(config.Timers, { CustomConfig: true, List: [timer, { ...timer, Minute: 1 }] });
+    await writeFile(f.file, JSON.stringify(config)); const before = await readFile(f.file);
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, authorization: { source: 'current-request', reference: 'two scheduled runs of first profile and one run of second', medicineCount: budget }, changes: [0, 1].flatMap(index => [
+      { path: ['Configurations', index, 'TaskQueue', 0, 'UseMedicine'], value: true },
+      { path: ['Configurations', index, 'TaskQueue', 0, 'MedicineCount'], value: 2 },
+    ]) }, maa);
+    assert.equal(result.status, budget === 4 ? 'rejected' : 'complete');
+    if (budget === 4) assert.deepEqual(await readFile(f.file), before);
+  }
+});
+
+test('local timer protection includes both occurrences of the daylight saving repeated hour', () => {
+  const module = new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url).href;
+  const source = `import {checkMaintenanceWindow} from ${JSON.stringify(module)};
+    const config={Timers:{List:[{IsEnabled:true,Hour:1,Minute:30}]}};
+    const intervals=[['2026-11-01T01:29:30-04:00','2026-11-01T01:31:00-04:00'],['2026-11-01T01:29:30-05:00','2026-11-01T01:31:00-05:00'],['2026-11-01T01:27:00-05:00','2026-11-01T01:27:59-05:00']];
+    console.log(JSON.stringify(intervals.map(([start,end])=>checkMaintenanceWindow(config,new Date(start),new Date(end)))));`;
+  const result = spawnSync(process.execPath, ['--input-type=module'], { input: source, encoding: 'utf8', env: { ...process.env, TZ: 'America/New_York' } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [false, false, true]);
+});
