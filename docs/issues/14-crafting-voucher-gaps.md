@@ -14,7 +14,7 @@ Blocked by: [13: 单干员培养成本查询](13-operator-cost-query.md)
 
 2026-11-11 从 13 已合并的 PR #37、主线 `370ed68809ca12c920fd25054276c797157a4749` 开始。先冻结包含账号/成本/基建 11 场景的载荷；公开函数与真实 CLI 接缝测试仅用合成库存、配方和网络响应。原型只读调查，原项目及真实账号不变；阶段候选、独立审查与模型状态另行记录，不自动沿用 13 的模型延期决定。
 
-网络评测支持包已在固定候选 `1b17c15f7161493399c5e56f103415960441dbbe` 独立 R1 通过，见[审查记录](../reviews/2026-11-11-14-network-evaluation.md)；它只增加临时原生 `cultivation-gaps.ts query` 精确网络夹具入口，不代表产品算法通过。产品独立 R1 两项 Spec P2 均接受并修复，最终候选 `b00e7cc14b50fd0726c6f0eb99cc7fd28822c6a5` 独立 R2 的 Standards/Spec 均 PASS，详见[产品审查](../reviews/2026-11-11-14-crafting-vouchers.md)。[PR #39](https://github.com/VincentChen0111/maa_skills/pull/39) 待合并，GitHub 镜像随交付同步。
+网络评测支持包已在固定候选 `1b17c15f7161493399c5e56f103415960441dbbe` 独立 R1 通过，见[审查记录](../reviews/2026-11-11-14-network-evaluation.md)；它只增加临时原生 `cultivation-gaps.ts query` 精确网络夹具入口，不代表产品算法通过。产品独立 R1 两项 Spec P2 均接受并修复，最终候选 `b00e7cc14b50fd0726c6f0eb99cc7fd28822c6a5` 独立 R2 的 Standards/Spec 均 PASS，详见[产品审查](../reviews/2026-11-11-14-crafting-vouchers.md)。[PR #39](https://github.com/VincentChen0111/maa_skills/pull/39) 已于 2026-11-11 squash 合并，主线提交 `ac03ba8a9afbf6aa3c2519d14d3bc2b6b867bf23`，GitHub 镜像随交付同步。
 
 已实现共享库存、确定性加工与券换投入组合路线、独立不加工对照、真实 CLI 与 Markdown。最终作者完整离线入口 118 项为 117 通过、1 项短路径适用性跳过，独立审查员实际 118/118、无跳过；另有开发测试 worker 的 454 组独立路线重放。固定 b00 的双宿主官方原生安装/同版更新、64 条命令及 Windows/Ubuntu CI 均通过。来源不足的永久性命名与 rank 映射保持推断/待核，五类相关券有效性均需明确确认。具体范围与证据见[来源说明](../crafting-sources.md)和[验证记录](../crafting-verification.md)。
 

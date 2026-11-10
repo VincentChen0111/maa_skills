@@ -47,6 +47,8 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 文件差异由运行器读取，事件协议由测试工具写出。它是行为回归证据，不是抵御恶意模型伪造整个测试环境的安全隔离边界。公共 grader 可接收已归一化的合成记录；真正产品验收必须同时接入对应边界观察器，不能只交一段模型文本。
 
+daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测](daily-evaluation.md)的窄接缝：仅替代 MAA 进程边界，实际 CLI、锁、备份和记录由预加载观察器及真实文件差异核验。`expectedInvocations.exitCode` 默认 0；失败分支可明确要求 1，不接受任意非零。
+
 ## 固定版本与回归判断
 
 每次保留宿主/CLI 版本、固定模型、场景与评分器摘要、skill 内容版本和证据摘要。场景摘要包括评分器、文件观察器和运行器源码，确保采集语义变化也改变指纹。通过 `compareRuns(before, after, reruns)` 比较保存的 `run.json` 数组：宿主、模型、CLI 版本、场景集合或摘要不一致时拒绝比较。缺失和失败记录不得当作通过。2026-11-11 增加 `$exists` 与生成时间规则后的记录与旧语义不可比，旧 run 原样保留，不能改写成新规则结果。
