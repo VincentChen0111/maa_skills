@@ -52,3 +52,5 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 2026-11-10 本机尝试：Codex CLI `0.167.0-alpha.3.2` 启动成功，隔离认证为空，模型请求返回 401；Claude CLI 未安装。两种真模型均未验证，演示 skill 未建立模型基线。离线演示和规则测试通过，不声称双宿主 skill 可用；具体证据见[验证记录](evaluation-verification.md)。
 
 记录格式参考 [Codex 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)与 [Claude 非交互模式](https://code.claude.com/docs/en/headless)。实现独立编写，只借鉴公开的行为评分思路；没有复制原私有项目的代码、提示词或真实账号基线。
+
+通过导出函数 `runScenario` 评测依赖共享载荷的 skill 时，用 `companionSkills: { "maa-help": absoluteDirectory }` 同时安装相邻目录。目录按原字节复制到两个临时宿主，名称限制为小写 skill 名且不能覆盖 subject/probe；源文件及 companion 均计入 skill 版本哈希。此选项不借用已安装 skill。

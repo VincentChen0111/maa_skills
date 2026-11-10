@@ -1,0 +1,6 @@
+[
+  { "taskchain": "Depot", "what": "DepotInfo", "details": { "done": true, "data": { "30012": 17, "4001": 1200 } } },
+  { "taskchain": "OperBox", "what": "OperBoxInfo", "details": { "done": true, "own_opers": [
+    { "id": "char_001_synthetic", "name": "合成干员", "own": true, "rarity": 5, "elite": 2, "level": 40, "potential": 1 }
+  ] } }
+]

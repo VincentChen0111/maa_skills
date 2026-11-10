@@ -7,3 +7,38 @@
 MAA 代码和资源、游戏数据、一图流和企鹅物流数据不随包分发。用时读取需在相应输出注明来源，具体边界见 [规格](docs/spec.md)。
 
 开发依赖 TypeScript、Node 类型声明的许可证保留在各自安装包中；版本与完整性哈希见 lockfile。它们不属于产品共享工具实现。
+
+## dsh-maa-cli 的识别回调解析
+
+- 上游：[nhyo/dsh-maa-cli](https://github.com/nhyo/dsh-maa-cli)，固定提交 `cdeaa8fac12bdc1db5b4ea5c33fca358dc6cf43b`。
+- 来源文件：`src/operators/depot.js`、`src/operators/operator-box.js`；逐字核对日期 2026-11-11。
+- 改写文件：`skills/maa-help/scripts/account-snapshot.ts`。保留回调字段与数值校验思路；改为统一快照、显式未知值、每域最近状态、GUI 本地缓存输入、互斥及原子保存和白名单摘要。未借用运行扫描、UI 或外部数据。
+- 原版权及 MIT 全文如下：
+
+```text
+MIT License
+
+Copyright (c) 2026 nhyo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指纹见 [account 来源核对](docs/account-sources.md)；本仓库不复制其 AGPL 实现。
+
+原生单目录安装时，[maa-help/LICENSE](skills/maa-help/LICENSE) 随共享脚本携带完整 MIT 许可和上述原版权行，避免仅引用仓库根文件而丢失许可。
