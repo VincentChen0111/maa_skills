@@ -8,7 +8,7 @@
 
 | 文件（均在 zh_CN/gamedata/excel） | 核对事实 | 原响应 SHA-256 |
 | --- | --- | --- |
-| character_table.json | phases 的升级上限和 evolveCost；allSkillLvlup 的 lvlUpCost/unlockCond；skills 的 levelUpCostCond，按原数组位置逐级取数 | `eb6fff6fb3ce605bd60db2206a644625a3d145b4c46fa126f218cd51df4f1f1d` |
+| character_table.json | 目录含 char_ 干员以及 token_/trap_ 记录，isNotObtainable 单独不能排除召唤物；phases 的升级上限和 evolveCost；allSkillLvlup 的 lvlUpCost/unlockCond；skills 的 levelUpCostCond，按原数组位置逐级取数 | `eb6fff6fb3ce605bd60db2206a644625a3d145b4c46fa126f218cd51df4f1f1d` |
 | char_patch_table.json | patchChars 提供形态记录；同名形态不能默认共用当前练度 | `f1c48737f63fa1ad1c189a3dd865920b54f062700280984aaf73f737791dc14a` |
 | gamedata_const.json | characterExpMap 与 characterUpgradeCostMap 按精英阶段及当前等级减一索引；evolveGoldCost 按稀有度减一及精英阶段索引，负哨兵不是免费 | `f665c62e5da9804792a65cb54c03532e8af66fcc4e1b4059f91fc21b338f3534` |
 | uniequip_table.json | charEquip 与 equipDict 对应干员；itemCost 按 1/2/3 级取数，4001 为龙门币；unlockEvolvePhase/unlockLevel 是练度前置；任务和信赖不由快照验证 | `ea9c66d111aa80662c7f89585f76fd2e4799bbe7c3a6ea8c0af78c0fd9311869` |
@@ -22,6 +22,8 @@
 | level.json | characterExp、characterUpgradeCost 的相同阶段和等级索引 | `c37f97c7ecf98ad2c25d536af71eaea61b33ffb34b482bd0108b4c28a8e4ed89` |
 
 实际读取时间为 UTC `2026-11-10T17:47:10.634Z` 至 `2026-11-10T17:47:12.440Z`，对应本地 11 日；不是上游更新时间。运行时每次返回实际来源 URL、提交、文件、字节数、SHA-256 和读取时间，不把上述核对指纹硬编码成假读取结果。一次公开表结构探针采用虚构当前练度，成功产出 3 个专精和 3 个模组步骤；核对源省略模组龙门币产生 3 个差异，主源金额保持不变。此探针只核对 schema，不是账号基线或真实培养验证。
+
+R1 修复时再次只读核对同一固定表：Mon3tr 的 `char_4179_monstr`、`token_10002_kalts_mon3tr`、`trap_624_xb2mtr` 均有 `isNotObtainable: false`，后两项 profession 为 TOKEN/TRAP。培养候选因此限定为可获取的 char_ 干员，保留真实 char_ 形态的同名消歧。虚构精零 1 级到 2 级的结构探针按名称只选出干员，得到经验 100、龙门币 30。专精前置来自对应 rank 的 unlockCond；当前与目标相等也不能跳过，当前已拥有的普通技能/专精/模组另用当前练度核对，已有专精还要求当前普通技能 7 级，不以未来目标练度代替。
 
 ## 原型适配边界
 

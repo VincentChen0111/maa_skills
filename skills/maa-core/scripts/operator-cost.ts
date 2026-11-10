@@ -1,8 +1,8 @@
 // Independent implementation of the maintainer-provided generic cost algorithms.
 // Algorithm file hashes and pinned public schema revisions: docs/operator-cost-sources.md.
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { readPublicJson, type PublicJsonResult, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 
@@ -71,7 +71,7 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
   if (snapshot.version !== 1 || snapshot.source !== 'maa' || !Array.isArray(snapshot.operators) || !['complete', 'partial'].includes(String(object(coverage.operators).status))) issue('snapshot:invalid-or-incomplete');
   const catalog = { ...object(tables.characters), ...object(object(tables.patches).patchChars) };
   const matches = Object.entries(catalog).filter(([id, value]) => {
-    const char = object(value); return char.isNotObtainable !== true && char.name === request.name && (request.operatorId === undefined || id === request.operatorId);
+    const char = object(value); return id.startsWith('char_') && char.isNotObtainable !== true && char.name === request.name && (request.operatorId === undefined || id === request.operatorId);
   });
   result.candidates = matches.map(([id, char]) => ({ id, name: String(object(char).name) }));
   if (typeof request.name !== 'string' || !request.name.trim() || matches.length !== 1) { issue(matches.length > 1 ? 'operator:ambiguous' : 'operator:not-found'); return result; }
@@ -138,10 +138,10 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
       compare(`${label}:lmd`, lmd, array(array(object(tables.crossLevel).characterUpgradeCost)[e])[l - 1]);
     }
   };
-  const prerequisite = (condition: unknown, label: string) => {
+  const prerequisite = (condition: unknown, label: string, availableElite = finalElite, availableLevel = finalLevel) => {
     const cond = object(condition), requiredElite = phase(cond.phase), requiredLevel = cond.level;
     if (requiredElite === null || !integer(requiredLevel, 1, 100)) { issue(`${label}:prerequisite-unavailable`); return; }
-    if (finalElite === null || finalLevel === null || finalElite < requiredElite || (finalElite === requiredElite && finalLevel < requiredLevel)) issue(`${label}:prerequisite-not-met`);
+    if (availableElite === null || availableLevel === null || availableElite < requiredElite || (availableElite === requiredElite && availableLevel < requiredLevel)) issue(`${label}:prerequisite-not-met`);
   };
   if ('elite' in target || 'level' in target) {
     const e = target.elite, l = target.level;
@@ -168,6 +168,8 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
   }
   let skillLevel: number | null = null;
   if ('skillLevel' in target || 'mastery' in target) skillLevel = current('skillLevel', 1, 7);
+  const currentSkillLevel = skillLevel;
+  if (currentSkillLevel !== null && currentSkillLevel > 1) prerequisite(object(array(char.allSkillLvlup)[currentSkillLevel - 2]).unlockCond, `current.skill.${currentSkillLevel}`, elite, level);
   if ('skillLevel' in target) {
     const goal = target.skillLevel;
     if (!integer(goal, 1, 7)) issue('target.skillLevel:invalid');
@@ -193,6 +195,9 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
         const skill = object(array(char.skills)[Number(key) - 1]);
         if (typeof skill.skillId !== 'string') { issue(`mastery.${key}:skill-unavailable`); continue; }
         if (goal > 0 && skillLevel !== 7) issue(`mastery.${key}:skill-level-7-required`);
+        if (start > 0 && currentSkillLevel !== 7) issue(`current.mastery.${key}:skill-level-7-required`);
+        if (start > 0) prerequisite(object(array(skill.levelUpCostCond)[start - 1]).unlockCond, `current.mastery.${key}.${start}`, elite, level);
+        if (goal > 0) prerequisite(object(array(skill.levelUpCostCond)[goal - 1]).unlockCond, `mastery.${key}.${goal}`);
         const cross = array(object(crossChar.skills).elite).map(object).find(s => typeof s.name === 'string' && s.name.replace(/\[(\d+)\]/g, '_$1') === skill.skillId);
         for (let n = start + 1; n <= goal; n++) {
           const row = object(array(skill.levelUpCostCond)[n - 1]); prerequisite(row.unlockCond, `mastery.${key}.${n}`);
@@ -201,6 +206,7 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
       } else {
         const modules = object(tables.modules), module = object(object(modules.equipDict)[key]);
         if (!array(object(modules.charEquip)[id]).includes(key) || module.charId !== id || !Object.keys(object(module.itemCost)).length) { issue(`module.${key}:not-available-for-operator`); continue; }
+        if (start > 0) prerequisite({ phase: module.unlockEvolvePhase, level: module.unlockLevel }, `current.modules.${key}`, elite, level);
         if (goal > 0) { prerequisite({ phase: module.unlockEvolvePhase, level: module.unlockLevel }, `module.${key}`); if (!result.uncertainties.includes('module-missions-and-trust-not-verified')) result.uncertainties.push('module-missions-and-trust-not-verified'); }
         const cross = array(crossChar.uniequip).map(object).find(m => m.id === key);
         for (let n = start + 1; n <= goal; n++) add('module', `${key} L${n - 1}`, `${key} L${n}`, normalizeCosts(object(module.itemCost)[String(n)], `module.${key}.${n}`), array(cross?.cost)[n - 1]);
@@ -257,7 +263,8 @@ export async function queryOperatorCost(input: unknown, options: { home?: string
   return calculateOperatorCost(await loadOperatorCostTables(options.fetcher), snapshot, request);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
+if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv[2] !== 'query') throw new Error('cost-action-invalid');
     let raw = ''; for await (const chunk of process.stdin) raw += chunk;
