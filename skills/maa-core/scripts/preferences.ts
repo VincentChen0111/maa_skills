@@ -59,6 +59,7 @@ const staleLockMs = 30_000;
  * entry is a single append. Its lock therefore needs no reconciliation, unlike the MAA write lock.
  */
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
+const contended = (error: unknown) => ['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '');
 const identity = (file: { ino: number; birthtimeMs: number }) => `${file.ino}:${file.birthtimeMs}`;
 
 /** Identifies the lock file when its writer is gone; undefined while a writer may still hold it or once it has disappeared. */
@@ -82,19 +83,29 @@ async function staleLock(lockFile: string): Promise<string | undefined> {
  */
 async function removeStaleLock(lockFile: string, judged: string): Promise<boolean> {
   const aside = `${lockFile}.${randomUUID()}.stale`;
-  try { await rename(lockFile, aside); } catch (error) { if (missing(error)) return false; throw error; }
-  const same = identity(await stat(aside)) === judged;
-  if (!same) await link(aside, lockFile).catch(() => undefined);
-  await unlink(aside);
-  return same;
+  // Windows renames by handle, so a competing writer can move or still hold the same file: that is a lost race, not a failure.
+  try {
+    await rename(lockFile, aside);
+    const same = identity(await stat(aside)) === judged;
+    if (!same) await link(aside, lockFile).catch(() => undefined);
+    await unlink(aside);
+    return same;
+  } catch (error) { if (missing(error) || contended(error)) return false; throw error; }
 }
 
 async function withSettingsWrite<T>(home: string, action: () => Promise<T>): Promise<T> {
   await mkdir(home, { recursive: true });
   const lockFile = join(home, '.preferences.lock');
   const acquire = async () => {
-    try { return await open(lockFile, 'wx', 0o600); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined; throw error; }
+    // On Windows a lock that is being deleted answers EPERM for a moment; a lasting EPERM is a real permission problem.
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await open(lockFile, 'wx', 0o600); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
+        if (!contended(error) || attempt === 5) throw error;
+        await new Promise((resume) => setTimeout(resume, 20));
+      }
+    }
   };
   let handle = await acquire();
   if (!handle) {
@@ -105,7 +116,11 @@ async function withSettingsWrite<T>(home: string, action: () => Promise<T>): Pro
   try {
     await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     return await action();
-  } finally { await handle.close(); await unlink(lockFile); }
+  } finally {
+    await handle.close();
+    // A writer judging an older lock may hold this one aside for an instant; it puts it back or drops it, and a leftover is taken over later.
+    try { await unlink(lockFile); } catch (error) { if (!missing(error)) throw error; }
+  }
 }
 
 export async function updateSettings(value: unknown, home = settingsHome()): Promise<Settings> {

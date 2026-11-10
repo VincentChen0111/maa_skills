@@ -161,11 +161,12 @@ test('writers racing to take over a stale lock never lose a reported change', as
     child.on('close', (status) => done({ status, stderr }));
     child.stdin.end(JSON.stringify(input));
   });
-  const exited = spawnSync(process.execPath, ['-e', '']).pid;
+  const minuteAgo = new Date(Date.now() - 60_000).toISOString();
   for (let trial = 0; trial < 20; trial += 1) {
     const home = await mkdtemp(join(tmpdir(), 'maa-preferences-'));
     t.after(() => rm(home, { recursive: true, force: true }));
-    await writeFile(lockOf(home), JSON.stringify({ pid: exited, startedAt: new Date().toISOString() }));
+    // Stale by age: a planted exited pid can be reused by one of the racing writers and then look live.
+    await writeFile(lockOf(home), JSON.stringify({ pid: process.pid, startedAt: minuteAgo }));
     const patches = [{ language: 'en' }, { maaDirectory: join(home, 'sample-maa') }];
     const results = await Promise.all(patches.map((patch) => run(home, patch)));
     for (const [index, result] of results.entries()) {
