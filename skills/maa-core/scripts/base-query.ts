@@ -92,7 +92,8 @@ function crossCheckSkills(operators: BaseOperator[], value: unknown, room?: stri
           || !Number.isSafeInteger(skill.required_level) || Number(skill.required_level) < 1 || Number(skill.required_level) > 100) throw new Error();
         return { name: label(skill.skill_name), room: crossRooms[facility] ?? facility, elite: Number(skill.elite), level: Number(skill.required_level), text: label(skill.description).replace(/<[^>]*>/g, '') };
       }).filter(skill => !room || skill.room === room);
-      const game: ComparisonSkill[] = operator.skills.map(skill => ({ name: skill.name, room: skill.room, elite: skill.unlock?.elite ?? null, level: skill.unlock?.level ?? null, text: skill.text }));
+      const game: ComparisonSkill[] = operator.skills.filter(skill => !room || skill.room === room)
+        .map(skill => ({ name: skill.name, room: skill.room, elite: skill.unlock?.elite ?? null, level: skill.unlock?.level ?? null, text: skill.text }));
       // Compare multisets of source facts. Neither source's derived bonuses are used.
       const remaining = [...reference];
       for (const skill of game) {
@@ -128,17 +129,18 @@ export function queryBaseSkills(input: unknown, tables: BaseTables, query: BaseQ
     const own = snapshot.operators.find(row => row.id === id);
     if (!own && !query.operators?.length) continue;
     if (!own) warnings.push(`ownership-unobserved:${id}`);
-    if (!Object.hasOwn(chars, id)) { warnings.push(`game-operator-incomplete:${id}`); if (!room) operators.push({ id, name, ownership: own ? 'owned' : 'unknown', elite: own?.elite ?? null, level: own?.level ?? null, skills: [] }); continue; }
-    const skills = projectSkills(chars[id], buffs, own?.elite ?? null, own?.level ?? null, warnings).filter(skill => !room || skill.room === room);
-    if (room && !skills.length) continue;
+    if (!Object.hasOwn(chars, id)) { warnings.push(`game-operator-incomplete:${id}`); operators.push({ id, name, ownership: own ? 'owned' : 'unknown', elite: own?.elite ?? null, level: own?.level ?? null, skills: [] }); continue; }
+    const skills = projectSkills(chars[id], buffs, own?.elite ?? null, own?.level ?? null, warnings);
     operators.push({ id, name, ownership: own ? 'owned' : 'unknown', elite: own?.elite ?? null, level: own?.level ?? null, skills });
   }
   for (const own of snapshot.operators) {
     if (Object.hasOwn(characters, own.id) || query.operators?.length && !selected.has(own.id)) continue;
     warnings.push(`game-operator-incomplete:${own.id}`);
-    if (!room) operators.push({ id: own.id, name: own.name, ownership: 'owned', elite: own.elite, level: own.level, skills: [] });
+    operators.push({ id: own.id, name: own.name, ownership: 'owned', elite: own.elite, level: own.level, skills: [] });
   }
-  return { operators, warnings, snapshotReadAt: snapshot.readAt, limits: [...limits], crossCheck: crossCheckSkills(operators, tables.crossCheck, room), source: { mode: 'supplied', files: [] } };
+  const crossCheck = crossCheckSkills(operators, tables.crossCheck, room);
+  const matching = room ? operators.map(operator => ({ ...operator, skills: operator.skills.filter(skill => skill.room === room) })).filter(operator => operator.skills.length) : operators;
+  return { operators: matching, warnings, snapshotReadAt: snapshot.readAt, limits: [...limits], crossCheck, source: { mode: 'supplied', files: [] } };
 }
 
 /** Fetch only the fixed public tables; no game data is bundled, cached or written. */
@@ -152,15 +154,16 @@ export async function queryPublicBaseSkills(snapshot: unknown, query: BaseQuery,
   ]);
   if (characters.status === 'rejected') throw characters.reason;
   if (building.status === 'rejected') throw building.reason;
-  const result = queryBaseSkills(snapshot, { characters: characters.value.value, building: building.value.value }, query);
-  result.source = { mode: 'public', files: [characters.value.source, building.value.source] };
-  if (crossCheck.status === 'fulfilled') {
-    result.source.files.push(crossCheck.value.source);
-    try {
-      const room = query.room ? Object.keys(rooms).find(key => key === query.room || rooms[key] === query.room) : undefined;
-      result.crossCheck = crossCheckSkills(result.operators, crossCheck.value.value, room);
-    } catch { result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-invalid'] }; }
-  } else result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-unavailable'] };
+  const tables = { characters: characters.value.value, building: building.value.value };
+  let result: BaseResult;
+  try { result = queryBaseSkills(snapshot, { ...tables, crossCheck: crossCheck.status === 'fulfilled' ? crossCheck.value.value : undefined }, query); }
+  catch (error) {
+    if (!(error instanceof Error) || error.message !== 'base-cross-check-invalid') throw error;
+    result = queryBaseSkills(snapshot, tables, query);
+    result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-invalid'] };
+  }
+  result.source = { mode: 'public', files: [characters.value.source, building.value.source, ...(crossCheck.status === 'fulfilled' ? [crossCheck.value.source] : [])] };
+  if (crossCheck.status === 'rejected') result.crossCheck = { status: 'unavailable', differences: [], issues: ['cross-check-unavailable'] };
   return result;
 }
 

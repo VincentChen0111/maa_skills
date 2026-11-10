@@ -116,6 +116,19 @@ test('cross-check differences are reported without replacing game skills or impo
   assert.equal(queryBaseSkills(snapshot(2, 1), { characters, building }, {}).crossCheck.status, 'not-requested');
 });
 
+test('room filtering still reports skills present only in the cross-check source', () => {
+  const meetingOnly = { ...building, chars: { char_alpha: { buffChar: [building.chars.char_alpha.buffChar[1]!] } } };
+  const crossCheck = { operators: [{ name: '合成甲', skills: [
+    { facility: 'factory', skill_name: '合成线索', elite: 1, required_level: 50, description: building.buffs.second.description },
+  ] }] };
+  for (const operators of [undefined, ['合成甲']]) {
+    const result = queryBaseSkills(snapshot(2, 1), { characters, building: meetingOnly, crossCheck }, { operators, room: '制造站' });
+    assert.deepEqual(result.operators, []);
+    assert.deepEqual(result.crossCheck.differences.map(row => [row.operatorId, row.onlyIn, row.skill.room]), [['char_alpha', 'cross-check', 'MANUFACTURE']]);
+    assert.match(formatBaseSkills(result), /交叉核对.*1/);
+  }
+});
+
 test('CLI emits the same JSON and Markdown from supplied tables and leaves snapshot/settings unchanged', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'maa-base-cli-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -147,10 +160,12 @@ test('CLI emits the same JSON and Markdown from supplied tables and leaves snaps
 
 test('public query uses fixed commits, records hashes, and reports unavailable cross-check without inventing agreement', async (t) => {
   let crossAvailable = true;
+  let buildingData = building;
+  let crossData: unknown = { operators: [] };
   const server = createServer((request, response) => {
     if (request.url?.endsWith('character_table.json')) response.end(JSON.stringify(characters));
-    else if (request.url?.endsWith('building_data.json')) response.end(JSON.stringify(building));
-    else if (crossAvailable) response.end(JSON.stringify({ operators: [] }));
+    else if (request.url?.endsWith('building_data.json')) response.end(JSON.stringify(buildingData));
+    else if (crossAvailable) response.end(JSON.stringify(crossData));
     else { response.statusCode = 503; response.end('synthetic-private-response'); }
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -173,4 +188,13 @@ test('public query uses fixed commits, records hashes, and reports unavailable c
   assert.equal(partial.operators[0]!.skills[1]!.status, 'active');
   assert.match(formatBaseSkills(partial), /cross-check-unavailable/);
   assert.doesNotMatch(JSON.stringify(partial), /synthetic-private-response/);
+  crossAvailable = true;
+  buildingData = { ...building, chars: { ...building.chars, char_alpha: { buffChar: [building.chars.char_alpha.buffChar[1]!] } } };
+  crossData = { operators: [{ name: '合成甲', skills: [
+    { facility: 'factory', skill_name: '合成线索', elite: 1, required_level: 50, description: building.buffs.second.description },
+  ] }] };
+  const roomOnly = await queryPublicBaseSkills(snapshot(2, 1), { room: '制造站' }, network);
+  assert.deepEqual(roomOnly.operators, []);
+  assert.equal(roomOnly.crossCheck.differences.length, 1);
+  assert.equal(roomOnly.crossCheck.differences[0]!.onlyIn, 'cross-check');
 });

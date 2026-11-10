@@ -3,7 +3,7 @@
 2026-11-11：工具行为与两种安装目录布局验证完成，独立审查见[审查记录](reviews/2026-11-11-21-base-query.md)。当前工单仍为进行中，PR 由主协调代理统一交付。这里没有把目录复制验证当作真实宿主安装器验证，也没有把脚本验证当作模型通过。
 
 - TDD 接缝：CLI／导出函数。每个行为切片先见失败再实现，覆盖阶段与等级阈值、同槽替换、未知持有和练度、同名歧义、缺字段、完整条件、交叉差异、稳定错误、只读 CLI 及固定公共来源。
-- `node scripts/check.ts`：66/66 测试通过，七类评分规则 14 份样例、tracker、metadata、privacy 通过；`npm ci --ignore-scripts` 和 `npm run typecheck` 通过。
+- R1 候选 `node scripts/check.ts`：66/66 测试通过。审查指出房间过滤遗漏交叉表单边技能后，补失败测试并修复；最终完整入口 67/67、七类评分规则 14 份样例、tracker、metadata、privacy 通过；`npm ci --ignore-scripts` 和 `npm run typecheck` 通过。修复后的固定模型后态正在复跑。
 - 网络测试使用本机临时 HTTP 服务，仅替代 fetch 边界；当前 Windows 沙箱禁止 loopback（EACCES），在授权的沙箱外离线检查中通过。没有访问外网或真实 MAA。
 - 双布局测试把相同载荷复制到临时 `.agents`、`.claude` 目录，实际调用共享偏好和基建查询 CLI，观察到零文件改动；查询中未知练度仍为待核，差异来自合成表。`node scripts/base-demo.ts` 可复现 Markdown。
 - 固定真实公开表的结构核对、哈希及差异见[来源记录](base-sources.md)；只在忽略的临时目录保存。没有读取真实账号或做游戏实机验证。
@@ -15,7 +15,7 @@
 | 项目 | 结果 |
 | --- | --- |
 | 修改前载荷指纹 | `334b2e120e595146e8aad87098a50968ca83878e76f1e85ce6b87c1460410d04` |
-| 修改后载荷指纹 | `3a1a50176c791a90a4a0e67dfcef79d083624c5461a326bf907d8f65f1682a01` |
+| 初次修改后载荷指纹 | `3a1a50176c791a90a4a0e67dfcef79d083624c5461a326bf907d8f65f1682a01` |
 | 前后真实尝试 | 前 14／后 14 全部 `unverified`，无成功基线 |
 | 比较器结果 | `compareRuns` 为 `unverified`，无 pass→fail 重跑项 |
 
