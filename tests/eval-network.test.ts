@@ -15,10 +15,12 @@ test('trusted network fixtures replace only the named product CLI boundary and r
   await mkdir(join(root, 'scripts')); await writeFile(join(root, 'SKILL.md'), 'Synthetic network observer harness.');
   await writeFile(join(root, 'scripts/public-data.ts'), await readFile(new URL('../skills/maa-core/scripts/public-data.ts', import.meta.url)));
   // This harness tests the runner seam through the real public reader, without duplicating a calculation.
-  await writeFile(join(root, 'scripts/operator-cost.ts'), `import {readPublicJson} from './public-data.ts'; let raw='';for await(const c of process.stdin)raw+=c;try{console.log(JSON.stringify(await readPublicJson(JSON.parse(raw))));}catch{console.error('network-rejected');process.exitCode=1;}`);
+  await writeFile(join(root, 'scripts/operator-cost.ts'), `import {readPublicJson} from './public-data.ts';if(process.argv.includes('--probe')){console.log(fetch.toString().includes('eval-network-unlisted'));}else{let raw='';for await(const c of process.stdin)raw+=c;try{console.log(JSON.stringify(await readPublicJson(JSON.parse(raw))));}catch{console.error('network-rejected');process.exitCode=1;}}`);
+  await writeFile(join(root, 'scripts/cultivation-gaps.ts'), await readFile(join(root, 'scripts/operator-cost.ts')));
+  await writeFile(join(root, 'scripts/cultivation-gaps-copy.ts'), await readFile(join(root, 'scripts/operator-cost.ts')));
   const fixture = await createFixture({ companionSkills: { 'maa-core': root }, networkFixtures: { [url]: { synthetic: 17 } } }); t.after(() => fixture.dispose());
-  for (const host of ['.agents', '.claude']) {
-    const script = `${host}/skills/maa-core/scripts/operator-cost.ts`;
+  for (const host of ['.agents', '.claude']) for (const name of ['operator-cost', 'cultivation-gaps']) {
+    const script = `${host}/skills/maa-core/scripts/${name}.ts`;
     const result = spawnSync(process.execPath, [script, 'query'], { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(source), encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr); const response = JSON.parse(result.stdout);
     assert.deepEqual(response.value, { synthetic: 17 });
@@ -27,7 +29,13 @@ test('trusted network fixtures replace only the named product CLI boundary and r
     assert.equal(missing.status, 1); assert.match(missing.stderr, /network-rejected/);
   }
   const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
-  assert.deepEqual(evidence.changes, []); assert.equal(evidence.events.filter(event => event.kind === 'invocation').length, 4);
+  assert.deepEqual(evidence.changes, []); assert.equal(evidence.events.filter(event => event.kind === 'invocation').length, 8);
+  for (const host of ['.agents', '.claude']) for (const [file, action, active] of [
+    ['cultivation-gaps.ts', 'query', 'true'], ['cultivation-gaps.ts', 'inspect', 'false'], ['cultivation-gaps-copy.ts', 'query', 'false'],
+  ]) {
+    const probe = spawnSync(process.execPath, [`${host}/skills/maa-core/scripts/${file}`, action!, '--probe'], { cwd: fixture.workspace, env: fixture.env, encoding: 'utf8' });
+    assert.equal(probe.status, 0, probe.stderr); assert.equal(probe.stdout.trim(), active);
+  }
   const unrelated = spawnSync(process.execPath, ['-e', `console.log(fetch.toString().includes('eval-network-unlisted'))`], { cwd: fixture.workspace, env: fixture.env, encoding: 'utf8' });
   assert.equal(unrelated.stdout.trim(), 'false');
 });
