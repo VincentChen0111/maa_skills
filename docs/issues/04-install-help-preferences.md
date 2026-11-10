@@ -12,7 +12,7 @@ Blocked by: [03: 双宿主行为评测](03-cross-host-evaluation.md)
 
 实施进度：已完成。
 
-2026-11-11 维护者决定 `maa-help` 只提供文字帮助，共享偏好脚本移到 `skills/maa-core/`（见规格「默认值及其来源」）。本票下文记录的是移动之前的交付；移动之后的原生安装和模型基线尚未重新验证，由 [26](26-v0-1-0-release-validation.md) 验收。
+2026-11-11 维护者决定 `maa-help` 只提供文字帮助，共享偏好脚本移到 `skills/maa-core/`（见规格「默认值及其来源」）。本票下文记录的是移动之前的交付；移动后的 core/help/account 原生安装及同版更新入口已由 [11 集成验收](../account-verification.md) 在公开固定提交上重新核对；模型基线仍未通过，由 [26](26-v0-1-0-release-validation.md) 验收。
 
 maa-help 与唯一共享偏好脚本的实现完成。离线 28/28、类型与隐私检查、三轮产品审查及两个宿主的临时原生安装载荷验证通过，最终 Windows/Linux CI 均通过。交付 [PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)；合并后解除 05、11 的实现依赖。
 

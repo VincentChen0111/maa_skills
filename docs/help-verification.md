@@ -1,6 +1,6 @@
 # maa-help 验证记录
 
-2026-11-11 补记：共享偏好脚本已从 `maa-help` 移到 `skills/maa-core/`，`maa-help` 改为只提供文字帮助。下文是移动之前的验证记录，其中的路径和场景名（`help-language`、`help-append`）对应当时的结构；移动之后的原生安装与模型基线尚未重新验证。
+2026-11-11 补记：共享偏好脚本已从 `maa-help` 移到 `skills/maa-core/`，`maa-help` 改为只提供文字帮助。下文是移动之前的验证记录，其中的路径和场景名（`help-language`、`help-append`）对应当时的结构；移动后的 core/help/account 已从公开固定提交 `24b7ebb0a4a9a57095ee7f5a44fe1338edfa2fea` 完成临时双宿主原生安装和同版更新入口核对，见 [account 集成验收](account-verification.md)。help 更新可用入口说明前后按 `help-routing`、`help-preference`、`help-boundary` 在固定 Codex `0.167.0-alpha.3.2` / `gpt-6` 与 Claude Code `2.1.322` / `claude-sonnet-4-6` 各运行六次；12 次均因隔离认证缺失而 unverified，执行窗口和证据哈希已核对，模型基线仍未建立。help 前后载荷指纹分别为 `655a2645d71f18673a62052223a9059d0de7b36496b9393aade2e6f32605c478` 与 `bb494afef0a281fef1f2829641f001d8648a616efc7b8ebc0d8e219802df2484`。
 
 日期：2026-11-10。工单 04 实现交付完成；真实模型基线仍未验证，作为 [26 发布门禁](issues/26-v0-1-0-release-validation.md)保留。本次收口用于解除实现依赖，不代表发布验收完成。
 

@@ -1,6 +1,6 @@
 # account 验证记录
 
-工单 11 的实现交付在 [PR #33](https://github.com/VincentChen0111/maa_skills/pull/33)；原产品独立审查两轮通过。旧 maa-help 载荷的两个真实宿主临时原生安装与同版更新入口已验证；2026-11-11 合入 maa-core 架构后的新载荷须重新验证，见下节。正向导入评测接缝已补齐，真实模型尚未通过。本次交付将模型基线与语义验收移交 26，仍阻止发布；实现完成不代表模型或实机完成。本机仅使用临时 home、合成识别资料和复制到临时目录的 skill；没有读取真实账号、操作设备或修改已安装 skill。
+工单 11 的实现交付在 [PR #33](https://github.com/VincentChen0111/maa_skills/pull/33)；原产品独立审查两轮通过。旧 maa-help 载荷的两个真实宿主临时原生安装与同版更新入口已验证；2026-11-11 合入 maa-core 架构后的新载荷也已从公开固定提交完成两宿主原生安装和同版更新入口核对，见下节。正向导入评测接缝已补齐，真实模型尚未通过。本次交付将模型基线与语义验收移交 26，仍阻止发布；实现完成不代表模型或实机完成。本机仅使用临时 home、合成识别资料和复制到临时目录的 skill；没有读取真实账号、操作设备或修改已安装 skill。
 
 - 工具层接缝：`parseMaaSnapshot`、`inspectMaaSnapshot`、`importMaaSnapshot`、`formatAccountSummary` 与 CLI。完成回调、较新未完成结果、缺失练度、损坏 JSON、非法数量、重复干员、空识别、模板错误、缓存原扫描时间及两种 GUI 缓存分别有行为测试。
 - 写入接缝：真实临时目录验证配置指定私有目录、JSON 原子替换、占用锁不抢占、只读目标保存失败旧内容保留；设置、输入 MAA 缓存保持原样；合成额外凭据和账号字段不进入快照及输出。
@@ -12,9 +12,19 @@
 
 合并 main `37167326638c55d4cdd33a48a51b8391c29c4e9e` 后，账号脚本与许可移到唯一共享目录 maa-core；account 的安装、参考、测试、演示与四场景调用路径同步。maa-help 保持纯文字，account 自身携带缺少 core 时的两宿主安装指引。迁移先将安装测试改为新路径，确认缺少脚本及 LICENSE 的失败，再迁实现；18 项定向 CLI/导出函数及安装检查通过。Windows 沙箱内 rename/junction 限制由临时夹具的沙箱外运行核实，未修改真实环境。
 
-完整离线检查 `node scripts/check.ts` 50/50、七类评分规则自检、tracker、metadata、privacy 和 `npm run typecheck` 通过。新集成包的固定提交原生安装和独立审查正在进行；旧载荷通过不能当作新载荷通过。
+完整离线检查 `node scripts/check.ts` 50/50、七类评分规则自检、tracker、metadata、privacy 和 `npm run typecheck` 通过。新集成包的独立审查待完成；原生安装使用下述公开固定提交单独核对。
 
-账号四场景固定 Codex `0.167.0-alpha.3.2` / `gpt-6`、Claude Code `2.1.322` / `claude-sonnet-4-6`，迁移前后各八次真实尝试全部为 `unverified`（Codex 401、Claude 未登录）。16 份证据核对执行窗口和 evidenceHash；未复制认证。迁移前 skill/companion 指纹为 `e63e0d8db8d7fe79bd8db872aeb5c6a35de04f026589f8db53cbbd7532fcb7bb`，迁移后为 `54ac8a5dd724ec98d69b57e750f445f1b024a5ce60cde74c58ccd5c32ab5d634`。场景授权和字段断言不变，仅期望调用路径从 help 改为 core，因此场景指纹发生变化；两个版本分别检查仍无通过基线，不声称分数未下降。help 的交付入口说明也已更新为 account 可用，并按三个固定 help 场景补做前后尝试。模型基线与人工语义核对继续由 26 阻止发布，真实设备仍未测试。
+账号四场景固定 Codex `0.167.0-alpha.3.2` / `gpt-6`、Claude Code `2.1.322` / `claude-sonnet-4-6`，迁移前后各八次真实尝试全部为 `unverified`（Codex 401、Claude 未登录）。16 份证据核对执行窗口和 evidenceHash；未复制认证。迁移前 skill/companion 指纹为 `e63e0d8db8d7fe79bd8db872aeb5c6a35de04f026589f8db53cbbd7532fcb7bb`，迁移后为 `54ac8a5dd724ec98d69b57e750f445f1b024a5ce60cde74c58ccd5c32ab5d634`。场景授权和字段断言不变，仅期望调用路径从 help 改为 core，因此场景指纹发生变化；两个版本分别检查仍无通过基线，不声称分数未下降。help 的交付入口说明也已更新为 account 可用，三个固定 help 场景在相同两宿主和模型前后各六次真实尝试均为 unverified，12 份证据的执行窗口和 evidenceHash 已核对。模型基线与人工语义核对继续由 26 阻止发布，真实设备仍未测试。
+
+### 新载荷的真实原生安装与更新
+
+公开提交 `24b7ebb0a4a9a57095ee7f5a44fe1338edfa2fea` 推送后，在新的临时 home 中实际执行：
+
+- Codex 官方 installer 固定该完整 SHA，`--path skills/maa-core skills/maa-help skills/maa-account --dest <临时宿主 skills>`；首次安装退出 0，已有目标重复安装退出 1，仅删除经 realpath 核对位于本次临时根下的三目录后重装退出 0。
+- Claude Code `2.1.322` 在独立临时配置中，从 `codex/11-account-snapshot` 分支执行 marketplace add、plugin install、marketplace update、plugin update，各退出 0。安装记录 `gitCommitSha` 与上述固定提交完全一致；同版 `0.1.0-dev.0` 的更新入口返回已最新，不声称跨版本升级通过。
+- 每个宿主的 core/help/account 共 11 个载荷文件逐一与候选核对（只规范化 CRLF），包括 core 的本仓库与 nhyo 版权及 MIT 全文、help 的本仓库 MIT 文字许可。help 无脚本目录。
+- 分别从真实安装产物执行 core 的 `preferences.ts set/read`、`account-snapshot.ts inspect/import`，合成样例得到 1 名干员、2 种库存、龙门币 1200；未知技能与基建保持 null。inspect 不生成快照，import 只在该临时私有目录生成账号快照，读取时间处于实际调用窗口，源文件不变，摘要不包含原始干员标识。
+- 本地忽略目录保留安装命令结果、固定提交安装清单、逐文件核对与 `native-evidence.json`；环境采用白名单，未复制调用者认证或修改已安装 skill。真实设备和跨版本升级仍未测试。
 
 ## 旧载荷的真实原生安装与更新
 
