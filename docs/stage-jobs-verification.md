@@ -6,7 +6,7 @@
 
 `node scripts/stage-demo.ts [已安装 maa-core 的绝对目录]` 运行实际 installed core CLI：合成范围→候选保存→明确批准→配置事务→摘要读回；只替代 MAA 进程。断言三次主作业形成三条、备选仅记批准记录、全局 LoopTimes 保留、额外干员关闭、其他字段原样、只受限重开不启动游戏。临时 home、账号、配置和作业都在自建临时目录，结束清理；最终 stdout 可留作本机安装证据。仓库内运行通过不冒充两宿主原生安装。
 
-模型场景在 `1f2a3e89a1aa9ff5b98d61c47083bce95416bada` 冻结：六个 stage 场景加既有 daily/help 场景；stage 场景实际共享 CLI 在两种临时安装布局共十二次只读调用通过。固定框架测试调用/文件授权，模型对难度、未知练度、替代要求、前置、外部描述和循环交接的解释仍须人工语义核对。根代理已留存改前 32 次真实本机尝试：固定框架 1f2a3e89、改前载荷 ddd0ca80，16 次 Codex 返回隔离认证 401、16 次 Claude 未登录；没有完成事件或 runner failure，全部 unverified。改后尝试及比较待根代理收口，不声称分数不下降。05 既有真实模型发布门禁原样保留。
+模型场景在 `1f2a3e89a1aa9ff5b98d61c47083bce95416bada` 冻结：六个 stage 场景加既有 daily/core 场景；stage 场景实际共享 CLI 在两种临时安装布局共十二次只读调用通过。固定框架测试调用/文件授权，模型对难度、未知练度、替代要求、前置、外部描述和循环交接的解释仍须人工语义核对。根代理已留存改前 32 次真实本机尝试：固定框架 1f2a3e89、改前载荷 ddd0ca80，16 次 Codex 返回隔离认证 401、16 次 Claude 未登录；没有完成事件或 runner failure，全部 unverified。9c 旧候选的改后尝试见后文历史证据，修后固定候选仍待重跑，不声称分数不下降。05 既有真实模型发布门禁原样保留。
 
 R1 前作者候选完整离线入口 206 项：204 通过、2 项跳过（本文件系统不提供 Windows 短路径别名；非 Windows 适配器测试不适用于当前平台）。类型、privacy、metadata、tracker 与评分规则自检通过。另按 red→green 核对共享 levelId 的主线环境误匹配，按地图/难度/diffGroup 分批，拒绝混合环境准备，批准记录保留 difficultyGroup。场景与 fixture 文件相对冻结框架保持不变。
 
@@ -28,4 +28,18 @@ R1 前作者候选完整离线入口 206 项：204 通过、2 项跳过（本文
 
 2026-11-11 根代理依据维护者授权自行决定推进问题及继续按依赖实施，对 15 单独决定：仅隔离认证不可用可延期模型发布验收。前提是 R1 四项修复和 06 整合的完整独立复核、离线/类型、双平台 CI、固定双宿主原生准备/读回全部通过，且保存完整实际前后及新增场景尝试。此决定不从 06 自动继承，不是维护者明确免测；实际完成的行为失败或回归不能改成 unverified 或自动延期。
 
-当前改前框架 `1f2a3e89` / 载荷 `ddd0ca80` 的 32 次真实尝试全部 unverified；最终改后仍待根代理用同一固定框架执行。成功的 stage/daily/core 模型基线、已验证执行分配与原作业分开、精确难度/前置、批准及循环交接语义、同模型前后分数不降均在 [26 发布验收](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。R2 等前提未完成前不勾选工单完成，也不把合成 CLI 或 GUI smoke 当模型/实际游戏通过。
+改前框架 `1f2a3e89` / 载荷 `ddd0ca80` 的 32 次真实尝试全部 unverified；9c 旧候选另有同框架改后 32 次，详见后文，修后候选须重新固定并运行。成功的 stage/daily/core 模型基线、已验证执行分配与原作业分开、精确难度/前置、批准及循环交接语义、同模型前后分数不降均在 [26 发布验收](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。完整独立复核等前提未完成前不勾选工单完成，也不把合成 CLI 或 GUI smoke 当模型/实际游戏通过。
+
+## R2 历史证据与零门槛修复
+
+[完整独立 R2](reviews/2026-11-11-15-stage-r2.md) 固定候选 `9c60fd32fe8c4b1695dbe0a8d747a2aeff7471d5`，结论 Standards 0 / Spec 1 P2，FAIL。S1 的显式 elite=-1 仍会被 Core 拒绝，根接受该意见；R1 四项与 06 整合的其余复核结果保留，但不能覆盖这个缺陷。
+
+根执行且 R2 独立审核的 9c 历史证据如下；这些记录不改写，也不作为修后新候选通过的证明：
+
+- [双平台 CI run 42914947796](https://github.com/VincentChen0111/maa_skills/actions/runs/42914947796) 的 Windows/Ubuntu、离线检查和类型检查通过。
+- `.tmp/native-check-QuEOop` 保存 34 条原生命令，只有预期重复安装拒绝为 exit 1；Codex 26 + Claude 190 = 216 个仓库文件逐字节匹配 9c，655 个生成依赖文件另记哈希和 lock 元数据，未冒充对 registry 内容独立核验。合成 GUI 烟测实调 query→prepare→readback→normal-close：低潜 A blocked / B ready、派生单 B 与源 A+B 分存、双哈希、三次主条目、备选仅保留、全局 LoopTimes 不变、锁释放均通过；相关进程为 0。没有真实 MAA 游戏运行。
+- `.tmp/15-model-evidence/frozen-models-MZjbhO` 和 `.tmp/15-after-model-evidence/frozen-models-fo3la6` 分别保存 before/9c-after 各 32 次真实尝试，各 16 Codex 401、16 Claude 未登录，全部 unverified、0 完成。框架哈希均 `fe0cabb53bea0f06c67cb99185e4a37041aa6fe5a2c6749fd5ca53e0d76c9e22`；14 daily / 12 stage / 6 core 对的 CLI/model/scenario 相同，仍不能证明语义或分数不降。没有将已完成行为失败改成 unverified。
+
+R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pass / 2 fail：matcher 的有效值仍为 -1，prepare 实际文件仍含 -1。修复只对已知 S1/显式 -1 补零门槛归一化；技能 0/缺省的 -1 和缺省 elite 保持，非整数、null、文本、未知账号精英、未证实技能等级/模组仍待核。测试覆盖这些组合及精零 39/40 级边界，实际读取交给 Core 的 JSON，核源 -1 /执行 0、有效要求、批准变更拒绝和双资产/记录哈希，不复制原生解析器假称加载实跑。
+
+修后定向 17 项通过，`.tmp/stage-r2-green.txt`；最终完整离线入口 `.tmp/stage-r2-final-check.txt` 为 295 total / 293 pass / 0 fail / 2 skip（仍为短路径和非 Windows adapter 平台条件），tracker/privacy/metadata 无错误、评分自检 7 rules / 14 samples 通过。类型检查通过。六个固定模型场景和 fixture 未改，05/06/26 既有门禁不变。根将重跑固定新候选原生与改后模型，再进行默认三轮内的完整 R3；本页不提前记 R3 或新候选远程验证通过。

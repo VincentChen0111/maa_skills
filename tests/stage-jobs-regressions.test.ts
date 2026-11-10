@@ -73,6 +73,78 @@ test('S3 elite -1/0/1 is normalized before matching and approval; unknown and in
   }
 });
 
+test('zero elite gates normalize explicit S1/-1 without guessing absent skill or invalid requirements', () => {
+  for (const skill of [undefined, 0, 1, null, 1.5, '1']) for (const elite of [undefined, -1, 0, null, 0.5, '0']) {
+    const account = structuredClone(accountSnapshot); account.operators[0]!.name = '能天使'; account.operators[0]!.rarity = 6;
+    const oper = { name: '能天使', ...(skill === undefined ? {} : { skill }), requirements: { ...(elite === undefined ? {} : { elite }), level: 40 } };
+    const input = { ...stageJob(10), content: { ...stageJob(10).content, opers: [oper] } };
+    const candidate = matchStageJobs(account, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
+    const valid = (skill === undefined || skill === 0 || skill === 1) && (elite === undefined || elite === -1 || elite === 0);
+    assert.equal(candidate.status, valid ? 'ready' : 'unknown', JSON.stringify({ skill, elite }));
+    assert.deepEqual(candidate.requirements[0]!.required, oper.requirements);
+    assert.deepEqual(candidate.content.opers[0], oper);
+    if (valid) {
+      const effective = skill === 1 && elite === -1 ? 0 : elite;
+      assert.equal(candidate.requirements[0]!.effectiveRequired.elite, effective);
+      assert.equal(candidate.execution!.content.opers[0].requirements.elite, effective);
+      assert.equal(Object.hasOwn(candidate.execution!.content.opers[0].requirements, 'elite'), elite !== undefined);
+    } else assert.equal(candidate.execution, null);
+    account.operators[0]!.elite = null;
+    const unknown = matchStageJobs(account, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
+    assert.equal(unknown.status, 'unknown'); assert.equal(unknown.execution, null);
+  }
+  for (const skillLevel of [-1, 0, 1, 2, 3, 4, null, 0.5]) {
+    const input = { ...stageJob(10), content: { ...stageJob(10).content, opers: [{ name: '合成甲', skill: 1, requirements: { elite: -1, skill_level: skillLevel, module: -1 } }] } };
+    const candidate = matchStageJobs(accountSnapshot, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
+    assert.equal(candidate.requirements[0]!.effectiveRequired.elite, 0);
+    assert.equal(candidate.status, skillLevel === -1 ? 'ready' : 'unknown');
+    if (skillLevel !== -1) assert.equal(candidate.execution, null);
+  }
+  for (const module of [undefined, -1, 0, null, 0.5]) {
+    const input = { ...stageJob(10), content: { ...stageJob(10).content, opers: [{ name: '合成甲', skill: 1, requirements: { elite: -1, ...(module === undefined ? {} : { module }) } }] } };
+    const candidate = matchStageJobs(accountSnapshot, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
+    assert.equal(candidate.requirements[0]!.effectiveRequired.elite, 0);
+    assert.equal(candidate.status, module === undefined || module === -1 ? 'ready' : 'unknown');
+  }
+  for (const [elite, level, expected] of [[0, 39, 'blocked'], [0, 40, 'ready'], [2, 1, 'ready']] as const) {
+    const account = structuredClone(accountSnapshot); account.operators[0]!.elite = elite; account.operators[0]!.level = level;
+    const input = { ...stageJob(10), content: { ...stageJob(10).content, opers: [{ name: '合成甲', skill: 1, requirements: { elite: -1, level: 40 } }] } };
+    assert.equal(matchStageJobs(account, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!.status, expected);
+  }
+});
+
+test('prepare persists native-compatible S1 elite zero and binds it separately from source elite minus one', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'stage-s1-zero-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private'); await mkdir(join(maaDirectory, 'config'), { recursive: true });
+  const file = join(maaDirectory, 'config/gui.new.json');
+  await writeFile(file, JSON.stringify({ Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [], Copilot: { TaskList: [], LoopTimes: 91, EnableUserAdditional: true } } }, Timers: { List: [] } }));
+  const account = structuredClone(accountSnapshot); account.operators[0]!.name = '能天使'; account.operators[0]!.rarity = 6;
+  const original = { ...stageJob(10), content: { ...stageJob(10).content, opers: [{ name: '能天使', skill: 1, requirements: { elite: -1, level: 40 } }] } };
+  const report = matchStageJobs(account, stageTables, stageRequest, [original]);
+  const candidate = report.stages[0]!.candidates[0]!;
+  const approval = { reportHash: report.hash, reference: '批准 S1 精零最低门槛规范化与三次执行，仅准备', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 10, alternates: [], loops: 3 }] };
+  let running = false; const actions: string[] = [];
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; actions.push('close'); }, start: async () => { running = true; actions.push('reopen'); } };
+  const input = { report, approval, snapshot: account, maaDirectory, privateDirectory, profile: 0, host: 'codex' as const, closedConfirmed: true, expectedRevision: (await inspectConfiguration(maaDirectory)).revision };
+  const result = await prepareStageJobs(input, maa); assert.equal(result.status, 'complete');
+  const saved = JSON.parse(await readFile(file, 'utf8')), list = saved.Configurations.Synthetic.Copilot.TaskList;
+  assert.equal(list.length, 3); assert.equal(saved.Configurations.Synthetic.Copilot.LoopTimes, 91);
+  // Read the actual file passed to Core, not just the report or a copied parser.
+  const execution = JSON.parse(await readFile(list[0].FilePath, 'utf8'));
+  assert.deepEqual(execution.opers, [{ name: '能天使', skill: 1, requirements: { elite: 0, level: 40 } }]);
+  assert.deepEqual(execution, candidate.execution!.content); assert.equal(hash(execution), candidate.execution!.hash);
+  assert.equal(candidate.requirements[0]!.required.elite, -1); assert.equal(candidate.requirements[0]!.effectiveRequired.elite, 0);
+  assert.equal(candidate.hash, hash(original.content)); assert.notEqual(candidate.hash, candidate.execution!.hash);
+  assert.deepEqual(JSON.parse(await readFile(sourceFile(privateDirectory, report.hash, 10), 'utf8')), original.content);
+  const pending = JSON.parse((await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim());
+  assert.equal(pending.authorization.jobPlan.entries[0].primary.sourceHash, candidate.hash);
+  assert.equal(pending.authorization.jobPlan.entries[0].primary.hash, candidate.execution!.hash);
+  assert.match(formatStageJobs(report), /规范化.*elite.*0/); assert.deepEqual(actions, ['reopen']);
+  const changed = structuredClone(report); changed.stages[0]!.candidates[0]!.execution!.content.opers[0].requirements.elite = -1;
+  changed.stages[0]!.candidates[0]!.execution!.hash = hash(changed.stages[0]!.candidates[0]!.execution!.content);
+  await assert.rejects(() => prepareStageJobs({ ...input, report: changed }, maa), /approval/);
+});
+
 test('derived groups preserve the globally unique allocation and the exact chosen alternative requirements', () => {
   const input = { ...stageJob(7), content: { ...stageJob(7).content, opers: [], groups: [
     { name: '二选一', opers: [{ name: '合成甲' }, { name: '合成乙', requirements: { potentiality: 6 } }, { name: '合成乙', requirements: { potentiality: 1 } }] },

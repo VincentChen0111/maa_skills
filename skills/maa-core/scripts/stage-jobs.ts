@@ -59,6 +59,8 @@ function effectiveRequirements(oper: ObjectValue): ObjectValue {
   const module = Number.isSafeInteger(required.module) && required.module > 0 ? 2 : 0;
   const floor = Math.max(skill, level, module);
   if (floor > 0 && (required.elite === undefined || Number.isSafeInteger(required.elite) && required.elite >= -1 && required.elite < floor)) required.elite = floor;
+  // Core rejects explicit -1 for S1's zero floor; skill 0/omitted still accepts it.
+  else if (oper.skill === 1 && required.elite === -1) required.elite = 0;
   return required;
 }
 function matchOperators(snapshot: ObjectValue, content: ObjectValue) {

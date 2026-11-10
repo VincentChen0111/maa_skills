@@ -39,3 +39,5 @@ UseCopilotList 是 CopilotViewModel 中的 GUI 运行状态，没有对应 Copil
 | CopilotHelper.cs | `26564e008143de86046988ce6ea3595920e269e7` |
 
 报告保留 candidate.hash（原文）与 execution.content/hash（派生）。批准后 pending jobPlan 的 sourceHash/hash 分别绑定两者；原文存 source 子目录，MAA FilePath 指向派生内容。以上是源码支持的行为推导和合成文件实测，不是实际游戏运行结论。R1 原报告与意见处置见 [独立审查](reviews/2026-11-11-15-stage-r1.md)。
+
+R2 补核同一固定 Core 的零门槛：已识别且支持 S1 的干员以 `skill - 1` 得到精英 0，显式 elite=-1 会被拒绝；skill=0 或缺省则得到 -1，可以保留原值。GUI 的上述修正仅针对正门槛，并不能修复这项 S1 差异。本工具因此只把 S1 的明确 -1 归一化为 0；缺省 elite 不凭空增加，非法精英类型不转数值，技能 0/缺省的 -1 不改，账号未知阶段仍待核。归一化后的精英阶段参与原有等级比较，原文和派生分别绑定。来源仍为上表固定 CopilotConfig / CopilotViewModel；[R2 原报告](reviews/2026-11-11-15-stage-r2.md) 保留缺陷证据及作者接受理由。
