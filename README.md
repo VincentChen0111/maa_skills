@@ -2,7 +2,7 @@
 
 MAA skills for Arknights CN on Windows, designed for Codex and Claude Code. Work in progress; no playable automation is shipped yet.
 
-面向 Windows MAA 图形界面版、国服玩家的 skill 集合。规划包含 setup、account、daily、doctor、help，产品边界见[规格](docs/spec.md)。当前提供开发检查与工单流程，maa-help 候选实现可操作隔离样例的偏好设置，仍在验收；产品功能按[工单索引](docs/issues/INDEX.md)实施。模型和原生安装的未验证项见 [help 验证记录](docs/help-verification.md)，不能把文档或源码检查当作实机已核。
+面向 Windows MAA 图形界面版、国服玩家的 skill 集合。规划包含 setup、account、daily、doctor、help，产品边界见[规格](docs/spec.md)。当前提供偏好设置与 MAA 本地识别结果的账号快照导入；其余功能按[工单索引](docs/issues/INDEX.md)实施。help/account 的实现与临时原生安装已验证，真实模型基线仍是发布门禁，见 [help 验证记录](docs/help-verification.md)和 [account 验证记录](docs/account-verification.md)。不能把离线测试或源码检查当作实机已核。
 
 需要 Node 24。在干净检出运行 `node scripts/check.ts` 即可离线检查，不必安装依赖。开发、类型检查和 PR 流程见[贡献指南](CONTRIBUTING.md)，原生安装结构见[宿主说明](docs/hosts.md)。问题通过 [Issues](https://github.com/VincentChen0111/maa_skills/issues)报告，修改通过 PR 和 squash 交付。
 

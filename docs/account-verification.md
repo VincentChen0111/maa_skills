@@ -1,11 +1,11 @@
 # account 验证记录
 
-工单 11 的实现候选，交付在 [draft PR #33](https://github.com/VincentChen0111/maa_skills/pull/33)；产品独立审查两轮通过；两个真实宿主的临时原生安装与同版更新入口已验证，完成声明仍受模型基线约束。正向导入评测接缝已补齐，真实模型尚未通过。本机仅使用临时 home、合成识别资料和复制到临时目录的 skill；没有读取真实账号、操作设备或修改已安装 skill。
+工单 11 的实现交付在 [PR #33](https://github.com/VincentChen0111/maa_skills/pull/33)；产品独立审查两轮通过；两个真实宿主的临时原生安装与同版更新入口已验证。正向导入评测接缝已补齐，真实模型尚未通过。本次交付将模型基线与语义验收移交 26，仍阻止发布；实现完成不代表模型或实机完成。本机仅使用临时 home、合成识别资料和复制到临时目录的 skill；没有读取真实账号、操作设备或修改已安装 skill。
 
 - 工具层接缝：`parseMaaSnapshot`、`inspectMaaSnapshot`、`importMaaSnapshot`、`formatAccountSummary` 与 CLI。完成回调、较新未完成结果、缺失练度、损坏 JSON、非法数量、重复干员、空识别、模板错误、缓存原扫描时间及两种 GUI 缓存分别有行为测试。
 - 写入接缝：真实临时目录验证配置指定私有目录、JSON 原子替换、占用锁不抢占、只读目标保存失败旧内容保留；设置、输入 MAA 缓存保持原样；合成额外凭据和账号字段不进入快照及输出。
 - 安装载荷：两个临时原生目录布局内，account 通过相邻 maa-help 的唯一脚本完成 read、inspect、import。另已从公开的固定提交完成真实 installer 验证，详见下节；没有把目录复制测试当作原生安装证据。
-- 2026-11-11：补充评测接缝后完整 `node scripts/check.ts` 45/45 通过，七类评分规则自检、tracker、metadata、privacy 通过；`npm run typecheck` 通过。Windows 真实 rename/只读目标测试需在临时夹具中运行沙箱外命令；不以沙箱权限失败认定产品失败。新增提交的公开 CI 仍待推送。
+- 2026-11-11：补充评测接缝后完整 `node scripts/check.ts` 45/45 通过，七类评分规则自检、tracker、metadata、privacy 通过；`npm run typecheck` 通过。Windows 真实 rename/只读目标测试需在临时夹具中运行沙箱外命令；不以沙箱权限失败认定产品失败。提交 `b9507a4444148ce28fe0c9f94d3c28a5a441f7bc` 的 Windows 与 Ubuntu 公开 CI 均通过；后续文档提交仍需对应 CI。
 - TDD：新增每个脚本行为前先执行失败的 CLI/导出函数测试，再实现；companion 安装最初缺少 sibling 导致失败，扩展后同场景通过。静态文案不靠逐字匹配测试。
 
 ## 真实原生安装与更新
@@ -23,7 +23,7 @@
 
 固定 CLI 和模型尝试：Codex `0.167.0-alpha.3.2` / `gpt-6`，Claude Code `2.1.322` / `claude-sonnet-4-6`。许可修复前后原三个场景各运行六次，均为 `unverified`。补齐正向导入及新评分语义后，冻结四个场景各在两个宿主执行一次，共八次；仍全部 `unverified`：Codex 缺少隔离认证（401），Claude 未登录；没有调用者认证文件复制。八份记录均核对了真实执行窗口留存及 evidenceHash，`compareRuns([], runs)` 为 `unverified`。旧记录原样保留；新增 `$exists` 和生成时间规则改变了评分、观察与运行器指纹，不能与旧语义比较分数。
 
-最终 skill 与 companion 的整体指纹仍为 `541ae4bcaabdb04801b3e82f2394a276c5f9b2145934c2bb12f1ed81cc29d208`。本地忽略目录保留 run/evidence/host/stderr/invocation/scenario 证据，无通过的基线，不解除 12、13、15、21 的依赖。04 的一次性模型延期不适用于 11。
+最终 skill 与 companion 的整体指纹仍为 `541ae4bcaabdb04801b3e82f2394a276c5f9b2145934c2bb12f1ed81cc29d208`。本地忽略目录保留 run/evidence/host/stderr/invocation/scenario 证据，无通过的基线。2026-11-11 对 11 单独作出交付决定：合并后解除下游的实现依赖，将这四场景的真实基线及人工语义核对移交 [26](issues/26-v0-1-0-release-validation.md) 的硬发布门禁。此决定依据维护者的持续并行实施要求与常规判断授权，由执行代理明确记录；不是将 04 的例外自动推广，也不是模型通过证据。
 
 独立审查及意见处置见 [产品审查记录](reviews/2026-11-11-11-account.md)及[正向导入评测支持审查](reviews/2026-11-11-11-generated-time.md)；后者第一轮通过，无确认问题。
 

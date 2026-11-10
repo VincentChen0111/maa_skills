@@ -16,6 +16,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 04 为支持并行实现已完成实现交付，其模型基线因隔离认证为空移交本票。发布前必须清除此门禁；04 的完成状态不能作为模型已通过的证据，见 [help 验证记录](../help-verification.md)。
 
+11 在独立产品、原生安装及正向评测支持验证后，也以单独交付决定将模型验收移交本票。四场景八次真实调用均因隔离认证缺失而 unverified；实现交付不能替代模型验收，见 [account 验证记录](../account-verification.md)。
+
 ## 要交付的行为
 
 完成五个 skill 的发布验收，形成可复现的安装/更新、行为评测、版本核实及许可证据，按规格发布 v0.1.0。
@@ -27,6 +29,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 ## 验收条件
 
 - [ ] 补齐 04 的 Codex/Claude 各三个场景 `help-language`、`help-append`、`help-boundary` 的真实基线；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
+
+- [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。
 
 - [ ] 在两个临时宿主环境从实际发布内容原生安装和更新五个 skill，验证每个入口和共享脚本可达；开发目录联接也在临时位置验证。
 - [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，所有 skill 读取语言，结构化设置与偏好原话及各自写入边界一致。
