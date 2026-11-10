@@ -1,6 +1,6 @@
 # doctor 配置与遗留锁验证
 
-2026-11-11，06 从 05 squash 基点 `ddd0ca80a3367b589866efde73aa1c0205732c3a` 实施。当前是作者候选，工单仍进行中，独立审查和外部交付不能由作者测试代替。
+2026-11-11，06 从 05 squash 基点 `ddd0ca80a3367b589866efde73aa1c0205732c3a` 实施。实现验收已完成，固定产品 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b` 的完整 R2 通过，Standards/Spec 均无真实错误。经 [PR #40](https://github.com/VincentChen0111/maa_skills/pull/40) 待 squash 交付；模型及实机范围仍未验证。下方历史记录与最终验收分列。
 
 共享入口 `skills/maa-core/scripts/doctor.ts` 提供只读检查及最近脱敏记录；恢复由 `maa-config.ts` 的原事务实现负责。诊断字段包含状态、原因、修法和执行者；CLI 提供人类可读与 JSON 输出及 0/1/2 退出码。
 
@@ -44,3 +44,13 @@ R1 修后作者结果：doctor、场景、05 writer 定向组合 139 项全部�
 2026-11-11 根代理依据维护者既有常规推进授权及继续按依赖实施要求，对 06 **单独**作出有条件交付决定，不从 05 自动继承，也不称维护者明确免测：R1 错误修复并完整独立复核、离线/类型、双平台 CI、固定远程双宿主原生恢复全部通过，且所有实际模型尝试如实留存后，可交付实现。仅认证不可用可延期；真正完成后的行为失败/回归不得改成 unverified 或自动延期。
 
 doctor 真实基线与正向恢复语义，以及本次受影响 help/daily/core 的真实分数不降，保留为 [26 发布硬门禁](issues/26-v0-1-0-release-validation.md)。没有建立模型基线、人工语义核对或分数不降，不得声称这些项目通过；真实账号、MAA、模拟器和游戏仍未验证。
+
+## 固定修复候选的最终验收
+
+产品与原生安装固定源为 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b`。完整 [R2](reviews/2026-11-11-06-doctor-r2.md) 实现审查通过；独立运行 `node scripts/check.ts` 为 278 项中 277 通过、1 非 Windows 分支跳过，类型检查及 14 组额外探针通过。作者 276/2 与独立 277/1 的差异是 Windows 短路径条件，本轮独立环境实际通过该项。原受限环境失败记录保留。该 SHA 的 [双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42910595093) 通过。
+
+新临时原生环境 `.tmp/native-check-VhCOen` 的 32 条命令完成，预期非零仅安装目标已存在与两个 stale-check；实际已安装 CLI 在两个宿主完成合成遗留诊断、具名恢复、第二份备份、归档关联、读回、锁释放及正常关闭。Codex 23 个、Claude 176 个仓库文件逐字节等于固定源，R2 独立核对全部 199 文件和恢复结果。655 个宿主生成依赖另列哈希与锁文件元数据；未宣称独立核验 registry 包字节。相关残留进程 0。
+
+修后 `.tmp/06-r2-model-evidence/frozen-models-XfJS76` 新增 30 条实际调用，冻结框架仍为 c0b916、payload 为 67af7f8；15 次 Codex 401、15 次 Claude 未登录，无完成事件、无 runner 失败，全部 unverified。doctor 10 对、daily 14 对、core 6 对与已留存旧批次的模型/CLI/场景和框架指纹一致，比较仍 unverified；help 目录未变，沿用旧 c0b916 实际 6 对，不冒称修后重跑。两批共 92 份原始记录由 R2 独立重算 evidenceHash、normalizeHost、grade 与执行窗口，冻结文件与对应 Git 源核对。所有模型 fixture 已清理、相关 CLI 残留 0。
+
+本票单独列明的实现交付条件已经满足；doctor 成功模型基线、正向恢复语义及受影响 help/daily/core 分数不降继续阻塞 26。真实 MAA/模拟器/游戏、真实账号和跨版本升级仍未验证。最终验收记录只改文档，不改固定产品/skill/评测框架；原生仓库全量文件字节结论仅针对实际安装的 67af7f8。
