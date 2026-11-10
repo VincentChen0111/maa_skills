@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { parseMaaSnapshot, importMaaSnapshot, inspectMaaSnapshot, formatAccountSummary } from '../skills/maa-help/scripts/account-snapshot.ts';
+import { parseMaaSnapshot, importMaaSnapshot, inspectMaaSnapshot, formatAccountSummary } from '../skills/maa-core/scripts/account-snapshot.ts';
 
 const readAt = '2026-11-11T00:00:00.000Z';
 const callbacks = [
@@ -94,7 +94,7 @@ test('import CLI writes only a snapshot to the configured private directory and 
   const raw = JSON.stringify([...callbacks, { credentials: 'synthetic-account-secret', accountId: '<synthetic-id>' }]);
   await writeFile(inputFile, raw);
   const before = Date.now();
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../skills/maa-help/scripts/account-snapshot.ts', import.meta.url)), 'import'], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../skills/maa-core/scripts/account-snapshot.ts', import.meta.url)), 'import'], {
     input: JSON.stringify({ callbackFile: inputFile, format: 'markdown' }), encoding: 'utf8',
     env: { ...process.env, HOME: root, USERPROFILE: root, MAA_SKILLS_HOME: home },
   });

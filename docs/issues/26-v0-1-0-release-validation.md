@@ -6,7 +6,7 @@ Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
 GitHub Issue: [#28](https://github.com/VincentChen0111/maa_skills/issues/28)
-Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [25: MAA 版本核对与升级提醒](25-maa-version-verification.md)
+Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md)
 
 ## 背景与目标
 
@@ -16,7 +16,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 04 为支持并行实现已完成实现交付，其模型基线因隔离认证为空移交本票。发布前必须清除此门禁；04 的完成状态不能作为模型已通过的证据，见 [help 验证记录](../help-verification.md)。
 
-11 在独立产品、原生安装及正向评测支持验证后，也以单独交付决定将模型验收移交本票。四场景八次真实调用均因隔离认证缺失而 unverified；实现交付不能替代模型验收，见 [account 验证记录](../account-verification.md)。
+11 在独立产品、原生安装及正向评测支持验证后，也以单独交付决定将模型验收移交本票。四场景真实调用均因隔离认证缺失而 unverified；2026-11-11 改为 maa-core 载荷后的新尝试与新原生安装按验证记录单独核对；实现交付不能替代模型验收，见 [account 验证记录](../account-verification.md)。
 
 ## 要交付的行为
 
@@ -28,14 +28,14 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 验收条件
 
-- [ ] 补齐 04 的 Codex/Claude 各三个场景 `help-language`、`help-append`、`help-boundary` 的真实基线；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
+- [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
 
 - [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。
 
 - [ ] 在两个临时宿主环境从实际发布内容原生安装和更新五个 skill，验证每个入口和共享脚本可达；开发目录联接也在临时位置验证。
-- [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，所有 skill 读取语言，结构化设置与偏好原话及各自写入边界一致。
+- [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，操作类 skill 读取语言，maa-help 按用户当前语言回复，结构化设置与偏好原话及各自写入边界一致。
 - [ ] 离线脚本测试、评分规则自检、隐私检查通过；维护者本机对各 skill 起步 3–6 个场景及已有回归场景运行同模型前后评测，pass→fail 按规则重跑三次。
-- [ ] 核对全部已实现 MAA 依赖已登记；发布说明区分源码已核、实机已核和未验证，不将离线测试或历史经验算作实机通过。
+- [ ] 发布说明写明实机已核的 MAA 版本，区分实机已核和未验证，不将离线测试或历史经验算作实机通过；setup 和 doctor 按这份记录提醒。源码指纹的自动核对在 v0.1.0 之后由 [25](25-maa-version-verification.md) 实施，不是本票门禁。
 - [ ] 版本从 v0.1.0 开始，语义化版本号、插件描述和更新记录同步；经分支、独立审查、PR 及 squash 合并后发布，main 保护保持。
 - [ ] 逐文件检查公开内容与第三方声明，保留 MIT 全文、原版权行、借用提交号及致谢；不包含私人路径、账号数据、配置原文或打包游戏数据。
 - [ ] 记录实际运行结果及未验证项；未执行的真实设备验证不记通过，若需要用户操作则明确跟踪到相应状态。
@@ -47,7 +47,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 依赖理由
 
-08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链；25 完成版本跟踪。其余票经这些依赖传递纳入。
+08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
 
 ## 实现与交付约定
 

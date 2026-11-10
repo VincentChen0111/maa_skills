@@ -59,4 +59,4 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 记录格式参考 [Codex 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)与 [Claude 非交互模式](https://code.claude.com/docs/en/headless)。实现独立编写，只借鉴公开的行为评分思路；没有复制原私有项目的代码、提示词或真实账号基线。
 
-通过导出函数 `runScenario` 评测依赖共享载荷的 skill 时，用 `companionSkills: { "maa-help": absoluteDirectory }` 同时安装相邻目录。目录按原字节复制到两个临时宿主，名称限制为小写 skill 名且不能覆盖 subject/probe；源文件及 companion 均计入 skill 版本哈希。此选项不借用已安装 skill。
+通过导出函数 `runScenario` 评测依赖共享载荷的 skill 时，用 `companionSkills: { "maa-core": absoluteDirectory }` 同时安装相邻目录。目录按原字节复制到两个临时宿主，名称限制为小写 skill 名且不能覆盖 subject/probe；源文件及 companion 均计入 skill 版本哈希。此选项不借用已安装 skill。

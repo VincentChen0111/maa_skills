@@ -2,8 +2,8 @@ import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: null, server: 'CN' };
 const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [],
   downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'] };
-const read = { file: 'maa-help/scripts/preferences.ts', action: 'read' };
-const inspect = { file: 'maa-help/scripts/account-snapshot.ts', action: 'inspect' };
+const read = { file: 'maa-core/scripts/preferences.ts', action: 'read' };
+const inspect = { file: 'maa-core/scripts/account-snapshot.ts', action: 'inspect' };
 const snapshotFile = 'private/account-snapshot.json';
 const snapshotGrants = Object.entries({
   $exists: true, version: 1, source: 'maa',
@@ -35,5 +35,5 @@ export const accountScenarios: ScenarioDefinition[] = [
     ] }, policy: { ...policy, grants: snapshotGrants, expectedChanges: snapshotGrants,
       allowedKeys: [...snapshotGrants.map(grant => grant.key), 'readAt'],
       generatedUtcFields: [{ file: snapshotFile, key: 'readAt' }],
-      expectedInvocations: [read, inspect, { file: 'maa-help/scripts/account-snapshot.ts', action: 'import' }] } },
+      expectedInvocations: [read, inspect, { file: 'maa-core/scripts/account-snapshot.ts', action: 'import' }] } },
 ];

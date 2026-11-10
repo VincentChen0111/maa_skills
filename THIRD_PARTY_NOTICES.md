@@ -12,7 +12,7 @@ MAA 代码和资源、游戏数据、一图流和企鹅物流数据不随包分�
 
 - 上游：[nhyo/dsh-maa-cli](https://github.com/nhyo/dsh-maa-cli)，固定提交 `cdeaa8fac12bdc1db5b4ea5c33fca358dc6cf43b`。
 - 来源文件：`src/operators/depot.js`、`src/operators/operator-box.js`；逐字核对日期 2026-11-11。
-- 改写文件：`skills/maa-help/scripts/account-snapshot.ts`。保留回调字段与数值校验思路；改为统一快照、显式未知值、每域最近状态、GUI 本地缓存输入、互斥及原子保存和白名单摘要。未借用运行扫描、UI 或外部数据。
+- 改写文件：`skills/maa-core/scripts/account-snapshot.ts`。保留回调字段与数值校验思路；改为统一快照、显式未知值、每域最近状态、GUI 本地缓存输入、互斥及原子保存和白名单摘要。未借用运行扫描、UI 或外部数据。
 - 原版权及 MIT 全文如下：
 
 ```text
@@ -41,4 +41,4 @@ SOFTWARE.
 
 MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指纹见 [account 来源核对](docs/account-sources.md)；本仓库不复制其 AGPL 实现。
 
-原生单目录安装时，[maa-help/LICENSE](skills/maa-help/LICENSE) 随共享脚本携带完整 MIT 许可和上述原版权行，避免仅引用仓库根文件而丢失许可。
+原生单目录安装时，[maa-core/LICENSE](skills/maa-core/LICENSE) 随共享脚本携带完整 MIT 许可和上述原版权行，避免仅引用仓库根文件而丢失许可。

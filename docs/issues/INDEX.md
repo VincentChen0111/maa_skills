@@ -37,11 +37,11 @@
 | 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 未开始 |
 | 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 未开始 |
 | 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 未开始 |
-| 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24、25 | 未开始 |
+| 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24 | 未开始 |
 
 <!-- tracker:end -->
 
-26 条 GitHub Issues 均标记为 ready-for-agent；39 条直接依赖已设置为 GitHub 原生阻塞关系，以上表中的本地票号对应。
+26 条 GitHub Issues 均标记为 ready-for-agent；发布时设置了 39 条 GitHub 原生阻塞关系，与当时的本地票号对应。2026-11-11 本地去掉了 26 对 25 的依赖，现为 38 条；GitHub 上 #28 对 #27 的阻塞关系尚未同步移除。
 
 ## 用户故事覆盖
 

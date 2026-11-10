@@ -1,6 +1,6 @@
 # 识别导入接口
 
-共享实现位于相邻 `maa-help/scripts/account-snapshot.ts`。Node 24 运行；动作 `inspect` 只读，`import` 写入设置指定的私有目录内 `account-snapshot.json`。标准输入为一个 JSON 对象，禁止把路径或内容插值到 shell 命令。JSON 输出只含状态、计数、时间和 Markdown 摘要，不输出路径、账号标识或原始回调；`format: "markdown"` 可直接输出摘要。输出语言优先采用设置文件，未设时使用 `currentLanguage`（默认 `zh-CN`；目前摘要模板有中文及英文，其他语言由 agent 按设置翻译）。
+共享实现位于相邻 `maa-core/scripts/account-snapshot.ts`。Node 24 运行；动作 `inspect` 只读，`import` 写入设置指定的私有目录内 `account-snapshot.json`。标准输入为一个 JSON 对象，禁止把路径或内容插值到 shell 命令。JSON 输出只含状态、计数、时间和 Markdown 摘要，不输出路径、账号标识或原始回调；`format: "markdown"` 可直接输出摘要。输出语言优先采用设置文件，未设时使用 `currentLanguage`（默认 `zh-CN`；目前摘要模板有中文及英文，其他语言由 agent 按设置翻译）。
 
 | 输入 | 用途 |
 | --- | --- |
