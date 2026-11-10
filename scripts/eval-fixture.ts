@@ -8,7 +8,7 @@ import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.t
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
 export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure';
-export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode };
+export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown> };
 
 async function files(root: string, directory = ''): Promise<Map<string, Buffer>> {
   const result = new Map<string, Buffer>();
@@ -22,6 +22,10 @@ async function files(root: string, directory = ''): Promise<Map<string, Buffer>>
 }
 
 export async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
+  for (const url of Object.keys(options.networkFixtures ?? {})) {
+    if (!/^https:\/\/raw\.githubusercontent\.com\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[a-f0-9]{40}\/[A-Za-z0-9][A-Za-z0-9._/-]*\.json$/.test(url)
+      || url.split('/').slice(6).some(part => !part || part === '.' || part === '..')) throw new Error('network-fixture-url');
+  }
   const root = await mkdtemp(join(tmpdir(), 'maa-evaluation-'));
   const workspace = join(root, 'workspace');
   const home = join(root, 'home');
@@ -74,6 +78,13 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       const rendered = JSON.parse(JSON.stringify(value), (_key, item: unknown) => item === '{{private}}' ? join(workspace, 'private') : item === '{{workspace}}' ? workspace : item);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, JSON.stringify(rendered));
+    }
+    if (options.networkFixtures !== undefined) {
+      const loader = join(workspace, '.eval-network-fixture.mjs');
+      // These bytes come from the trusted scenario and repository, never from model events.
+      await writeFile(join(workspace, '.eval-network-responses.json'), JSON.stringify(options.networkFixtures));
+      await writeFile(loader, await readFile(new URL('../eval/network-fixture.mjs', import.meta.url)));
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(loader).href}`.trim();
     }
     const value = { file: 'maa/config.json', key: 'queue', value: ['1-7'] };
     const policy: Policy = { allowedKeys: ['queue'], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [value],

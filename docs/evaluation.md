@@ -31,6 +31,8 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 
+13 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 进程替代 `fetch`，其他入口保持原行为。实际公共读取接口仍计算响应字节的 SHA-256，CLI 调用与文件差异仍实测，不接受模型提供的成功事件代替它们。映射、启用逻辑、预加载器内容进入场景指纹，映射保存于 `scenario.json`；工作区映射或预加载器被改写照常产生未授权差异。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。新增运行器语义后的场景与旧记录不可比，旧记录保留。
+
 `jsonFiles` 中的顶层 JSON 对象按字段比较；创建和删除另产生 `$exists` 布尔变化，空对象也不会丢失。数组、损坏 JSON 及含保留键 `$exists` / `$file` 的对象退回 `$file` 完整字节比较。创建文件须同时授权 `$exists: true` 和每个预期字段；额外字段、删除或未授权路径照常失败。
 
 确实由产品产生的读取时间可由可信场景声明 `generatedUtcFields: [{ file: 'private/account-snapshot.json', key: 'readAt' }]`。它同时是该字段的写入授权和必需变化：只接受确切相对 JSON 文件、非保留顶层标识符，拒绝通配符、重复项及与静态 `grants` / `expectedChanges` 同位置的声明。其余字段仍用精确值授权，生成时间也须通过允许键、禁止键、持锁范围和秘密输出规则。
