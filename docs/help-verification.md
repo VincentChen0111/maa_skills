@@ -16,16 +16,20 @@
 
 场景定义见 [maa-help 场景](../eval/maa-help/scenarios.ts)，均为合成数据。固定模型参数：Codex `gpt-6`，Claude `claude-sonnet-4-6`；后者可用性未验证。
 
-| 场景 | Codex CLI 0.167.0-alpha.3.2 | Claude CLI |
+| 场景 | Codex CLI 0.167.0-alpha.3.2 | Claude CLI 2.1.322 |
 | --- | --- | --- |
-| help-language | 未验证：隔离认证为空，401 | 未验证：CLI 不可用 |
-| help-append | 未验证：隔离认证为空，401 | 未验证：CLI 不可用 |
-| help-boundary | 未验证：隔离认证为空，401 | 未验证：CLI 不可用 |
+| help-language | 未验证：隔离认证为空，401 | 未验证：隔离认证为空，未登录 |
+| help-append | 未验证：隔离认证为空，401 | 未验证：隔离认证为空，未登录 |
+| help-boundary | 未验证：隔离认证为空，401 | 未验证：隔离认证为空，未登录 |
 
-比较器返回 `unverified`，没有建立通过的产品基线。原始证据与版本摘要保留在本机忽略目录，不公开账号相关路径或服务连接信息。没有把脚本测试当作 skill 模型评测；没有声称改动前后分数已验证。
+首次尝试时 Claude CLI 不可用；随后按 [Claude 官方安装说明](https://code.claude.com/docs/en/setup#install-with-npm)，将官方 npm 包固定为 2.1.322，仅下载到被忽略的临时目录。用这两个固定 CLI 对修正后的同一候选再次执行三个场景，Claude 正确发现待测 skill，但返回 `Not logged in`；Codex 均返回 401。
+
+比较器返回 `unverified`，没有建立通过的产品基线。原始前后尝试、版本摘要与观察器版本均保留在本机忽略目录，不公开账号相关路径或服务连接信息。没有把脚本测试当作 skill 模型评测；没有声称改动前后分数已验证。阻塞只剩隔离的模型认证；未读取或复制正常用户账号凭据。
 
 ## 原生安装
 
-Codex 原生 skill-installer 已从固定提交 `27fc6ef4f1a6353a8e13b9c7998fea5f39913b04`、路径 `skills/maa-help` 安装到新建的临时 home。该临时安装只含 maa-help；独立执行 `set`、`read`、`append` 均成功，语言切为 en，原话记录追加一条。没有依赖 clone 的相邻工具或另一份安装，正常用户安装未改动。
+Codex 原生 skill-installer 已从固定提交 `9e319b86fc6d09163fca5789f58255108e0d04e7`、路径 `skills/maa-help` 安装到新建的临时 home。该临时安装只含 maa-help；重复安装正确拒绝覆盖（退出码 1），核实目标位于临时根目录后移除这份临时安装并重新安装成功。独立执行 `set`、`read`、`append` 均成功，语言切为 en，原话记录追加。没有依赖 clone 的相邻工具或另一份安装，正常用户安装未改动。
 
-Claude CLI 不可用，因此插件市场实际安装/更新与模型调用尚未验证。两个目录布局的脚本验证不能替代这项宿主验收。
+Claude CLI 2.1.322 在全新隔离 home 中，通过原生 `plugin marketplace add` 添加候选分支、`plugin install` 安装 maa-skills。原生市场刷新和插件更新命令成功，更新结果为当前版本已最新；未模拟跨版本升级。实际缓存中的偏好脚本与上述提交一致，并独立执行 `set`、`read`、`append` 成功。
+
+两种原生安装载荷及更新入口已验证；模型驱动的 help 响应、路由及边界行为仍须通过上述真模型基线。离线实现经两轮[独立审查](reviews/2026-11-10-04-help.md)通过，交付为 [草稿 PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)，未合并、未关闭工单。
