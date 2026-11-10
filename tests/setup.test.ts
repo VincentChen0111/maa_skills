@@ -1,17 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { checkSetup, checkRuntime, prepareSetup, discoverSetupConnections, testSetupConnection, applySetupConnection, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
-import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { executeConfigWrite, executeSetupConfigWrite, inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
-  const root = await mkdtemp(join(tmpdir(), 'maa-setup-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'settings'); const maaDirectory = join(root, 'maa'); const privateDirectory = join(root, 'private');
   await mkdir(join(maaDirectory, 'config'), { recursive: true });
@@ -190,5 +190,102 @@ test('connection mutation rejects stale evidence and live locks; failed restart 
       assert.deepEqual(JSON.parse(await readFile(f.configFile, 'utf8')), f.config);
     }
     assert.doesNotMatch(JSON.stringify(result), /127\.0\.0\.1|Synthetic private name|maa-setup-/);
+  });
+});
+
+test('unchanged connections still report active, stale and unreadable transaction locks without writing', async t => {
+  for (const mode of ['active', 'stale', 'malformed', 'restart-failed']) await t.test(mode, async t => {
+    const f = await fixture(t); const adbPath = join(f.maaDirectory, 'adb.exe'); await writeFile(adbPath, 'synthetic adb');
+    await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
+    const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? '127.0.0.1:5555 device\n' : args.at(-1) === 'get-state' ? 'device' : 'connected' }) };
+    let running = false; let starts = 0;
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; },
+      start: async () => { starts++; if (mode !== 'restart-failed') running = true; } };
+    const context = { home: f.home, adbPaths: [adbPath], addresses: ['127.0.0.1:5555'] };
+    const initial = await discoverSetupConnections(context, adb);
+    const request = { host: 'codex' as const, reference: 'synthetic install', closedConfirmed: true, discoveryRevision: initial.discoveryRevision };
+    assert.equal((await applySetupConnection(request, context, adb, maa)).status, mode === 'restart-failed' ? 'unknown' : 'complete');
+    const lockFile = join(f.maaDirectory, 'config/.maa-skills.lock');
+    if (mode !== 'restart-failed') await writeFile(lockFile, mode === 'malformed' ? '{' : JSON.stringify({ pid: mode === 'active' ? process.pid : 2147483647 }));
+    const before = await readFile(f.configFile); const lock = await readFile(lockFile); const runs = await readFile(join(f.privateDirectory, 'daily-runs.jsonl'));
+    const found = await discoverSetupConnections(context, adb);
+    const result = await applySetupConnection({ ...request, discoveryRevision: found.discoveryRevision }, context, adb, maa);
+    assert.equal(result.status, ['active', 'restart-failed'].includes(mode) ? 'busy' : 'unknown', JSON.stringify(result));
+    assert.equal(result.reason, 'lock-requires-reconciliation'); assert.equal(starts, 1);
+    assert.deepEqual(await readFile(f.configFile), before); assert.deepEqual(await readFile(lockFile), lock);
+    assert.deepEqual(await readFile(join(f.privateDirectory, 'daily-runs.jsonl')), runs);
+  });
+});
+
+test('ordinary writer exports and CLI cannot grant connection changes without setup selection and retest', async t => {
+  const samples = [
+    { profile: 1, field: 'Address', value: '192.0.2.1:5555', source: 'approved-report' as const },
+    { profile: 0, field: 'Address', value: '127.0.0.1:5555', source: 'current-request' as const },
+    { profile: 0, field: 'AdbPath', value: 'adb/platform-tools/adb.exe', source: 'current-request' as const },
+    { profile: 0, field: 'Address', value: '', source: 'current-request' as const },
+    { profile: 0, field: 'AutoDetect', value: true, source: 'current-request' as const },
+  ];
+  for (const sample of samples) await t.test(`${sample.profile} ${sample.field} ${sample.source}`, async t => {
+    const f = await fixture(t);
+    Reflect.set(f.config.Configurations, 'Synthetic second profile', structuredClone(f.config.Configurations['Synthetic private name']));
+    await writeFile(f.configFile, JSON.stringify(f.config));
+    await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
+    const body = { host: 'codex' as const, expectedRevision: (await inspectConfiguration(f.maaDirectory)).revision, closedConfirmed: true,
+      authorization: { source: sample.source, reference: 'synthetic direct connection request' },
+      changes: [{ path: ['Configurations', sample.profile, 'Gui', 'ConnectSettings', sample.field], value: sample.value }] };
+    let processCalls = 0;
+    const maa: MaaProcess = { inspect: async () => { processCalls++; return { running: false, treeExited: true, idle: true, ready: true }; }, close: async () => { processCalls++; }, start: async () => { processCalls++; } };
+    const original = await readFile(f.configFile);
+    const result = await executeConfigWrite({ ...body, ...f }, maa);
+    assert.equal(result.status, 'rejected', JSON.stringify(result)); assert.equal(result.reason, 'request-invalid');
+    assert.equal(processCalls, 0); assert.deepEqual(await readFile(f.configFile), original);
+    const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../skills/maa-core/scripts/maa-config.ts', import.meta.url)), 'write'],
+      { input: JSON.stringify(body), env: { ...process.env, MAA_SKILLS_HOME: f.home }, encoding: 'utf8', windowsHide: true });
+    assert.equal(cli.status, 1); assert.equal(JSON.parse(cli.stdout).reason, 'request-invalid');
+    await assert.rejects(readdir(f.privateDirectory), { code: 'ENOENT' });
+  });
+});
+
+test('setup writer owns retesting and cannot combine arbitrary changes or another authorization grant', async t => {
+  const f = await fixture(t); const adbPath = join(f.maaDirectory, 'adb.exe'); await writeFile(adbPath, 'synthetic adb');
+  await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
+  const context = { home: f.home, adbPaths: [adbPath], addresses: ['127.0.0.1:5555'] };
+  const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? '127.0.0.1:5555 device\n' : args.at(-1) === 'get-state' ? 'device' : 'connected' }) };
+  const found = await discoverSetupConnections(context, adb);
+  const request = { discoveryRevision: found.discoveryRevision, host: 'codex' as const, reference: 'synthetic current request', closedConfirmed: true };
+  const before = await readFile(f.configFile); let maaCalls = 0;
+  const maa: MaaProcess = { inspect: async () => { maaCalls++; return { running: false, treeExited: true, idle: true, ready: false }; }, close: async () => { maaCalls++; }, start: async () => { maaCalls++; } };
+  for (const extra of [{ changes: [{ path: ['Configurations', 1, 'Gui', 'ConnectSettings', 'Address'], value: '192.0.2.1:5555' }] },
+    { authorization: { source: 'approved-report', reference: 'synthetic report' } }, { jobPlan: {} }, { trainingPlan: {} }, { connectionMode: 'recovery' }]) {
+    assert.equal((await executeSetupConfigWrite({ ...request, ...extra }, context, adb, maa)).reason, 'request-invalid');
+  }
+  const failed: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? '127.0.0.1:5555 device\n' : 'offline' }) };
+  assert.equal((await executeSetupConfigWrite(request, context, failed, maa)).reason, 'connection-test-failed');
+  assert.equal(maaCalls, 0); assert.deepEqual(await readFile(f.configFile), before);
+  await assert.rejects(readdir(f.privateDirectory), { code: 'ENOENT' });
+});
+
+test('corrupt or unreadable settings produce specific read-only checks without first-run prompts', async t => {
+  for (const kind of ['json', 'schema', 'directory']) await t.test(kind, async t => {
+    const f = await fixture(t); await mkdir(f.home, { recursive: true }); const path = join(f.home, 'config.json');
+    const bytes = kind === 'json' ? '{broken synthetic' : '{"version":999,"privateDirectory":"synthetic-relative"}';
+    if (kind === 'directory') await mkdir(path); else await writeFile(path, bytes);
+    const result = spawnSync(process.execPath, ['skills/maa-core/scripts/setup.ts', 'check', '--json'], {
+      env: { ...process.env, HOME: f.root, USERPROFILE: f.root, MAA_SKILLS_HOME: f.home }, input: '{}', encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 1, result.stdout);
+    const checked = JSON.parse(result.stdout); const settings = checked.checks.find((item: { id: string }) => item.id === 'settings');
+    assert.equal(settings.status, 'error'); assert.equal(settings.reason, 'settings-unreadable');
+    assert.equal(settings.repair.executor, 'user'); assert.match(settings.repair.description, /preserv|restore|repair/i);
+    assert.equal(checked.checks.find((item: { id: string }) => item.id === 'node').status, 'normal');
+    assert.equal(checked.checks.find((item: { id: string }) => item.id === 'platform').status, process.platform === 'win32' ? 'normal' : 'error');
+    assert.equal(checked.checks.find((item: { id: string }) => item.id === 'private-directory').reason, 'private-directory-unverified');
+    assert.equal(checked.needsLanguagePrompt, false); assert.equal(checked.needsDirectoryPrompt, false);
+    assert.equal(checked.language, null); assert.doesNotMatch(result.stdout, /broken synthetic|synthetic-relative|maa-setup-/);
+    await assert.rejects(prepareSetup({ home: f.home }));
+    if (kind === 'directory') assert.deepEqual(await readdir(path), []); else assert.equal(await readFile(path, 'utf8'), bytes);
+    assert.deepEqual(await readdir(f.home), ['config.json']); await assert.rejects(readdir(f.privateDirectory), { code: 'ENOENT' });
+    const explicit = await checkSetup({ home: f.home, maaDirectory: f.maaDirectory }, async () => null);
+    assert.equal(explicit.checks.find(item => item.id === 'maa')?.status, 'normal');
+    assert.equal(explicit.checks.find(item => item.id === 'settings')?.reason, 'settings-unreadable');
   });
 });

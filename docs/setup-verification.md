@@ -30,4 +30,14 @@
 
 根任务已报告：固定 ecf 框架与旧 payload 788ac13 的 36 次实际调用完成（18 次 Codex 401、18 次 Claude 未登录；0 完成、0 runner failure），证据位于根任务忽略目录 `.tmp/07-model-evidence/frozen-models-39mcHH`。旧尝试不能证明候选通过，最终后态与 setup 新基线仍待实际运行及独立核对。
 
-临时安装 CLI smoke 可执行 `node scripts/setup-smoke.ts <已安装 maa-core 的绝对目录> [codex|claude]`（默认 codex），另需同版 `tests/fixtures/setup-boundary.mjs`。脚本只读安装目录，使用新的临时 home、合成 MAA/adb 文件；实际执行 preferences 首次设置、check、prepare、discover、test、关闭未确认拒绝、确认后 apply、重复 unchanged，核配置、备份、事务宿主与进程边界记录。loader 只替代精确安装 setup 的 adb/版本元数据进程调用和 MAA 进程模块，不替换文件系统、Node 版本、配置 writer 或内部函数。显式 adbPaths/addresses 将发现限定到合成路径，未扫描真实模拟器；结果不能冒称真实设备连接通过。
+临时安装 CLI smoke 可执行 `node scripts/setup-smoke.ts <已安装 maa-core 的绝对目录> [codex|claude]`（默认 codex），另需同版 `tests/fixtures/setup-boundary.mjs`。脚本只读安装目录，使用新的临时 home、合成 MAA/adb 文件；实际执行 preferences 首次设置、check、prepare、discover、test、关闭未确认拒绝、确认后 apply、重复 unchanged，核配置、备份、事务宿主与进程边界记录。loader 只替代精确安装 setup／共用候选模块的 adb/版本元数据进程调用和 writer 的 MAA 进程模块，不替换文件系统、Node 版本、配置 writer 或内部函数。显式 adbPaths/addresses 将发现限定到合成路径，未扫描真实模拟器；结果不能冒称真实设备连接通过。
+
+## R1 失败、修复及验证
+
+完整独立 [R1 原文](reviews/2026-11-11-07-setup-r1.md)原样保留，结论要求修改：S1 一致连接漏查锁、S2 普通 writer 连接权限过宽、S3 损坏设置缺具体检查、T1 Windows 短路径夹具错拒，四项均接受。原候选 `847c07e` 的 Windows CI run `42918403791` / job `130186684875` 为 305 项、298 pass、6 fail、1 skip；Ubuntu 通过。此历史失败不会由本机通过覆盖，修后固定新候选双平台 CI 仍待根任务实际验证。
+
+[逐项处置](reviews/2026-11-11-07-setup-r1-fixes.md)记录测试先行及拒绝绕过的设计。原公开探针先复现 4 pass／4 fail，修后 8／8 通过；新增测试覆盖 active／stale／损坏锁及实际重开失败后再次 apply、普通 writer 导出与 CLI 拒绝连接、setup 拒绝异种授权并自己复测、损坏或无法读取设置的逐项诊断和保留。恢复原相对 adb 路径、空地址、开关及关停配置漂移仍通过。T1 统一 fs.promises.realpath／realpathSync.native 的原生身份，明确拒绝异目录同名 adb；五个固定场景及原评测框架不变。
+
+修后完整入口的沙箱运行 `.tmp/07-r1-offline-sandbox.log`：322 项、299 pass、20 fail、3 skip，失败来自既有 junction EPERM、临时 GUI 编译和本机 loopback 夹具限制。相同产品与 TEMP/TMP 的正常权限对照 `.tmp/07-r1-offline-normal-permission.log`：322 项、319 pass、0 fail、3 skip，tracker／privacy／metadata 无问题，评分规则 7／样例 14 通过。三项跳过分别为已有 help 短路径、新增 setup 短路径（本文件系统无 8.3 alias）和 Windows 上的非 Windows 边界用例；短路径未在本机执行通过。`npm run typecheck`、`node scripts/tracker.ts --write` 与差异空白检查通过。
+
+逐文件检查本次四项修复的产品、测试、skill、spec 和审查记录，新增内容仅含合成目录/地址、公共来源与日志引用；自动隐私检查为空。原审查报告复制前后的 SHA-256 均为 `65181bb9ba820db4aadfa763f62eb378919f1e694d56d940afe616892975dadc`。当前仍等待实际主线整合、R2 与根任务外部验证，未勾验收、未解除 08／09、未自行运行模型或追加审查员。

@@ -10,7 +10,7 @@ export async function runSetupSmoke(installedCore: string, host: 'codex' | 'clau
   if (process.platform !== 'win32') throw new Error('windows-smoke-required');
   if (host !== 'codex' && host !== 'claude') throw new Error('host-invalid');
   const core = await realpath(installedCore);
-  const root = await mkdtemp(join(tmpdir(), 'maa-setup-native-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-native-')));
   try {
     const workspace = join(root, 'workspace'); const home = join(root, 'home'); const privateDirectory = join(workspace, 'private');
     for (const path of [join(workspace, 'config'), privateDirectory, home, join(home, 'tmp')]) await mkdir(path, { recursive: true });

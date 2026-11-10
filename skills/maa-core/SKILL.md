@@ -11,6 +11,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | --- | --- | --- |
 | `scripts/preferences.ts` | 读写结构化设置（语言、私有目录、MAA 目录、服务器），追加偏好原话 | [偏好接口](references/preferences.md) |
 | `scripts/setup.ts` | 现场接入检查、私有目录骨架与环境记录、adb 候选测试；连接设置交统一写入器 | [接入接口](../maa-setup/references/setup.md) |
+| `scripts/setup-connection.ts` | setup 与统一 writer 共用的候选选择及复测；由 setup 入口调用 | [接入接口](../maa-setup/references/setup.md) |
 | `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
 | `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |

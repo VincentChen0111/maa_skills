@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, writeFile, mkdir, realpath } from 'node:fs/promises';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { setupScenarios } from '../eval/maa-setup/scenarios.ts';
@@ -53,16 +53,39 @@ test('installed setup CLI applies a selected synthetic connection through the re
     assert.equal(run('apply', { ...request, closedConfirmed: true }).value.status, 'complete');
     const config = JSON.parse(await readFile(join(fixture.workspace, 'config/gui.new.json'), 'utf8'));
     assert.deepEqual(config.Configurations['Synthetic profile'].Gui.ConnectSettings, {
-      AdbPath: context.adbPaths[0], Address: '127.0.0.1:5555', AddressHistory: [], AutoDetect: false, AlwaysAutoDetect: false,
+      AdbPath: await realpath(context.adbPaths[0]!), Address: '127.0.0.1:5555', AddressHistory: [], AutoDetect: false, AlwaysAutoDetect: false,
     });
     assert.equal((await readdir(join(fixture.workspace, 'private/maa-config-backups'))).length, 1);
     const again = run('discover', context);
     assert.equal(run('apply', { ...request, discoveryRevision: again.value.discoveryRevision }).value.status, 'unchanged');
+    // A same-named executable elsewhere must never be accepted by the process boundary.
+    const outside = join(fixture.workspace, 'other/synthetic-adb.exe'); await mkdir(join(fixture.workspace, 'other'));
+    await writeFile(outside, 'synthetic non-executable file');
+    const forbidden = { adbPaths: [outside], addresses: ['127.0.0.1:5555'] };
+    const untrusted = run('discover', forbidden); assert.equal(untrusted.value.failedAdb, 1);
+    assert.equal(run('test', { ...forbidden, discoveryRevision: untrusted.value.discoveryRevision }).value.status, 'failed');
     assert.equal(run('prepare', {}).code, 0);
     const commands = (await readFile(join(fixture.workspace, '.setup-boundary.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     assert.equal(commands.filter(item => item.kind === 'maa-start').length, 1);
     assert.equal(commands.filter(item => item.kind === 'adb').every(item => ['devices', 'connect', '-s'].includes(item.args[0])), true);
   });
+});
+
+test('native smoke accepts an actual Windows short-path alias without widening process identity', { skip: process.platform !== 'win32' }, async t => {
+  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-setup', import.meta.url)),
+    companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) } });
+  t.after(() => fixture.dispose());
+  const script = '$fso = New-Object -ComObject Scripting.FileSystemObject; [Console]::Write($fso.GetFolder($env:MAA_SHORT_PATH_INPUT).ShortPath)';
+  const workspace = await realpath(fixture.workspace);
+  const aliasResult = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { env: { ...process.env, MAA_SHORT_PATH_INPUT: workspace }, encoding: 'utf8', windowsHide: true });
+  assert.equal(aliasResult.status, 0, aliasResult.stderr); const alias = aliasResult.stdout.trim();
+  if (alias.toLowerCase() === workspace.toLowerCase()) { t.skip('filesystem provides no Windows short-path alias'); return; }
+  assert.equal(await realpath(alias), workspace);
+  const smoke = spawnSync(process.execPath, ['scripts/setup-smoke.ts', join(alias, '.agents/skills/maa-core'), 'claude'],
+    { env: { ...process.env, TEMP: alias, TMP: alias }, encoding: 'utf8', windowsHide: true });
+  assert.equal(smoke.status, 0, smoke.stdout + smoke.stderr);
+  const result = JSON.parse(smoke.stdout); assert.equal(result.transactionHost, 'claude'); assert.equal(result.status, 'pass');
 });
 
 test('the public native smoke validates first settings and connection writes without changing the installation', { skip: process.platform !== 'win32' }, async t => {
