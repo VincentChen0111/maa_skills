@@ -22,7 +22,7 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
     Current: 'Synthetic profile', ConfigVersion: 1,
     Configurations: { 'Synthetic profile': {
       Gui: { ConnectSettings: { Address: 'synthetic-secret-address' }, StartUpSettings: { RunDirectly: false }, RuntimeSettings: { StartGame: false } },
-      TaskQueue: [{ TaskType: 'Fight', IsEnable: false, UseStone: false, UseMedicine: false, MedicineCount: 0, UseExpiringMedicine: false, UseExpireMedicineForActivity: false, StagePlan: ['1-7'] }, { TaskType: 'Infrast', IsEnable: true, PlanSelect: 3 }, { TaskType: 'Award', IsEnable: false, FreeGacha: false }],
+      TaskQueue: [{ $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: false, UseMedicine: false, MedicineCount: 0, UseExpiringMedicine: false, UseExpireMedicineForActivity: false, StagePlan: ['1-7'] }, { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: true, PlanSelect: 3 }, { $type: 'AwardTask', TaskType: 'Award', IsEnable: false, FreeGacha: false }],
     } },
     Timers: { List: [], NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5, CustomConfig: false },
     UnknownSetting: { keep: 'synthetic-secret-token' },
@@ -31,6 +31,47 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   await writeFile(file, JSON.stringify(config));
   return { root, maa, privateDirectory, file, config };
 }
+
+test('a task label cannot disguise its runtime model in the safe configuration summary', async (t) => {
+  const f = await fixture(t);
+  Object.assign(f.config.Configurations['Synthetic profile'], { TaskQueue: [
+    { $type: 'StartUpTask', TaskType: 'Infrast', IsEnable: false, AccountName: 'synthetic-account' },
+    { $type: 'FightTask', TaskType: 'Infrast', IsEnable: true, UseStone: true },
+    { $type: 'FutureTask', TaskType: 'Infrast', IsEnable: false },
+    { TaskType: 'Infrast', IsEnable: false },
+    { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: false },
+  ] });
+  await writeFile(f.file, JSON.stringify(f.config));
+  const summary = await inspectConfiguration(f.maa);
+  assert.deepEqual(summary.profiles[0]!.queue.map(task => task.type), ['OtherTask', 'OtherTask', 'OtherTask', 'OtherTask', 'Infrast']);
+  assert.doesNotMatch(JSON.stringify(summary), /synthetic-account|StartUpTask/);
+});
+
+test('runtime task identity controls enable, medicine, reordering and timer authorization', async (t) => {
+  const cases = [
+    { name: 'login disguised as base', task: { $type: 'StartUpTask', TaskType: 'Infrast', IsEnable: false, AccountSwitchEnabled: true, AccountName: 'synthetic-account' }, field: 'IsEnable', value: true },
+    { name: 'unknown runtime model', task: { $type: 'FutureTask', TaskType: 'Infrast', IsEnable: false }, field: 'IsEnable', value: true },
+    { name: 'missing runtime model', task: { TaskType: 'Infrast', IsEnable: false }, field: 'IsEnable', value: true },
+    { name: 'medicine on disguised login', task: { $type: 'StartUpTask', TaskType: 'Fight', IsEnable: false, UseMedicine: false, MedicineCount: 0, UseStone: false, UseExpiringMedicine: false, UseExpireMedicineForActivity: false }, field: 'UseMedicine', value: false },
+    { name: 'moving a disabled mismatched task', task: { $type: 'StartUpTask', TaskType: 'Infrast', IsEnable: false }, field: 'reorder', value: [1, 0] },
+    { name: 'timer with disguised consuming Fight', task: { $type: 'FightTask', TaskType: 'Infrast', IsEnable: true, UseStone: true, UseStoneAllowSave: true, UseMedicine: true, MedicineCount: 5 }, field: 'timer', value: null },
+  ];
+  for (const sample of cases) await t.test(sample.name, async (t) => {
+    const f = await fixture(t); let running = false; let processCalls = 0;
+    Object.assign(f.config.Configurations['Synthetic profile'], { TaskQueue: [sample.task, { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: false }] });
+    Object.assign(f.config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' }] });
+    await writeFile(f.file, JSON.stringify(f.config));
+    const before = await readFile(f.file);
+    const maa: MaaProcess = { inspect: async () => { processCalls++; return { running, treeExited: !running, idle: true, ready: running }; }, close: async () => { running = false; }, start: async () => { running = true; } };
+    const path = sample.field === 'reorder' ? ['Configurations', 0, 'TaskQueue'] : sample.field === 'timer' ? ['Timers', 'List', 0, 'IsEnabled'] : ['Configurations', 0, 'TaskQueue', 0, sample.field];
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
+      authorization: { source: 'current-request', reference: 'synthetic ordinary task change', ...(sample.field === 'UseMedicine' ? { medicineCount: 1 } : {}) }, changes: [{ path, value: sample.value }] }, maa);
+    assert.equal(result.status, 'rejected');
+    assert.equal(processCalls, 0);
+    assert.deepEqual(await readFile(f.file), before);
+    assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+  });
+});
 
 test('a confirmed closed MAA receives only the requested reminder change with backup and a private run record', async (t) => {
   const f = await fixture(t);
@@ -167,6 +208,109 @@ test('the entire maintenance interval avoids recurring and one-shot timer window
   assert.equal(checkMaintenanceWindow({ Timers: { List: [{ IsEnabled: true, Hour: 99, Minute: 0 }] } }, new Date(), new Date()), false);
 });
 
+test('an omitted native timer enabled field retains its one-shot maintenance window', () => {
+  const config = { Timers: { List: [{ Hour: 12, Minute: 30 }] } };
+  assert.equal(checkMaintenanceWindow(config, new Date(2026, 0, 1, 11, 0), new Date(2026, 0, 1, 11, 2)), true);
+  assert.equal(checkMaintenanceWindow(config, new Date(2026, 0, 1, 12, 28), new Date(2026, 0, 1, 12, 29)), false);
+  assert.equal(checkMaintenanceWindow({ Timers: { List: [{ IsEnabled: 0, Hour: 12, Minute: 30 }] } }, new Date(2026, 0, 1, 11, 0), new Date(2026, 0, 1, 11, 2)), false);
+});
+
+test('native omission of a null one-shot flag is equivalent for changed fields, slots and timer dependencies', async (t) => {
+  for (const mode of ['direct-flag', 'slot-hour', 'timer-dependency', 'omitted-input', 'shutdown-omission']) await t.test(mode, async (t) => {
+    const f = await fixture(t); let running = mode === 'shutdown-omission';
+    const hour = (new Date().getHours() + 3) % 24;
+    const timer: Record<string, unknown> = { Id: 0, IsEnabled: mode === 'direct-flag' ? false : null, Hour: hour, Minute: 0, Config: 'Synthetic profile', FutureField: null };
+    if (mode === 'omitted-input') delete timer.IsEnabled;
+    Object.assign(f.config.Timers, { List: [timer] });
+    await writeFile(f.file, JSON.stringify(f.config));
+    const before = await readFile(f.file);
+    let expectedBackup = before;
+    const saveNative = async () => {
+      const saved = JSON.parse(await readFile(f.file, 'utf8'));
+      for (const entry of saved.Timers.List) if (entry.IsEnabled === null) delete entry.IsEnabled;
+      await writeFile(f.file, JSON.stringify(saved));
+    };
+    const maa: MaaProcess = {
+      inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+      close: async () => { running = false; await saveNative(); expectedBackup = await readFile(f.file); },
+      start: async () => { running = true; await saveNative(); },
+    };
+    const changes = mode === 'direct-flag' || mode === 'omitted-input' ? [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }]
+      : mode === 'timer-dependency' ? [{ path: ['Timers', 'CustomConfig'], value: true }]
+      : [{ path: ['Timers', 'List', 0, 'Hour'], value: (hour + 1) % 24 }];
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
+      authorization: { source: 'current-request', reference: 'synthetic one-shot change' }, changes }, maa);
+    assert.equal(result.status, 'complete');
+    const actual = JSON.parse(await readFile(f.file, 'utf8'));
+    assert.equal(Object.hasOwn(actual.Timers.List[0], 'IsEnabled'), false);
+    assert.equal(actual.Timers.List[0].FutureField, null);
+    assert.equal((await inspectConfiguration(f.maa)).timers[0]!.enabled, null);
+    const backups = await readdir(join(f.privateDirectory, 'maa-config-backups'));
+    assert.deepEqual(await readFile(join(f.privateDirectory, 'maa-config-backups', backups[0]!)), expectedBackup);
+    assert.equal((await readdir(join(f.maa, 'config'))).includes('.maa-skills.lock'), false);
+  });
+});
+
+test('omitted one-shot flags count each scheduled medicine run exactly once', async (t) => {
+  for (const budget of [1, 2]) await t.test(`budget ${budget}`, async (t) => {
+    const f = await fixture(t); let running = false;
+    const fight = f.config.Configurations['Synthetic profile'].TaskQueue[0]!;
+    Object.assign(fight, { IsEnable: true, UseMedicine: true, MedicineCount: 1 });
+    const timer = { Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' };
+    Object.assign(f.config.Timers, { List: [timer, { ...timer, Minute: 1 }] });
+    await writeFile(f.file, JSON.stringify(f.config));
+    const before = await readFile(f.file);
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
+      authorization: { source: 'current-request', reference: 'one medicine per scheduled run', medicineCount: budget }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'MedicineCount'], value: 1 }] }, maa);
+    assert.equal(result.status, budget === 2 ? 'complete' : 'rejected');
+    if (budget === 1) { assert.equal(result.reason, 'request-invalid'); assert.deepEqual(await readFile(f.file), before); }
+  });
+});
+
+test('null equivalence does not authorize changed timer values or other omitted fields during shutdown or readback', async (t) => {
+  const mutations = [
+    { key: 'IsEnabled', value: true }, { key: 'IsEnabled', value: false }, { key: 'Hour', value: -1 },
+    { key: 'Minute', value: 2 }, { key: 'Config', value: 'synthetic-other' }, { key: 'FutureField', value: undefined },
+  ];
+  for (const phase of ['close', 'start']) for (const mutation of mutations) await t.test(`${phase} ${mutation.key} ${mutation.value}`, async (t) => {
+    const f = await fixture(t); let running = phase === 'close';
+    Object.assign(f.config.Timers, { List: [{ IsEnabled: null, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile', FutureField: null }] });
+    await writeFile(f.file, JSON.stringify(f.config));
+    const mutate = async () => { const saved = JSON.parse(await readFile(f.file, 'utf8')); saved.Timers.List[0][mutation.key] = mutation.value; await writeFile(f.file, JSON.stringify(saved)); };
+    const maa: MaaProcess = {
+      inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+      close: async () => { running = false; if (phase === 'close') await mutate(); },
+      start: async () => { running = true; if (phase === 'start') await mutate(); },
+    };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
+      authorization: { source: 'current-request', reference: 'use the selected timer configuration' }, changes: [{ path: ['Timers', 'CustomConfig'], value: true }] }, maa);
+    assert.equal(result.status, 'unknown');
+    assert.equal(result.phase, phase === 'close' ? 'backup' : 'readback');
+    assert.equal((await readdir(join(f.maa, 'config'))).includes('.maa-skills.lock'), true);
+  });
+});
+
+test('raw revisions retain null omission differences and only Timer.IsEnabled may be missing in a change', async (t) => {
+  const f = await fixture(t);
+  const timer: Record<string, unknown> = { IsEnabled: null, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' };
+  Object.assign(f.config.Timers, { List: [timer] });
+  await writeFile(f.file, JSON.stringify(f.config));
+  const explicit = await inspectConfiguration(f.maa);
+  delete timer.IsEnabled;
+  await writeFile(f.file, JSON.stringify(f.config));
+  const omitted = await inspectConfiguration(f.maa);
+  assert.notEqual(explicit.revision, omitted.revision);
+  const maa: MaaProcess = { inspect: async () => { assert.fail('must reject before process access'); }, close: async () => {}, start: async () => {} };
+  const request = { maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex' as const, closedConfirmed: true,
+    authorization: { source: 'current-request' as const, reference: 'synthetic timer change' }, changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: false }] };
+  assert.equal((await executeConfigWrite({ ...request, expectedRevision: explicit.revision }, maa)).reason, 'configuration-changed');
+  delete timer.Hour;
+  await writeFile(f.file, JSON.stringify(f.config));
+  const result = await executeConfigWrite({ ...request, changes: [{ path: ['Timers', 'List', 0, 'Hour'], value: 12 }] }, maa);
+  assert.equal(result.status, 'rejected'); assert.equal(result.reason, 'request-invalid');
+});
+
 test('a timer that would be reached during the full close-to-reopen budget prevents closing MAA', async (t) => {
   const f = await fixture(t);
   const now = new Date();
@@ -274,7 +418,7 @@ test('only a boolean user confirmation is accepted from runtime JSON', async (t)
 test('the authorized task cannot change identity while MAA is closing', async (t) => {
   const f = await fixture(t); let running = true;
   const config = structuredClone(f.config);
-  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [{ TaskType: 'Infrast', IsEnable: false }, { TaskType: 'Mall', IsEnable: false }] });
+  Object.assign(config.Configurations['Synthetic profile'], { TaskQueue: [{ $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: false }, { $type: 'MallTask', TaskType: 'Mall', IsEnable: false }] });
   await writeFile(f.file, JSON.stringify(config));
   const reordered = structuredClone(config);
   reordered.Configurations['Synthetic profile'].TaskQueue.reverse();

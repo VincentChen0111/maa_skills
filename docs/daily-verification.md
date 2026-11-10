@@ -11,6 +11,8 @@ MAA 固定在官方 v6.21.4，提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`�
 - [Timer.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/Timer.cs) 与 [TimerSettings.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/TimerSettings.cs)：定时字段、八槽由 GUI 使用，null 表示单次。
 - [TaskQueueViewModel.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs#L1080)：本机本地时间；定时前两分钟配置切换，午夜跨日；触发后 null 置为 false。
 - [FightTask.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs) 与 [AwardTask.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/AwardTask.cs)：药剂、源石、免费抽卡与特殊礼包字段，按类型白名单独立实现。
+- [BaseTask.cs 第 24–41 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/BaseTask.cs#L24) 用 JsonDerivedType 声明运行模型的 `$type`；[TolerantEnumConverter.cs 第 85–92 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Converter/TolerantEnumConverter.cs#L85) 接受合法枚举标签，未将不一致 TaskType 改成运行模型。摘要与写入据两字段的已核对应关系识别，未知激活、药剂及整队重排拒绝；这是独立实现的保守范围。
+- [ConfigFactory.cs 第 64 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs#L64) 保存时省略 null；[Timer.cs 第 22–29 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/Timer.cs#L22) 的 JsonConstructor 接收 nullable isEnabled，省略参数为 null 并覆盖属性初值。仅这个字段在维护窗口、药剂次数、关停目标绑定与重开读回中按省略/null 等价；revision 和备份保留原始数据，其他缺失字段仍拒绝或保留 unknown。
 - [Bootstrapper.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Bootstrapper.cs#L525) 与 [AsstProxy.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Main/AsstProxy.cs#L757)：原生参数跳过自动连接目标启动与 LinkStart，避免维护后自动开任务；不修改保存设置。
 
 这不是完整 MAA 版本的「源码已核」认证；依赖清单和自动指纹跟踪仍由 25 交付。其它版本可检查，但未核字段和进程状态不能猜测为安全。
@@ -59,3 +61,13 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 最终组合从公开固定提交再执行官方两宿主原生安装、预期重复拒绝、限定临时重装和 Claude 同版更新；两个宿主 core/help/daily 各 14 文件的字节 hash 与源提交一致。core 保留根 MIT 及账号解析来源的 nhyo 版权行；合成配置事务、备份、锁释放、ready 与正常关停通过。首次验收脚本错误假定所有目录许可证均与根文件完全相同，因合法新增版权行失败；改为核对各目录自己的固定源许可证并检查 nhyo 行后重跑通过，保留失败记录，没有删除产品版权。
 
 最终组合冻结后的七场景 × 两宿主十四次模型调用仍全部 `unverified`，载荷指纹 `4070bb7792233d03926ca64bbc216659cebac349f43bb1c462c0f846e54b1da0`；执行窗口、证据 hash 与隔离认证失败均核对。没有模型通过分数，未使用用户认证。原生测试准备一次只读 CIM 设施后验证产品 5 秒预算；新 CI 通过不证明旧超时根因或冷启动性能。真实 MAA/设备仍未运行。
+
+## R4 作者修复验证
+
+维护者批准的额外第四轮复核确认任务运行类型和 nullable 定时字段两项问题，结论仍未通过。本次在基点 `7c7fa2b92fbc76401a941789e267efdd0bb2fa5c` 的独立工作树按公开导出函数/CLI 接缝修复；以下是作者测试，不是第五轮独立审查，不解除 05 下游依赖。
+
+任务类型的六个写入反例原先全部返回 complete，包括登录伪装、未知/缺失 `$type`、伪装 Fight 的药剂修改、停用异常条目重排和定时消费绕过；修复后在进程访问、锁和写入之前拒绝。摘要的四种未知/不一致情况显示 OtherTask。定时测试先复现直接设单次、改槽时间和整个 Timers 依赖读回失败，并覆盖原始缺省与关闭时省略、窗口及药剂次数；修复后等价变化通过。true/false、时分、目标配置和其他 null 字段丢失的十二个漂移用例仍保留 unknown 和锁，原始 revision 与备份保护未放宽。
+
+配置测试 59/59；最终完整离线入口一次运行，128 项中 127 通过、1 项平台跳过，含原生合成 GUI 和 CLI 事务。类型检查、tracker、隐私、metadata、评分规则自检及 diff 检查通过；逐文件人工检查仅含合成账号标记与官方固定来源，没有真实 MAA/用户私有环境操作。
+
+改前、改后分别冻结 daily/core，按同一七场景、模型和宿主各调用十四次：Codex `0.167.0-alpha.3.2` / `gpt-6`，Claude Code `2.1.322` / `claude-sonnet-4-6`。前后场景/框架指纹相同，二十八次均为认证相关的 `host-failed` / `unverified`，比较器同样 unverified，不能判定分数不下降。载荷指纹由 `f4f9d2571bbaa8054217c5082d08d952527aaab58d9ed3b5f0612150640db6c3` 变为 `bb087fcbe8b9ad6f7d2d957fd064b9c8d0c39eb0807eafe38c12f273f517c9ac`。原始 red/green、冻结载荷、宿主调用及比较证据保留在该工作树的忽略目录 `.tmp`，不复制用户认证。
