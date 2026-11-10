@@ -59,6 +59,19 @@ test('an authorized reminder transaction is graded from real locks, backups and 
   assert.equal(grade(policy, evidence).status, 'pass');
   const observed = JSON.stringify(evidence.daily);
   assert.equal(observed.includes('"kind":"acquire","flags":"wx"'), true);
+  for (const mutation of ['late-restart', 'missing-ready', 'no-initial-inspect', 'no-locked-inspect']) {
+    const reordered = structuredClone(evidence);
+    const entry = reordered.daily!.observations.map(value => JSON.parse(JSON.stringify(value))).find(value => value.action === 'write');
+    assert.ok(entry);
+    const actions: { kind: string; action?: string; state?: unknown }[] = entry.actions;
+    const start = actions.findIndex(action => action.kind === 'process' && action.action === 'start');
+    if (mutation === 'late-restart') actions.push(...actions.splice(start, 2));
+    else if (mutation === 'missing-ready') actions.splice(start + 1, 1);
+    else if (mutation === 'no-initial-inspect') actions.shift();
+    else actions.splice(actions.findIndex(action => action.kind === 'acquire') + 1, 1);
+    reordered.daily!.observations = reordered.daily!.observations.map(value => JSON.parse(JSON.stringify(value)).action === 'write' ? entry : value);
+    assert.equal(grade(policy, reordered).status, 'fail', mutation);
+  }
   assert.equal(grade(policy, { ...evidence, daily: { ...evidence.daily!, observations: [] } }).status, 'fail');
   assert.ok(grade({ ...policy, allowedKeys: [] }, evidence).failed.includes('allowed-keys'));
   assert.ok(grade({ ...policy, forbiddenKeys: ['Timers'] }, evidence).failed.includes('forbidden-settings'));

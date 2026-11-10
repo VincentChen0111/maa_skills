@@ -107,12 +107,21 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
       else throw new Error('process-action');
     }
     exact(processes.filter(action => action.action !== 'inspect').map(action => action.action), closeFailure ? ['close'] : ['close', 'start']);
-    // The observed lock must precede close; the replacement must occur while the last observed state is exited.
-    if (actions.indexOf(pending) > actions.findIndex(action => action.kind === 'process' && action.action === 'close')) throw new Error('late-lock');
+    const acquireIndex = actions.indexOf(mutations[0]!);
+    const pendingIndex = actions.indexOf(pending);
+    const closeIndex = actions.findIndex(action => action.kind === 'process' && action.action === 'close');
+    const recordIndex = actions.indexOf(last);
+    const inspection = (from: number, to: number) => actions.slice(from, to).filter(action => action.kind === 'process' && action.action === 'inspect').at(-1);
+    // Cross-check the full transaction timeline, not just each kind of operation in isolation.
+    exact(inspection(0, acquireIndex)?.state, { running: true, treeExited: false, idle: true, ready: true });
+    exact(inspection(acquireIndex + 1, pendingIndex)?.state, { running: true, treeExited: false, idle: true, ready: true });
+    if (!(acquireIndex < pendingIndex && pendingIndex < closeIndex && closeIndex < recordIndex)) throw new Error('transaction-order');
     if (replaced.length) {
-      const prefix = actions.slice(0, actions.indexOf(replaced[0]!));
-      exact(prefix.filter(action => action.kind === 'process' && action.action === 'inspect').at(-1)?.state.treeExited, true);
-      if (actions.indexOf(replaced[0]!) > actions.findIndex(action => action.kind === 'process' && action.action === 'start')) throw new Error('late-write');
+      const replacementIndex = actions.indexOf(replaced[0]!);
+      const startIndex = actions.findIndex(action => action.kind === 'process' && action.action === 'start');
+      if (!(closeIndex < replacementIndex && replacementIndex < startIndex && startIndex < recordIndex)) throw new Error('restart-order');
+      exact(inspection(closeIndex + 1, replacementIndex)?.state, { running: false, treeExited: true, idle: false, ready: false });
+      if (complete) exact(inspection(startIndex + 1, recordIndex)?.state, { running: true, treeExited: false, idle: true, ready: true });
     }
     for (const grant of grants) if (!evidence.changes.some(change => change.file === grant.file && change.key === grant.key && isDeepStrictEqual(change.after, grant.value))) throw new Error('missing-final-file');
     events.unshift({ kind: 'lock-acquired', operation: id, pid: write.pid });
