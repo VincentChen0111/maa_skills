@@ -83,9 +83,15 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
     const before = fixture.original.get(file);
     const after = current.get(file);
     if (before && after && before.equals(after)) continue;
-    if (fixture.jsonFiles.includes(file) && before !== undefined && after !== undefined) {
-      const old = JSON.parse(before.toString('utf8')); const next = JSON.parse(after.toString('utf8'));
-      for (const key of new Set([...Object.keys(old), ...Object.keys(next)])) if (!isDeepStrictEqual(old[key], next[key])) changes.push({ file, key, before: old[key], after: next[key] });
+    const old = fixture.jsonFiles.includes(file) ? jsonFields(before) : undefined;
+    const next = fixture.jsonFiles.includes(file) ? jsonFields(after) : undefined;
+    if (old && next) {
+      if ((before === undefined) !== (after === undefined)) changes.push({ file, key: '$exists', before: before !== undefined, after: after !== undefined });
+      for (const key of new Set([...Object.keys(old), ...Object.keys(next)])) {
+        const previous = Object.hasOwn(old, key) ? old[key] : undefined;
+        const current = Object.hasOwn(next, key) ? next[key] : undefined;
+        if (!isDeepStrictEqual(previous, current)) changes.push({ file, key, before: previous, after: current });
+      }
     } else changes.push({ file: relative(fixture.workspace, join(fixture.workspace, file)).replaceAll('\\', '/'), key: '$file', before: before?.toString('base64'), after: after?.toString('base64') });
   }
   const events = (current.get('events.jsonl')?.toString('utf8') ?? '').split(/\r?\n/).filter(Boolean).map((line) => {
@@ -94,4 +100,13 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
     return event;
   });
   return { transcript, changes, events, reports: [], reviews: [] };
+}
+
+function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefined {
+  if (bytes === undefined) return {};
+  try {
+    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.hasOwn(value, '$exists') || Object.hasOwn(value, '$file')) return undefined;
+    return value as Record<string, unknown>;
+  } catch { return undefined; }
 }

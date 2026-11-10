@@ -42,3 +42,16 @@ test('custom scenarios preserve their own prompt and identity for subsequent ski
   assert.ok(!claudeInvocation.args.includes('Bash(node custom-tool.ts inspect)'));
   assert.equal(result.record.grade.status, 'unverified');
 });
+
+test('scenario-supplied execution windows cannot create trusted time evidence for a missing host', async (t) => {
+  const result = await runScenario({ host: 'codex', model: 'fixed-model', executable: 'maa-synthetic-absent-cli', scenario: {
+    id: 'untrusted-window', prompt: 'Keep all files unchanged.',
+    ...{ executionWindow: { startedAt: '1970-01-01T00:00:00.000Z', endedAt: '2999-01-01T00:00:00.000Z' } },
+    policy: { allowedKeys: ['readAt'], forbiddenKeys: [], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+      generatedUtcFields: [{ file: 'private/account-snapshot.json', key: 'readAt' }], reportRequired: false, skipReview: false },
+  } });
+  t.after(() => rm(result.artifactDirectory, { recursive: true, force: true }));
+  const evidence = JSON.parse(await readFile(result.artifactDirectory + '/evidence.json', 'utf8'));
+  assert.ok(!Object.hasOwn(evidence, 'executionWindow'));
+  assert.equal(result.record.grade.status, 'unverified');
+});
