@@ -31,18 +31,18 @@ test('public data is read from a fixed revision with reproducible body provenanc
 test('branch names and noncanonical paths are refused before any network request', async () => {
   const network: typeof fetch = async () => assert.fail('invalid source must not access the network');
   for (const invalid of [{ ...request, commit: 'main' }, { ...request, repository: 'https://example.invalid/repo' },
-    ...['../secret.json', '/secret.json', 'a//b.json', 'a/./b.json', 'a\\b.json', 'a/%2e%2e/b.json', 'a.json?token=synthetic'].map(file => ({ ...request, file }))]) {
+    ...['../secret.json', '/secret.json', 'a//b.json', 'a/./b.json', 'a\\b.json', 'a/%2e%2e/b.json', 'a.json?mode=synthetic'].map(file => ({ ...request, file }))]) {
     await assert.rejects(readPublicJson(invalid, network), { message: 'public-data-input-invalid' });
   }
 });
 
 test('download failures never expose network messages or response bodies', async () => {
-  const secret = 'synthetic-network-private-marker';
+  const marker = 'synthetic-network-private-marker';
   for (const [network, code] of [
-    [async () => { throw new Error(secret); }, 'public-data-network-failed'],
-    [async () => new Response(secret, { status: 403 }), 'public-data-http-failed'],
-    [async () => new Response(secret), 'public-data-json-invalid'],
-  ] as const) await assert.rejects(readPublicJson(request, network), error => error instanceof Error && error.message === code && !String(error).includes(secret));
+    [async () => { throw new Error(marker); }, 'public-data-network-failed'],
+    [async () => new Response(marker, { status: 403 }), 'public-data-http-failed'],
+    [async () => new Response(marker), 'public-data-json-invalid'],
+  ] as const) await assert.rejects(readPublicJson(request, network), error => error instanceof Error && error.message === code && !String(error).includes(marker));
 });
 
 test('redirects do not turn a pinned source into another endpoint', async (t) => {
