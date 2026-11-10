@@ -43,6 +43,12 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 
 原生单目录安装时，[maa-core/LICENSE](skills/maa-core/LICENSE) 随共享脚本携带完整 MIT 许可和上述原版权行，避免仅引用仓库根文件而丢失许可。
 
+## 单干员成本与公开游戏表
+
+`skills/maa-core/scripts/operator-cost.ts` 独立重写维护者提供的成本原型的通用算法：逐级升级、精英化、技能/专精/模组成本加总和公开表适配。只读参考文件的内容指纹、改写范围见[成本来源记录](docs/operator-cost-sources.md)。未复制原型的私人存储、账号默认值、个人策略或原项目运行环境；没有引入第三方算法源代码，未修改原生产副本。
+
+运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 的固定游戏表和 [arkntools/arknights-toolbox-data](https://github.com/arkntools/arknights-toolbox-data) 的固定核对表；完整提交、字段与内容 SHA-256 见同一记录。镜像/整理者是资料来源，不是本工具作者或产品背书。游戏数据版权不因本仓库 MIT 许可而转移；不随 skill 分发游戏表、图像或上游源代码。当前成本/库存差额不需要材料价值和掉率，因此不取一图流、企鹅物流的数据，也不声称使用其估值。
+
 ## 基建技能查询
 
 `skills/maa-core/scripts/base-query.ts` 参考维护者自有原型，剥离个人路径、名册、生产规则及依赖后重写；原型 SHA256、范围和隐私核对见 [base 来源记录](docs/base-sources.md)。未引入原项目历史或第三方排班代码。

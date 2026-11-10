@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、11、21。当前可开始：05、13。
+当前已完成：01、02、03、04、11、13、21。当前可开始：05、14。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -24,7 +24,7 @@
 | 10 | [doctor 完整检查与转介](10-doctor-checks-referral.md) | [#12](https://github.com/VincentChen0111/maa_skills/issues/12) | 09 | 未开始 |
 | 11 | [MAA 识别结果转账号快照](11-maa-account-snapshot.md) | [#13](https://github.com/VincentChen0111/maa_skills/issues/13) | 04 | 已完成 |
 | 12 | [森空岛账号快照](12-skland-account-snapshot.md) | [#14](https://github.com/VincentChen0111/maa_skills/issues/14) | 09、11 | 未开始 |
-| 13 | [单干员培养成本查询](13-operator-cost-query.md) | [#15](https://github.com/VincentChen0111/maa_skills/issues/15) | 11 | 进行中 |
+| 13 | [单干员培养成本查询](13-operator-cost-query.md) | [#15](https://github.com/VincentChen0111/maa_skills/issues/15) | 11 | 已完成 |
 | 14 | [加工与材料凭证后的缺口](14-crafting-voucher-gaps.md) | [#16](https://github.com/VincentChen0111/maa_skills/issues/16) | 13 | 未开始 |
 | 15 | [指定关卡作业准备](15-stage-job-preparation.md) | [#17](https://github.com/VincentChen0111/maa_skills/issues/17) | 05、11 | 未开始 |
 | 16 | [跟踪关卡运行结果](16-stage-run-tracking.md) | [#18](https://github.com/VincentChen0111/maa_skills/issues/18) | 06、15 | 未开始 |
@@ -41,7 +41,7 @@
 
 <!-- tracker:end -->
 
-26 条 GitHub Issues 均标记为 ready-for-agent；发布时设置了 39 条 GitHub 原生阻塞关系，与当时的本地票号对应。2026-11-11 本地去掉了 26 对 25 的依赖，现为 38 条；GitHub 上 #28 对 #27 的阻塞关系尚未同步移除。
+26 条 GitHub Issues 均标记为 ready-for-agent；发布时设置了 39 条 GitHub 原生阻塞关系，与当时的本地票号对应。2026-11-11 本地去掉了 26 对 25 的依赖，现为 38 条；GitHub 上 #28 对 #27 的阻塞关系也已同步移除。
 
 ## 用户故事覆盖
 
