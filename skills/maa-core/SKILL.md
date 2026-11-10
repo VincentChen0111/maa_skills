@@ -13,6 +13,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
+| `scripts/base-query.ts` | 只读查询已持有干员基建技能、解锁条件和交叉核对差异 | [基建查询接口](references/base-query.md) |
 
 调用方的约定：
 
