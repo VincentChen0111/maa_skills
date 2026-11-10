@@ -12,7 +12,7 @@
 
 合并 main `37167326638c55d4cdd33a48a51b8391c29c4e9e` 后，账号脚本与许可移到唯一共享目录 maa-core；account 的安装、参考、测试、演示与四场景调用路径同步。maa-help 保持纯文字，account 自身携带缺少 core 时的两宿主安装指引。迁移先将安装测试改为新路径，确认缺少脚本及 LICENSE 的失败，再迁实现；18 项定向 CLI/导出函数及安装检查通过。Windows 沙箱内 rename/junction 限制由临时夹具的沙箱外运行核实，未修改真实环境。
 
-完整离线检查 `node scripts/check.ts` 50/50、七类评分规则自检、tracker、metadata、privacy 和 `npm run typecheck` 通过。新集成包的独立审查待完成；原生安装使用下述公开固定提交单独核对。
+完整离线检查 `node scripts/check.ts` 50/50、七类评分规则自检、tracker、metadata、privacy 和 `npm run typecheck` 通过。[新集成包独立审查](reviews/2026-11-11-11-core-integration.md)第一轮通过，无确认错误；审查员另行复跑检查并核对下述固定提交的原生安装和模型尝试证据。
 
 账号四场景固定 Codex `0.167.0-alpha.3.2` / `gpt-6`、Claude Code `2.1.322` / `claude-sonnet-4-6`，迁移前后各八次真实尝试全部为 `unverified`（Codex 401、Claude 未登录）。16 份证据核对执行窗口和 evidenceHash；未复制认证。迁移前 skill/companion 指纹为 `e63e0d8db8d7fe79bd8db872aeb5c6a35de04f026589f8db53cbbd7532fcb7bb`，迁移后为 `54ac8a5dd724ec98d69b57e750f445f1b024a5ce60cde74c58ccd5c32ab5d634`。场景授权和字段断言不变，仅期望调用路径从 help 改为 core，因此场景指纹发生变化；两个版本分别检查仍无通过基线，不声称分数未下降。help 的交付入口说明也已更新为 account 可用，三个固定 help 场景在相同两宿主和模型前后各六次真实尝试均为 unverified，12 份证据的执行窗口和 evidenceHash 已核对。模型基线与人工语义核对继续由 26 阻止发布，真实设备仍未测试。
 
