@@ -354,3 +354,36 @@ test('an unsupported voucher rule cannot inherit a JavaScript object property as
   assert.equal(plan.materials.mat?.voucher, 0); assert.equal(plan.materials.mat?.remaining, null);
   assert.equal(Object.entries(plan.ledger).find(([id]) => id === 'toString')?.[1].closing, 1);
 });
+
+test('invalid or ambiguous lower-tier formulas remain pending through the public function and both real CLI paths', async t => {
+  for (const kind of ['missing-fee', 'invalid-count', 'invalid-first-duplicate', 'valid-first-duplicate']) {
+    const { tables, snapshot } = fixture(); snapshot.items.mat = 0; snapshot.lmd = 1000;
+    Object.assign(snapshot.items, { ore: 0, dust: 20 });
+    const child = { ...recipe('ore', 'dust', 1), ...(kind === 'missing-fee' ? { goldCost: undefined } : kind === 'valid-first-duplicate' ? {} : { count: 0 }) };
+    Object.assign(tables.building.workshopFormulas, { mat: recipe(), ore: child });
+    if (kind.endsWith('duplicate')) Object.assign(tables.building.workshopFormulas, { ore_second: { ...recipe('ore', 'dust', 1), formulaId: 'recipe_ore_second' } });
+    const request = { targets: [goal()], progress };
+    const check = (result: ReturnType<typeof calculateCultivationGaps>) => {
+      assert.equal(result.status, 'partial', kind); const plan = result.comparison!.craft;
+      assert.equal(plan.materials.mat?.remaining, null); assert.equal(plan.materials.mat?.crafted, 0);
+      assert.deepEqual(plan.route, []); assert.deepEqual(plan.voucherAllocations, []); assert.equal(plan.lmd.required, 102);
+      assert.ok(plan.blocked.some(row => row.issues.includes(`recipe:ore:${kind.endsWith('duplicate') ? 'ambiguous' : 'invalid'}`)));
+      assert.deepEqual(result.comparison!.noCraft.materials.mat, { required: 2, available: 0, existing: 0, crafted: 0, voucher: 0, remaining: 2 });
+    };
+    check(calculateCultivationGaps(tables, snapshot, request));
+    const networkFixtures = Object.fromEntries(Object.entries({ ...operatorCostSources, ...craftingSources }).map(([key, source]) => [
+      `https://raw.githubusercontent.com/${source.repository}/${source.commit}/${source.file}`, tables[key as keyof typeof tables],
+    ]));
+    const isolated = await createFixture({ companionSkills: { 'maa-core': resolve('skills/maa-core') }, networkFixtures, jsonInputs: {
+      'private/config.json': { language: 'zh-CN', privateDirectory: '{{private}}' }, 'private/account-snapshot.json': snapshot,
+    } }); t.after(() => isolated.dispose());
+    for (const host of ['.agents', '.claude']) {
+      const cli = spawnSync(process.execPath, [`${host}/skills/maa-core/scripts/cultivation-gaps.ts`, 'query'], { cwd: isolated.workspace, env: isolated.env, input: JSON.stringify(request), encoding: 'utf8' });
+      assert.equal(cli.status, 0, cli.stderr); check(JSON.parse(cli.stdout));
+    }
+    assert.deepEqual((await collectEvidence(isolated, { completed: false, calls: [], outputs: [] })).changes, []);
+    // An unused bad recipe does not invalidate already-known input stock.
+    Object.assign(snapshot.items, { ore: 4 });
+    assert.equal(calculateCultivationGaps(tables, snapshot, request).comparison?.craft.materials.mat?.remaining, 0);
+  }
+});

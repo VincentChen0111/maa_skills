@@ -273,7 +273,10 @@ function applyCrafting(plan: GapPlan, tables: GapTables, progressInput: unknown,
       if (available.closing === null) return [`inventory:${input}:unknown`];
       const unknownVoucher = available.closing < required && supplyVouchers(trial, input, required);
       if (available.closing < required) {
-        const child = recipes.get(input)?.[0]; if (!child) return [`inventory:${input}:insufficient`, ...(unknownVoucher ? ['voucher:count-or-validity-unknown'] : [])];
+        const children = recipes.get(input);
+        if (!children?.length) return [`inventory:${input}:insufficient`, ...(unknownVoucher ? ['voucher:count-or-validity-unknown'] : [])];
+        if (children.length !== 1) return [`recipe:${input}:ambiguous`];
+        const child = children[0]; if (!child) return [`recipe:${input}:invalid`];
         const failed = produce(trial, input, Math.ceil((required - available.closing) / child.count), [...path, id]);
         if (failed.length) return [...failed, ...(unknownVoucher ? ['voucher:count-or-validity-unknown'] : [])];
       }
