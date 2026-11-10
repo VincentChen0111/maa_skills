@@ -1,6 +1,6 @@
 # 宿主与原生安装
 
-当前提供文字帮助 maa-help、账号识别导入 maa-account 和共享载荷 maa-core，状态见 [help 验证记录](help-verification.md)及 [account 验证记录](account-verification.md)；其余产品入口未交付。根目录的 `.claude-plugin/plugin.json` 描述插件，`marketplace.json` 用 `./` 指向同一插件。入口放在 `skills/<名称>/SKILL.md`，参考文件和脚本随入口目录复制。
+当前提供文字帮助 maa-help、账号识别导入与单干员成本查询 maa-account，以及共享载荷 maa-core，状态见 [help 验证记录](help-verification.md)、[account 验证记录](account-verification.md)及[成本验证记录](operator-cost-verification.md)；其余产品入口未交付。成本新增载荷的临时目录验证与远程固定版本原生安装验收分开记录，不能把此前账号导入的安装证据当成成本候选已验证。根目录的 `.claude-plugin/plugin.json` 描述插件，`marketplace.json` 用 `./` 指向同一插件。入口放在 `skills/<名称>/SKILL.md`，参考文件和脚本随入口目录复制。
 
 Claude Code 使用原生插件市场：`/plugin marketplace add VincentChen0111/maa_skills`，再用 `/plugin install maa-skills@maa-skills`；开发时可在隔离环境用 `claude --plugin-dir <clone>`。结构依据 [插件描述](https://code.claude.com/docs/en/plugins-reference)和[市场说明](https://code.claude.com/docs/en/plugin-marketplaces)。实际安装验证单独核对固定提交的完整载荷及调用结果。
 

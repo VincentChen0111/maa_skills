@@ -11,6 +11,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | --- | --- | --- |
 | `scripts/preferences.ts` | 读写结构化设置（语言、私有目录、MAA 目录、服务器），追加偏好原话 | [偏好接口](references/preferences.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
+| `scripts/operator-cost.ts` | 按快照和明确目标只读查询单干员逐级培养成本 | [成本接口](../maa-account/references/cost.md) |
 
 调用方的约定：
 
