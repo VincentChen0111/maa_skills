@@ -1,5 +1,15 @@
 # 15 作业准备验证
 
+## 当前交付结论
+
+最终产品候选 `d2877b561188ea99b1472e824168335059dfd22d` 的 [完整独立 R4](reviews/2026-11-11-15-stage-r4.md) 已通过，Standards / Spec 均 0 项。独立完整离线入口 297 项中 295 通过、2 项条件跳过，类型及额外组合探针通过；[固定候选双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42919809758) 全绿。R1/R2/R3 的 FAIL 和各轮实际证据原样保留为历史。
+
+固定远程 d287 的两宿主原生安装及实际 CLI 合成准备通过：`.tmp/native-check-mK3upJ` 中 34 条命令，只有预期重复安装拒绝 exit 1；Codex 26 / Claude 192 个仓库文件共 218 个逐字节匹配 Git。655 个生成依赖另记 hash 和 lock metadata，未独立核验 registry 包字节。运行前冻结四份验证源码并实际导入冻结 smoke。五份 ready 默认建议三份备选，明确批准四份备选后只把主作业按三次循环装入列表；原文与派生执行资产、S1 零门槛、待执行记录、全局 LoopTimes 保留、备份、锁释放及正常关闭全部通过，相关临时进程残留 0。
+
+最终改后 32 次真实模型尝试在 `.tmp/15-r4-model-evidence/frozen-models-4852eK`，与改前 MZjbhO 保持框架 `1f2a3e89`、模型、CLI 和 32 对场景指纹相同；各批均 16 次 Codex 401、16 次 Claude 未登录，全部 unverified。连同 9c、8e 两个历史改后批次，共保存 128 份实际尝试（64 Codex 401 / 64 Claude 未登录），0 完成事件和 runner failure。R4 独立审计最终前后 64 份及载荷，旧批次分别经 R2/R3 审计。认证不可用不能证明基线、语义或分数不降，仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。
+
+15 单票有条件交付决定的产品和证据前提已满足；[PR41](https://github.com/VincentChen0111/maa_skills/pull/41) 待最终文档提交 CI 后 squash。此次验收登记不改产品，最终文档 head 另跑 CI。未运行真实 MaaCore parser、MAA、模拟器、游戏或全站作业抽样；合成 GUI 和源码推导不写成实机成功。下文“待验证 / 工单进行中”等措辞均为所标旧候选的历史状态。
+
 ## 固定 8e 旧候选的根验收（历史）
 
 产品候选 `8e0b94740d8782e8ce8f18beff4279d986ed569a` 基于 06 的实际 main `788ac13febf35a54e556fa527943c01431b8e215`。以下是该候选已实际运行、并经 R3 独立审计的外部验证；[完整 R3](reviews/2026-11-11-15-stage-r3.md) 已结束，唯一 P3 为默认备选数量遗漏，结论 FAIL，工单仍进行中。这些历史成功不能代替修后新候选验证；下文 R1/R2 的失败与待验措辞也保留为历史。
