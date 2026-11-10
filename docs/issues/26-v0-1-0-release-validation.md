@@ -18,6 +18,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 11 在独立产品、原生安装及正向评测支持验证后，也以单独交付决定将模型验收移交本票。四场景真实调用均因隔离认证缺失而 unverified；2026-11-11 改为 maa-core 载荷后的新尝试与新原生安装按验证记录单独核对；实现交付不能替代模型验收，见 [account 验证记录](../account-verification.md)。
 
+21 在功能、两轮独立审查与固定候选的双宿主原生安装验证后，由根代理依据持续并行实施及常规判断授权单独决定交付实现。前态、初次后态、最终后态共 42 份完整批次记录及另留的中断 6 份全部 unverified；七场景基线和条件／收益语义验收仍是本票发布门禁，见 [base 验证记录](../base-verification.md)。
+
 ## 要交付的行为
 
 完成五个 skill 的发布验收，形成可复现的安装/更新、行为评测、版本核实及许可证据，按规格发布 v0.1.0。
@@ -31,6 +33,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
 
 - [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。
+
+- [ ] 在最终发布载荷上补齐 21 的 Codex/Claude 各七场景真实基线：重跑 11 上述四场景，并加入 `base-unknown-training`、`base-room-query`、`base-cross-check`。固定 CLI、模型、场景和评分器，留存证据摘要；人工核实同名歧义、未知持有／练度、当前及后续解锁、完整条件、文本百分比不等于最终收益、来源和交叉差异的语义表现。仅实际 CLI 调用与只读断言不能代替语义验收。认证缺失、unverified、失败或不稳定时不得发布；更换模型或评分语义时重建基线，保留 21 的初次、最终和中断记录。
 
 - [ ] 在两个临时宿主环境从实际发布内容原生安装和更新五个 skill，验证每个入口和共享脚本可达；开发目录联接也在临时位置验证。
 - [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，操作类 skill 读取语言，maa-help 按用户当前语言回复，结构化设置与偏好原话及各自写入边界一致。
