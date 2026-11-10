@@ -1,6 +1,6 @@
 # maa-help 验证记录
 
-日期：2026-11-10。当前为工单 04 候选实现，尚未全部验收。
+日期：2026-11-10。工单 04 实现交付完成；真实模型基线仍未验证，作为 [26 发布门禁](issues/26-v0-1-0-release-validation.md)保留。本次收口用于解除实现依赖，不代表发布验收完成。
 
 ## 离线行为
 
@@ -34,4 +34,4 @@ Codex 原生 skill-installer 已从固定提交 `1bc3f8ca98e970dd064d494aed14d82
 
 Claude CLI 2.1.322 在全新隔离 home 中，通过原生 `plugin marketplace add` 添加候选分支、`plugin install` 安装 maa-skills。原生市场刷新和插件更新命令成功，更新结果为当前版本已最新；未模拟跨版本升级。实际缓存中的偏好脚本与上述提交一致，并独立执行 `set`、`read`、`append` 成功。
 
-两种原生安装载荷及更新入口已验证；模型驱动的 help 响应、路由及边界行为仍须通过上述真模型基线。离线实现经三轮[独立审查](reviews/2026-11-10-04-help.md)通过，交付为 [草稿 PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)，未合并、未关闭工单。
+两种原生安装载荷及更新入口已验证；模型驱动的 help 响应、路由及边界行为仍须通过上述真模型基线。离线实现经三轮[独立审查](reviews/2026-11-10-04-help.md)通过，最终实现提交 `538c8ae` 的 Windows/Linux CI 均通过。交付为 [PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)。2026-11-10 维护者要求完成 04 并准备并行交接，本次将未验证的模型项目明确移交 26；[收口审查](reviews/2026-11-10-04-closeout.md)仅审查此交付安排与交接，不重开产品实现的第四轮审查。
