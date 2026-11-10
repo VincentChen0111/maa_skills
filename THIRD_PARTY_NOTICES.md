@@ -48,3 +48,33 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 `skills/maa-core/scripts/operator-cost.ts` 独立重写维护者提供的成本原型的通用算法：逐级升级、精英化、技能/专精/模组成本加总和公开表适配。只读参考文件的内容指纹、改写范围见[成本来源记录](docs/operator-cost-sources.md)。未复制原型的私人存储、账号默认值、个人策略或原项目运行环境；没有引入第三方算法源代码，未修改原生产副本。
 
 运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) 的固定游戏表和 [arkntools/arknights-toolbox-data](https://github.com/arkntools/arknights-toolbox-data) 的固定核对表；完整提交、字段与内容 SHA-256 见同一记录。镜像/整理者是资料来源，不是本工具作者或产品背书。游戏数据版权不因本仓库 MIT 许可而转移；不随 skill 分发游戏表、图像或上游源代码。当前成本/库存差额不需要材料价值和掉率，因此不取一图流、企鹅物流的数据，也不声称使用其估值。
+
+## 基建技能查询
+
+`skills/maa-core/scripts/base-query.ts` 参考维护者自有原型，剥离个人路径、名册、生产规则及依赖后重写；原型 SHA256、范围和隐私核对见 [base 来源记录](docs/base-sources.md)。未引入原项目历史或第三方排班代码。
+
+游戏表运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData/tree/6f63c14e27b847ef74b53b00fe51fc322b3cd7ff) 的固定提交，数据权利归原权利人，本仓库不再分发。交叉核对运行时读取 [KayChung17/arknights-base-skill](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/skills/ark-base-schedule/assets/operator-skills.json) 的 `operator-skills.json`，固定提交 `368ea6d83d14409a3e7354df4359960adba6b36b`；不采用其算法或衍生加成，不复制其数据文件。该仓库 [MIT 许可](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/LICENSE) 全文如下，注明引用来源不表示上游背书：
+
+```text
+MIT License
+
+Copyright (c) 2026 KayChung17
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
