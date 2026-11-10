@@ -10,7 +10,7 @@ import { grade } from '../scripts/evaluation.ts';
 import { assessDailyTransaction } from '../scripts/eval-daily.ts';
 
 const skillDirectory = fileURLToPath(new URL('../skills/maa-daily', import.meta.url));
-const companionSkills = { 'maa-core': fileURLToPath(new URL('../skills/maa-help', import.meta.url)) };
+const companionSkills = { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) };
 
 test('the installed daily CLI observes a closed synthetic MAA and refuses writing without confirmation', async (t) => {
   const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: dailyScenarios[0]!.jsonInputs,
