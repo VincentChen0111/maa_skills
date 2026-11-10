@@ -1,7 +1,7 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
 import { queryBaseSkills } from './base-query.ts';
 import { calculateCultivationGaps, type GapTables, type GapResult } from './cultivation-gaps.ts';
-import { loadOperatorCostTables, operatorCostSources } from './operator-cost.ts';
+import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
@@ -39,7 +39,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const start = object(operator.mastery)[String(skill)] ?? object(current.mastery)[String(skill)];
   if (!integer(start, 0, 3)) { result.issues.push('training:current-rank-unknown'); return result; }
   result.currentRank = start;
-  const char = object(object(tables.characters)[cost.operator.id]);
+  const catalog = operatorCatalog(tables), char = object(catalog[cost.operator.id]);
   const selectedSkill = object(array(char.skills)[skill - 1]);
   result.skillId = typeof selectedSkill.skillId === 'string' ? selectedSkill.skillId : null;
   const name = object(array(object(object(tables.skillNames)[String(result.skillId)]).levels)[0]).name;
@@ -53,7 +53,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const base = trainingData.basicSpeedBuff;
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
   const available = facts.source === 'user-confirmed' && Array.isArray(facts.availableAssistants) && facts.availableAssistants.every(id => typeof id === 'string') ? facts.availableAssistants : null;
-  const helpers = queryBaseSkills(snapshot, tables, { room: 'TRAINING' });
+  const helpers = queryBaseSkills(snapshot, { ...tables, characters: catalog }, { room: 'TRAINING' });
   for (let rank = start + 1; rank <= targetRank; rank++) {
     const seconds = object(array(selectedSkill.levelUpCostCond)[rank - 1]).lvlUpTime;
     const baseSeconds = integer(seconds, 1, 31 * 86400) ? seconds : null;

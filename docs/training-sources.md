@@ -41,3 +41,13 @@
 重新进入时核对实际日志与槽身份，再停用自己过期且未被改变的单次槽。离线无常驻清理，窗口/关停/读回失败明确保留未清理状态，不能保证次日不会触发。材料每档重新核对，不因原计划估算足够就承诺后续消耗。
 
 训练自定义资产为内容地址不可变文件；唯一写入器把原先缺失/一致状态、摘要和 GUI 引用纳入 pending manifest，持锁关停后安装，GUI 备份及重启读回校验。已有一致文件不覆盖，漂移/部分失败保留 unknown；不是多文件原子提交声明。06 不认识训练 manifest 时只能保留未知，不宣称自动恢复附加资产。实际助手身份、减时效果、真实设备动作、两宿主模型行为和候选原生安装分别以验证记录为准，不能由合成测试推定。
+
+## R1 后的身份与因果证据补核
+
+训练目标沿用成本的 `operatorCatalog` 合并 character 与 patches.patchChars；同名须给 operatorId。[固定 char_patch_table](https://github.com/Kengxxiao/ArknightsGameData/blob/6f63c14e27b847ef74b53b00fe51fc322b3cd7ff/zh_CN/gamedata/excel/char_patch_table.json) 中 `char_1001_amiya2` 为 WARRIOR，`char_1037_amiya3` 为 MEDIC，各有两技能；2026-11-11 通过连接器再次实际读取核实，Git blob `a0fc7daa64a375b8431201c7f08abe4695f9f5e7` 由独立 R1 核对记录提供。不能在成本已消歧后退回不含形态的目录。
+
+同日补核上述固定官方 Assistant.cpp 的 append_task：先记录类型及实际 JSON 参数，随后记录 task_id；工作线程的 TaskChainStart 和后续回调带相同 taskid/taskchain。[Logger.hpp](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Utils/Logger.hpp#L495) 为每行记录 Px/Tx 进程和线程标识。参数记录与返回 ID 按同线程配对，回调按同进程、ID、任务链和开始时间关联；多个匹配候选或 set_task_params 变更留未知。现有日志不含这条证据链时，不能从孤立完成行恢复执行资格。这是使用已核日志的保守实现选择，不是虚构新回调。
+
+[AsstInfrastTask.Serialize](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaWpfGui/Models/AsstTasks/AsstInfrastTask.cs) 的 facility/mode/filename/plan_index/continue_training 对应当前训练资产和禁续训范围；AsstOperProgressTask.Serialize 的 plans/role/name/skill_mastery 对应唯一目标与下一档，非零精英或普通技能目标不得混入。本次核对复用原有 CLI 输入，不读取 GUI 私人配置到对话，也不声称源码日志已证明设备行为。
+
+完成时间必须不早于本档 startedAt 和最新训练观察；倒序、旧片段及回拨保留未知。manualTraining 随当前档完成清除，但 external-training-observed 历史不清除。这是工单真实证据与逐档推进要求的修复，不改变授权目标。

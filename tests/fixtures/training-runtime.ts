@@ -38,4 +38,3 @@ export async function configFixture(t: { after(fn: () => Promise<unknown>): void
   const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; }, start: async () => { running = true; } };
   return { root, maaDirectory, privateDirectory, file, config, maa };
 }
-

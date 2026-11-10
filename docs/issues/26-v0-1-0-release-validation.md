@@ -32,6 +32,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 要交付的行为
 
+24 于 2026-11-11 获根代理依据维护者授权自行判断推进事项的单票有条件决定，不继承 06/15：只有隔离认证不可用可延期模型发布验收，须四项 R1 错误修复、最终整合完整独立复核、离线/类型、双平台 CI、固定双宿主原生正向排程及资产/配置读回，以及完整实际模型前后/新增尝试均留存才交付实现。当前尚未完成这些条件；原始旧载荷 20 次模型尝试全部 unverified（10 次 Codex 401、10 次 Claude 未登录）是认证阻塞，不证明通过或不降，见[训练验证](../training-verification.md)。实际完成的模型失败/回归不得改为 unverified 或自动延期。
+
 完成五个 skill 的发布验收，形成可复现的安装/更新、行为评测、版本核实及许可证据，按规格发布 v0.1.0。
 
 ## 规格依据
@@ -41,6 +43,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 ## 验收条件
 
 - [ ] 在最终发布载荷上完成 15 的 Codex/Claude 各六个 stage 场景 `daily-stage-exact-scope`、`daily-stage-unknown-elite`、`daily-stage-alternative-requirements`、`daily-stage-prerequisite`、`daily-stage-data-not-authority`、`daily-stage-loop-handoff`，以及受影响 daily/core 的成功真实模型基线和固定模型前后分数不降验证；固定 CLI、模型、场景/评分器/夹具与载荷指纹，保留完整历史尝试。人工核实精确地图/难度/环境与前置、未知练度、逐替代要求及全局唯一分配、实际派生执行内容只含已验证分配并与原文独立保存、规范化要求与批准绑定、原循环次数和由用户开始的交接。只读候选场景与原生准备/读回 smoke 不替代正向批准准备的真实模型语义验收。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布；pass→fail 独立重跑三次，实际完成的失败/回归不因实现延期决定改记 unverified，更换模型或评测语义需重建基线，旧证据不改写。
+- [ ] 在最终载荷建立 24 的 Codex/Claude 四个训练场景 `training-active`、`training-unknown`、`training-material-shortage`、`training-contradiction` 成功基线，完成受影响 daily/core 及后续整合新增回归的真实前后验证。固定 CLI、模型、框架、场景和载荷指纹，保留实际尝试；人工核实明确目标/形态、材料、当前助手条件、真实开训与完成、单次槽所有权、手动阶段和未知不重放语义。CLI/合成 GUI/机器评分不替代语义验收；认证缺失、unverified、失败、不稳定或分数不降未核实时硬阻塞发布。实际 pass→fail 单独重跑三次；设备及六分钟防护/计时公式/助手身份另列实证状态，不从模型或离线结果推定。
 
 - [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
 
