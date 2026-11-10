@@ -139,6 +139,69 @@ test('parallel approved restorations perform one transaction and reject the comp
   assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), f.config);
 });
 
+test('unknown or malformed transaction metadata never permits either recovery action', async (t) => {
+  const cases: { target: 'lock' | 'pending' | 'authorization' | 'change'; key: string; value?: unknown; omit?: boolean; name?: string }[] = [
+    { target: 'lock', key: 'jobPlan', value: { file: 'synthetic-unverified-resource.json' } },
+    { target: 'change', key: 'trainingPlan', value: { file: 'synthetic-unverified-resource.json' } },
+    { target: 'pending', key: 'authorization', value: {} },
+    ...['id', 'skill', 'host', 'pid', 'startedAt', 'phase'].map(key => ({ target: 'lock' as const, key, omit: true })),
+    { target: 'lock', key: 'id', value: 'not-an-operation' },
+    { target: 'lock', key: 'skill', value: 'future-writer' },
+    { target: 'lock', key: 'host', value: ['codex'] },
+    { target: 'lock', key: 'pid', value: -1 },
+    { target: 'lock', key: 'startedAt', value: '2026-01-01' },
+    { target: 'lock', key: 'phase', value: 'future-phase' },
+    ...['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes'].map(key => ({ target: 'pending' as const, key, omit: true })),
+    { target: 'pending', key: 'phase', value: 'restart' },
+    { target: 'pending', key: 'changes', value: [] },
+    { target: 'authorization', key: 'source', value: 'historical-preference' },
+    { target: 'authorization', key: 'source', omit: true },
+    { target: 'authorization', key: 'reference', omit: true },
+    { target: 'authorization', key: 'reference', value: '   ' },
+    { target: 'authorization', key: 'reference', value: { text: 'synthetic approval' } },
+    { target: 'authorization', key: 'medicineCount', value: -1 },
+    { target: 'authorization', key: 'medicineCount', value: 1.5 },
+    { target: 'authorization', key: 'medicineCount', value: 2147483648 },
+    { target: 'authorization', key: 'medicineCount', value: '1' },
+    { target: 'change', key: 'path', omit: true },
+    { target: 'change', key: 'value', omit: true },
+    { target: 'change', key: 'path', value: ['Timers', { name: 'NotifyBeforeScheduledStart' }] },
+    { target: 'change', key: 'path', value: [] },
+  ];
+  for (const sample of cases) await t.test(`${sample.target}.${sample.key} ${sample.omit ? 'missing' : JSON.stringify(sample.value)}`, async (t) => {
+    const f = await fixture(t); const retained = await abandoned(f);
+    const lock = JSON.parse(await readFile(retained.lockFile, 'utf8'));
+    const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
+    const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
+    const target = sample.target === 'lock' ? lock : sample.target === 'pending' ? pending : sample.target === 'change' ? pending.changes[0] : pending['authorization'];
+    if (sample.omit) delete target[sample.key]; else target[sample.key] = sample.value;
+    await writeFile(retained.lockFile, JSON.stringify(lock)); await writeFile(pendingFile, JSON.stringify(pending) + '\n');
+    const original = await readFile(f.file); const lockBytes = await readFile(retained.lockFile); const pendingBytes = await readFile(pendingFile);
+    const checked = await runChecks(f, f.maa);
+    assert.equal(checked.recovery.comparison, 'unknown');
+    assert.equal(checked.recovery.canReconcile, false); assert.equal(checked.recovery.canRestore, false);
+    for (const action of ['reconcile-lock', 'restore-config']) {
+      const result = await executeRepairs({ ...f, host: 'codex', approved: [action], reference: 'synthetic current approval', evidenceRevision: checked.recovery.evidenceRevision }, f.maa);
+      assert.equal(result.status, 'rejected'); assert.deepEqual(await readFile(retained.lockFile), lockBytes);
+      assert.deepEqual(await readFile(f.file), original); assert.deepEqual(await readFile(pendingFile), pendingBytes);
+    }
+    assert.deepEqual(f.actions, []);
+  });
+});
+
+test('transaction schema checks preserve unrelated MAA configuration fields during valid recovery', async (t) => {
+  for (const action of ['reconcile-lock', 'restore-config']) await t.test(action, async (t) => {
+    const f = await fixture(t);
+    Object.assign(f.config, { jobPlan: { file: 'synthetic-maa-owned-value.json' }, trainingPlan: { future: true }, authorization: {} });
+    await abandoned(f);
+    const checked = await runChecks(f, f.maa);
+    assert.equal(checked.recovery.canReconcile, true); assert.equal(checked.recovery.canRestore, true);
+    const result = await executeRepairs({ ...f, host: 'codex', approved: [action], reference: 'synthetic approval', evidenceRevision: checked.recovery.evidenceRevision }, f.maa);
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), action === 'restore-config' ? f.config : { ...f.config, Timers: { ...f.config.Timers, NotifyBeforeScheduledStart: true } });
+  });
+});
+
 test('evidence changed during final reconciliation is retained rather than cleared', async (t) => {
   const f = await fixture(t); const retained = await abandoned(f); const checked = await runChecks(f, f.maa);
   let calls = 0; const originalInspect = f.maa.inspect;

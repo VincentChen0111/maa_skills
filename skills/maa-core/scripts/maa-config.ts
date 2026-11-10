@@ -199,6 +199,35 @@ export type RecoveryInspection = {
 };
 const operationId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 
+function transactionFields(value: unknown, required: string[], optional: string[] = []): RecordValue {
+  const record = object(value);
+  if (required.some(key => !Object.hasOwn(record, key)) || Object.keys(record).some(key => !required.includes(key) && !optional.includes(key))) throw new Error('unsupported-transaction');
+  return record;
+}
+
+function transactionMetadata(value: unknown, pending = false): RecordValue {
+  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
+  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor')
+    || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
+    || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
+    || typeof record.phase !== 'string' || !(pending ? ['check'] : ['check', 'close', 'backup', 'write', 'restart', 'readback', 'record', 'release']).includes(record.phase)) throw new Error('transaction-metadata-invalid');
+  return record;
+}
+
+function transactionPending(value: unknown): RecordValue {
+  const record = transactionMetadata(value, true);
+  const authorization = transactionFields(record.authorization, ['source', 'reference'], ['medicineCount']);
+  if ((authorization.source !== 'current-request' && authorization.source !== 'approved-report')
+    || typeof authorization.reference !== 'string' || !authorization.reference.trim()
+    || Object.hasOwn(authorization, 'medicineCount') && (!Number.isInteger(authorization.medicineCount) || Number(authorization.medicineCount) < 0 || Number(authorization.medicineCount) > 2147483647)) throw new Error('transaction-authorization-invalid');
+  if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
+  for (const item of record.changes) {
+    const change = transactionFields(item, ['path', 'value']);
+    if (!Array.isArray(change.path) || !change.path.length || change.path.some(part => typeof part !== 'string' && (!Number.isSafeInteger(part) || Number(part) < 0))) throw new Error('transaction-change-invalid');
+  }
+  return record;
+}
+
 async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
   const lockFile = join(context.maaDirectory, 'config', '.maa-skills.lock');
   const read = async (file: string) => { try { return await readFile(file, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } };
@@ -222,8 +251,7 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       const state = await maa.inspect();
       summary.process = state.running && state.ready && state.idle && !state.treeExited ? 'ready'
         : !state.running && state.treeExited ? 'closed' : 'unverified';
-      if (!metadata || !operationId(metadata.id) || !['maa-daily', 'maa-doctor'].includes(String(metadata.skill))
-        || !['codex', 'claude'].includes(String(metadata.host)) || typeof metadata.startedAt !== 'string' || !Number.isFinite(Date.parse(metadata.startedAt))) throw new Error('lock-metadata');
+      metadata = transactionMetadata(metadata);
       const directory = join(context.privateDirectory, 'maa-config-backups');
       const backups = await Promise.all((await readdir(directory)).filter(file => operationId(file.slice(0, -5)) && file.endsWith('.json'))
         .map(async file => ({ file, modified: (await stat(join(directory, file))).mtimeMs })));
@@ -236,11 +264,8 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       const records = (rawPending ?? '').trim().split('\n').filter(Boolean).map(line => object(JSON.parse(line)));
       const matches = records.filter(record => record.id === metadata!.id);
       if (matches.length !== 1 || records.at(-1)?.id !== metadata.id) throw new Error('pending-record-mismatch');
-      const record = matches[0]!;
-      if (Object.keys(record).some(key => !['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes'].includes(key))
-        || Object.keys(object(record.authorization)).some(key => !['source', 'reference', 'medicineCount'].includes(key))) throw new Error('unsupported-transaction');
+      const record = transactionPending(matches[0]);
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
-      if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
       const expected = prepare(backup, pending).config;
       summary.backup = 'matched-latest';
