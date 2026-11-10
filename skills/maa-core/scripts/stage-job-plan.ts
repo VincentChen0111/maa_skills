@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type ApprovedJob = { id: number; hash: string; source: { url: string; readAt: string; sha256?: string } };
-export type ApprovedJobPlan = { reportHash: string; map: string; entries: { stageId: string; code: string; difficulty: 'normal' | 'raid'; loops: number; primary: ApprovedJob; alternates: ApprovedJob[] }[] };
+export type ApprovedJobPlan = { reportHash: string; map: string; entries: { stageId: string; code: string; difficulty: 'normal' | 'raid'; difficultyGroup: string; loops: number; primary: ApprovedJob; alternates: ApprovedJob[] }[] };
 const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 export function approvedJobFile(privateDirectory: string, reportHash: string, id: number): string {
   if (!hash(reportHash) || !Number.isSafeInteger(id) || id < 1) throw new Error('job-plan-invalid');
@@ -16,6 +16,7 @@ export function approvedJobList(plan: ApprovedJobPlan, privateDirectory: string)
   for (const entry of plan.entries) {
     if (typeof entry.stageId !== 'string' || !entry.stageId || stages.has(entry.stageId) || typeof entry.code !== 'string' || !entry.code
       || !['normal', 'raid'].includes(entry.difficulty) || !Number.isSafeInteger(entry.loops) || entry.loops < 1 || entry.loops > 1000 || !Array.isArray(entry.alternates)) throw new Error('job-plan-invalid');
+    if (typeof entry.difficultyGroup !== 'string' || !entry.difficultyGroup || entry.difficulty !== plan.entries[0]!.difficulty || entry.difficultyGroup !== plan.entries[0]!.difficultyGroup) throw new Error('job-mixed-difficulty-batch');
     stages.add(entry.stageId);
     const ids = new Set<number>();
     for (const job of [entry.primary, ...entry.alternates]) {

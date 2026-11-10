@@ -53,7 +53,9 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
       // Level thresholds apply at the required elite stage, not after a higher promotion.
       if (!(Number.isSafeInteger(required.elite) && required.elite >= 0 && Number.isSafeInteger(actual?.elite) && actual!.elite > required.elite)) check('level', required.level, actual?.level);
       check('potential', required.potentiality ?? required.potential, actual?.potential);
-      check('skill-level', required.skill_level, actual?.skillLevel);
+      // AccountSnapshot currently has no per-skill mastery contract. A scalar cannot prove S2/S3 mastery.
+      check('skill-level', required.skill_level, required.skill_level > 7 ? null : actual?.skillLevel);
+      if (Number.isInteger(oper.skill) && oper.skill >= 2 && oper.skill <= 3) check('skill-unlock', oper.skill - 1, actual?.elite);
       for (const key of ['module', 'module_level']) if (required[key] !== undefined && required[key] !== -1) { checks.push('unknown'); reasons.push(`unknown-${key}`); }
       if (oper.skill !== undefined && (!Number.isInteger(oper.skill) || oper.skill < 0 || oper.skill > 3)) { checks.push('unknown'); reasons.push('invalid-skill'); }
       if (oper.role !== undefined) { checks.push('unknown'); reasons.push('role-unverified'); }
@@ -93,7 +95,9 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       || stage.difficulty !== (selected.difficulty === 'normal' ? 'NORMAL' : 'FOUR_STAR')) throw new Error('stage-identity-mismatch');
     if (!Number.isSafeInteger(selected.loops) || selected.loops < 1 || selected.loops > 1000) throw new Error('loops-invalid');
     const map = text(stage.zoneId), levelId = text(stage.levelId);
-    const aliases = [selected.stageId, levelId, levelId.split('level_').at(-1)];
+    // Main-story difficulty groups can share levelId. Only an explicit stageId proves the chosen group.
+    const difficultyGroup = text(stage.diffGroup ?? 'NONE');
+    const aliases = difficultyGroup === 'NONE' ? [selected.stageId, levelId, levelId.split('level_').at(-1)] : [selected.stageId];
     const prerequisiteChecks = Array.isArray(stage.unlockCondition) ? stage.unlockCondition.map((value: unknown) => {
       const requirement = object(value), actual = request.completions?.[requirement.stageId];
       const state: Status = !request.completionEvidence?.trim() || !actual ? 'unknown' : actual === requirement.completeState || actual === 'COMPLETE' && requirement.completeState === 'PASS' ? 'ready' : 'blocked';
@@ -119,11 +123,14 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
         requirements: operators.requirements, assignment: operators.assignment, content: structuredClone(content), hash: digest(content) };
     });
     const ready = candidates.filter(candidate => candidate.status === 'ready');
-    return { ...selected, map, levelId, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1).map(candidate => candidate.id) };
+    return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1).map(candidate => candidate.id) };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
-    tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
-    batches: [...new Set(stages.map(stage => stage.map))].map(map => ({ map, stages: stages.filter(stage => stage.map === map).map(stage => stage.stageId) })) };
+    tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
+    batches: [...new Set(stages.map(stage => JSON.stringify([stage.map, stage.difficulty, stage.difficultyGroup])))].map(key => {
+      const [map, difficulty, difficultyGroup] = JSON.parse(key) as string[];
+      return { map: map!, difficulty: difficulty!, difficultyGroup: difficultyGroup!, stages: stages.filter(stage => stage.map === map && stage.difficulty === difficulty && stage.difficultyGroup === difficultyGroup).map(stage => stage.stageId) };
+    }) };
   return { ...result, hash: digest(result) };
 }
 
@@ -149,11 +156,12 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
   matchStageJobs(snapshot, tables, request, []); // Validate the entire scope before making a network request.
   const jobs: Job[] = [], seen = new Set<number>(), search: { stageId: string; pages: number; truncated: boolean }[] = [];
   for (const stage of request.stages) {
+    const keyword = text(object(object(object(tables).stages)[stage.stageId]).levelId).split('level_').at(-1)!;
     let next = true, page = 1;
     for (; next && page <= 3; page++) {
-      const url = `https://prts.maa.plus/copilot/query?${new URLSearchParams({ page: String(page), limit: '20', level_keyword: stage.stageId, language: 'cn' })}`;
+      const url = `https://prts.maa.plus/copilot/query?${new URLSearchParams({ page: String(page), limit: '20', level_keyword: keyword, language: 'cn' })}`;
       const { data } = await publicResponse(url, fetcher);
-      if (!Array.isArray(data.data) || typeof data.has_next !== 'boolean') throw new Error('job-query-invalid');
+      if (!Array.isArray(data.data) || data.data.length > 20 || typeof data.has_next !== 'boolean') throw new Error('job-query-invalid');
       next = data.has_next;
       for (const entry of data.data) {
         const id = Number(object(entry).id);
@@ -172,11 +180,11 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
 /** Summary and per-operator training view; untrusted document text remains quoted data. */
 export function formatStageJobs(report: StageReport, operator?: string): string {
   const escape = (value: unknown) => String(value).replace(/[<>|`\r\n]/g, char => ({ '<': '&lt;', '>': '&gt;', '|': '\\|', '`': '\\`', '\r': ' ', '\n': ' ' })[char]!);
-  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, '候选是公开数据；运行由用户点开始。', ''];
+  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}`, '候选是外部数据；运行由用户点开始。', ''];
   for (const batch of report.batches) {
     lines.push(`## 地图 ${escape(batch.map)}`);
-    for (const stage of report.stages.filter(item => item.map === batch.map)) {
-      lines.push(`### ${escape(stage.code)} / ${stage.difficulty} / ${escape(stage.stageId)} × ${stage.loops}`, `主作业候选：${stage.primary ?? '待核'}；备选候选：${stage.alternates.join(', ') || '无'}`);
+    for (const stage of report.stages.filter(item => batch.stages.includes(item.stageId))) {
+      lines.push(`### ${escape(stage.code)} / ${stage.difficulty} / ${escape(stage.difficultyGroup)} / ${escape(stage.stageId)} × ${stage.loops}`, `主作业候选：${stage.primary ?? '待核'}；备选候选：${stage.alternates.join(', ') || '无'}`);
       for (const condition of stage.prerequisites) lines.push(`- 前置 ${escape(condition.stageId)} ${condition.required}：${condition.status}`);
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
@@ -206,7 +214,7 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
       if (!candidate || candidate.status !== 'ready') throw new Error('approval-requires-ready-candidate');
       return { id, hash: candidate.hash, source: candidate.source };
     });
-    return { stageId: stage.stageId, code: stage.code, difficulty: stage.difficulty, loops: selection.loops, primary: selectedJobs[0]!, alternates: selectedJobs.slice(1) };
+    return { stageId: stage.stageId, code: stage.code, difficulty: stage.difficulty, difficultyGroup: stage.difficultyGroup, loops: selection.loops, primary: selectedJobs[0]!, alternates: selectedJobs.slice(1) };
   }) };
   const list = approvedJobList(plan, input.privateDirectory);
   for (const entry of plan.entries) for (const selected of [entry.primary, ...entry.alternates]) {
@@ -224,17 +232,33 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
 }
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
+async function loadStageTables(file?: unknown) {
+  if (file !== undefined) return { ...object(JSON.parse(await readFile(text(file), 'utf8'))), source: { kind: 'offline-input' } };
+  const result = await readPublicJson(stageTableSource); return { ...object(result.value), source: result.source };
+}
+export function findStages(tables: unknown, codes: string[]) {
+  if (!Array.isArray(codes) || !codes.length || codes.length > 100 || codes.some(code => typeof code !== 'string' || !code.trim())) throw new Error('stage-code-required');
+  return Object.values(object(object(tables).stages)).filter(stage => codes.includes(object(stage).code)).map(value => {
+    const stage = object(value);
+    return { stageId: stage.stageId, code: stage.code, map: stage.zoneId, levelId: stage.levelId, difficulty: stage.difficulty === 'NORMAL' ? 'normal' : stage.difficulty === 'FOUR_STAR' ? 'raid' : 'unsupported',
+      difficultyGroup: stage.diffGroup ?? null, prerequisites: stage.unlockCondition ?? null };
+  });
+}
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
-    if (process.argv.length !== 3 || !['query', 'prepare'].includes(process.argv[2]!)) throw new Error('action-invalid');
+    if (process.argv.length !== 3 || !['stages', 'query', 'prepare'].includes(process.argv[2]!)) throw new Error('action-invalid');
     let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 1024 * 1024) throw new Error('input-too-large'); }
     const input = object(JSON.parse(raw)), settings = await readSettings();
-    const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
-    if (process.argv[2] === 'query') {
+    if (process.argv[2] === 'stages') {
+      if (Object.keys(input).some(key => !['codes', 'tablesFile'].includes(key))) throw new Error('request-invalid');
+      const tables = await loadStageTables(input.tablesFile);
+      console.log(JSON.stringify({ ok: true, stages: findStages(tables, input.codes), tablesOrigin: input.tablesFile ? 'offline-input' : stageTableSource }));
+    } else if (process.argv[2] === 'query') {
+      const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
       if (Object.keys(input).some(key => !['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'].includes(key))
         || input.format !== undefined && !['json', 'markdown'].includes(input.format) || input.saveReport !== undefined && typeof input.saveReport !== 'boolean') throw new Error('request-invalid');
-      const tables = input.tablesFile ? JSON.parse(await readFile(text(input.tablesFile), 'utf8')) : (await readPublicJson(stageTableSource)).value;
+      const tables = await loadStageTables(input.tablesFile);
       const report = input.jobsFile ? matchStageJobs(snapshot, tables, input.request, JSON.parse(await readFile(text(input.jobsFile), 'utf8'))) : await collectStageJobs(snapshot, tables, input.request);
       if (input.saveReport) {
         const file = join(settings.privateDirectory, 'stage-jobs', 'reports', `${report.hash}.json`);
@@ -244,6 +268,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
       console.log(input.format === 'markdown' ? formatStageJobs(report, input.operator === undefined ? undefined : text(input.operator)) : JSON.stringify({ ok: true, report, tablesOrigin: input.tablesFile ? 'offline-input' : stageTableSource }));
     } else {
+      const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
       if (Object.keys(input).some(key => !['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed'].includes(key)) || !settings.maaDirectory) throw new Error('request-invalid');
       const hash = text(input.approval?.reportHash); if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('approval-invalid');
       const report = JSON.parse(await readFile(join(settings.privateDirectory, 'stage-jobs', 'reports', `${hash}.json`), 'utf8'));

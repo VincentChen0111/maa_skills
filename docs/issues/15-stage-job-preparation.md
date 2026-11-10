@@ -14,6 +14,8 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [11: 
 
 2026-11-11 在独立分支实施，候选见 [PR #41](https://github.com/VincentChen0111/maa_skills/pull/41)。完整 R1 发现四项真实错误，正在集中修复；未完成独立验收，不解除下游依赖。
 
+作者实现及外部行为测试已形成候选；来源与验证见 [作业接口核对](../stage-jobs-sources.md)、[作者验证](../stage-jobs-verification.md)。独立审查、固定候选的原生安装、真实模型前后尝试与 PR 交付仍由根代理收口，不提前记已完成。
+
 用户交办一批关卡时，需要确保关卡、难度和名册确实匹配作业，而不是只因名称相似就装进 MAA。
 
 ## 要交付的行为

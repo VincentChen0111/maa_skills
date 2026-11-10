@@ -4,6 +4,8 @@
 
 ## 读取与写入
 
+关卡作业由 [作业准备接口](stage-jobs.md) 生成独立 jobPlan 授权，唯一写入器核对当前配置的 Copilot.TaskList 和 EnableUserAdditional=false。摘要仅新增每配置 jobCount，不输出文件路径、关卡名称或完整作业。事务还绑定 Current、整份 Copilot 设置及私有作业资产内容指纹；不与普通配置修改合成一次请求。
+
 `read` 输出配置序号、任务类型/启用状态、定时槽、提醒字段与 revision 指纹。任务的 `$type` 和 `TaskType` 必须符合已核对应关系；缺失、未知或不一致均显示 `OtherTask`，不能凭任务名称或标签授权启用。不输出配置名称、任务名称、连接地址、账号或完整配置。`write.expectedRevision` 必须使用此次摘要的 `configuration.revision`，不能临时读取新值来绕过变更提示。开始时版本不符返回 configuration-changed；关停后任务/定时槽对象或决定实际执行目标的当前配置、定时模式、目标队列变化则保留 unknown，不按旧下标写入。重新核对目标与当次授权后才可重新准备请求。
 
 `write` 输入示例：
