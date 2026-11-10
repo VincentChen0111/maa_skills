@@ -69,3 +69,53 @@ test('a custom JSON input is rendered inside the temporary fixture and observed 
   assert.deepEqual(evidence.changes, [{ file: 'private/config.json', key: 'language', before: null, after: 'en' }]);
   await assert.rejects(createFixture({ jsonInputs: { '../outside.json': {} } }), /fixture-path/);
 });
+
+test('companion skills install beside the subject in both isolated hosts', async (t) => {
+  const source = await mkdtemp(join(tmpdir(), 'maa-companion-'));
+  t.after(() => rm(source, { recursive: true, force: true }));
+  await writeFile(join(source, 'SKILL.md'), 'synthetic companion');
+  const fixture = await createFixture({ skillDirectory: source, companionSkills: { 'maa-help': source } });
+  t.after(() => fixture.dispose());
+  for (const host of ['.agents', '.claude']) {
+    assert.equal(await readFile(join(fixture.workspace, host, 'skills/maa-help/SKILL.md'), 'utf8'), 'synthetic companion');
+    assert.ok(fixture.original.has(`${host}/skills/maa-help/SKILL.md`));
+  }
+  for (const name of ['../outside', 'subject', 'maa-eval-probe', 'MixedCase']) {
+    await assert.rejects(createFixture({ skillDirectory: source, companionSkills: { [name]: source } }), /companion-name/);
+  }
+});
+
+test('new declared JSON objects expose file creation and each top-level field', async (t) => {
+  const fixture = await createFixture({ jsonFiles: ['private/new-snapshot.json'] });
+  t.after(() => fixture.dispose());
+  await writeFile(join(fixture.workspace, 'private/new-snapshot.json'), JSON.stringify({ source: 'maa', readAt: '2026-11-11T00:00:00.000Z' }));
+  const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+  assert.deepEqual(evidence.changes, [
+    { file: 'private/new-snapshot.json', key: '$exists', before: false, after: true },
+    { file: 'private/new-snapshot.json', key: 'source', before: undefined, after: 'maa' },
+    { file: 'private/new-snapshot.json', key: 'readAt', before: undefined, after: '2026-11-11T00:00:00.000Z' },
+  ]);
+});
+
+test('JSON existence, deletion, and unsafe object shapes cannot disappear from evidence', async (t) => {
+  const fixture = await createFixture({ jsonInputs: { 'private/deleted.json': { source: 'maa' } },
+    jsonFiles: ['private/deleted.json', 'private/empty.json', 'private/array.json', 'private/malformed.json', 'private/reserved.json'] });
+  t.after(() => fixture.dispose());
+  await rm(join(fixture.workspace, 'private/deleted.json'));
+  for (const [file, value] of [['empty', '{}'], ['array', '[]'], ['malformed', '{bad'], ['reserved', '{"$exists":true}']]) {
+    await writeFile(join(fixture.workspace, `private/${file}.json`), value!);
+  }
+  const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+  assert.deepEqual(evidence.changes.filter(change => change.file === 'private/deleted.json'), [
+    { file: 'private/deleted.json', key: '$exists', before: true, after: false },
+    { file: 'private/deleted.json', key: 'source', before: 'maa', after: undefined },
+  ]);
+  assert.deepEqual(evidence.changes.filter(change => change.file === 'private/empty.json'), [
+    { file: 'private/empty.json', key: '$exists', before: false, after: true },
+  ]);
+  for (const file of ['array', 'malformed', 'reserved']) {
+    assert.equal(evidence.changes.filter(change => change.file === `private/${file}.json`).length, 1);
+    assert.equal(evidence.changes.find(change => change.file === `private/${file}.json`)!.key, '$file');
+  }
+  assert.equal(grade({ ...fixture.policy, lockFiles: [] }, evidence).status, 'fail');
+});

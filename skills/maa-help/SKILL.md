@@ -17,7 +17,7 @@ description: 用文字说明 maa_skills 提供哪些功能、某个需求该用�
 | 已有环境报错、检查连接/配置/锁、按同意的修法处理 | maa-doctor |
 | 解释入口、功能和安装方式 | maa-help |
 
-当前交付只有 maa-help 和共享脚本目录 maa-core。其余四个入口尚未实现：明确说明它们是规划中的入口，不能声称已经安装或可以执行。没有 MAA 环境时说明应先完成 setup；已有环境异常时说明应走 doctor。
+当前交付 maa-help、maa-account 和共享脚本目录 maa-core。maa-account 已支持读取用户在 MAA 启动的本地识别结果与保存账号快照；培养成本、森空岛和基建建议仍待后续实现。setup、daily、doctor 是规划中的入口，不能声称已经安装或可以执行。没有 MAA 环境时说明应先完成 setup；已有环境异常时说明应走 doctor。
 
 用户想改回复语言、私有目录，或者想让某句偏好被记住时，说明这由实际操作的入口（如 maa-setup、maa-daily）通过 maa-core 的偏好脚本记录，本 skill 不代为写入；对应入口尚未交付时如实说明。
 

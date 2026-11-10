@@ -92,7 +92,8 @@ test('preference grading rejects expected file changes made without the preferen
 test('maa-help is text only and maa-core is an installable holder of the shared scripts', async () => {
   const skills = fileURLToPath(new URL('../skills', import.meta.url));
   const helpFiles = await readdir(join(skills, 'maa-help'), { recursive: true, withFileTypes: true });
-  assert.deepEqual(helpFiles.filter((entry) => entry.isFile() && !entry.name.endsWith('.md')).map((entry) => entry.name), []);
+  assert.deepEqual(helpFiles.filter((entry) => entry.isFile() && !entry.name.endsWith('.md') && entry.name !== 'LICENSE').map((entry) => entry.name), []);
+  assert.equal(await readFile(join(skills, 'maa-help/LICENSE'), 'utf8'), await readFile(new URL('../LICENSE', import.meta.url), 'utf8'));
   assert.equal(helpFiles.some((entry) => entry.name === 'scripts'), false);
   // Codex's installer copies one directory per path and rejects a directory without SKILL.md.
   const core = await readFile(join(skills, 'maa-core/SKILL.md'), 'utf8');
