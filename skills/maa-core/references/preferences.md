@@ -1,6 +1,6 @@
 # 偏好接口
 
-入口为当前 skill 的 `scripts/preferences.ts`，需要 Node 24。命令的输入是标准输入中的 JSON 对象；把用户文本作为数据传入，不能拼成 shell 命令。共享代码可直接导入该文件的 `readSettings`、`updateSettings`、`appendPreference`、`startup`，没有第二份实现。
+入口为 `maa-core` 目录的 `scripts/preferences.ts`，其他 skill 经相邻目录 `../maa-core/scripts/preferences.ts` 调用，需要 Node 24。命令的输入是标准输入中的 JSON 对象；把用户文本作为数据传入，不能拼成 shell 命令。共享代码可直接导入该文件的 `readSettings`、`updateSettings`、`appendPreference`、`startup`，没有第二份实现。
 
 | 命令 | 输入 | 行为 |
 | --- | --- | --- |

@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { updateSettings, readSettings } from '../skills/maa-help/scripts/preferences.ts';
+import { updateSettings, readSettings } from '../skills/maa-core/scripts/preferences.ts';
 
-const command = fileURLToPath(new URL('../skills/maa-help/scripts/preferences.ts', import.meta.url));
+const command = fileURLToPath(new URL('../skills/maa-core/scripts/preferences.ts', import.meta.url));
 
 test('preferences CLI persists language atomically while preserving unrelated settings', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'maa-preferences-'));

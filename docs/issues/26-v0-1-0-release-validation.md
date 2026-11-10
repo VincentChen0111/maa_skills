@@ -26,7 +26,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 验收条件
 
-- [ ] 补齐 04 的 Codex/Claude 各三个场景 `help-language`、`help-append`、`help-boundary` 的真实基线；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
+- [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
 
 - [ ] 在两个临时宿主环境从实际发布内容原生安装和更新五个 skill，验证每个入口和共享脚本可达；开发目录联接也在临时位置验证。
 - [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，所有 skill 读取语言，结构化设置与偏好原话及各自写入边界一致。

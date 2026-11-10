@@ -1,0 +1,19 @@
+---
+name: maa-core
+description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-account、maa-daily、maa-doctor 调用，不直接处理用户请求。用户问该用哪个 MAA skill 或怎么安装时用 maa-help。
+---
+
+# maa-core
+
+本目录不是操作入口。它存放 maa_skills 的共享脚本，每个脚本只有这一份实现；其他 maa skill 通过相邻目录 `../maa-core/scripts/` 调用。脚本需要 Node 24。
+
+| 脚本 | 用途 | 接口说明 |
+| --- | --- | --- |
+| `scripts/preferences.ts` | 读写结构化设置（语言、私有目录、MAA 目录、服务器），追加偏好原话 | [偏好接口](references/preferences.md) |
+
+调用方的约定：
+
+- 调用前读对应的接口说明，只通过脚本读写，不直接改它管理的文件。
+- 用户的文本作为数据经标准输入传给脚本，不拼进命令行。
+- 偏好不能授权源石、抽卡、礼包、付费、登录或设备操作。
+- 本目录要和调用它的 skill 来自同一个版本。更新时所有 maa skill 一起重装，见 maa-help 的宿主说明。
