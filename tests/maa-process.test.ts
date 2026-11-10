@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { fork, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createMaaProcess, type ProcessControl, type ProcessIdentity } from '../skills/maa-help/scripts/maa-process.ts';
-import { updateSettings } from '../skills/maa-help/scripts/preferences.ts';
+import { createMaaProcess, type ProcessControl, type ProcessIdentity } from '../skills/maa-core/scripts/maa-process.ts';
+import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 
 const fake = fileURLToPath(new URL('./fixtures/fake-maa-process.mjs', import.meta.url));
 async function fixture(t: TestContext, mode = 'ready', closeDelay = 0) {
@@ -168,7 +168,7 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   await updateSettings({ maaDirectory: root, privateDirectory }, settingsDirectory);
   const configuration = { Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [], Gui: { StartUpSettings: { RunDirectly: false } } } }, Timers: { List: [], NotifyBeforeScheduledStart: false }, untouched: 'synthetic-private-value' };
   await writeFile(join(configDirectory, 'gui.new.json'), JSON.stringify(configuration));
-  const command = fileURLToPath(new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url));
+  const command = fileURLToPath(new URL('../skills/maa-core/scripts/maa-config.ts', import.meta.url));
   const read = spawnSync(process.execPath, [command, 'read'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 10_000 });
   assert.equal(read.status, 0, read.stdout);
   const expectedRevision = JSON.parse(read.stdout).configuration.revision;

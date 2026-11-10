@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { updateSettings } from '../skills/maa-help/scripts/preferences.ts';
-import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-help/scripts/maa-config.ts';
+import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
+import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
 
 async function executeConfigWrite(request: Omit<WriteRequest, 'expectedRevision'> & { expectedRevision?: string }, maa: MaaProcess) {
   const expectedRevision = request.expectedRevision ?? (await inspectConfiguration(request.maaDirectory)).revision;
@@ -211,7 +211,7 @@ test('enabling a timer cannot activate existing forbidden or unapproved consumpt
 test('the CLI reads only settings-selected MAA summaries and never prints secrets or raw parse errors', async (t) => {
   const f = await fixture(t); const home = join(f.root, 'home');
   await updateSettings({ maaDirectory: f.maa, privateDirectory: f.privateDirectory }, home);
-  const command = fileURLToPath(new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url));
+  const command = fileURLToPath(new URL('../skills/maa-core/scripts/maa-config.ts', import.meta.url));
   const invoke = (action: string, input: unknown = {}) => spawnSync(process.execPath, [command, action], { encoding: 'utf8', input: JSON.stringify(input), env: { ...process.env, MAA_SKILLS_HOME: home, HOME: home, USERPROFILE: home } });
   const result = invoke('read');
   assert.equal(result.status, 0);
@@ -413,7 +413,7 @@ test('medicine budgets sum each profile after accounting for its own timer count
 });
 
 test('local timer protection includes both occurrences of the daylight saving repeated hour', () => {
-  const module = new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url).href;
+  const module = new URL('../skills/maa-core/scripts/maa-config.ts', import.meta.url).href;
   const source = `import {checkMaintenanceWindow} from ${JSON.stringify(module)};
     const config={Timers:{List:[{IsEnabled:true,Hour:1,Minute:30}]}};
     const intervals=[['2026-11-01T01:29:30-04:00','2026-11-01T01:31:00-04:00'],['2026-11-01T01:29:30-05:00','2026-11-01T01:31:00-05:00'],['2026-11-01T01:27:00-05:00','2026-11-01T01:27:59-05:00']];
@@ -447,7 +447,7 @@ test('readback verifies the expected execution dependencies after MAA restarts',
 });
 
 test('a repeated timer has a full physical two-minute window before the clock rolls back', () => {
-  const module = new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url).href;
+  const module = new URL('../skills/maa-core/scripts/maa-config.ts', import.meta.url).href;
   const source = `import {checkMaintenanceWindow} from ${JSON.stringify(module)};
     const config={Timers:{List:[{IsEnabled:true,Hour:1,Minute:0}]}};
     const intervals=[['2026-11-01T01:58:30-04:00','2026-11-01T01:59:30-04:00'],['2026-11-01T01:57:00-04:00','2026-11-01T01:57:59-04:00']];
