@@ -85,6 +85,13 @@ function prepare(config: RecordValue, request: WriteRequest) {
       if (path[3] === 'EnableUserAdditional') allowed = value === false;
       dependencies.push(['Current'], ['Configurations', String(path[1]), 'Copilot']);
     }
+    if (path.length === 5 && path[0] === 'Configurations' && typeof path[1] === 'string' && path[2] === 'Gui' && path[3] === 'ConnectSettings') {
+      if (['AutoDetect', 'AlwaysAutoDetect'].includes(String(path[4]))) allowed = typeof value === 'boolean';
+      // MAA also stores empty/relative adb paths; recovery must be able to restore those originals.
+      if (path[4] === 'AdbPath') allowed = typeof value === 'string' && value.length <= 32767 && !/[\0\r\n]/.test(value);
+      if (path[4] === 'Address') allowed = typeof value === 'string' && value.length <= 255 && /^[a-zA-Z0-9_.:[\]-]*$/.test(value);
+      dependencies.push(['Current'], ['Configurations', path[1], 'Gui', 'ConnectSettings'], ['Configurations', path[1], 'Gui', 'RuntimeSettings']);
+    }
     if (path.length === 2 && path[0] === 'Timers') {
       if (['CustomConfig', 'ForceScheduledStart', 'ShowWindowBeforeForceScheduledStart', 'NotifyBeforeScheduledStart'].includes(String(path[1]))) allowed = typeof value === 'boolean';
       if (path[1] === 'ScheduledStartNotificationMinutes') allowed = Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 1439;
@@ -227,7 +234,7 @@ function transactionFields(value: unknown, required: string[], optional: string[
 
 function transactionMetadata(value: unknown, pending = false): RecordValue {
   const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
-  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor')
+  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor' && record.skill !== 'maa-setup')
     || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
     || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
     || typeof record.phase !== 'string' || !(pending ? ['check'] : ['check', 'close', 'backup', 'write', 'restart', 'readback', 'record', 'release']).includes(record.phase)) throw new Error('transaction-metadata-invalid');
@@ -495,7 +502,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
   if (recovery) { const changed = await locked(); if (changed) return changed; }
-  const metadata = { id, skill: recovery ? 'maa-doctor' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
+  const connectionOnly = request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
+  const metadata = { id, skill: recovery ? 'maa-doctor' : connectionOnly ? 'maa-setup' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
     await lock.truncate(0); await lock.write(JSON.stringify(metadata), 0, 'utf8'); await lock.sync();

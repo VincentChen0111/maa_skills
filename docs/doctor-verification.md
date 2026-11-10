@@ -1,6 +1,6 @@
 # doctor 配置与遗留锁验证
 
-2026-11-11，06 从 05 squash 基点 `ddd0ca80a3367b589866efde73aa1c0205732c3a` 实施。实现验收已完成，固定产品 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b` 的完整 R2 通过，Standards/Spec 均无真实错误。经 [PR #40](https://github.com/VincentChen0111/maa_skills/pull/40) 待 squash 交付；模型及实机范围仍未验证。下方历史记录与最终验收分列。
+2026-11-11，06 从 05 squash 基点 `ddd0ca80a3367b589866efde73aa1c0205732c3a` 实施。实现验收已完成，固定产品 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b` 的完整 R2 通过，Standards/Spec 均无真实错误。经 [PR #40](https://github.com/VincentChen0111/maa_skills/pull/40) squash 交付为 `788ac13febf35a54e556fa527943c01431b8e215`；模型及实机范围仍未验证。下方历史记录与最终验收分列。
 
 共享入口 `skills/maa-core/scripts/doctor.ts` 提供只读检查及最近脱敏记录；恢复由 `maa-config.ts` 的原事务实现负责。诊断字段包含状态、原因、修法和执行者；CLI 提供人类可读与 JSON 输出及 0/1/2 退出码。
 

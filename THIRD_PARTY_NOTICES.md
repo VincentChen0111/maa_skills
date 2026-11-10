@@ -6,6 +6,8 @@
 
 MAA 代码和资源、游戏数据、一图流和企鹅物流数据不随包分发。用时读取需在相应输出注明来源，具体边界见 [规格](docs/spec.md)。
 
+setup 的现有环境检查、adb 候选处理和连接字段事务为独立实现；MAA v6.21.4 接口字段、Android adb 和 Windows 版本元数据的官方来源见 [setup 来源核对](docs/setup-sources.md)。没有复制 MAA AGPL 源码、模拟器资源或下载逻辑，不把接口核对当作实机验证。
+
 开发依赖 TypeScript、Node 类型声明的许可证保留在各自安装包中；版本与完整性哈希见 lockfile。它们不属于产品共享工具实现。
 
 ## dsh-maa-cli 的识别回调解析
