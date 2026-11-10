@@ -16,6 +16,8 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [11: 
 
 作者实现及外部行为测试已形成候选；来源与验证见 [作业接口核对](../stage-jobs-sources.md)、[作者验证](../stage-jobs-verification.md)。独立审查、固定候选的原生安装、真实模型前后尝试与 PR 交付仍由根代理收口，不提前记已完成。
 
+[独立 R1](../reviews/2026-11-11-15-stage-r1.md) 结论 FAIL：派生执行分配、预发布版本、技能精英门槛规范化、Markdown 检索覆盖四项均接受修复。作者集中修复并测试，待与 06 整合后的完整 R2，不把原 R1 或尚未完成的门禁记为通过。交付 PR [#41](https://github.com/VincentChen0111/maa_skills/pull/41) 当前为草稿。
+
 用户交办一批关卡时，需要确保关卡、难度和名册确实匹配作业，而不是只因名称相似就装进 MAA。
 
 ## 要交付的行为

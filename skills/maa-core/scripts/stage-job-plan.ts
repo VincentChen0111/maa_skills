@@ -2,12 +2,16 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type ApprovedJob = { id: number; hash: string; source: { url: string; readAt: string; sha256?: string } };
+export type ApprovedJob = { id: number; hash: string; sourceHash: string; source: { url: string; readAt: string; sha256?: string } };
 export type ApprovedJobPlan = { reportHash: string; map: string; entries: { stageId: string; code: string; difficulty: 'normal' | 'raid'; difficultyGroup: string; loops: number; primary: ApprovedJob; alternates: ApprovedJob[] }[] };
 const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 export function approvedJobFile(privateDirectory: string, reportHash: string, id: number): string {
   if (!hash(reportHash) || !Number.isSafeInteger(id) || id < 1) throw new Error('job-plan-invalid');
   return join(privateDirectory, 'stage-jobs', reportHash, `${id}.json`);
+}
+export function approvedJobSourceFile(privateDirectory: string, reportHash: string, id: number): string {
+  approvedJobFile(privateDirectory, reportHash, id);
+  return join(privateDirectory, 'stage-jobs', reportHash, 'source', `${id}.json`);
 }
 export function approvedJobList(plan: ApprovedJobPlan, privateDirectory: string) {
   if (!plan || !hash(plan.reportHash) || typeof plan.map !== 'string' || !plan.map || !Array.isArray(plan.entries) || !plan.entries.length) throw new Error('job-plan-invalid');
@@ -20,7 +24,7 @@ export function approvedJobList(plan: ApprovedJobPlan, privateDirectory: string)
     stages.add(entry.stageId);
     const ids = new Set<number>();
     for (const job of [entry.primary, ...entry.alternates]) {
-      if (!job || !hash(job.hash) || !Number.isSafeInteger(job.id) || job.id < 1 || ids.has(job.id)
+      if (!job || !hash(job.hash) || !hash(job.sourceHash) || !Number.isSafeInteger(job.id) || job.id < 1 || ids.has(job.id)
         || job.source?.url !== `https://prts.maa.plus/copilot/get/${job.id}` || !Number.isFinite(Date.parse(job.source.readAt))) throw new Error('job-plan-invalid');
       ids.add(job.id);
     }
@@ -33,7 +37,9 @@ export function approvedJobList(plan: ApprovedJobPlan, privateDirectory: string)
 export async function verifyApprovedJobFiles(plan: ApprovedJobPlan, privateDirectory: string): Promise<void> {
   approvedJobList(plan, privateDirectory);
   for (const entry of plan.entries) for (const job of [entry.primary, ...entry.alternates]) {
-    const content = JSON.parse(await readFile(approvedJobFile(privateDirectory, plan.reportHash, job.id), 'utf8'));
-    if (createHash('sha256').update(JSON.stringify(content)).digest('hex') !== job.hash) throw new Error('job-file-changed');
+    for (const [file, expected] of [[approvedJobFile(privateDirectory, plan.reportHash, job.id), job.hash], [approvedJobSourceFile(privateDirectory, plan.reportHash, job.id), job.sourceHash]]) {
+      const content = JSON.parse(await readFile(file!, 'utf8'));
+      if (createHash('sha256').update(JSON.stringify(content)).digest('hex') !== expected) throw new Error('job-file-changed');
+    }
   }
 }

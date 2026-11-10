@@ -21,3 +21,21 @@ UseCopilotList 是 CopilotViewModel 中的 GUI 运行状态，没有对应 Copil
 [MultiCopilotTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/Miscellaneous/MultiCopilotTaskPlugin.cpp#L55) 在当前地图按导航名找关卡，仅 IsRaid=true 时触发突袭切换；它没有调用普通 Fight 的 StageNavigationTask 难度环境切换。因此每地图再按难度与 diffGroup 分批，非 NONE 组要求明确 stageId，待执行计划保留该组。用户在开始前确认地图与环境；不以共享 levelId 或列表配置冒充环境已选中。
 
 摘要哈希保留读取字节；源码仅用于核对接口事实。公开 API 可变，报告保存每份来源 URL、读取时间、响应 SHA（联网模式）和作业内容 SHA。突袭与普通使用共享 levelId 检索，再以各自精确 stageId 和 difficulty 筛选；避免带 #f# 的关卡 ID 漏掉作业。合成离线输入明确标记，不假称 API 实读；人工语义/实机边界见 [验证记录](stage-jobs-verification.md)。
+
+## R1 发现后的执行内容核对
+
+以下同样固定于上述 MAA 提交，2026-11-11 经 GitHub 连接器重新读取完整文件；只独立实现接口事实，没有移植实现。
+
+- [CopilotConfig](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Config/Miscellaneous/CopilotConfig.cpp#L108) 不解析潜能要求；[BattleFormationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/Miscellaneous/BattleFormationTask.cpp#L600) 和 [OperBoxDataConfig](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Config/Miscellaneous/OperBoxDataConfig.cpp#L83) 不复用本工具的分配。[列表模式开启 Form](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/CopilotViewModel.cs#L861)，不能把 UseFormation 当关闭自动编队。由此选择派生执行文件每组仅保留已核成员，固定 opers 与 actions/组名保留，原文和派生分别保存并校验。原文、各替代要求和分配仍可审查。
+- [GUI 常规导入](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/CopilotViewModel.cs#L1333) 会按技能、技能等级及模组提高精英要求；Core 对显式 elite 低于所需门槛的已识别干员拒绝解析。直接文件列表不会做该导入修正。因此本工具在核对账号前取 S2→精一、S3→精二、普通技能等级 5–7→精一、8–10→精二、正模组要求→精二的最低门槛；缺省或 -1/0/1 低于门槛时提高，原文值单独显示，不修改账号事实，不降低要求。模组/逐技能专精没有证据仍待核。对未知职业等现有待核条件不扩大准备范围。
+- [CopilotHelper](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Helper/CopilotHelper.cs) 使用 Semver 的 AllowLowerV；最低版本另允许 OptionalPatch，并调用 CompareSortOrderTo。[固定项目依赖](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/MaaWpfGui.csproj) 为 Semver 3.0.0。[库的官方排序说明](https://semver-nuget.org/v3.0.x/Semver.SemVersion.html#Semver_SemVersion_CompareSortOrderTo_Semver_SemVersion_) 先比较数字版本，再比较预发布，最后比较构建标识；预发布数字按数值，构建标识按 ASCII 字典序。这里沿用实际 GUI 的排序而非忽略构建标识；未知/非法版本保留 unknown，不照搬调试版本免检查分支。
+- 分页覆盖并非作业证明的一部分，但会影响用户审阅候选，故把每关 online/offline、页数和截断状态纳入同一报告指纹，JSON 与 Markdown 同时显示。达到上限仍有下一页明确为未穷尽；即使查询结束，也不声称全站无其他候选。
+
+| R1 新核对文件 | 固定 Git blob |
+| --- | --- |
+| CopilotConfig.cpp | `13339e8cafeb50e9e0b66198ebb31a46f7364b34` |
+| BattleFormationTask.cpp | `d61d7246314a7d9ffe1af3cb396908ae60110360` |
+| OperBoxDataConfig.cpp | `98c3da696860664c7ed654facea35e10e721b5e2` |
+| CopilotHelper.cs | `26564e008143de86046988ce6ea3595920e269e7` |
+
+报告保留 candidate.hash（原文）与 execution.content/hash（派生）。批准后 pending jobPlan 的 sourceHash/hash 分别绑定两者；原文存 source 子目录，MAA FilePath 指向派生内容。以上是源码支持的行为推导和合成文件实测，不是实际游戏运行结论。R1 原报告与意见处置见 [独立审查](reviews/2026-11-11-15-stage-r1.md)。
