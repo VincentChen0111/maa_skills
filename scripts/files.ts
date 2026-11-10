@@ -1,11 +1,11 @@
-import { lstat, readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { lstat, readdir, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 // Dependency and Git internals are never publication inputs.
 export async function repositoryFiles(root: string): Promise<string[]> {
   const top = spawnSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
-  if (top.status === 0 && resolve(top.stdout.trim()) === resolve(root)) {
+  if (top.status === 0 && await realpath(top.stdout.trim()) === await realpath(root)) {
     const result = spawnSync('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     if (result.status !== 0) throw new Error('file-inventory');
     const files: string[] = [];

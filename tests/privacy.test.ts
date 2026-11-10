@@ -25,6 +25,9 @@ test('privacy scans tracked ignored files but ignores untracked build artifacts'
   await mkdir(join(root, '.tmp'));
   await writeFile(join(root, '.tmp', 'sample.txt'), ['PRIVATE', 'ACCOUNT', 'MARKER'].join('_'));
   assert.deepEqual(await inspectPrivacy(root), []);
+  if (process.platform === 'win32') {
+    assert.deepEqual(await inspectPrivacy(root.toUpperCase()), [], 'Windows path casing must not change the Git inventory');
+  }
   assert.equal(spawnSync('git', ['-C', root, 'add', '-f', '.tmp/sample.txt']).status, 0);
   assert.equal((await inspectPrivacy(root))[0]?.rule, 'account-marker');
 });
