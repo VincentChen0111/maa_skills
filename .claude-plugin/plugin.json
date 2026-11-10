@@ -1,0 +1,8 @@
+{
+  "name": "maa-skills",
+  "version": "0.1.0-dev.0",
+  "description": "Windows MAA GUI workflows for Arknights CN; implementation in progress.",
+  "author": { "name": "VincentChen0111" },
+  "repository": "https://github.com/VincentChen0111/maa_skills",
+  "license": "MIT"
+}
