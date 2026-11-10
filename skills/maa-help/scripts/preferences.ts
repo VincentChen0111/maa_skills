@@ -1,4 +1,4 @@
-import { mkdir, readFile, open, rename, unlink, realpath } from 'node:fs/promises';
+import { mkdir, readFile, open, rename, unlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,18 +10,22 @@ export function settingsHome(): string {
   return resolve(process.env.MAA_SKILLS_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? homedir(), '.maa-skills'));
 }
 
+/** Rejected before anything is written, so the caller can correct the input and retry. */
+class InputError extends Error {}
+
 function record(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('object-required');
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new InputError('object-required');
   return value as Record<string, unknown>;
 }
 function locale(value: unknown): string {
-  if (typeof value !== 'string' || !value) throw new Error('language-required');
-  const result = Intl.getCanonicalLocales(value);
-  if (!result[0]) throw new Error('language-required');
+  if (typeof value !== 'string' || !value) throw new InputError('language-required');
+  let result: string[];
+  try { result = Intl.getCanonicalLocales(value); } catch { throw new InputError('language-required'); }
+  if (!result[0]) throw new InputError('language-required');
   return result[0];
 }
 function path(value: unknown): string {
-  if (typeof value !== 'string' || !isAbsolute(value)) throw new Error('absolute-path-required');
+  if (typeof value !== 'string' || !isAbsolute(value)) throw new InputError('absolute-path-required');
   return resolve(value);
 }
 function patch(value: unknown): SettingsPatch {
@@ -30,11 +34,11 @@ function patch(value: unknown): SettingsPatch {
   for (const [key, value] of Object.entries(input)) {
     switch (key) {
       case 'language': result.language = value === null ? null : locale(value); break;
-      case 'languageAsked': if (typeof value !== 'boolean') throw new Error('boolean-required'); result.languageAsked = value; break;
+      case 'languageAsked': if (typeof value !== 'boolean') throw new InputError('boolean-required'); result.languageAsked = value; break;
       case 'privateDirectory': result.privateDirectory = path(value); break;
       case 'maaDirectory': result.maaDirectory = value === null ? null : path(value); break;
-      case 'server': if (value !== 'CN') throw new Error('unsupported-server'); result.server = 'CN'; break;
-      default: throw new Error('unsupported-setting');
+      case 'server': if (value !== 'CN') throw new InputError('unsupported-server'); result.server = 'CN'; break;
+      default: throw new InputError('unsupported-setting');
     }
   }
   return result;
@@ -43,15 +47,44 @@ function patch(value: unknown): SettingsPatch {
 export async function readSettings(home = settingsHome()): Promise<Settings> {
   const defaults: Settings = { language: null, languageAsked: false, privateDirectory: resolve(home), maaDirectory: null, server: 'CN' };
   try { return { ...defaults, ...patch(JSON.parse(await readFile(join(home, 'config.json'), 'utf8'))) }; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaults; throw error; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaults;
+    throw error instanceof InputError ? new Error('settings-unreadable') : error;
+  }
+}
+
+const staleLockMs = 30_000;
+/**
+ * A writer that died cannot leave settings half-written: config.json is replaced by rename and an
+ * entry is a single append. Its lock therefore needs no reconciliation, unlike the MAA write lock.
+ */
+async function lockIsStale(lockFile: string): Promise<boolean> {
+  try {
+    const modified = (await stat(lockFile)).mtimeMs;
+    let holder: Record<string, unknown> = {};
+    try { holder = record(JSON.parse(await readFile(lockFile, 'utf8'))); } catch { /* holder not recorded yet, or cut short */ }
+    const started = typeof holder.startedAt === 'string' ? Date.parse(holder.startedAt) : Number.NaN;
+    if (Date.now() - (Number.isNaN(started) ? modified : started) > staleLockMs) return true;
+    const pid = holder.pid;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return false; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
 }
 
 async function withSettingsWrite<T>(home: string, action: () => Promise<T>): Promise<T> {
   await mkdir(home, { recursive: true });
   const lockFile = join(home, '.preferences.lock');
-  let handle;
-  try { handle = await open(lockFile, 'wx', 0o600); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('preferences-busy'); throw error; }
+  const acquire = async () => {
+    try { return await open(lockFile, 'wx', 0o600); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined; throw error; }
+  };
+  let handle = await acquire();
+  if (!handle && await lockIsStale(lockFile)) {
+    try { await unlink(lockFile); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    handle = await acquire();
+  }
+  if (!handle) throw new Error('preferences-busy');
   try {
     await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     return await action();
@@ -86,9 +119,9 @@ export function startup(settings: Settings, currentLanguage: string) {
 export async function appendPreference(value: unknown, home = settingsHome()): Promise<void> {
   const input = record(value);
   if (Object.keys(input).some((key) => !['date', 'source', 'text'].includes(key)) ||
-    typeof input.source !== 'string' || !input.source.trim() || typeof input.text !== 'string' || !input.text.trim()) throw new Error('invalid-preference');
+    typeof input.source !== 'string' || !input.source.trim() || typeof input.text !== 'string' || !input.text.trim()) throw new InputError('invalid-preference');
   const date = input.date ?? new Date().toISOString();
-  if (typeof date !== 'string' || new Date(date).toISOString() !== date) throw new Error('invalid-date');
+  if (typeof date !== 'string' || Number.isNaN(Date.parse(date)) || new Date(date).toISOString() !== date) throw new InputError('invalid-date');
   await withSettingsWrite(home, async () => {
   const settings = await readSettings(home);
   await mkdir(settings.privateDirectory, { recursive: true });
@@ -102,15 +135,19 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = record(JSON.parse(raw || '{}'));
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw || '{}'); } catch { throw new InputError('json-required'); }
+    const input = record(parsed);
     if (process.argv[2] === 'read') console.log(JSON.stringify({ ok: true, ...startup(await readSettings(), String(input.currentLanguage ?? 'zh-CN')) }));
     else if (process.argv[2] === 'set') {
       const settings = await updateSettings(input);
       console.log(JSON.stringify({ ok: true, changed: Object.keys(input), ...startup(settings, 'zh-CN') }));
     } else if (process.argv[2] === 'append') { await appendPreference(input); console.log(JSON.stringify({ ok: true, appended: true })); }
-    else throw new Error('unknown-action');
+    else throw new InputError('unknown-action');
   } catch (error) {
-    console.error(JSON.stringify({ ok: false, error: error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : 'preferences-check-required' }));
+    const code = error instanceof InputError ? 'invalid-input'
+      : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : 'preferences-check-required';
+    console.error(JSON.stringify({ ok: false, error: code }));
     process.exitCode = 1;
   }
 }

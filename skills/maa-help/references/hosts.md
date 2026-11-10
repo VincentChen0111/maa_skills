@@ -8,4 +8,4 @@ Claude Code：运行 `claude plugin marketplace add VincentChen0111/maa_skills`�
 
 Windows 开发目录联接：只在新建的临时宿主目录中，用 PowerShell `New-Item -ItemType Junction` 把该宿主的 `skills/maa-help` 指向 clone 的 `skills/maa-help`。先核实临时目标不存在。验证后仅清理临时联接，不移动或替换正常宿主安装；不要递归删除联接目标。
 
-建议报告的独立审查：Codex 用新的 `codex exec` 进程，Claude 用全新上下文，提供任务、规格、固定版本和 diff/报告全文的自包含说明。仅一名审查员，最多三轮，只报告真实错误；不能运行时写明未验证。用户当次明确跳过报告审查时标为「未审查」。maa-help 本身不创建建议报告。
+建议报告的独立审查：Codex 用新的 `codex exec` 进程，Claude 用全新上下文，提供任务、规格、固定版本和 diff/报告全文的自包含说明。仅一名审查员，只审一轮，只报告真实错误；接受的错误改正后不再复审，在报告里列出这些改动；不能运行时写明未验证。用户当次明确跳过报告审查时标为「未审查」。maa-help 本身不创建建议报告。

@@ -6,7 +6,7 @@ Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
 GitHub Issue: [#28](https://github.com/VincentChen0111/maa_skills/issues/28)
-Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [25: MAA 版本核对与升级提醒](25-maa-version-verification.md)
+Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md)
 
 ## 背景与目标
 
@@ -31,7 +31,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 在两个临时宿主环境从实际发布内容原生安装和更新五个 skill，验证每个入口和共享脚本可达；开发目录联接也在临时位置验证。
 - [ ] 验证 setup→account→用户批准→daily 及 help/doctor 的关键交接，所有 skill 读取语言，结构化设置与偏好原话及各自写入边界一致。
 - [ ] 离线脚本测试、评分规则自检、隐私检查通过；维护者本机对各 skill 起步 3–6 个场景及已有回归场景运行同模型前后评测，pass→fail 按规则重跑三次。
-- [ ] 核对全部已实现 MAA 依赖已登记；发布说明区分源码已核、实机已核和未验证，不将离线测试或历史经验算作实机通过。
+- [ ] 发布说明写明实机已核的 MAA 版本，区分实机已核和未验证，不将离线测试或历史经验算作实机通过；setup 和 doctor 按这份记录提醒。源码指纹的自动核对在 v0.1.0 之后由 [25](25-maa-version-verification.md) 实施，不是本票门禁。
 - [ ] 版本从 v0.1.0 开始，语义化版本号、插件描述和更新记录同步；经分支、独立审查、PR 及 squash 合并后发布，main 保护保持。
 - [ ] 逐文件检查公开内容与第三方声明，保留 MIT 全文、原版权行、借用提交号及致谢；不包含私人路径、账号数据、配置原文或打包游戏数据。
 - [ ] 记录实际运行结果及未验证项；未执行的真实设备验证不记通过，若需要用户操作则明确跟踪到相应状态。
@@ -43,7 +43,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 依赖理由
 
-08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链；25 完成版本跟踪。其余票经这些依赖传递纳入。
+08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
 
 ## 实现与交付约定
 
