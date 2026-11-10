@@ -182,10 +182,13 @@ export function checkMaintenanceWindow(config: unknown, start: Date, end: Date):
         || Number(timer.Hour) < 0 || Number(timer.Hour) > 23 || Number(timer.Minute) < 0 || Number(timer.Minute) > 59) return false;
       // Visit actual instants rather than constructing a local time, which chooses
       // only the first occurrence of an hour repeated by a daylight-saving rollback.
-      for (let instant = Math.floor(start.getTime() / 60000) * 60000; instant <= end.getTime(); instant += 60000) {
+      for (let instant = Math.floor(start.getTime() / 60000) * 60000; instant <= end.getTime() + 120000; instant += 60000) {
         const local = new Date(instant);
         const untilTrigger = (Number(timer.Hour) * 60 + Number(timer.Minute) - local.getHours() * 60 - local.getMinutes() + 1440) % 1440;
-        if (untilTrigger <= 2) return false;
+        // MAA's wall-clock configuration switch and the physical two-minute
+        // interval before every actual trigger must both remain protected.
+        if (instant <= end.getTime() && untilTrigger <= 2) return false;
+        if (untilTrigger === 0 && start.getTime() < instant + 60000 && end.getTime() >= instant - 120000) return false;
       }
     }
     return true;
@@ -349,6 +352,9 @@ export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess)
     const readback = await readConfiguration(request.maaDirectory);
     for (const change of request.changes) {
       if (JSON.stringify(at(readback, change.path)) !== JSON.stringify(at(config, change.path))) throw new Error('readback-mismatch');
+    }
+    for (const target of targets) {
+      if (JSON.stringify(at(readback, target.path)) !== JSON.stringify(at(config, target.path))) throw new Error('readback-target-changed');
     }
     await phase('record');
     const result = { status: 'complete', phase: 'complete', operation: id, changedKeys, reason: null };

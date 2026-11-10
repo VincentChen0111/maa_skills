@@ -422,3 +422,37 @@ test('local timer protection includes both occurrences of the daylight saving re
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), [false, false, true]);
 });
+
+test('readback verifies the expected execution dependencies after MAA restarts', async (t) => {
+  for (const change of ['current-profile', 'target-queue']) {
+    const f = await fixture(t); let running = true;
+    const config = structuredClone(f.config);
+    Object.assign(config.Configurations, { 'Synthetic second': structuredClone(config.Configurations['Synthetic profile']) });
+    Object.assign(config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' }] });
+    await writeFile(f.file, JSON.stringify(config));
+    const maa: MaaProcess = {
+      inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; },
+      start: async () => {
+        running = true; const saved = JSON.parse(await readFile(f.file, 'utf8'));
+        if (change === 'current-profile') saved.Current = 'Synthetic second';
+        else saved.Configurations['Synthetic profile'].TaskQueue.reverse();
+        await writeFile(f.file, JSON.stringify(saved));
+      },
+    };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'run this profile once' }, changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }] }, maa);
+    assert.equal(result.status, 'unknown', change); assert.equal(result.phase, 'readback');
+    assert.equal(JSON.parse(await readFile(join(f.maa, 'config', '.maa-skills.lock'), 'utf8')).phase, 'readback');
+    assert.equal(JSON.parse((await readFile(join(f.privateDirectory, 'daily-runs.jsonl'), 'utf8')).trim()).status, 'unknown');
+  }
+});
+
+test('a repeated timer has a full physical two-minute window before the clock rolls back', () => {
+  const module = new URL('../skills/maa-help/scripts/maa-config.ts', import.meta.url).href;
+  const source = `import {checkMaintenanceWindow} from ${JSON.stringify(module)};
+    const config={Timers:{List:[{IsEnabled:true,Hour:1,Minute:0}]}};
+    const intervals=[['2026-11-01T01:58:30-04:00','2026-11-01T01:59:30-04:00'],['2026-11-01T01:57:00-04:00','2026-11-01T01:57:59-04:00']];
+    console.log(JSON.stringify(intervals.map(([start,end])=>checkMaintenanceWindow(config,new Date(start),new Date(end)))));`;
+  const result = spawnSync(process.execPath, ['--input-type=module'], { input: source, encoding: 'utf8', env: { ...process.env, TZ: 'America/New_York' } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [false, true]);
+});
