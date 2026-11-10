@@ -12,7 +12,7 @@ Blocked by: [03: 双宿主行为评测](03-cross-host-evaluation.md)
 
 实施进度：进行中。
 
-maa-help 与唯一共享偏好脚本已实现。离线 27/27、类型与隐私检查、两轮独立审查及两个宿主的临时原生安装载荷验证均通过，见 [验证记录](../help-verification.md)与[审查记录](../reviews/2026-11-10-04-help.md)。交付为 [草稿 PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)。六项真模型场景因隔离认证为空仍为未验证；保持进行中，不解除后续依赖。
+maa-help 与唯一共享偏好脚本已实现。离线 28/28、类型与隐私检查、三轮独立审查及两个宿主的临时原生安装载荷验证均通过，见 [验证记录](../help-verification.md)与[审查记录](../reviews/2026-11-10-04-help.md)。交付为 [草稿 PR #32](https://github.com/VincentChen0111/maa_skills/pull/32)。六项真模型场景因隔离认证为空仍为未验证；保持进行中，不解除后续依赖。
 
 用户安装后的第一个入口应能解释该用哪个 skill，并把语言及私有目录设置保留下来。共享工具放在仓库中，并不自动保证按单个 skill 路径安装后还能调用。
 

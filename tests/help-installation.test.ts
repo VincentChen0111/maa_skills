@@ -24,10 +24,12 @@ test('both temporary native layouts can execute the single packaged preferences 
     ] as const) {
       const result = spawnSync(process.execPath, [script, action], { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).ok, true, 'successful CLI calls must produce a response');
       outputs.push(result.stdout);
     }
     const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs });
-    assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence).status, 'pass');
+    const result = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
+    assert.equal(result.status, 'pass', JSON.stringify({ result, events: evidence.events }));
   }
 });
 
@@ -51,6 +53,22 @@ test('the exported preferences interface remains importable from standard input'
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'function');
+});
+
+test('Windows short-path aliases execute the installed preferences entrypoint', { skip: process.platform !== 'win32' }, async (t) => {
+  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-help', import.meta.url)) });
+  t.after(() => fixture.dispose());
+  const alias = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:MAA_TEST_LONG_PATH).ShortPath'], {
+    env: { ...fixture.env, MAA_TEST_LONG_PATH: fixture.workspace }, encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(alias.status, 0, alias.stderr);
+  const shortWorkspace = alias.stdout.trim();
+  if (shortWorkspace === fixture.workspace) { t.skip('This filesystem does not provide short-path aliases.'); return; }
+  const result = spawnSync(process.execPath, [join(shortWorkspace, '.agents/skills/subject/scripts/preferences.ts'), 'read'], {
+    cwd: fixture.workspace, env: fixture.env, input: '{"currentLanguage":"en"}', encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).language, 'en');
 });
 
 test('help grading rejects expected file changes made without the preferences script', async (t) => {

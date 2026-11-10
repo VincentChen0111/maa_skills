@@ -1,7 +1,7 @@
 import { mkdir, readFile, open, rename, unlink, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 export type Settings = { language: string | null; languageAsked: boolean; privateDirectory: string; maaDirectory: string | null; server: 'CN' };
@@ -99,7 +99,7 @@ export async function appendPreference(value: unknown, home = settingsHome()): P
 }
 
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
-if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
+if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     let raw = ''; for await (const chunk of process.stdin) raw += chunk;
     const input = record(JSON.parse(raw || '{}'));
