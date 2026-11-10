@@ -12,7 +12,7 @@ Blocked by: [02: 仓库开发与公开检查闭环](02-repository-workflow.md)
 
 实施进度：已完成。
 
-离线归一化、七项规则正反例、隔离演示和版本比较已实现；[独立审查](../reviews/2026-11-10-03-evaluation.md)第三轮通过。框架实现已完成，PR 交付进行中。本机 Codex 隔离认证为空、Claude CLI 不可用，真模型及产品基线未验证，见[评测说明](../evaluation.md)和[验证记录](../evaluation-verification.md)。
+离线归一化、七项规则正反例、隔离演示和版本比较已实现；[独立审查](../reviews/2026-11-10-03-evaluation.md)第三轮通过。[PR #31](https://github.com/VincentChen0111/maa_skills/pull/31)已 squash 合并，双平台 CI 通过，GitHub 镜像已同步。本机 Codex 隔离认证为空、Claude CLI 不可用，真模型及产品基线未验证，见[评测说明](../evaluation.md)和[验证记录](../evaluation-verification.md)。
 
 原评分逻辑可借鉴，但原驱动绑定其他运行环境。本项目需要面向 Codex 与 Claude Code 的统一行为证据。
 

@@ -15,7 +15,7 @@
 | 01 | [修正三项规则来源](01-spec-rule-provenance.md) | [#3](https://github.com/VincentChen0111/maa_skills/issues/3) | 无 | 已完成 |
 | 02 | [仓库开发与公开检查闭环](02-repository-workflow.md) | [#4](https://github.com/VincentChen0111/maa_skills/issues/4) | 01 | 已完成 |
 | 03 | [双宿主行为评测](03-cross-host-evaluation.md) | [#5](https://github.com/VincentChen0111/maa_skills/issues/5) | 02 | 已完成 |
-| 04 | [可安装的 help 与偏好设置](04-install-help-preferences.md) | [#6](https://github.com/VincentChen0111/maa_skills/issues/6) | 03 | 未开始 |
+| 04 | [可安装的 help 与偏好设置](04-install-help-preferences.md) | [#6](https://github.com/VincentChen0111/maa_skills/issues/6) | 03 | 进行中 |
 | 05 | [daily 安全修改配置](05-daily-safe-config-write.md) | [#7](https://github.com/VincentChen0111/maa_skills/issues/7) | 04 | 未开始 |
 | 06 | [doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md) | [#8](https://github.com/VincentChen0111/maa_skills/issues/8) | 05 | 未开始 |
 | 07 | [setup 接入现有环境](07-setup-existing-environment.md) | [#9](https://github.com/VincentChen0111/maa_skills/issues/9) | 06 | 未开始 |
