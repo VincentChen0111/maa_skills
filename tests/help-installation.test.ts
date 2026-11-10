@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, unlink, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, unlink, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
+import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
 
 test('both temporary native layouts can execute the single packaged preferences implementation', async (t) => {
-  const skillDirectory = fileURLToPath(new URL('../skills/maa-help', import.meta.url));
-  const scenario = helpScenarios[0]!;
+  const skillDirectory = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
+  const scenario = coreScenarios[0]!;
   for (const host of ['.agents', '.claude']) {
     const fixture = await createFixture({ skillDirectory, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
     t.after(() => fixture.dispose());
@@ -34,10 +35,10 @@ test('both temporary native layouts can execute the single packaged preferences 
 });
 
 test('the documented development directory junction executes the preferences CLI', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'maa-help-junction-'));
-  const installed = join(root, 'skills/maa-help');
+  const root = await mkdtemp(join(tmpdir(), 'maa-core-junction-'));
+  const installed = join(root, 'skills/maa-core');
   await mkdir(join(root, 'skills'));
-  await symlink(fileURLToPath(new URL('../skills/maa-help', import.meta.url)), installed, 'junction');
+  await symlink(fileURLToPath(new URL('../skills/maa-core', import.meta.url)), installed, 'junction');
   t.after(async () => { await unlink(installed); await rm(root, { recursive: true, force: true }); });
   const result = spawnSync(process.execPath, [join(installed, 'scripts/preferences.ts'), 'read'], {
     input: '{"currentLanguage":"en"}', encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root, MAA_SKILLS_HOME: join(root, 'settings') },
@@ -48,7 +49,7 @@ test('the documented development directory junction executes the preferences CLI
 
 test('the exported preferences interface remains importable from standard input', () => {
   const result = spawnSync(process.execPath, ['--input-type=module', '-'], {
-    input: "import { readSettings } from './skills/maa-help/scripts/preferences.ts'; console.log(typeof readSettings);",
+    input: "import { readSettings } from './skills/maa-core/scripts/preferences.ts'; console.log(typeof readSettings);",
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
@@ -56,7 +57,7 @@ test('the exported preferences interface remains importable from standard input'
 });
 
 test('Windows short-path aliases execute the installed preferences entrypoint', { skip: process.platform !== 'win32' }, async (t) => {
-  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-help', import.meta.url)) });
+  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-core', import.meta.url)) });
   t.after(() => fixture.dispose());
   const alias = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:MAA_TEST_LONG_PATH).ShortPath'], {
     cwd: fixture.workspace,
@@ -73,8 +74,8 @@ test('Windows short-path aliases execute the installed preferences entrypoint', 
   assert.equal(JSON.parse(result.stdout).language, 'en');
 });
 
-test('help grading rejects expected file changes made without the preferences script', async (t) => {
-  const scenario = helpScenarios[0]!;
+test('preference grading rejects expected file changes made without the preferences script', async (t) => {
+  const scenario = coreScenarios[0]!;
   const fixture = await createFixture({ jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
   t.after(() => fixture.dispose());
   const configFile = join(fixture.workspace, 'private/config.json');
@@ -86,4 +87,18 @@ test('help grading rejects expected file changes made without the preferences sc
   const result = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
   assert.equal(result.status, 'fail');
   assert.deepEqual(result.failed, ['expected-behavior']);
+});
+
+test('maa-help is text only and maa-core is an installable holder of the shared scripts', async () => {
+  const skills = fileURLToPath(new URL('../skills', import.meta.url));
+  const helpFiles = await readdir(join(skills, 'maa-help'), { recursive: true, withFileTypes: true });
+  assert.deepEqual(helpFiles.filter((entry) => entry.isFile() && !entry.name.endsWith('.md')).map((entry) => entry.name), []);
+  assert.equal(helpFiles.some((entry) => entry.name === 'scripts'), false);
+  // Codex's installer copies one directory per path and rejects a directory without SKILL.md.
+  const core = await readFile(join(skills, 'maa-core/SKILL.md'), 'utf8');
+  assert.match(core, /^---\r?\nname: maa-core\r?\ndescription: .+\r?\n---/);
+  for (const scenario of helpScenarios) {
+    assert.deepEqual(scenario.policy.grants, [], 'help never writes');
+    assert.deepEqual(scenario.policy.expectedInvocations ?? [], [], 'help runs no script');
+  }
 });
