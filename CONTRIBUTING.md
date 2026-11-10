@@ -4,7 +4,7 @@
 
 ## 本地验证
 
-Node 24 直接运行 TypeScript。干净检出无需下载依赖即可运行 `node scripts/check.ts`（或 `npm run check`），覆盖脚本测试、tracker、相对文档链接、插件描述和隐私检查。入口给测试创建临时 home；测试数据只来自临时目录和合成样例，不操作真实 MAA、用户私有目录或已安装 skill。评分规则尚未建立时明确输出「未验证」；03 建立 `scripts/eval-selftest.ts` 后入口会自动运行它。
+Node 24 直接运行 TypeScript。干净检出无需下载依赖即可运行 `node scripts/check.ts`（或 `npm run check`），覆盖脚本测试、tracker、相对文档链接、插件描述和隐私检查。入口给测试创建临时 home；测试数据只来自临时目录和合成样例，不操作真实 MAA、用户私有目录或已安装 skill。入口也运行 `scripts/eval-selftest.ts` 的评分规则自检；真模型运行、证据留存及未验证项见[行为评测](docs/evaluation.md)。
 
 开发类型检查先运行 `npm ci --ignore-scripts`，再运行 `npm run typecheck`。依赖由 lockfile 固定；离线检查入口本身没有第三方运行依赖。定向测试用 `node --test tests/privacy.test.ts` 等，完整验证用离线入口。CI 的依赖准备阶段联网，检查阶段没有网络或模型调用；Linux job 只验证可移植的开发检查工具，不代表支持非 Windows 的 MAA。
 

@@ -6,6 +6,8 @@ MAA skills for Arknights CN on Windows, designed for Codex and Claude Code. Work
 
 需要 Node 24。在干净检出运行 `node scripts/check.ts` 即可离线检查，不必安装依赖。开发、类型检查和 PR 流程见[贡献指南](CONTRIBUTING.md)，原生安装结构见[宿主说明](docs/hosts.md)。问题通过 [Issues](https://github.com/VincentChen0111/maa_skills/issues)报告，修改通过 PR 和 squash 交付。
 
+双宿主运行器、离线评分样例与固定版本比较见[行为评测](docs/evaluation.md)。本机缺少隔离认证或宿主的项目标记为未验证，不代表模型基线已通过。
+
 ## 致谢
 
 - [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)：图形界面版及其识别、任务和定时机制。
