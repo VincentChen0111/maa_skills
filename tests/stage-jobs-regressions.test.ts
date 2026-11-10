@@ -17,6 +17,67 @@ const groupedJob = (): Job => ({ ...stageJob(7), content: { ...stageJob(7).conte
   { name: '合成乙', skill: 2, requirements: { elite: -1, level: 20, potentiality: 1 } },
 ] }] } });
 
+test('matcher and Markdown default to at most three ready alternatives while preserving all candidate evidence', () => {
+  const blocked = stageJob(90, 2), unknown = stageJob(91); unknown.content.opers = [{ name: '合成未识别' }];
+  for (const count of [0, 1, 2, 4, 6]) {
+    const jobs = Array.from({ length: count }, (_, index) => stageJob(index + 1));
+    const report = matchStageJobs(accountSnapshot, stageTables, stageRequest, [blocked, unknown, ...jobs]);
+    const stage = report.stages[0]!;
+    assert.equal(stage.primary, count ? 1 : null);
+    const expected = count <= 1 ? [] : count === 2 ? [2] : [2, 3, 4];
+    assert.deepEqual(stage.alternates, expected);
+    assert.deepEqual(stage.candidates.map(candidate => candidate.id), [90, 91, ...jobs.map(job => job.id)]);
+    assert.deepEqual(stage.candidates.slice(0, 2).map(candidate => candidate.status), ['blocked', 'unknown']);
+    const markdown = formatStageJobs(report);
+    assert.equal(markdown.split('\n').find(line => line.startsWith('主作业候选：')), `主作业候选：${count ? 1 : '待核'}；备选候选：${expected.join(', ') || '无'}`);
+    if (count === 6) {
+      assert.match(markdown, /作业 6：ready/);
+      assert.deepEqual(stage.candidates.find(candidate => candidate.id === 6)!.content, stageJob(6).content);
+    }
+  }
+});
+
+test('explicit approval may add fourth and fifth alternatives, reduce or remove them, or choose another ready primary', async t => {
+  const jobs = Array.from({ length: 6 }, (_, index) => stageJob(index + 1)), blocked = stageJob(7, 2), unknown = stageJob(8);
+  unknown.content.opers = [{ name: '合成未识别' }];
+  const report = matchStageJobs(accountSnapshot, stageTables, stageRequest, [...jobs, blocked, unknown]);
+  assert.deepEqual(report.stages[0]!.alternates, [2, 3, 4]);
+  for (const selection of [{ primary: 1, alternates: [2, 3, 4, 5, 6] }, { primary: 1, alternates: [5] }, { primary: 1, alternates: [] }, { primary: 6, alternates: [1, 2, 3, 4, 5] }]) {
+    const root = await mkdtemp(join(tmpdir(), 'stage-alternates-')); t.after(() => rm(root, { recursive: true, force: true }));
+    const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private'); await mkdir(join(maaDirectory, 'config'), { recursive: true });
+    const file = join(maaDirectory, 'config/gui.new.json');
+    await writeFile(file, JSON.stringify({ Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [], Copilot: { TaskList: [], LoopTimes: 91, EnableUserAdditional: true } } }, Timers: { List: [] } }));
+    let running = false; const actions: string[] = [];
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; actions.push('close'); }, start: async () => { running = true; actions.push('reopen'); } };
+    const approval = { reportHash: report.hash, reference: `合成用户明确批准主 ${selection.primary}、备选 ${selection.alternates.join(',') || '无'}，三次仅准备`, map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', ...selection, loops: 3 }] };
+    const input = { report, approval, snapshot: accountSnapshot, maaDirectory, privateDirectory, profile: 0, host: 'codex' as const, closedConfirmed: true, expectedRevision: (await inspectConfiguration(maaDirectory)).revision };
+    for (const alternates of [[999], [7], [8], [2, 2], [selection.primary]]) {
+      await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, selections: [{ ...approval.selections[0]!, alternates }] } }, maa), /ready|approval/);
+    }
+    assert.deepEqual(actions, []);
+    const result = await prepareStageJobs(input, maa); assert.equal(result.status, 'complete');
+    const saved = JSON.parse(await readFile(file, 'utf8')), list = saved.Configurations.Synthetic.Copilot.TaskList;
+    assert.deepEqual(list.map((item: any) => [item.CopilotId, item.Index, item.IsChecked]), [[selection.primary, 0, true], [selection.primary, 1, true], [selection.primary, 2, true]]);
+    assert.equal(saved.Configurations.Synthetic.Copilot.LoopTimes, 91);
+    const pending = JSON.parse((await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim());
+    const plan = pending.authorization.jobPlan.entries[0];
+    assert.equal(plan.primary.id, selection.primary); assert.equal(plan.loops, 3);
+    assert.deepEqual(plan.alternates.map((job: any) => job.id), selection.alternates);
+    for (const selected of [plan.primary, ...plan.alternates]) {
+      const candidate = report.stages[0]!.candidates.find(candidate => candidate.id === selected.id)!;
+      const execution = JSON.parse(await readFile(approvedJobFile(privateDirectory, report.hash, selected.id), 'utf8'));
+      const original = JSON.parse(await readFile(sourceFile(privateDirectory, report.hash, selected.id), 'utf8'));
+      assert.deepEqual(execution, candidate.execution!.content); assert.deepEqual(original, candidate.content);
+      assert.equal(selected.hash, hash(execution)); assert.equal(selected.sourceHash, hash(original));
+    }
+    for (const unselected of jobs.filter(job => job.id !== selection.primary && !selection.alternates.includes(job.id))) {
+      await assert.rejects(() => readFile(approvedJobFile(privateDirectory, report.hash, unselected.id)), { code: 'ENOENT' });
+      await assert.rejects(() => readFile(sourceFile(privateDirectory, report.hash, unselected.id)), { code: 'ENOENT' });
+    }
+    assert.deepEqual(actions, ['reopen']);
+  }
+});
+
 test('approved execution pins the verified group member and normalized requirements while preserving source evidence', async t => {
   const root = await mkdtemp(join(tmpdir(), 'stage-derived-')); t.after(() => rm(root, { recursive: true, force: true }));
   const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');

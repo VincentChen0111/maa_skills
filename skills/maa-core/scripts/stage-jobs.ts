@@ -176,7 +176,7 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
         execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null };
     });
     const ready = candidates.filter(candidate => candidate.status === 'ready');
-    return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1).map(candidate => candidate.id) };
+    return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id) };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
     tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
