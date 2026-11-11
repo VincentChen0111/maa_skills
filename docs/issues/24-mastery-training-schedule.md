@@ -12,7 +12,7 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [14: 
 
 实施进度：已完成。
 
-最终产品 `991c7e0` 已整合实际 06/15 主线 `3ff4555`，[完整独立 R3](../reviews/2026-11-11-24-training-r3.md) 通过，Standards / Spec 均 0。离线 332 通过、2 条件跳过，类型、精确双平台 CI 和最终双宿主原生正向预入驻/资产读回通过；普通助手遗漏及 R1 四项均解决。单票有条件实现交付前提满足，[PR43](https://github.com/VincentChen0111/maa_skills/pull/43) 待最终文档 CI 后 squash。142 份完整批次实际模型记录加 1 份中断记录全 unverified，成功基线、真实语义与分数不降仍由 26 硬阻塞发布，真实游戏训练未验证。
+最终产品 `991c7e0` 已整合实际 06/15 主线 `3ff4555`，[完整独立 R3](../reviews/2026-11-11-24-training-r3.md) 通过，Standards / Spec 均 0。离线 332 通过、2 条件跳过，类型、精确双平台 CI 和最终双宿主原生正向预入驻/资产读回通过；普通助手遗漏及 R1 四项均解决。单票有条件实现交付前提满足，[PR43](https://github.com/VincentChen0111/maa_skills/pull/43) 已 squash 为实际 main `fc633d680f82c9edb224ca4bd9065c20797ea885`；最终文档 `e36cbcea02c353d79b54b37a03eb548c04a4a071` 的[双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42929877277) 均通过。142 份完整批次实际模型记录加 1 份中断记录全 unverified，成功基线、真实语义与分数不降仍由 26 硬阻塞发布，真实游戏训练未验证。
 
 已实现训练计算、原生逐阶段配置、日志核对、过期单次槽清理及技能接口；[来源核对](../training-sources.md)和[验证记录](../training-verification.md)记录具体范围、实际证据与未验证项。以下 R1 状态保留为历史，原 FAIL 不改写。
 

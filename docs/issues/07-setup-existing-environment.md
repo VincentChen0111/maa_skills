@@ -12,13 +12,13 @@ Blocked by: [06: doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md)
 
 实施进度：进行中。
 
-PR [#42](https://github.com/VincentChen0111/maa_skills/pull/42) 为草稿，独立 R1 的三项产品错误和一项 Windows CI 夹具路径错误已集中修复，候选 1bf779c 的离线 319 通过、3 条件跳过，类型通过。待 24 实际主线后最终整合，再完成完整 R2、固定原生和改后模型验证；目前不解除 08/09 依赖。
+PR [#42](https://github.com/VincentChen0111/maa_skills/pull/42) 为草稿，独立 R1 的三项产品错误和一项 Windows CI 夹具路径错误已集中修复，候选 1bf779c 的离线 319 通过、3 条件跳过，类型通过。已 rebase 到 24 实际 squash 主线 `fc633d680f82c9edb224ca4bd9065c20797ea885`，保留 06 严格恢复、15 jobPlan 与 24 trainingPlan/manifest/药剂互斥；新增组合验证通过，实际最终检查见 [setup 验证记录](../setup-verification.md)。完整 R2、固定候选原生和改后模型由根任务补证；目前不解除 08/09 依赖。
 
 2026-11-11 从 06 的实际 squash 提交 `788ac13febf35a54e556fa527943c01431b8e215` 开始。setup 检查／私有骨架／adb 发现与测试／统一连接事务已实现为候选，固定五个新场景；作者验证见 [setup 验证记录](../setup-verification.md)，字段与官方入口见 [来源核对](../setup-sources.md)。完整独立审查、真模型与固定远程原生安装由根任务统一执行，未出结论前不标已完成，不从先前工单继承延期决定。
 
 已有 MAA 的用户不应重复安装。首次接入也要尊重已关闭 MAA 可能由用户操作的状态。
 
-完整 R1 要求修改，原文见 [独立审查](../reviews/2026-11-11-07-setup-r1.md)；三项产品 P2 与一项 Windows CI 夹具 P2 全部接受，测试先行修复及限制见 [逐项处置](../reviews/2026-11-11-07-setup-r1-fixes.md)。原候选 Windows CI 的真实失败保留；修后完整复核、双平台 CI、固定原生与模型尝试仍由根任务补证。等待实际主线整合后进行 R2，当前不勾验收或解除 08／09。
+完整 R1 要求修改，原文见 [独立审查](../reviews/2026-11-11-07-setup-r1.md)；三项产品 P2 与一项 Windows CI 夹具 P2 全部接受，测试先行修复及限制见 [逐项处置](../reviews/2026-11-11-07-setup-r1-fixes.md)。原候选 Windows CI 的真实失败保留；修后完整复核、双平台 CI、固定原生与模型尝试仍由根任务补证。实际主线整合已完成，等待完整 R2，当前不勾验收或解除 08／09。
 
 ## 要交付的行为
 

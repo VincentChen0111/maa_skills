@@ -1,5 +1,30 @@
 # setup 现有环境接入验证
 
+## 实际 15/24 主线整合候选，待完整 R2
+
+07 已从原基点 rebase 到实际 main `fc633d680f82c9edb224ca4bd9065c20797ea885`（24 的 PR43 squash，包含 15/06）。完整 R1 四项修复保持；共享 writer 合并保留三次作业文件校验、训练资产持锁安装/readback/manifest、job/training/medicine 互斥，以及 06 严格 transaction schema 与未知附加资源拒绝。setup 仍在内部重新发现/选择/复测，只生成当前四字段连接差异；恢复宽格式仅用于已核单配置事务，没有新增通用授权或放宽资产恢复。
+
+新增公开导出接缝 `tests/setup-integration.test.ts` 使用真实临时 FS、合成数据和 MAA/adb 进程替身，验证完整 jobPlan/trainingPlan/medicineCount 不能放入 setup 请求或 context，普通 writer 不能借这三种授权写连接；实际先写批准作业和训练资产再接入，除当前连接外原配置、任务、定时及资产保持；实际子进程重开失败后退出的 job/training 事务，setup 返回 unknown，doctor 两种修法均拒绝并保留原锁/配置/记录。此轮是在既有 R1 修复与实际 main 合并后的回归验证，首次运行已经通过，没有伪造新的行为红测；原 R1 红测与失败 CI 记录不变。
+
+| 本轮实际检查 | 结果及证据 |
+| --- | --- |
+| setup/integration/scenarios/training-integration 定向 | 51 项，50 pass、0 fail、1 skip；`.tmp/07-integration-targeted.log`。skip 为文件系统无 8.3 别名 |
+| 完整离线，受限沙箱 | 383 项，360 pass、20 fail、3 skip；`.tmp/07-integration-check-sandbox.log`。既有 junction EPERM、临时 GUI 编译和 loopback 网络限制，原日志保留 |
+| 相同产品、TEMP/TMP 的正常权限完整离线对照 | 383 项，380 pass、0 fail、3 skip，tracker/privacy/metadata 为空，7 规则/14 样例通过；`.tmp/07-integration-check-normal.log` |
+| 类型检查 | 首次新增测试未缩窄 nullable asset，2 个 TS18047 保留于 `.tmp/07-integration-types.log`；增加公开结果非空断言后 `npm run typecheck` 通过，`.tmp/07-integration-types-final.log`。未放宽产品类型 |
+
+完整入口三项 skip：已有 help 与新增 setup 短路径用例因本文件系统无 8.3 alias；非 Windows 边界拒绝用例在 Windows 跳过。真实临时 Windows GUI 的进程适配器用例正常权限下实际执行通过，但不代表真实 MAA/模拟器/游戏。未改变五个冻结 setup 场景、旧评测框架、原生 smoke CLI 或精确 fixture；`scripts/setup-smoke.ts <installed-core> [codex|claude]` 与 `tests/fixtures/setup-boundary.mjs` 逐字节等于 R1 修复候选 `1bf779c`。
+
+根任务与独立审查员已核对附加改前批次 `.tmp/07-integration-before-evidence/frozen-models-xyj44e`：框架/载荷 `991c7e0b55df92f53ae3170e7215c6c5fb96cc50`，框架 hash `07becf7a4cd2155771ea05fecd841b9480bccb930fcf5d056568c250e14c39b6`；stage 12 + training 8，共 20 次实际调用，10 Codex 401 + 10 Claude 未登录，全部 unverified，0 完成/runner failure/fixture 或进程残留。该载荷不是 main；根任务与审查员实际核对其到 fc633d6 的 skills/scripts/eval/tests/package/lock/.github 字节无差异。独立核 164 manifest 文件及 114 Git blob，raw/hash/grade/场景/skill version/实际参数，证据位于根 `.tmp/review-07-r2-prep/audit-integration-before.json` 与 `process-integration-before.json`。
+
+旧改前 36 次独立批次保持 `.tmp/07-model-evidence/frozen-models-39mcHH`，ecf 框架 hash `495281064e71025a4553d07d340a241c3f11539ca90d2ce5134512bb24971476`、payload 788；18 Codex 401 + 18 Claude 未登录，全部 unverified。审查员核对 137 manifest 文件/109 Git blob/36 raw 与重新构造合成 fixture 的场景及 skill version，独立 CIM 残留 0，`.tmp/review-07-r2-prep/audit-before.json` 与 `process-before.json`。这些是实际前态证据，不能证明改后通过或分数不降。
+
+公开前逐文件核对本轮完整包的代码、注释、文档、许可证、版本记录及合成测试；没有真实账号、用户凭据、私有机器路径或真实 MAA/游戏数据。保留 R1 原始报告字节与所有原始失败，不修改旧日志。最终独立调用 privacy/metadata/tracker 及实际 base 区间 diff-check 均通过；INDEX 只由 tracker 生成。
+
+最终固定候选双平台 CI、远程双宿主原生安装/更新和真实 CLI 接入、两批改后模型及新 setup 基线尝试、完整独立 R2 仍由根任务完成；作者未将它们记为通过。07 保持进行中，不解除 08/09；07 单票条件交付与 26 硬门禁不变，受影响模型范围补齐 stage/training，并同步规格两张来源表与 26。下文均为原候选历史，原 R1 FAIL、Windows CI FAIL 和未验证记录不改写。
+
+## 原基点实现历史
+
 2026-11-11，工单 07 候选从 06 squash `788ac13febf35a54e556fa527943c01431b8e215` 实施。当前仍进行中：作者验证不能代替独立审查、真模型或原生远程安装验收。来源及设计限制见 [来源核对](setup-sources.md)和 [规格](spec.md)。
 
 ## 实现及测试先行
