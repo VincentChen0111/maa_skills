@@ -51,3 +51,9 @@
 [AsstInfrastTask.Serialize](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaWpfGui/Models/AsstTasks/AsstInfrastTask.cs) 的 facility/mode/filename/plan_index/continue_training 对应当前训练资产和禁续训范围；AsstOperProgressTask.Serialize 的 plans/role/name/skill_mastery 对应唯一目标与下一档，非零精英或普通技能目标不得混入。本次核对复用原有 CLI 输入，不读取 GUI 私人配置到对话，也不声称源码日志已证明设备行为。
 
 完成时间必须不早于本档 startedAt 和最新训练观察；倒序、旧片段及回拨保留未知。manualTraining 随当前档完成清除，但 external-training-observed 历史不清除。这是工单真实证据与逐档推进要求的修复，不改变授权目标。
+
+## R2 普通助手范围修复
+
+独立 R2 再次实际读取上述固定 building_data，确认 basicSpeedBuff=0.05，响应 hash 与本页一致；固定 InfrastTrainingTask 自定义助手选择未要求候选具有训练技能。原计算把训练室技能过滤结果当助手全集，错误漏掉只有其他房间技能的完整可用助手。修复保留完整已持有候选，再在候选内部筛训练技能；已知零额外技能或全部锁定时仍计基础项，3600 秒示例为 ceil(3600/1.05)=3429。
+
+缺角色/建筑条目、残缺技能资料、未知房间或未知训练解锁继续待核，不从过滤后的空数组推断零加成。明确其他房间技能的解锁未知不能变成训练速度；该房间资料完整时不影响基础项。房间识别复用 base-query 已有词表，未改其查询行为。以上是 R2 错误修复及既有未知语义，不是新增游戏限制；公式/助手实际就位仍未实机验证。

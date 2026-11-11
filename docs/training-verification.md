@@ -1,6 +1,24 @@
 # 24 训练工具验证记录
 
-## 当前整合候选
+## R2 修复候选，待完整 R3
+
+[完整独立 R2](reviews/2026-11-11-24-training-r2.md) 对 `fd1aa07f1b52f3d02e6fae6af9e5f284f6280a24` 的结论为 FAIL：Standards 0 / Spec 1 P2，普通可用助手因没有训练室技能而被遗漏。根代理接受并完成本轮测试先行修复：以完整已持有候选为起点，在每个候选内筛训练技能；资料完整且没有额外训练加成的助手计基础 5%，3600 秒为 3429 秒。缺条目或有效结构中的残缺/未知资料仍待核，非法表结构仍沿用共享查询的输入拒绝，不扩大为自动容错。原生/CLI 参数和冻结场景未变，R1 状态/归属/形态与 06/15 writer 边界未改。
+
+新增 `training-assistants.test.ts` 六组公开计算/真实 prepare 接缝测试：普通、明确空技能、锁定及已生效技能；十种缺失或未知事实；八种非法表结构；其他房间解锁未知；可用性/持有/受训者排除；其他房间技能不混算。最初红测 `.tmp/24-r2-assistants-red.log` 为 1 pass / 4 fail，最终与既有时长测试共 11/11 通过。补充结构探针曾把“必须返回 unknown 对象”误作期望而 4 pass / 1 fail，根明确维持既有 `base-data-invalid` 拒绝语义后改为拒绝断言；没有因此改 21 查询行为或添加局部容错。原日志 `.tmp/24-r2-assistants-structure-red.log` 保留。
+
+修后最终完整离线入口 `.tmp/24-r2-check-final.log` exit 0：334 total / 332 pass / 0 fail / 2 条件 skip；tracker/privacy/metadata 无错误，7 rules / 14 samples 通过。`npm run typecheck` 与 main `3ff4555` 到候选 diff-check 通过。此前受限入口 333 total / 311 pass / 20 fail / 2 skip 为 junction、GUI 和 loopback 限制，`.tmp/24-r2-check-sandbox.log` 原样保留；之后只新增非法结构拒绝负例，不靠产品修改消除权限失败。类型检查发现新增测试给推断 number 字段直接赋 null，改用合成局部 Object.assign 后通过，产品类型未放宽。
+
+本轮逐文件核对训练计算、base-query 的纯字典判断导出、新测试、接口/规格双表、来源/验证/工单与完整 R2 报告；均为合成账号、公共固定来源及实际证据摘要，无真实账号或私人环境数据。R1/R2 原文完整保留。原四训练场景和 training-data 对冻结 6a0ba41 无差异，scripts/eval/fixtures 及 writer/state/plan/config 对 fd1 无差异。root 将对修后固定候选重跑原生与两批改后模型，由同一独立 R2 审查员完成 R3；尚未写修后通过，不勾工单完成。
+
+## fd1 的 R2 外部验证（历史）
+
+R2 独立离线 328 total / 326 pass / 2 skip、类型、区间 diff-check 均通过；[固定 fd1 双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42925737520) Windows / Ubuntu success。其唯一 P2 不属于认证延期，故旧检查成功不能代表产品复核通过。
+
+固定原生 `.tmp/native-check-WYp7ty` 的 38 份实际命令经 R2 独立审计，预期重复安装和两宿主重复 apply 拒绝共三条非零，其余成功。245 个仓库文件匹配 fd1（Codex 31 / Claude 214），655 个生成依赖 hash 复核，未核 registry 包字节；四份运行前冻结验证源一致。两宿主安装 CLI 的 query、只读 prepare/read、批准预入驻 apply、资产及配置读回、重复拒绝、正常关闭通过；相关进程残留 0 是根实际记录，非审查员独立枚举。未执行真实 MAA/游戏训练。
+
+R2 独立审计四个完整批次共 92 个唯一真实模型记录，全部 unverified（46 Codex 401 / 46 Claude 未登录），0 完成/runner failure：旧 daily/core before skcOqN 20，fd1 after qjycSg 28（含 training 新基线尝试 8），整合 doctor/stage before GhliUO 22、fd1 after BfJ7Tr 22。两套冻结框架、42 对场景/CLI/模型身份及载荷均核对一致；没有成功基线或分数不降结论。中断 Rbw9G1 的 1 份 Codex 401 另核，原 2237 字节全零 batch 与空运行目录情况不改写，不称完整批次。所有路径/指纹/核对界限见 R2。以上旧成功及未验证证据保留，不能替代修后候选验收。
+
+## fd1 整合与作者记录（历史）
 
 已将原 `6a0ba41` 实现和 `151c76c` 的全部 R1 修复重放到实际 main `3ff455595c4a3dc68817151a5e82f26dfb420c7a`（含 06 与 15）。保留 06 严格事务 schema、恢复锁与未知附加资产拒绝；15 的三次双资产核对及作业配置范围不变。训练资产仍只在统一 writer 持锁且关停后安装，重开后同时校验引用和内容。CLI、原生 smoke 输入和训练 fixture 未改，R1 的状态/归属/形态实现逐文件与 151c 比较相同。
 

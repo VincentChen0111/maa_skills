@@ -1,5 +1,5 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
-import { queryBaseSkills } from './base-query.ts';
+import { queryBaseSkills, isBaseRoom } from './base-query.ts';
 import { calculateCultivationGaps, type GapTables, type GapResult } from './cultivation-gaps.ts';
 import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
@@ -53,17 +53,21 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const base = trainingData.basicSpeedBuff;
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
   const available = facts.source === 'user-confirmed' && Array.isArray(facts.availableAssistants) && facts.availableAssistants.every(id => typeof id === 'string') ? facts.availableAssistants : null;
-  const helpers = queryBaseSkills(snapshot, { ...tables, characters: catalog }, { room: 'TRAINING' });
+  const helpers = queryBaseSkills(snapshot, { ...tables, characters: catalog }, {});
+  const sourceWarnings = new Set(helpers.warnings);
   for (let rank = start + 1; rank <= targetRank; rank++) {
     const seconds = object(array(selectedSkill.levelUpCostCond)[rank - 1]).lvlUpTime;
     const baseSeconds = integer(seconds, 1, 31 * 86400) ? seconds : null;
     const assistants: TrainingAssistant[] = [];
     for (const helper of helpers.operators.filter(row => row.id !== cost.operator!.id)) {
-      const active = helper.skills.filter(row => row.status === 'active');
+      const trainingSkills = helper.skills.filter(row => row.room === 'TRAINING');
+      const active = trainingSkills.filter(row => row.status === 'active');
       const issues: string[] = [];
       let bonus = baseBonus ?? 0, durationFactor = 1;
       if (baseBonus === null) issues.push('assistant:base-speed-unknown');
-      if (helper.ownership !== 'owned' || helper.skills.some(row => row.status === 'unknown')) issues.push('assistant:skill-or-ownership-unknown');
+      if (sourceWarnings.has(`game-operator-incomplete:${helper.id}`) || helper.skills.some(row => sourceWarnings.has(`game-skill-incomplete:${row.id}`)
+        || !isBaseRoom(row.room) || !row.name.trim() || !row.text.trim())) issues.push('assistant:source-incomplete');
+      if (helper.ownership !== 'owned' || trainingSkills.some(row => row.status === 'unknown')) issues.push('assistant:skill-or-ownership-unknown');
       for (const item of active) {
         if (item.text === '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）') {
           const prior = object(facts.previousAssistance);
