@@ -1,5 +1,17 @@
 # 24 训练工具验证记录
 
+## 当前交付结论
+
+最终产品 `991c7e0b55df92f53ae3170e7215c6c5fb96cc50` 的 [完整独立 R3](reviews/2026-11-11-24-training-r3.md) 已通过，Standards / Spec 均 0；R1 四项与 R2 普通助手 P2 全部解决。独立完整离线 334 项中 332 通过、2 条件跳过，类型、区间 diff 与额外正向普通助手 calculate→prepare→apply 探针通过。[精确候选双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42928351175) 均 success。R1/R2 FAIL 及所有旧证据保留，下文未完成措辞均属于所标历史候选。
+
+固定远程 991 的双宿主原生安装与实际 CLI 合成预入驻验证通过，目录 `.tmp/native-check-tMXbRu`：38 条命令中仅重复安装和两宿主重复 apply 的 3 条预期拒绝为非零。31 个 Codex / 216 个 Claude 仓库文件共 247 个逐字节匹配 Git；655 个生成依赖另核 hash/lock metadata，未核 registry 包原始字节。四份验证源在运行前冻结，实际导入冻结 smoke。query（原 fixture 2400 秒）、只读 prepare/read、批准 apply、单次槽与资产/配置/pending 读回、备份、锁释放、重复拒绝和正常关闭通过，相关临时进程残留 0。普通助手 3429 秒的正向应用来自独立公开探针，不冒称原生 smoke 覆盖该变体。
+
+最终两批改后真实模型尝试 `.tmp/24-r3-model-evidence/frozen-models-VC1u4t`（28）与 `.tmp/24-r3-integration-model-evidence/frozen-models-I3793M`（22）全部 unverified，25 Codex 401 / 25 Claude 未登录，0 完成事件或 runner failure。与原两批改前 42 份保持冻结框架、CLI、模型和场景指纹；42 对比较仍 unverified，8 次训练场景仅是新基线尝试。R3 独立核对最终前后 92 份原始记录、manifest/Git 字节、评分和清理，根相关进程记录为 0。
+
+旧 fd1 改后 50 份和中断 Rbw9G1 的 1 份原始记录保留；历史累计 142 份完整批次实际记录（71 Codex 401 / 71 Claude 未登录）加 1 份中断 Codex 401，143 个唯一 ID 已独立核对。原中断 batch 全零及空 run 目录不改写，不补造完整批次。成功训练基线、daily/core/doctor/stage 真实语义和分数不降仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布；真实 MAA/游戏、六分钟实效、速度/减时叠加和换人身份均未验证。
+
+24 单票有条件实现交付的产品与证据前提已满足；[PR43](https://github.com/VincentChen0111/maa_skills/pull/43) 待最终文档提交 CI 后 squash。本次只登记验收，不改产品，最终文档 head 另核 CI。原生单次槽无日期 TTL、离线没有常驻清理，维护失败仍可能留到次日，这些边界保持。
+
 ## R2 修复候选，待完整 R3
 
 [完整独立 R2](reviews/2026-11-11-24-training-r2.md) 对 `fd1aa07f1b52f3d02e6fae6af9e5f284f6280a24` 的结论为 FAIL：Standards 0 / Spec 1 P2，普通可用助手因没有训练室技能而被遗漏。根代理接受并完成本轮测试先行修复：以完整已持有候选为起点，在每个候选内筛训练技能；资料完整且没有额外训练加成的助手计基础 5%，3600 秒为 3429 秒。缺条目或有效结构中的残缺/未知资料仍待核，非法表结构仍沿用共享查询的输入拒绝，不扩大为自动容错。原生/CLI 参数和冻结场景未变，R1 状态/归属/形态与 06/15 writer 边界未改。

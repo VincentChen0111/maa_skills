@@ -12,7 +12,7 @@ Blocked by: [06: doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md)
 
 实施进度：进行中。
 
-PR [#42](https://github.com/VincentChen0111/maa_skills/pull/42) 为草稿，独立 R1 的三项产品错误和一项 Windows CI 夹具路径错误均接受，正在集中修复。最终整合、独立复核、固定原生与改后模型尝试尚未完成，不解除 08/09 依赖。
+PR [#42](https://github.com/VincentChen0111/maa_skills/pull/42) 为草稿，独立 R1 的三项产品错误和一项 Windows CI 夹具路径错误已集中修复，候选 1bf779c 的离线 319 通过、3 条件跳过，类型通过。待 24 实际主线后最终整合，再完成完整 R2、固定原生和改后模型验证；目前不解除 08/09 依赖。
 
 已有 MAA 的用户不应重复安装。首次接入也要尊重已关闭 MAA 可能由用户操作的状态。
 
