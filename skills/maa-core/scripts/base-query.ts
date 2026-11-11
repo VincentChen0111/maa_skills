@@ -22,6 +22,8 @@ const limits = ['Unlock status does not prove current assignment or that effect 
   'Unobserved ownership and training remain unknown; recognition completion does not prove roster completeness.'];
 const rooms: Record<string, string> = { CONTROL: '控制中枢', MANUFACTURE: '制造站', TRADING: '贸易站', POWER: '发电站',
   MEETING: '会客室', HIRE: '办公室', WORKSHOP: '加工站', TRAINING: '训练室', DORMITORY: '宿舍', RECYCLE: '回收站' };
+/** A source room outside this vocabulary is unknown, not proof of a different known facility. */
+export function isBaseRoom(value: unknown): value is string { return typeof value === 'string' && Object.hasOwn(rooms, value); }
 const crossRooms: Record<string, string> = { control_center: 'CONTROL', factory: 'MANUFACTURE', trading_post: 'TRADING', power_plant: 'POWER',
   reception_room: 'MEETING', office: 'HIRE', workshop: 'WORKSHOP', training_room: 'TRAINING', dormitory: 'DORMITORY', recycle_station: 'RECYCLE' };
 class AmbiguousName extends Error {

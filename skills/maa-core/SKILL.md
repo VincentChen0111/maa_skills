@@ -18,6 +18,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/cultivation-gaps.ts` | 多目标共用库存，比较加工、材料券及券换投入后加工的缺口，只给建议 | [缺口接口](../maa-account/references/gaps.md) |
 | `scripts/base-query.ts` | 只读查询已持有干员基建技能、解锁条件和交叉核对差异 | [基建查询接口](references/base-query.md) |
 | `scripts/stage-jobs.ts` | 查询明确关卡的作业、逐成员核对，准备已批准的地图批次 | [关卡作业接口](../maa-daily/references/stage-jobs.md) |
+| `scripts/training-time.ts`、`scripts/training-plan.ts` | 查询已授权目标的助手/时长，记录训练并逐阶段安排原生单次定时 | [训练接口](references/training.md) |
 
 调用方的约定：
 

@@ -12,7 +12,7 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md), [11: 
 
 实施进度：已完成。
 
-最终产品 `d2877b5` 的 [完整独立 R4](../reviews/2026-11-11-15-stage-r4.md) 通过，Standards / Spec 均 0；离线 295 通过、2 条件跳过，类型、双平台 CI、两宿主固定原生安装及实际 CLI 合成准备通过。15 单票有条件交付前提已满足，PR [#41](https://github.com/VincentChen0111/maa_skills/pull/41) 待最终文档 CI 后 squash。128 份真实模型尝试全部因隔离认证不可用而 unverified；成功 stage/daily/core 基线、语义和分数不降仍由 26 硬阻塞发布。来源与完整界限见 [作业接口核对](../stage-jobs-sources.md)、[验证记录](../stage-jobs-verification.md)。以下 R1–R3 状态保留为历史。
+最终产品 `d2877b5` 的 [完整独立 R4](../reviews/2026-11-11-15-stage-r4.md) 通过，Standards / Spec 均 0；离线 295 通过、2 条件跳过，类型、双平台 CI、两宿主固定原生安装及实际 CLI 合成准备通过。15 单票有条件交付前提已满足，PR [#41](https://github.com/VincentChen0111/maa_skills/pull/41) 已 squash 合入 main `3ff455595c4a3dc68817151a5e82f26dfb420c7a`；最终文档 head `5beb40f` 的 [Windows / Ubuntu CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42921934089) 均通过。128 份真实模型尝试全部因隔离认证不可用而 unverified；成功 stage/daily/core 基线、语义和分数不降仍由 26 硬阻塞发布。来源与完整界限见 [作业接口核对](../stage-jobs-sources.md)、[验证记录](../stage-jobs-verification.md)。以下 R1–R3 状态保留为历史。
 
 [独立 R1](../reviews/2026-11-11-15-stage-r1.md) 结论 FAIL：派生执行分配、预发布版本、技能精英门槛规范化、Markdown 检索覆盖四项均接受并完成作者修复，已整合 06 的 main 提交 788ac13；当时完整离线入口 293 项中 291 通过、2 跳过。原 R1 结论保留，后续完整 R2 见下，不把尚未完成的门禁记为通过，不解除下游依赖。交付 PR [#41](https://github.com/VincentChen0111/maa_skills/pull/41) 当前为草稿。
 

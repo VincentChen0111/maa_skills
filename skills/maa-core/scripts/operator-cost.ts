@@ -49,6 +49,11 @@ export async function loadOperatorCostTables(fetcher: typeof fetch = fetch): Pro
     crossCultivate: values.crossCultivate, crossLevel: values.crossLevel, sources: sources.sort((a, b) => a.file.localeCompare(b.file)) };
 }
 
+/** One identity directory for normal operators and their explicitly selected patch forms. */
+export function operatorCatalog(tables: Pick<CostTables, 'characters' | 'patches'>): Record<string, unknown> {
+  return { ...object(tables.characters), ...object(object(tables.patches).patchChars) };
+}
+
 /** The same calculation serves CLI and consumers. Unknowns are never starting-level defaults. */
 export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown, requestInput: unknown): CostResult {
   const request = object(requestInput), snapshot = object(snapshotInput), target = object(request.target), supplied = object(request.current);
@@ -69,7 +74,7 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
   if (!Object.keys(target).length) issue('target:missing');
   if (Object.keys(supplied).length && supplied.source !== 'user-confirmed') issue('current:confirmation-required');
   if (snapshot.version !== 1 || snapshot.source !== 'maa' || !Array.isArray(snapshot.operators) || !['complete', 'partial'].includes(String(object(coverage.operators).status))) issue('snapshot:invalid-or-incomplete');
-  const catalog = { ...object(tables.characters), ...object(object(tables.patches).patchChars) };
+  const catalog = operatorCatalog(tables);
   const matches = Object.entries(catalog).filter(([id, value]) => {
     const char = object(value); return id.startsWith('char_') && char.isNotObtainable !== true && char.name === request.name && (request.operatorId === undefined || id === request.operatorId);
   });

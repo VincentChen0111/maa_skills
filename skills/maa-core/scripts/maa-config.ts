@@ -5,13 +5,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
+import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
   maaDirectory: string; privateDirectory: string; host: 'codex' | 'claude';
   expectedRevision: string;
   closedConfirmed?: boolean;
-  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan };
+  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant };
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
@@ -40,7 +41,7 @@ function changedKey(path: (string | number)[]): string {
   return path.map((part, index) => path[0] === 'Configurations' && index === 1 ? '<profile>' : String(part)).join('.');
 }
 function knownTaskType(task: RecordValue): string | undefined {
-  const types = ['StartUp', 'Fight', 'Infrast', 'Recruit', 'Mall', 'Award', 'UserDataUpdate', 'CloseDown', 'Roguelike'];
+  const types = ['StartUp', 'Fight', 'Infrast', 'Recruit', 'Mall', 'Award', 'UserDataUpdate', 'CloseDown', 'Roguelike', 'OperProgress'];
   return typeof task.TaskType === 'string' && types.includes(task.TaskType) && task.$type === `${task.TaskType}Task` ? task.TaskType : undefined;
 }
 const ordinaryTaskTypes = new Set(['Fight', 'Infrast', 'Recruit', 'Mall', 'Award', 'UserDataUpdate', 'CloseDown']);
@@ -55,11 +56,16 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   return JSON.stringify(value);
 }
 function prepare(config: RecordValue, request: WriteRequest) {
+  if (['medicineCount', 'jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
+  const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
+  if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan'].includes(key))
+    || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
   const medicineTasks = new Set<string>();
   const enabledTasks: (string | number)[][] = [];
   const dependencies: (string | number)[][] = [];
+  if (training) dependencies.push(['Configurations', training.profile, 'TaskQueue'], ['Timers']);
   for (const change of request.changes) {
     if (!Array.isArray(change.path) || !change.path.length) throw new Error('change-not-allowed');
     const path = change.path;
@@ -112,6 +118,7 @@ function prepare(config: RecordValue, request: WriteRequest) {
         medicineTasks.add(JSON.stringify(path.slice(0, 4)));
       }
     }
+    if (training) allowed = true;
     if (!allowed || (!nullableBoolean && old !== null && typeof old !== typeof value)) throw new Error('change-not-allowed');
     const parent = at(next, path.slice(0, -1)) as Record<string | number, unknown>;
     parent[path.at(-1)!] = value;
@@ -154,7 +161,8 @@ function prepare(config: RecordValue, request: WriteRequest) {
   for (const path of checkedTasks) {
     const task = object(at(next, path));
     const type = knownTaskType(task);
-    if (!ordinaryTaskTypes.has(type ?? '')) throw new Error('unsafe-task-settings');
+    if (!ordinaryTaskTypes.has(type ?? '') && !(training && type === 'OperProgress' && path[1] === training.profile
+      && path[3] === request.authorization.trainingPlan!.binding.progressTask)) throw new Error('unsafe-task-settings');
     if (type === 'Fight') {
       if (task.UseStone !== false || task.UseExpiringMedicine !== false || task.UseExpireMedicineForActivity !== false) throw new Error('unsafe-task-settings');
       if (task.UseMedicine !== false && (task.UseMedicine !== true || request.authorization.source !== 'current-request' || !Number.isSafeInteger(request.authorization.medicineCount)
@@ -183,7 +191,7 @@ function prepare(config: RecordValue, request: WriteRequest) {
     return sum + count * Math.max(1, repetitions);
   }, 0);
   if (requiredMedicine > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
-  return { config: next, dependencies, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
+  return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
 async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
   return object(JSON.parse((await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')).replace(/^\uFEFF/, '')));
@@ -428,6 +436,9 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
+  let trainingAsset: TrainingAsset | null = null;
+  let assetBefore: 'absent' | 'matching' | null = null;
+  const checkAsset = async () => { if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== assetBefore) throw new Error('training-asset-target-changed'); };
   let targets: { path: (string | number)[]; value: string | undefined }[];
   const checkTargets = (config: RecordValue) => {
     if (targets.some(target => comparableAt(config, target.path) !== target.value)) throw new Error('authorized-target-changed');
@@ -456,6 +467,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     }
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     const prepared = prepare(original, request);
+    trainingAsset = prepared.trainingAsset;
+    if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
     targets = request.changes.map(change => {
       const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
         : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
@@ -496,7 +509,9 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (state.running && !state.idle) throw new Error('maa-not-idle');
     await mkdir(request.privateDirectory, { recursive: true });
     const { authorization, changes } = request;
-    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes }) + '\n', { mode: 0o600 });
+    await checkAsset();
+    const trainingManifest = trainingAsset ? { file: trainingAsset.file, before: assetBefore, sha256: trainingAsset.sha256, immutable: true } : undefined;
+    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
     const preview = prepare(original, request);
@@ -510,6 +525,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const before = await readFile(file);
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
+    await checkAsset();
     const prepared = prepare(stoppedConfiguration, request);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
@@ -523,6 +539,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await phase('write');
     checkBeforeRestart();
     if (!(await maa.inspect()).treeExited) throw new Error('process-tree-running');
+    await checkAsset();
+    if (trainingAsset) await installTrainingAsset(trainingAsset);
     const temporary = `${file}.${id}.tmp`;
     const handle = await open(temporary, 'wx', 0o600);
     try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
@@ -536,6 +554,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await phase('readback');
     const readback = await readConfiguration(request.maaDirectory);
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
+    if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== 'matching') throw new Error('training-asset-readback-mismatch');
     for (const change of request.changes) {
       if (comparableAt(readback, change.path) !== comparableAt(config, change.path)) throw new Error('readback-mismatch');
     }

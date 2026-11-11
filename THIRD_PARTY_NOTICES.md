@@ -55,6 +55,8 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 
 `skills/maa-core/scripts/base-query.ts` 参考维护者自有原型，剥离个人路径、名册、生产规则及依赖后重写；原型 SHA256、范围和隐私核对见 [base 来源记录](docs/base-sources.md)。未引入原项目历史或第三方排班代码。
 
+专精计算及排程独立实现，复用共享成本和基建查询。固定公开游戏表与 MAA 原生字段/回调的核对见[训练来源记录](docs/training-sources.md)；未复制 MAA 的 AGPL 实现、游戏表或私人训练原型，不引入第三方排程算法。仅保留接口事实、指纹及必要的技能描述匹配条件；游戏数据权利不因本仓库许可而转移。
+
 游戏表运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData/tree/6f63c14e27b847ef74b53b00fe51fc322b3cd7ff) 的固定提交，数据权利归原权利人，本仓库不再分发。交叉核对运行时读取 [KayChung17/arknights-base-skill](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/skills/ark-base-schedule/assets/operator-skills.json) 的 `operator-skills.json`，固定提交 `368ea6d83d14409a3e7354df4359960adba6b36b`；不采用其算法或衍生加成，不复制其数据文件。该仓库 [MIT 许可](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/LICENSE) 全文如下，注明引用来源不表示上游背书：
 
 ```text
