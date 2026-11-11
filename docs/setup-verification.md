@@ -1,6 +1,37 @@
 # setup 现有环境接入验证
 
-## 实际 15/24 主线整合候选，待完整 R2
+## 当前交付结论
+
+固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
+
+122 次模型尝试全部因隔离认证不可用而 unverified，没有成功基线、语义验收或分数不降结论，仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。真实 MAA/模拟器/游戏及实际 ProductVersion 内容未验证。首次原生重开 unknown 的根因仍未唯一确定，未改产品/辅助程序的唯一完整对照通过只证明该固定载荷本次流程可用，不证明旧故障已修或所有运行稳定。以下当前证据与历史记录分列，原 R1 FAIL、旧 CI FAIL 和首次原生失败均保留。
+
+
+## 最终固定产品证据
+
+固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 基于实际 main `fc633d680f82c9edb224ca4bd9065c20797ea885`。根任务已核对[精确提交 CI run 42931175881](https://github.com/VincentChen0111/maa_skills/actions/runs/42931175881) 的 Windows / Ubuntu 两个 job 均通过。Windows 为 383 项：382 pass、0 fail、1 skip，help 和 setup 的真实 8.3 路径用例实际执行通过；本机完整检查 380 pass / 3 skip 的限制仍按下文保留。原候选 Windows CI 的失败不由新候选通过覆盖。
+
+固定候选的四批改后实际模型调用已经结束，原场景、模型、CLI 与框架保持：
+
+| 改后原始证据（根工作树忽略目录） | 框架 | 实际调用 |
+| --- | --- | --- |
+| `.tmp/07-after-core-help-evidence/frozen-models-h2qrFU` | ecf06bb / 495281064e71025a4553d07d340a241c3f11539ca90d2ce5134512bb24971476 | core 6 + help 6，共 12 |
+| `.tmp/07-after-daily-evidence/frozen-models-8XWIWu` | 同上 | daily 14 |
+| `.tmp/07-after-setup-doctor-evidence/frozen-models-kfek1M` | 同上 | doctor 10 + 新 setup 基线尝试 10，共 20 |
+| `.tmp/07-after-integration-evidence/frozen-models-1k3Mmt` | 991c7e0 / 07becf7a4cd2155771ea05fecd841b9480bccb930fcf5d056568c250e14c39b6 | stage 12 + training 8，共 20 |
+
+改前 56 + 改后 66 = 122 个唯一实际记录，61 Codex 401 / 61 Claude 未登录，全部 unverified，0 模型完成、0 runner failure。独立审查员已逐批核对 raw/evidence/record/manifest 与 Git 字节，重新构造合成 fixture 核场景与 skill 指纹；根 `.tmp/review-07-r2-prep/audit-after-{core-help,daily,setup-doctor,integration}.json` 与 `comparison-all.json` 保留审计。四批改后 manifest 文件数依次 113/114/140/170，对应 Git blob 113/114/116/142。56 对回归的模型/CLI/场景匹配仍全 unverified，另 10 次仅为新 setup 基线尝试，不能声称成功基线或分数不降。四批 fixture 清理与相关进程记录均为 0；独立正常权限 CIM 已核六批关联进程为 0，原沙箱 CIM 访问失败没有被当作进程已清。模型未验证与完整产品 R2 通过分别记录。
+
+首次固定原生验证 `.tmp/native-check-GghOle` 实际失败，15 条命令原样留存：安装/更新完成后，Codex 已安装 writer 的普通提醒写入在 restart 阶段返回 unknown / reconciliation-required。配置值已变，原锁、备份、pending/run、GUI 日志、launch 参数与 cleanup / 相关进程 0 证据全部保留；没有运行到本票 setup 正向 smoke，也不把该批记为原生通过。GUI 事后日志出现 Init True，仍不能证明当次进程观察已及时成功或归属正确。
+
+诊断在新的合成目录复用该失败批的已安装固定产品和同字节合成 GUI：一次继承环境、一次使用同 frozen native-env 的隔离环境公开导出对照均 complete、读回、正常关闭。严格隔离对照记录 13 次真实 PowerShell 进程命令均无错误，455–742 ms，start 约 1.908 秒；三个精确合成路径独立 CIM 残留 0。诊断前另有证据路径 ENOENT 与 Windows --import URL 错误，两次均未进入产品，原日志保留。作者树 `.tmp/07-native-diagnosis/diagnosis.md`、`process-summary.json`、`process-cleanup.json` 保存脱敏结论。原始进程 trace 含非选中实例私人路径，只留本机忽略目录，不公开；未操作该实例。没有修改产品、超时、fixture、native helper 或成功判据。
+
+首次原生失败根因仍未唯一确定，不能把它归因为已证实的环境/负载问题，不能把后来的局部成功当作已修复。在并行模型/检查结束后，根任务用同固定 head 和未改 helper 做了唯一一次完整原生对照，结果见下段；完整独立 R2 已核对这两批原生和诊断证据，确认符合既有单票实现交付前提，未将原失败改写为通过。07 仅完成实现验收；真实 MAA/模拟器/游戏、实际 ProductVersion 内容及模型语义仍未验证。成功 setup 基线与 help/core/daily/doctor/stage/training 分数不降仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布。下方历史章节保留其当时状态及原始 FAIL，不用于覆盖当前验证边界。
+
+
+完整对照 `.tmp/native-check-jeMvrK/native-evidence.json` 实际 exit 0、status pass：26 条命令中仅 Codex 重复安装的 1 条预期拒绝为非零。两宿主完成真实安装/更新、普通提醒事务、读回/备份/锁释放/正常关闭，以及已安装 setup CLI 的首次偏好、关闭未确认拒绝、确认后连接写入、重复 unchanged、各 1 份备份及正确 transactionHost。setup 的 adb/MAA 边界为合成替身，realDevice=false，不代表真实设备连接通过。正常权限相关进程检查为 0。根 payload audit 已实际通过，37 个 Codex + 233 个 Claude 仓库文件共 270 个精确匹配 df72640；655 个宿主生成依赖只单列 hash/lock metadata，未独立核 registry 包原始字节。完整 R2 已逐字节核对两次原生验证的四份冻结源、同固定 Git 的两份 smoke/fixture、26 份实际命令与安装载荷；源完全相同，最终及首轮/诊断关联合成进程独立 CIM 为 0。审计位于根 `.tmp/review-07-r2-prep/audit-native.json` 与 `process-final-native.json`。该完整对照成功不能确定 GghOle 的旧失败原因或称其已修复，两批原文均保留。
+
+## 历史：实际 15/24 主线整合候选，R2 前
 
 07 已从原基点 rebase 到实际 main `fc633d680f82c9edb224ca4bd9065c20797ea885`（24 的 PR43 squash，包含 15/06）。完整 R1 四项修复保持；共享 writer 合并保留三次作业文件校验、训练资产持锁安装/readback/manifest、job/training/medicine 互斥，以及 06 严格 transaction schema 与未知附加资源拒绝。setup 仍在内部重新发现/选择/复测，只生成当前四字段连接差异；恢复宽格式仅用于已核单配置事务，没有新增通用授权或放宽资产恢复。
 
@@ -23,11 +54,11 @@
 
 最终固定候选双平台 CI、远程双宿主原生安装/更新和真实 CLI 接入、两批改后模型及新 setup 基线尝试、完整独立 R2 仍由根任务完成；作者未将它们记为通过。07 保持进行中，不解除 08/09；07 单票条件交付与 26 硬门禁不变，受影响模型范围补齐 stage/training，并同步规格两张来源表与 26。下文均为原候选历史，原 R1 FAIL、Windows CI FAIL 和未验证记录不改写。
 
-## 原基点实现历史
+## 历史：原基点实现
 
 2026-11-11，工单 07 候选从 06 squash `788ac13febf35a54e556fa527943c01431b8e215` 实施。当前仍进行中：作者验证不能代替独立审查、真模型或原生远程安装验收。来源及设计限制见 [来源核对](setup-sources.md)和 [规格](spec.md)。
 
-## 实现及测试先行
+## 历史：实现及测试先行
 
 - 首次只读检查缺失设置、重复读取现场、首次语言与私有目录、仅创建私有骨架及环境记录：先观察缺少 setup 导出函数的失败，再实现；已存在账号文件保持原字节，设置仍由真实 preferences 接口写。
 - adb 发现／多候选需选／失效 adb／显式路径地址缩小／失败连接：先缺导出失败，再实现。只替代 adb 进程边界，真实临时文件；调用参数断言只出现 devices、connect、指定设备 get-state。显式候选未缩小范围及 malformed ClientType 接受问题分别先失败后修复。
@@ -43,7 +74,7 @@
 
 逐文件人工核对本包的代码、注释、文档、测试、版本记录和许可证：只含合成名称／地址、公共来源／指纹和相对证据位置，没有真实账号基线、机器路径、凭据或游戏数据。自动隐私检查再次为空；不将启发式扫描视为任意秘密可被识别的保证。
 
-## 模型、安装和审查
+## 历史：模型、安装和审查
 
 改前 core/help/daily/doctor 原字节 archive 保存在本机忽略目录 `.tmp/07-before/payload.tar`；SHA-256 `e7e99905ebba2f99d4eb01b399cac9522fcb662c36660985d396922ad8b8bf6b`。原始 Git payload 为 `788ac13`。现有评测运行器、评分器和场景未改，新 setup 场景固定后由根任务使用同框架分别运行旧载荷与最终载荷。受影响集合为 help、core、daily、doctor；setup 新建基线。当前作者未运行真模型，不能宣称分数不下降。
 
@@ -57,7 +88,7 @@
 
 临时安装 CLI smoke 可执行 `node scripts/setup-smoke.ts <已安装 maa-core 的绝对目录> [codex|claude]`（默认 codex），另需同版 `tests/fixtures/setup-boundary.mjs`。脚本只读安装目录，使用新的临时 home、合成 MAA/adb 文件；实际执行 preferences 首次设置、check、prepare、discover、test、关闭未确认拒绝、确认后 apply、重复 unchanged，核配置、备份、事务宿主与进程边界记录。loader 只替代精确安装 setup／共用候选模块的 adb/版本元数据进程调用和 writer 的 MAA 进程模块，不替换文件系统、Node 版本、配置 writer 或内部函数。显式 adbPaths/addresses 将发现限定到合成路径，未扫描真实模拟器；结果不能冒称真实设备连接通过。
 
-## R1 失败、修复及验证
+## 历史：R1 失败、修复及验证
 
 完整独立 [R1 原文](reviews/2026-11-11-07-setup-r1.md)原样保留，结论要求修改：S1 一致连接漏查锁、S2 普通 writer 连接权限过宽、S3 损坏设置缺具体检查、T1 Windows 短路径夹具错拒，四项均接受。原候选 `847c07e` 的 Windows CI run `42918403791` / job `130186684875` 为 305 项、298 pass、6 fail、1 skip；Ubuntu 通过。此历史失败不会由本机通过覆盖，修后固定新候选双平台 CI 仍待根任务实际验证。
 
