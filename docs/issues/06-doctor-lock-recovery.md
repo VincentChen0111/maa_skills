@@ -12,7 +12,7 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md)
 
 实施进度：已完成。
 
-2026-11-11 当前结论：固定产品 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b` 的完整 R2 通过，Standards/Spec 均 0 项真实错误，R1 P2 已修复。独立完整检查 277 通过、1 平台跳过，类型与 14 组额外探针通过；同 SHA 双平台 CI、双宿主固定原生恢复通过。经 [PR #40](https://github.com/VincentChen0111/maa_skills/pull/40) 待 squash 交付，详见 [R2 完整报告](../reviews/2026-11-11-06-doctor-r2.md)。共 92 次真实模型调用仍因缺认证未验证，按本票单独决定保留 [26 发布硬门禁](26-v0-1-0-release-validation.md)；下方各候选状态为历史记录。
+2026-11-11 当前结论：固定产品 `67af7f8d12abe31fb8514103dfb1b9db24f98f8b` 的完整 R2 通过，Standards/Spec 均 0 项真实错误，R1 P2 已修复。独立完整检查 277 通过、1 平台跳过，类型与 14 组额外探针通过；同 SHA 双平台 CI、双宿主固定原生恢复通过。经 [PR #40](https://github.com/VincentChen0111/maa_skills/pull/40) squash 交付为 `788ac13febf35a54e556fa527943c01431b8e215`，详见 [R2 完整报告](../reviews/2026-11-11-06-doctor-r2.md)。共 92 次真实模型调用仍因缺认证未验证，按本票单独决定保留 [26 发布硬门禁](26-v0-1-0-release-validation.md)；下方各候选状态为历史记录。
 
 2026-11-11 从 05 的实际 squash 提交 `ddd0ca80a3367b589866efde73aa1c0205732c3a` 开始。共享检查、点名批准的核对/恢复、CLI 与合成场景已实现；作者验证见 [doctor 验证记录](../doctor-verification.md)。独立审查、固定候选原生安装与真实模型结果未出前不标记完成，也不从 05 自动继承模型延期决定。
 

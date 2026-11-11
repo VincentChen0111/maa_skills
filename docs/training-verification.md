@@ -10,7 +10,7 @@
 
 旧 fd1 改后 50 份和中断 Rbw9G1 的 1 份原始记录保留；历史累计 142 份完整批次实际记录（71 Codex 401 / 71 Claude 未登录）加 1 份中断 Codex 401，143 个唯一 ID 已独立核对。原中断 batch 全零及空 run 目录不改写，不补造完整批次。成功训练基线、daily/core/doctor/stage 真实语义和分数不降仍由 [26](issues/26-v0-1-0-release-validation.md) 硬阻塞发布；真实 MAA/游戏、六分钟实效、速度/减时叠加和换人身份均未验证。
 
-24 单票有条件实现交付的产品与证据前提已满足；[PR43](https://github.com/VincentChen0111/maa_skills/pull/43) 待最终文档提交 CI 后 squash。本次只登记验收，不改产品，最终文档 head 另核 CI。原生单次槽无日期 TTL、离线没有常驻清理，维护失败仍可能留到次日，这些边界保持。
+24 单票有条件实现交付的产品与证据前提已满足；[PR43](https://github.com/VincentChen0111/maa_skills/pull/43) 已 squash 为实际 main `fc633d680f82c9edb224ca4bd9065c20797ea885`，最终文档 `e36cbcea02c353d79b54b37a03eb548c04a4a071` 的[双平台 CI](https://github.com/VincentChen0111/maa_skills/actions/runs/42929877277) 均通过。根任务已 fetch 并核对 `991c7e0` 与 `fc633d6` 的 skills/scripts/eval/tests/package/lock/.github 产品与验证字节无差异；本次同步实际交付状态，不改写历史结论。原生单次槽无日期 TTL、离线没有常驻清理，维护失败仍可能留到次日，这些边界保持。
 
 ## R2 修复候选，待完整 R3
 

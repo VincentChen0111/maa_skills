@@ -1,11 +1,12 @@
 import { access, appendFile, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
+import { prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
@@ -55,7 +56,7 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   }
   return JSON.stringify(value);
 }
-function prepare(config: RecordValue, request: WriteRequest) {
+function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery') {
   if (['medicineCount', 'jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan'].includes(key))
@@ -84,6 +85,20 @@ function prepare(config: RecordValue, request: WriteRequest) {
       if (path[3] === 'TaskList') allowed = JSON.stringify(value) === JSON.stringify(approvedJobList(request.authorization.jobPlan, request.privateDirectory));
       if (path[3] === 'EnableUserAdditional') allowed = value === false;
       dependencies.push(['Current'], ['Configurations', String(path[1]), 'Copilot']);
+    }
+    if (path.length === 5 && path[0] === 'Configurations' && typeof path[1] === 'string' && path[2] === 'Gui' && path[3] === 'ConnectSettings') {
+      if (!connectionMode || request.changes.some(item => item.path.length !== 5 || item.path[0] !== 'Configurations' || item.path[2] !== 'Gui' || item.path[3] !== 'ConnectSettings')) throw new Error('connection-route-required');
+      if (connectionMode === 'setup' && (path[1] !== config.Current || request.authorization.source !== 'current-request')) throw new Error('current-connection-required');
+      if (['AutoDetect', 'AlwaysAutoDetect'].includes(String(path[4]))) allowed = typeof value === 'boolean';
+      // MAA also stores empty/relative adb paths; recovery must be able to restore those originals.
+      if (path[4] === 'AdbPath') allowed = typeof value === 'string' && value.length <= 32767 && !/[\0\r\n]/.test(value);
+      if (path[4] === 'Address') allowed = typeof value === 'string' && value.length <= 255 && /^[a-zA-Z0-9_.:[\]-]*$/.test(value);
+      if (connectionMode === 'setup') {
+        if (['AutoDetect', 'AlwaysAutoDetect'].includes(String(path[4]))) allowed = value === false;
+        if (path[4] === 'AdbPath') allowed = typeof value === 'string' && isAbsolute(value) && value.length <= 32767 && !/[\0\r\n]/.test(value);
+        if (path[4] === 'Address') allowed = typeof value === 'string' && (/^emulator-\d{1,5}$/.test(value) || /^(?:127\.0\.0\.1|localhost):\d{1,5}$/.test(value) && Number(value.split(':')[1]) > 0 && Number(value.split(':')[1]) <= 65535);
+      }
+      dependencies.push(['Current'], ['Configurations', path[1], 'Gui', 'ConnectSettings'], ['Configurations', path[1], 'Gui', 'RuntimeSettings']);
     }
     if (path.length === 2 && path[0] === 'Timers') {
       if (['CustomConfig', 'ForceScheduledStart', 'ShowWindowBeforeForceScheduledStart', 'NotifyBeforeScheduledStart'].includes(String(path[1]))) allowed = typeof value === 'boolean';
@@ -210,6 +225,11 @@ async function existingLock(file: string) {
   return 'unknown';
 }
 
+/** Shared read-only lock gate, including callers that have no changed fields to write. */
+export async function inspectConfigWriteLock(maaDirectory: string) {
+  return existingLock(join(maaDirectory, 'config', '.maa-skills.lock'));
+}
+
 export type RecoveryContext = { maaDirectory: string; privateDirectory: string };
 export type RecoveryInspection = {
   lock: 'none' | 'active' | 'stale' | 'unknown'; comparison: 'applied' | 'unchanged' | 'unknown';
@@ -227,7 +247,7 @@ function transactionFields(value: unknown, required: string[], optional: string[
 
 function transactionMetadata(value: unknown, pending = false): RecordValue {
   const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
-  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor')
+  if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor' && record.skill !== 'maa-setup')
     || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
     || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
     || typeof record.phase !== 'string' || !(pending ? ['check'] : ['check', 'close', 'backup', 'write', 'restart', 'readback', 'record', 'release']).includes(record.phase)) throw new Error('transaction-metadata-invalid');
@@ -287,7 +307,7 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       const record = transactionPending(matches[0]);
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
-      const expected = prepare(backup, pending).config;
+      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined).config;
       summary.backup = 'matched-latest';
       if (!current || summary.configuration !== 'valid') throw new Error('current-invalid');
       summary.comparison = revision(current) === revision(backup) ? 'unchanged' : revision(current) === revision(expected) ? 'applied' : 'unknown';
@@ -432,7 +452,22 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
 }
 export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess) { return writeConfiguration(request, maa); }
 
-async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string }) {
+/** The sole normal connection-write entry: selection and adb retest happen here, not in a caller-supplied grant. */
+export async function executeSetupConfigWrite(request: SetupWriteRequest, context: ConnectionContext = {}, adb?: AdbBoundary, maa?: MaaProcess) {
+  const prepared = await prepareSetupConnection(request, context, adb);
+  if (!prepared.writeRequest) return prepared;
+  const write = prepared.writeRequest;
+  if (!write.changes.length) {
+    if ((await inspectConfiguration(write.maaDirectory)).revision !== write.expectedRevision) return { status: 'rejected', reason: 'configuration-changed' };
+    const lock = await inspectConfigWriteLock(write.maaDirectory);
+    if (lock) return { status: lock, reason: 'lock-requires-reconciliation' };
+    return { status: 'unchanged', reason: 'connection-already-configured' };
+  }
+  const boundary = maa ?? (await import('./maa-process.ts')).createMaaProcess(write.maaDirectory);
+  return writeConfiguration(write, boundary, undefined, 'setup');
+}
+
+async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string }, connection?: 'setup') {
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
@@ -466,7 +501,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
       }
     }
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
-    const prepared = prepare(original, request);
+    const prepared = prepare(original, request, recovery ? 'recovery' : connection);
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
     targets = request.changes.map(change => {
@@ -482,7 +517,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   const lockFile = join(request.maaDirectory, 'config', '.maa-skills.lock');
   const locked = async () => {
     if (recovery) return await readFile(lockFile, 'utf8').catch(() => null) === recovery.rawLock ? null : rejected('evidence-changed');
-    const status = await existingLock(lockFile);
+    const status = await inspectConfigWriteLock(request.maaDirectory);
     return status ? { ...rejected('lock-requires-reconciliation'), status } : null;
   };
   const retained = await locked(); if (retained) return retained;
@@ -495,7 +530,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
   if (recovery) { const changed = await locked(); if (changed) return changed; }
-  const metadata = { id, skill: recovery ? 'maa-doctor' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
+  const connectionOnly = request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
+  const metadata = { id, skill: recovery ? 'maa-doctor' : connectionOnly ? 'maa-setup' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
     await lock.truncate(0); await lock.write(JSON.stringify(metadata), 0, 'utf8'); await lock.sync();
@@ -514,7 +550,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
-    const preview = prepare(original, request);
+    const preview = prepare(original, request, recovery ? 'recovery' : connection);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
     if (!checkMaintenanceWindow(original, closeStarted, deadline) || !checkMaintenanceWindow(preview.config, closeStarted, deadline)) throw new Error('timer-window');
@@ -526,7 +562,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
     await checkAsset();
-    const prepared = prepare(stoppedConfiguration, request);
+    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');
