@@ -16,7 +16,7 @@ Blocked by: [05: daily 安全修改配置](05-daily-safe-config-write.md)
 
 2026-11-13 新增本票。维护者当日同意把这批建议写进工单，说明见[工单索引](INDEX.md)；下面各条的具体写法是设计默认值，不是维护者原话，对应的行已登记在规格「默认值及其来源」。
 
-当前实现，行号以基点 `2debab9` 的 `skills/maa-core/scripts/maa-config.ts` 为准，实现时按标识符重新定位：
+当前实现，行号以基点 `05d4ebd` 的 `skills/maa-core/scripts/maa-config.ts` 为准，实现时按标识符重新定位：
 
 - revision 是整份配置的指纹，不是投影：它对解析后的整份 `gui.new.json` 做 `JSON.stringify` 再取 SHA-256（第 27 行）。读取摘要返回它（第 410 行）；写入请求的 `expectedRevision` 和当前配置的 revision 不相等时，以 `configuration-changed` 拒绝（第 490–491 行，setup 专用入口在第 461 行）。所以从读取摘要到提交写入请求之间，配置里任何一个字段变了，包括 MAA 自己写的、和这次改动无关的字段，批准都会失效。
 - 关停 MAA 之后不再比整份指纹，只重新绑定目标对象的快照（第 478–479、563 行），并在关停后的配置上重新计算这次改动（第 565 行）。
