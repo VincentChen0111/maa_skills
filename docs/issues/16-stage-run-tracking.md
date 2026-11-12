@@ -16,6 +16,8 @@ MAA 进程退出成功并不等于关卡成功。中途断连和日志不完整�
 
 2026-11-13 按维护者当日的决定修订验收第 1、2、4 条并新增第 5 条：环境类失败先查明原因再由模型决定，用户手动玩要考虑进去，来源见规格「默认值及其来源」。
 
+2026-11-13 补充：参考同类公开项目，新增验收第 8–14 条和其后的「参考」一段，写的是实现方式和证据要求，不新增产品限制。维护者当日同意把这批建议写进工单，说明见[工单索引](INDEX.md)；各条的具体写法是设计默认值，不是维护者原话。标「核实后采用」的事实还没有在固定 MAA 上核对。
+
 ## 要交付的行为
 
 用户启动已准备批次后，maa-daily 持续跟踪结构化回调，保存运行记录并明确报告每关终态或需要核对的未知状态。
@@ -33,10 +35,19 @@ MAA 进程退出成功并不等于关卡成功。中途断连和日志不完整�
 - [ ] 能从回调或用户的说明看出用户正在手动玩（模拟器或官方 PC 客户端）、或者手动登录把 MAA 的会话顶下线时，按环境类失败处理，不记为作业失败；继续之前重新读取状态，不沿用批准时的理智、药剂、源石或关卡进度，读不到的标为未知。
 - [ ] 复用共享诊断分类并向用户给出下一步；日志摘要、运行记录和输出不含凭据、账号标识或完整配置。
 - [ ] 在临时环境中完整演示从用户开始信号到运行结果的跟踪，不点击游戏或操作设备。
+- [ ] 回调行解析只有一份：把 `skills/maa-core/scripts/training-state.ts` 里解析 MaaCore 日志回调行（`Assistant::append_callback | <消息名> <JSON>`，依据见[专精来源核对](../training-sources.md)）的部分提成 maa-core 的公共模块，运行跟踪和专精核对都调用它，不各写一份；专精现有的测试保持通过。
+- [ ] 运行开始前记录日志起点：`debug/asst.log` 和 `debug/gui.log` 各记字节偏移、文件大小、文件身份和末尾一段内容的哈希，跟踪时只把起点之后的行算作本次运行。发现文件被轮换或截断时（固定版本里上一轮 Core 日志在 `debug/asst.bak.log`），到轮换后的文件里接着找；接不上的部分记为证据不全，按结果未知处理，不把整份日志当成本次运行。
+- [ ] 运行记录的结果分两层：执行状态（已完成、失败、未知）和业务结果（每关的成功、失败、未三星、理智不足等）。业务结果在有对应回调证据之前保持「未评估」，不从执行状态推出；运行结束时仍没有证据的记为结果未知。失败类别直接记 MAA 回调里的消息名和 `what` 值，再对应到第 1 条的终态，不另起一套和 MAA 对不上的类别名。固定版本的回调协议里已核对到 `TaskChainError`、`SubTaskError`，以及 `ConnectionInfo` 的 `ConnectFailed`、`Disconnect`、`Reconnecting`、`Reconnected`、`ScreencapFailed`、`TouchModeNotAvailable`。
+- [ ] 读 `debug/gui.log` 时先查错误标记，再查完成标记；同一段时间里两者都出现时按错误处理，完成标记不覆盖错误。固定版本的中文界面文案里已核对到「任务出错: 」「战斗出错」「未选择作业」「读取文件失败！」和「完成任务: 」。自动战斗启动失败、自动战斗出错在 `gui.log` 里的实际写法，以及「任务失败后 MAA 仍会写完成任务」这一观察，核实后采用。界面文案随语言和版本变化，所以 `gui.log` 只用来划定时间段和补充说明，分类仍以结构化回调为准（第 2 条）。
+- [ ] 识别 MAA 原生定时接管了运行：跟踪期间 MAA 的定时启动了别的任务或切换了配置时，本次运行记为被接管，之后的回调不算进本批次；结果按未知处理，先核对当前状态，不重新启动。定时启动在 `gui.log` 和回调里留下的具体痕迹，核实后采用。
+- [ ] 关卡核对只用回调：把批次里配置的关卡，和掉落回调（`SubTaskExtraInfo` 的 `StageDrops`，其 `details.stage` 带 `stageCode` 和 `stageId`）里实际出现的关卡比较，逐关给出吻合、不符、没有打、未知四种结论，写进运行记录。这项核对不需要图像识别。
+- [ ] 证据可以引用 MAA 自己已经保存的调试截图，只给路径：`debug/` 下修改时间不早于运行起点的图片文件。固定版本的官方日志分析说明列有 `debug/interface/*.png` 和 `debug/drops/*.png`，`asst.log` 里有对应的保存记录。路径写成相对 MAA 目录的形式。本票不打开这些图片，也不对它们做识别；另加识别要按规格「不在范围」的说明，另开一张写明缺口的工单。
+
+参考，只对照思路，不复制代码：界定本次运行的日志行、把执行状态和业务结果分开，可参考 [A1m233/maa-daily-skill](https://github.com/A1m233/maa-daily-skill)（MIT）；`gui.log` 的判断顺序可参考 [yumi233/maa-control-center](https://github.com/yumi233/maa-control-center)（MIT）；只靠回调核对实际打的关卡可参考 [LIYuhao-u/maa-arknights-auto](https://github.com/LIYuhao-u/maa-arknights-auto)（MIT）。MAA 的事实在固定标签 v6.21.4 上核对：[回调协议](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.21.4/docs/zh-cn/protocol/callback-schema.md)、[中文界面文案](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.21.4/src/MaaWpfGui/Res/Localizations/zh-cn.xaml)、[官方日志分析说明](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.21.4/.agents/skills/maa-issue-log-analysis/SKILL.md)。MAA 是 AGPL-3.0，只取事实和思路。真要借用别处的代码，先按[第三方声明](../../THIRD_PARTY_NOTICES.md)登记提交号和许可。
 
 ## 验证方式
 
-回放正常、失败、未三星、无理智、超时、断连、手动会话顶下线及退出 0 但失败的合成结构化事件；验证不会重复执行或误报成功，环境类失败不记为该关失败，添加两宿主行为场景。
+回放正常、失败、未三星、无理智、超时、断连、手动会话顶下线及退出 0 但失败的合成结构化事件；验证不会重复执行或误报成功，环境类失败不记为该关失败，添加两宿主行为场景。2026-11-13 补充：再回放日志在运行中途被轮换、错误标记和完成标记同时出现、原生定时接管，以及掉落回调里的关卡和配置不符这四种合成样例；公共回调解析模块有自己的测试，专精的现有测试不改断言。
 
 ## 依赖理由
 

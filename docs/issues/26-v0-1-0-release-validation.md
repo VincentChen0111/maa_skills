@@ -6,7 +6,7 @@ Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
 GitHub Issue: [#28](https://github.com/VincentChen0111/maa_skills/issues/28)
-Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [27: 批准后的碎石与临期药](27-approved-stone-expiring-medicine.md)
+Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [27: 批准后的碎石与临期药](27-approved-stone-expiring-medicine.md), [28: 行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md)
 
 ## 背景与目标
 
@@ -15,6 +15,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 单项功能完成不代表安装包、跨 skill 交接和发布元数据已经一致。首版需要在干净环境证明整套公开交付可用。
 
 2026-11-13 按维护者当日的决定加入 27：它改写四个边界场景的拒绝诱饵并新增四个场景，这些场景进入本票的发布门禁；来源见规格「默认值及其来源」。
+
+2026-11-13 补充：加入 [28](28-runnable-evaluation-auth-preflight.md)，本票的模型验收要用它交付的入口、两道预检和补齐的场景。另在验收条件末尾新增四条和一段「参考」：模型验收经 28 的入口执行、「人工核实」的流程与记录格式、跨清单版本一致与标签等于版本、打包内容的必含与禁含清单。不新增产品限制；维护者当日同意把这批建议写进工单，说明见[工单索引](INDEX.md)，具体写法是设计默认值，不是维护者原话。
 
 04 为支持并行实现已完成实现交付，其模型基线因隔离认证为空移交本票。发布前必须清除此门禁；04 的完成状态不能作为模型已通过的证据，见 [help 验证记录](../help-verification.md)。
 
@@ -72,6 +74,12 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 逐文件检查公开内容与第三方声明，保留 MIT 全文、原版权行、借用提交号及致谢；不包含私人路径、账号数据、配置原文或打包游戏数据。
 - [ ] 记录实际运行结果及未验证项；未执行的真实设备验证不记通过，若需要用户操作则明确跟踪到相应状态。
 - [ ] 本票不迁移维护者个人数据、不更改现有日用 MAA 或已安装 skill；私有迁移及其他项目改为消费共享工具另行交办。
+- [ ] 2026-11-13 新增：模型验收经 [28](28-runnable-evaluation-auth-preflight.md) 交付的入口执行。每一批先通过不调用模型的环境预检和认证预检，再开始计入验收的运行；预检没有通过的批次不产生验收记录。上面各条要求补充的正向验收，使用 28 补齐的场景：06 的正向恢复，07 的正向连接写入与多候选选择，15 的批准后准备，以及 setup→account→用户批准→daily 和 help/doctor 的交接。场景名以 28 交付时写入本票的为准。这些场景同样固定 CLI、模型、场景、评分器与载荷指纹，unverified、失败或不稳定时不得发布。
+- [ ] 2026-11-13 新增：「人工核实」有写明的流程和记录。开始核实之前先写好核实清单：把本票各条点名的语义要点，逐场景列成检查项，每项写明看哪一份证据（宿主原始记录、归一化证据、文件差异）和怎样算通过。每个场景、每个宿主留一条记录，包含运行 ID、场景指纹、证据摘要哈希、逐项结论（通过、不通过、无法判断）、依据在证据里的位置、核实者的角色和日期。任何一项不通过或无法判断，都按本票现有规则阻止发布；机器评分通过不能代替这份记录。清单和记录写进仓库的验证记录，原始日志仍然不进仓库。
+- [ ] 2026-11-13 新增：跨清单版本一致，标签等于版本。`package.json`、`package-lock.json`、`.claude-plugin/plugin.json`、更新记录的最新条目和发布说明里的版本号相同。`scripts/metadata.ts` 现在只比较 `package.json` 和 `plugin.json`，其余几处在发布前由检查脚本或发布清单逐项核对。Git 标签是 `v` 加这个版本号，并指向发布的那个提交。
+- [ ] 2026-11-13 新增：打包内容的必含与禁含清单，在两个宿主实际安装得到的目录上核对，结果写进发布验证记录。必含清单按两种安装方式分别写，因为插件市场安装以仓库根目录为插件（`.claude-plugin/marketplace.json` 的 `source` 是 `./`），skill-installer 按 skill 目录安装；至少包括五个 skill 和 `maa-core` 各自的 `SKILL.md`、它们引用的参考文件和脚本、版本核实记录、`.claude-plugin/` 的两份描述文件，并写明许可证和第三方声明在每种安装方式下怎样随附。skill 正文引用而安装目录里没有的文件算缺失。禁含清单沿用规格「仓库与打包」「隐私」已有的规定：评测原始记录和 `.tmp/`、私有目录内容、账号快照、凭据、MAA 配置原文、打包的 MAA 资源或游戏数据、企鹅物流与一图流数据、`node_modules`。
+
+参考，只对照思路，不复制代码：发布前的跨清单版本检查和打包清单可参考 [KhazixW2/Everything-Maa](https://github.com/KhazixW2/Everything-Maa) 和 [penguin-statistics/agent-skills](https://github.com/penguin-statistics/agent-skills)（均 MIT）。
 
 ## 验证方式
 
@@ -79,7 +87,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 依赖理由
 
-08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链；27 完成批准后的碎石与临期药及其评测场景。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
+08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链；27 完成批准后的碎石与临期药及其评测场景；28 提供可运行的评测入口、预检和本票要求补齐的场景，没有它本票的模型验收无法执行。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
 
 ## 实现与交付约定
 
