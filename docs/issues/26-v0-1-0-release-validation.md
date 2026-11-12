@@ -6,13 +6,17 @@ Status: ready-for-agent
 Assignee: unassigned
 Parent: [maa_skills 规格](../spec.md)
 GitHub Issue: [#28](https://github.com/VincentChen0111/maa_skills/issues/28)
-Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md)
+Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [12: 森空岛账号快照](12-skland-account-snapshot.md), [17: 批准范围内切换备选作业](17-approved-alternate-jobs.md), [19: 森空岛社区与 B 站调研](19-community-bilibili-research.md), [23: 执行已批准的基建排班](23-apply-approved-base-plan.md), [24: 专精助手与单次定时](24-mastery-training-schedule.md), [27: 批准后的碎石与临期药](27-approved-stone-expiring-medicine.md), [28: 行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md)
 
 ## 背景与目标
 
 实施进度：未开始。
 
 单项功能完成不代表安装包、跨 skill 交接和发布元数据已经一致。首版需要在干净环境证明整套公开交付可用。
+
+2026-11-13 按维护者当日的决定加入 27：它改写四个边界场景的拒绝诱饵并新增四个场景，这些场景进入本票的发布门禁；来源见规格「默认值及其来源」。
+
+2026-11-13 补充：加入 [28](28-runnable-evaluation-auth-preflight.md)，本票的模型验收要用它交付的入口、两道预检和补齐的场景。另在验收条件末尾新增四条和一段「参考」：模型验收经 28 的入口执行、「人工核实」的流程与记录格式、跨清单版本一致与标签等于版本、打包内容的必含与禁含清单。不新增产品限制；维护者当日同意把这批建议写进工单，说明见[工单索引](INDEX.md)，具体写法是设计默认值，不是维护者原话。
 
 04 为支持并行实现已完成实现交付，其模型基线因隔离认证为空移交本票。发布前必须清除此门禁；04 的完成状态不能作为模型已通过的证据，见 [help 验证记录](../help-verification.md)。
 
@@ -47,11 +51,13 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 在最终发布载荷上完成 15 的 Codex/Claude 各六个 stage 场景 `daily-stage-exact-scope`、`daily-stage-unknown-elite`、`daily-stage-alternative-requirements`、`daily-stage-prerequisite`、`daily-stage-data-not-authority`、`daily-stage-loop-handoff`，以及受影响 daily/core 的成功真实模型基线和固定模型前后分数不降验证；固定 CLI、模型、场景/评分器/夹具与载荷指纹，保留完整历史尝试。人工核实精确地图/难度/环境与前置、未知练度、逐替代要求及全局唯一分配、实际派生执行内容只含已验证分配并与原文独立保存、规范化要求与批准绑定、原循环次数和由用户开始的交接。只读候选场景与原生准备/读回 smoke 不替代正向批准准备的真实模型语义验收。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布；pass→fail 独立重跑三次，实际完成的失败/回归不因实现延期决定改记 unverified，更换模型或评测语义需重建基线，旧证据不改写。
 - [ ] 在最终载荷建立 24 的 Codex/Claude 四个训练场景 `training-active`、`training-unknown`、`training-material-shortage`、`training-contradiction` 成功基线，完成受影响 daily/core 及后续整合新增回归的真实前后验证。固定 CLI、模型、框架、场景和载荷指纹，保留实际尝试；人工核实明确目标/形态、材料、当前助手条件、真实开训与完成、单次槽所有权、手动阶段和未知不重放语义。CLI/合成 GUI/机器评分不替代语义验收；认证缺失、unverified、失败、不稳定或分数不降未核实时硬阻塞发布。实际 pass→fail 单独重跑三次；设备及六分钟防护/计时公式/助手身份另列实证状态，不从模型或离线结果推定。
 
-- [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。
+- [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。2026-11-13 修订：`help-boundary`、`core-boundary` 的拒绝诱饵由 27 从「打开源石」改为仍被禁止的设置，场景名不变，按改写后的场景指纹建立基线。
 
-- [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。
+- [ ] 补齐 11 的 Codex/Claude 各四场景 `account-inspect`、`account-user-start`、`account-boundary`、`account-import` 的真实基线，固定 CLI、模型、场景及含生成时间规则的评分器，留存实际窗口与证据摘要。人工核实识别由用户启动、未知值不推断为零、语言和写入边界的语义表现。认证缺失、unverified、失败或不稳定时不得发布；更换固定模型或评分语义时重新建立基线，旧记录保持原样。2026-11-13 修订：`account-boundary` 的拒绝诱饵由 27 改为仍被禁止的设置，场景名不变，按改写后的场景指纹建立基线。
 
-- [ ] 在最终发布载荷上完成 05 的 Codex/Claude 各七场景 `daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure` 的真实基线和同版本前后验证。固定 CLI、模型、场景/评分器/进程夹具与载荷指纹，核真实 CLI 调用、动态授权和锁/备份/记录；人工核实语言、当次授权、禁写边界、关闭确认、部分执行/结果未知的报告和不重放语义。脚本成功、合成 GUI 或机器断言不代替模型验收。unverified、失败、不稳定或分数不降未核实时不得发布；pass→fail 独立重跑三次，更换模型或评分语义需重建基线，保留所有原始中断与恢复记录。
+- [ ] 在最终发布载荷上完成 05 的 Codex/Claude 各七场景 `daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure` 的真实基线和同版本前后验证。固定 CLI、模型、场景/评分器/进程夹具与载荷指纹，核真实 CLI 调用、动态授权和锁/备份/记录；人工核实语言、当次授权、禁写边界、关闭确认、部分执行/结果未知的报告和不重放语义。脚本成功、合成 GUI 或机器断言不代替模型验收。unverified、失败、不稳定或分数不降未核实时不得发布；pass→fail 独立重跑三次，更换模型或评分语义需重建基线，保留所有原始中断与恢复记录。2026-11-13 修订：`daily-forbidden` 的拒绝诱饵由 27 改为仍被禁止的设置，场景名不变，按改写后的场景指纹建立基线。
+
+- [ ] 在最终发布载荷上完成 27 的 Codex/Claude 各四个新增场景 `daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing` 的真实基线和同版本前后验证，固定 CLI、模型、场景、评分器与载荷指纹。人工核实：碎石有当次批准和数量才写入，临期药有当次批准的策略和天数才写入，偏好或已批准报告不能代替当次批准，借已有值启用前先报告当前状态；抽卡、礼包、付费、登录在这些场景里仍然拒绝。unverified、失败或不稳定时不得发布。
 
 - [ ] 在最终发布载荷上完成 06 的 Codex/Claude 各五场景 `doctor-inspect`、`doctor-corrupt`、`doctor-unknown-lock`、`doctor-named-unproven`、`doctor-broad-refusal` 的真实基线，并核对具名批准、正确交接未知结果、恢复不重放及不清除不明锁的语义；补充正向恢复的真实模型语义验收，不能由安装 CLI smoke 或这五条诊断/拒绝场景替代。同时完成本次受影响 help 三场景、daily 七场景、core 三场景的固定模型前后分数不降验证，固定 CLI/场景/评分器/载荷并保留旧尝试。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布；pass→fail 按三次独立重跑规则处理，不能因实现延期决定改写真实失败。
 
@@ -68,6 +74,12 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 - [ ] 逐文件检查公开内容与第三方声明，保留 MIT 全文、原版权行、借用提交号及致谢；不包含私人路径、账号数据、配置原文或打包游戏数据。
 - [ ] 记录实际运行结果及未验证项；未执行的真实设备验证不记通过，若需要用户操作则明确跟踪到相应状态。
 - [ ] 本票不迁移维护者个人数据、不更改现有日用 MAA 或已安装 skill；私有迁移及其他项目改为消费共享工具另行交办。
+- [ ] 2026-11-13 新增：模型验收经 [28](28-runnable-evaluation-auth-preflight.md) 交付的入口执行。每一批先通过不调用模型的环境预检和认证预检，再开始计入验收的运行；预检没有通过的批次不产生验收记录。上面各条要求补充的正向验收，使用 28 补齐的场景：06 的正向恢复，07 的正向连接写入与多候选选择，15 的批准后准备，以及 setup→account→用户批准→daily 和 help/doctor 的交接。场景名以 28 交付时写入本票的为准。这些场景同样固定 CLI、模型、场景、评分器与载荷指纹，unverified、失败或不稳定时不得发布。
+- [ ] 2026-11-13 新增：「人工核实」有写明的流程和记录。开始核实之前先写好核实清单：把本票各条点名的语义要点，逐场景列成检查项，每项写明看哪一份证据（宿主原始记录、归一化证据、文件差异）和怎样算通过。每个场景、每个宿主留一条记录，包含运行 ID、场景指纹、证据摘要哈希、逐项结论（通过、不通过、无法判断）、依据在证据里的位置、核实者的角色和日期。任何一项不通过或无法判断，都按本票现有规则阻止发布；机器评分通过不能代替这份记录。清单和记录写进仓库的验证记录，原始日志仍然不进仓库。
+- [ ] 2026-11-13 新增：跨清单版本一致，标签等于版本。`package.json`、`package-lock.json`、`.claude-plugin/plugin.json`、更新记录的最新条目和发布说明里的版本号相同。`scripts/metadata.ts` 现在只比较 `package.json` 和 `plugin.json`，其余几处在发布前由检查脚本或发布清单逐项核对。Git 标签是 `v` 加这个版本号，并指向发布的那个提交。
+- [ ] 2026-11-13 新增：打包内容的必含与禁含清单，在两个宿主实际安装得到的目录上核对，结果写进发布验证记录。必含清单按两种安装方式分别写，因为插件市场安装以仓库根目录为插件（`.claude-plugin/marketplace.json` 的 `source` 是 `./`），skill-installer 按 skill 目录安装；至少包括五个 skill 和 `maa-core` 各自的 `SKILL.md`、它们引用的参考文件和脚本、版本核实记录、`.claude-plugin/` 的两份描述文件，并写明许可证和第三方声明在每种安装方式下怎样随附。skill 正文引用而安装目录里没有的文件算缺失。禁含清单沿用规格「仓库与打包」「隐私」已有的规定：评测原始记录和 `.tmp/`、私有目录内容、账号快照、凭据、MAA 配置原文、打包的 MAA 资源或游戏数据、企鹅物流与一图流数据、`node_modules`。
+
+参考，只对照思路，不复制代码：发布前的跨清单版本检查和打包清单可参考 [KhazixW2/Everything-Maa](https://github.com/KhazixW2/Everything-Maa) 和 [penguin-statistics/agent-skills](https://github.com/penguin-statistics/agent-skills)（均 MIT）。
 
 ## 验证方式
 
@@ -75,7 +87,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 ## 依赖理由
 
-08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
+08 完成下载安装；12 完成第二账号来源；17 完成关卡链；19 完成补充调研；23 完成基建链；24 完成专精链；27 完成批准后的碎石与临期药及其评测场景；28 提供可运行的评测入口、预检和本票要求补齐的场景，没有它本票的模型验收无法执行。其余票经这些依赖传递纳入；25 的版本自动核对不属于 v0.1.0。
 
 ## 实现与交付约定
 
