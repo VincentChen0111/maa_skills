@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、11、13、14、15、21、24。当前可开始：08、09、16。
+当前已完成：01、02、03、04、05、06、07、11、13、14、15、21、24。当前可开始：08、09、16、27。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -37,11 +37,14 @@
 | 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 未开始 |
 | 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 已完成 |
 | 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 未开始 |
-| 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24 | 未开始 |
+| 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24、27 | 未开始 |
+| 27 | [批准后的碎石与临期药](27-approved-stone-expiring-medicine.md) | [#44](https://github.com/VincentChen0111/maa_skills/issues/44) | 03、05、06 | 未开始 |
 
 <!-- tracker:end -->
 
 26 条 GitHub Issues 均标记为 ready-for-agent；发布时设置了 39 条 GitHub 原生阻塞关系，与当时的本地票号对应。2026-11-11 本地去掉了 26 对 25 的依赖，现为 38 条；GitHub 上 #28 对 #27 的阻塞关系也已同步移除。
+
+2026-11-13 按维护者当日的决定新增 27（来源见规格「默认值及其来源」），并修订 10、16、17、25、26 的验收条件。27 的 GitHub Issue 为 #44；26 对 27 的阻塞关系，以及这五张票修订后的正文，需要同步到 GitHub。
 
 ## 用户故事覆盖
 
@@ -81,12 +84,12 @@
 | 30 | [05](05-daily-safe-config-write.md) |
 | 31 | [05](05-daily-safe-config-write.md) |
 | 32 | [15](15-stage-job-preparation.md)、[16](16-stage-run-tracking.md) |
-| 33 | [17](17-approved-alternate-jobs.md) |
+| 33 | [16](16-stage-run-tracking.md)、[17](17-approved-alternate-jobs.md) |
 | 34 | [16](16-stage-run-tracking.md)、[17](17-approved-alternate-jobs.md) |
 | 35 | [16](16-stage-run-tracking.md)、[17](17-approved-alternate-jobs.md) |
 | 36 | [24](24-mastery-training-schedule.md) |
-| 37 | [05](05-daily-safe-config-write.md)、[15](15-stage-job-preparation.md)、[23](23-apply-approved-base-plan.md)、[24](24-mastery-training-schedule.md) |
-| 38 | [05](05-daily-safe-config-write.md)、[17](17-approved-alternate-jobs.md) |
+| 37 | [05](05-daily-safe-config-write.md)、[15](15-stage-job-preparation.md)、[23](23-apply-approved-base-plan.md)、[24](24-mastery-training-schedule.md)、[27](27-approved-stone-expiring-medicine.md) |
+| 38 | [05](05-daily-safe-config-write.md)、[17](17-approved-alternate-jobs.md)、[27](27-approved-stone-expiring-medicine.md) |
 | 39 | [06](06-doctor-lock-recovery.md)、[10](10-doctor-checks-referral.md) |
 | 40 | [06](06-doctor-lock-recovery.md)、[10](10-doctor-checks-referral.md) |
 | 41 | [06](06-doctor-lock-recovery.md)、[10](10-doctor-checks-referral.md) |
@@ -101,7 +104,7 @@
 | 50 | [04](04-install-help-preferences.md) |
 | 51 | [04](04-install-help-preferences.md) |
 | 52 | [04](04-install-help-preferences.md) |
-| 53 | [05](05-daily-safe-config-write.md) |
+| 53 | [05](05-daily-safe-config-write.md)、[27](27-approved-stone-expiring-medicine.md) |
 | 54 | [05](05-daily-safe-config-write.md)、[09](09-manual-credentials.md) |
 | 55 | [02](02-repository-workflow.md) |
 | 56 | [25](25-maa-version-verification.md) |

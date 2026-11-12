@@ -28,6 +28,7 @@ MAA 的配置和回调行为会变化。只记录一个历史实测版本不足�
 
 - [ ] 依赖条目记录行为、对应源码位置/指纹、受影响 skill，以及源码已核和实机已核版本；仅存指纹和定位，不打包 MAA 源码。
 - [ ] 为当前已实现的配置、定时、回调等依赖登记证据，后续行为实现时补条目；不把起点版本的历史经验自动登记为本仓库已核。
+- [ ] 2026-11-13 新增：登记 [27](27-approved-stone-expiring-medicine.md) 依赖的 MAA 源码位置，27 尚未交付时由 27 实现时补上。条目包括 `FightTask.cs` 的 `UseStone`、`StoneCount`、`UseStoneAllowSave`、`UseExpiringMedicine`、`MedicineExpireDays`、`UseExpireMedicineForActivity` 字段和 `OnDeserialized` 对 `UseStone` 的重置；`FightTaskUserControlModel.cs` 里界面设置到 MaaCore 参数的换算；MaaCore `FightTask.cpp` 对 `medicine_expire_days`、`stone` 的处理和临期药 9999 的确认次数上限；`MedicineCounterTaskPlugin.cpp` 的临期药处理；界面的临期天数范围。
 - [ ] 每日检查正式版：全部条目未变才开 PR 添加源码已核版本；变化或条目缺失开 issue，列明受影响条目和 skill，不错误认证。
 - [ ] beta 变化开提前预警 issue，beta 不进入源码已核列表；相同版本/变化重复检查不会持续制造重复通知。
 - [ ] 把生成的核实记录接入 setup/doctor；正式版源码已核后提醒可升级，未核实版本只提醒不拒绝。
