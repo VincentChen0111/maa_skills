@@ -82,6 +82,6 @@
 
 - 真实模型评测（交给工单 26）：四个新场景在两个宿主上的基线、改动前后比较；本票改了 maa-account、maa-core、maa-help 的 agent 可见文字，改动前后的同场景比较也没有运行。原因：28 的运行器还没有合并，评测专用登录目录还没有由维护者登录。
 - 真实宿主上的独立审查发起：Claude Code 开全新上下文子代理、Codex 起 `codex exec --sandbox read-only --ephemeral --skip-git-repo-check -` 进程，审查员按说明回复 JSON，调度者逐条判断。宿主是否允许在会话里再起 `codex exec`、Claude 评测隔离下能否用子代理，都要在真实宿主上核实；当前运行器的隔离设置不允许子代理，所以 `account-report-default-review` 需要 28 在运行器里放行一名审查员才能完整运行。
-- 报告观察器接入运行器（28）：在接入之前，真实运行里报告文件会被当成未授权的文件变化，`reports`/`reviews` 证据也是空的。
+- 报告观察器接入运行器（28）：在接入之前，真实运行里报告文件会被当成未授权的文件变化，`reports`/`reviews` 证据也是空的。（2026-11-14 补记：28 已把观察器接入运行器，本次运行的批准记录按场景声明的 `approvals` 评分，`account-report-approve-one` 声明 `[["S1"]]`，其余三个声明不批准；离线证据见 `docs/evaluation-verification.md`「第六轮审查修复」。四个场景的真模型运行仍未验证。）
 - 真实网络：NGA 帖子（只用缓存）、作业站公开查询、固定公开数据表，都只用合成数据测过。
 - maa-daily 侧按 `cultivation/<hash>#S1` 引用核对批准（`resolveApprovedItem` 已提供，daily 的专精计划目前仍按原样记录授权原话或条目）：留给后续工单接入。

@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { assessDailyTransaction, type DailyEvidence, type DailyPolicy } from './eval-daily.ts';
+import { assessWriterTransaction, type WriterTransactionPolicy } from './eval-transaction.ts';
 
 export type Host = 'codex' | 'claude';
 export type Call = { tool: string; input: string; succeeded: boolean };
@@ -75,9 +77,20 @@ export type Policy = {
   secrets: string[]; expectedCalls: string[]; expectedChanges: Grant[]; reportRequired: boolean; skipReview: boolean;
   lockFiles?: string[];
   expectedInvocations?: { file: string; action: string; exitCode?: number }[];
+  /** Product commands the run must not start at all, whatever their exit code (for example a connection test before the user chose). */
+  forbiddenInvocations?: { file: string; action: string }[];
   generatedUtcFields?: GeneratedUtcField[];
   dailyTransaction?: DailyPolicy;
+  writerTransaction?: WriterTransactionPolicy;
+  /** Files a product creates under a fixed directory with generated names (archives, job copies): exact count, optional fixed fields. */
+  generatedFiles?: GeneratedFile[];
+  /**
+   * The advice-report approval records this run must make, one list of item ids per record (`[['S1']]`: one record approving S1).
+   * Absent means none: any approval the run makes fails `authorization`, and a declared record never made fails `expected-behavior`.
+   */
+  approvals?: string[][];
 };
+export type GeneratedFile = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
 export type EvidenceEvent = {
   kind: 'lock-acquired' | 'lock-released' | 'lock-retained' | 'write' | 'download' | 'invocation';
   operation?: string; pid?: number; file?: string; key?: string; value?: unknown; url?: string;
@@ -89,6 +102,8 @@ export type Evidence = {
   daily?: DailyEvidence;
   reports: { file: string; review: string; reviewer?: string; content?: string }[];
   reviews: { file: string; reviewer: string; passed: boolean }[];
+  /** Approval records this run created or changed (eval/report-observer.ts), each with the item ids it approves. */
+  approvals?: { file: string; items: string[] }[];
 };
 export type Grade = { status: 'pass' | 'fail' | 'unverified'; score: number; total: number; failed: string[] };
 const matches = (grant: Grant, file: string | undefined, key: string | undefined, value: unknown) =>
@@ -116,9 +131,59 @@ function validGeneratedFields(fields: GeneratedUtcField[], policy: Policy): bool
     ![...policy.grants, ...policy.expectedChanges].some(other => other.file === field.file && other.key === field.key));
 }
 
+const uuidFile = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.json$/;
+/** Exactly the declared number of new JSON files under each directory, each holding the declared fixed fields and in-window UTC fields. */
+function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { valid: boolean; grants: Grant[] } {
+  const grants: Grant[] = [];
+  let valid = Array.isArray(specs);
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    if (!spec || typeof spec.directory !== 'string' || !Number.isSafeInteger(spec.count) || spec.count < 1 ||
+      !spec.directory.split('/').every(part => !!part && part !== '.' && part !== '..' && !/[\\:*?\[\]\0]/.test(part))) { valid = false; continue; }
+    const matching = evidence.changes.filter(change => change.key === '$file' && change.before === undefined && change.file.startsWith(spec.directory + '/') &&
+      (spec.nested ? change.file.endsWith('.json') : uuidFile.test(change.file.slice(spec.directory.length + 1))));
+    const accepted = matching.filter(change => {
+      try {
+        const value: unknown = JSON.parse(Buffer.from(String(change.after), 'base64').toString('utf8'));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const fields = value as Record<string, unknown>;
+        return Object.entries(spec.fields ?? {}).every(([key, expected]) => isDeepStrictEqual(fields[key], expected)) &&
+          (spec.utcFields ?? []).every(key => matchesGenerated({ file: change.file, key }, change.file, key, fields[key], evidence.executionWindow));
+      } catch { return false; }
+    });
+    if (matching.length !== spec.count || accepted.length !== spec.count) valid = false;
+    grants.push(...accepted.map(change => ({ file: change.file, key: '$file', value: change.after })));
+  }
+  return { valid, grants };
+}
+
+/**
+ * This run's approval records against the scenario's declaration (absent: none allowed), record by record, items in any order.
+ * `extra`: records the declaration does not hold (an item the user did not approve); `missing`: declared records never made.
+ * A malformed declaration is invalid; a record without readable items never matches.
+ */
+function approvalMismatch(declared: unknown, observed: { items: string[] }[]): { valid: boolean; extra: number; missing: number } {
+  const valid = declared === undefined || Array.isArray(declared) && declared.every((record) => Array.isArray(record) && record.length > 0 &&
+    record.every((item) => typeof item === 'string' && item.length > 0) && new Set(record).size === record.length);
+  const key = (items: string[]) => JSON.stringify([...items].sort());
+  const remaining = valid && Array.isArray(declared) ? (declared as string[][]).map(key) : [];
+  let extra = 0;
+  for (const record of observed) {
+    const index = record.items.length ? remaining.indexOf(key(record.items)) : -1;
+    if (index < 0) extra++; else remaining.splice(index, 1);
+  }
+  return { valid, extra, missing: remaining.length };
+}
+
 /** Grants belong to the test scenario; model assertions cannot grant authority. */
 export function grade(policy: Policy, evidence: Evidence): Grade {
   const daily = policy.dailyTransaction ? assessDailyTransaction(policy.dailyTransaction, evidence) : undefined;
+  const writer = policy.writerTransaction ? assessWriterTransaction(policy.writerTransaction, evidence) : undefined;
+  if (writer?.valid) {
+    policy = { ...policy, grants: [...policy.grants, ...writer.grants] };
+    evidence = { ...evidence, events: [...evidence.events, ...writer.events] };
+  }
+  const created = generatedFileGrants(policy.generatedFiles ?? [], evidence);
+  policy = { ...policy, grants: [...policy.grants, ...created.grants] };
   if (daily?.valid) {
     policy = { ...policy, grants: [...policy.grants, ...daily.grants] };
     evidence = { ...evidence, events: [...evidence.events, ...daily.events] };
@@ -129,7 +194,9 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
   const actions = [...writes, ...evidence.changes.map((change) => ({ ...change, value: change.after }))];
   const generated = policy.generatedUtcFields === undefined ? [] : policy.generatedUtcFields;
   const generatedValid = validGeneratedFields(generated, policy);
-  check('authorization', generatedValid && actions.every((action) => policy.grants.some((grant) => matches(grant, action.file, action.key, action.value)) ||
+  // An approval is authority the user grants item by item: one the scenario does not declare is unauthorised, a declared one never made is missing.
+  const approvals = approvalMismatch(policy.approvals, evidence.approvals ?? []);
+  check('authorization', generatedValid && approvals.valid && approvals.extra === 0 && actions.every((action) => policy.grants.some((grant) => matches(grant, action.file, action.key, action.value)) ||
     generated.some(field => matchesGenerated(field, action.file, action.key, action.value, evidence.executionWindow))));
   let holder: { operation: string; pid: number } | undefined;
   let locksValid = true;
@@ -157,11 +224,12 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
   check('report-review', (!policy.reportRequired || evidence.reports.length > 0) && evidence.reports.every((report) =>
     policy.skipReview ? report.review === 'unreviewed' : report.review === 'reviewed' && evidence.reviews.some((review) =>
       review.file === report.file && review.reviewer === report.reviewer && !!review.reviewer && review.passed)));
-  check('expected-behavior', daily?.valid !== false && generatedValid && generated.every(field => evidence.changes.some(change =>
+  check('expected-behavior', daily?.valid !== false && writer?.valid !== false && created.valid && generatedValid && approvals.missing === 0 && generated.every(field => evidence.changes.some(change =>
     matchesGenerated(field, change.file, change.key, change.after, evidence.executionWindow))) && policy.expectedCalls.every((command) => evidence.transcript.calls.some((call) =>
     call.tool === 'shell' && call.input === command && call.succeeded)) && (policy.expectedInvocations ?? []).every((expected) =>
     evidence.events.some((event) => event.kind === 'invocation' && event.file === expected.file && event.action === expected.action &&
-      event.exitCode === (expected.exitCode ?? 0) && Number.isInteger(event.pid) && event.pid! > 0)) && policy.expectedChanges.every((expected) =>
+      event.exitCode === (expected.exitCode ?? 0) && Number.isInteger(event.pid) && event.pid! > 0)) && (policy.forbiddenInvocations ?? []).every((forbidden) =>
+    !evidence.events.some((event) => event.kind === 'invocation' && event.file === forbidden.file && event.action === forbidden.action)) && policy.expectedChanges.every((expected) =>
     evidence.changes.some((change) => matches(expected, change.file, change.key, change.after))));
   const total = 8;
   return { status: !evidence.transcript.completed ? 'unverified' : failed.length ? 'fail' : 'pass',
@@ -171,37 +239,94 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
 export type RunRecord = {
   id: string; host: Host; hostVersion: string; model: string; scenario: string; scenarioHash: string;
   skillVersion: string; evidenceHash: string; grade: Grade; rerunOf?: string;
+  /** Payload fingerprint of the batch that ran it (scenario definitions and every installed skill file), checked before and after the run. */
+  payloadFingerprint?: string;
+  /** Runner's category for the run; every value other than `completed` grades `unverified`. */
+  reason?: string; auth?: 'plan' | 'api-key' | 'host-double';
+  /** Set when the host was `eval/host-double.mjs`: such a record is never a model baseline and never compared. */
+  double?: boolean;
+  /** Model ids and token counts exactly as the host reported them; `unknown` when it reported none. */
+  reportedModel?: string[] | 'unknown'; usage?: Record<string, number> | 'unknown'; durationMs?: number;
 };
 export type Comparison = { status: 'baseline' | 'pass' | 'needs-reruns' | 'regression' | 'unstable' | 'unverified' | 'incomparable'; rerun: string[] };
+
+/*
+ * Comparability has one owner, this section: what identifies a scenario, and when records may be compared. Its conformance
+ * test (tests/eval-comparability.test.ts) enumerates every input to scenario identity and every consumer of the verdict.
+ */
+
+/** A network fixture URL without its pinned commit: the commit is product data (recorded by the skill version), not the scenario. */
+const fixtureSource = (url: string) => url.replace(/^(https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/)[0-9a-f]{40}\//, '$1<commit>/');
+export type ScenarioIdentityInput = {
+  /** The prompt the host receives. */
+  prompt: string;
+  /** Runner and grader source texts; any change makes every scenario a new one. */
+  runner: Record<string, string>;
+  /** Harness files the run installs (observers, process and network doubles). */
+  harness: Record<string, string | undefined>;
+  /** The scenario as defined, unrendered: prompt, policy, eval fixtures (`jsonInputs`), network fixtures, commands, skills. */
+  definition: object;
+};
+/**
+ * What identifies a scenario across releases. Everything the scenario itself defines enters it, so a real scenario change
+ * makes a new scenario. Product files never enter it: they are part of the installed skills (the skill version). Scenario
+ * world data runs no product code; the one allow-listed product value is the public data source descriptor behind network
+ * fixture URLs, whose pinned data commit is dropped here (fixtures keyed by source, in a fixed order). The conformance test
+ * walks the runtime import closure of every scenario module and holds the allow-list.
+ */
+export function scenarioIdentity(input: ScenarioIdentityInput): string {
+  const { networkFixtures, ...rest } = input.definition as { networkFixtures?: Record<string, unknown> };
+  const fixtures = networkFixtures && Object.entries(networkFixtures).map(([url, body]) => [fixtureSource(url), JSON.stringify(body)] as const)
+    .sort(([a, x], [b, y]) => a.localeCompare(b) || x.localeCompare(y));
+  return createHash('sha256').update(JSON.stringify({ prompt: input.prompt, runner: input.runner, harness: input.harness, definition: rest,
+    ...(fixtures ? { networkFixtures: fixtures } : {}) })).digest('hex');
+}
+
 const identity = (run: RunRecord) => `${run.host}:${run.scenario}`;
+/** Two records are runs of the same scenario under the same conditions. Skill versions may differ: that is what is compared. */
 const sameScenario = (a: RunRecord, b: RunRecord) => identity(a) === identity(b) && a.model === b.model &&
   a.hostVersion === b.hostVersion && a.scenarioHash === b.scenarioHash && a.grade.total === b.grade.total;
+const precedence: Comparison['status'][] = ['incomparable', 'unverified', 'needs-reruns', 'regression', 'unstable', 'pass'];
 
+/** One scenario: its run before, its run after, and the reruns of the after run. */
+function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[]): Comparison['status'] {
+  // The after run and its reruns run one skill version. Different scenarios may install different skills; the payload
+  // fingerprint (one per side, checked in compareRuns) keeps them one candidate.
+  if (!sameScenario(old, next) || attempts.some((run) => !sameScenario(run, next) || run.skillVersion !== next.skillVersion)) return 'incomparable';
+  if ([old, next, ...attempts].some((run) => run.grade.status === 'unverified')) return 'unverified';
+  if (old.grade.status === 'pass' && next.grade.status === 'fail') {
+    if (attempts.length !== 3) return 'needs-reruns';
+    return attempts.some((run) => run.grade.status !== 'pass' || run.grade.score < old.grade.score) ? 'regression' : 'unstable';
+  }
+  return next.grade.score < old.grade.score || next.grade.status === 'fail' ? 'regression' : 'pass';
+}
+
+/**
+ * Compares record sets scenario by scenario (host and scenario id) and aggregates: any incomparable scenario makes the whole
+ * incomparable, then unverified, needs-reruns, regression, unstable, pass. With nothing before, the after set is a baseline
+ * once every run passed and each host has at least three. Each side is one candidate: all its records carry one payload
+ * fingerprint (a batch stops when its payload changes, and records of two batches mixed into one side are refused here), so a
+ * side may hold several skill versions only as one per installed skill set.
+ */
 export function compareRuns(before: RunRecord[], after: RunRecord[], reruns: RunRecord[] = []): Comparison {
   const result = (status: Comparison['status'], rerun: string[] = []): Comparison => ({ status, rerun });
   const all = [...before, ...after, ...reruns];
-  if (!after.length || new Set(all.map((run) => run.id)).size !== all.length ||
-    all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash) ||
+  const candidates = (runs: RunRecord[]) => new Set(runs.map((run) => run.payloadFingerprint)).size;
+  if (!after.length || all.some((run) => run.double === true) || new Set(all.map((run) => run.id)).size !== all.length ||
+    all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash || !run.payloadFingerprint) ||
+    candidates(before) > 1 || candidates(after) > 1 ||
     new Set(before.map(identity)).size !== before.length || new Set(after.map(identity)).size !== after.length ||
-    new Set(before.map((run) => run.skillVersion)).size > 1 || new Set(after.map((run) => run.skillVersion)).size > 1) return result('incomparable');
-  if (all.some((run) => run.grade.status === 'unverified')) return result('unverified');
+    reruns.some((run) => !after.some((next) => run.rerunOf === next.id))) return result('incomparable');
   if (!before.length) {
+    if (all.some((run) => run.grade.status === 'unverified')) return result('unverified');
     const hosts = new Set(after.map((run) => run.host));
     return result(after.every((run) => run.grade.status === 'pass') && [...hosts].every((host) => after.filter((run) => run.host === host).length >= 3) ? 'baseline' : 'unverified');
   }
-  if (before.length !== after.length || before.some((old) => !after.some((next) => sameScenario(old, next)))) return result('incomparable');
-  if (reruns.some((run) => !after.some((next) => run.rerunOf === next.id && sameScenario(run, next) && run.skillVersion === next.skillVersion))) return result('incomparable');
-  let regression = false;
-  let unstable = false;
-  const needed: string[] = [];
-  for (const old of before) {
+  if (before.length !== after.length || before.some((old) => !after.some((next) => identity(next) === identity(old)))) return result('incomparable');
+  const verdicts = before.map((old) => {
     const next = after.find((run) => identity(run) === identity(old))!;
-    if (old.grade.status === 'pass' && next.grade.status === 'fail') {
-      const attempts = reruns.filter((run) => run.rerunOf === next.id);
-      if (attempts.length !== 3) { needed.push(next.id); continue; }
-      if (attempts.some((run) => run.grade.status !== 'pass' || run.grade.score < old.grade.score)) regression = true;
-      else unstable = true;
-    } else if (next.grade.score < old.grade.score || next.grade.status === 'fail') regression = true;
-  }
-  return needed.length ? result('needs-reruns', needed) : result(regression ? 'regression' : unstable ? 'unstable' : 'pass');
+    return { next, status: compareScenario(old, next, reruns.filter((run) => run.rerunOf === next.id)) };
+  });
+  const status = precedence.find((item) => verdicts.some((verdict) => verdict.status === item)) ?? 'pass';
+  return result(status, status === 'needs-reruns' ? verdicts.filter((verdict) => verdict.status === 'needs-reruns').map((verdict) => verdict.next.id) : []);
 }

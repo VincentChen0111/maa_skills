@@ -4,14 +4,14 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, readdir, writeFile, mkdir, realpath, rm } from 'node:fs/promises';
-import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
+import { createFixture, collectEvidence, renderPolicy } from '../scripts/eval-fixture.ts';
 import { runScenario } from '../scripts/eval-run.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { setupScenarios } from '../eval/maa-setup/scenarios.ts';
 import { runSetupSmoke } from '../scripts/setup-smoke.ts';
 
 test('setup scenarios observe installed check and preference CLI behavior in both native layouts', async (t) => {
-  for (const host of ['.agents', '.claude']) for (const scenario of setupScenarios) await t.test(`${host} ${scenario.id}`, async t => {
+  for (const host of ['.agents', '.claude']) for (const scenario of setupScenarios.filter((item) => !item.setupBoundary)) await t.test(`${host} ${scenario.id}`, async t => {
     const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-setup', import.meta.url)),
       companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) }, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
     t.after(() => fixture.dispose());
@@ -130,4 +130,64 @@ test('the public native smoke validates first settings and connection writes wit
   assert.equal(result.status, 'pass'); assert.equal(result.realDevice, false); assert.equal(result.transactionHost, 'claude');
   const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
   assert.deepEqual(evidence.changes, []);
+});
+
+test('connection write and multiple-candidate scenarios grade the real setup CLI behind the adb and MAA process boundary', { skip: process.platform !== 'win32' }, async (t) => {
+  for (const host of ['.agents', '.claude']) for (const id of ['setup-connection-write', 'setup-multiple-candidates']) await t.test(`${host} ${id}`, async (t) => {
+    const scenario = setupScenarios.find((item) => item.id === id)!;
+    const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-setup', import.meta.url)), setupBoundary: true,
+      companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) }, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
+    t.after(() => fixture.dispose());
+    const startedAt = new Date().toISOString();
+    const call = (script: string, action: string, input: unknown) => {
+      const result = spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts', script), action, ...(script === 'setup.ts' ? ['--json'] : [])],
+        { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, result.stdout + result.stderr); return JSON.parse(result.stdout);
+    };
+    call('preferences.ts', 'read', { currentLanguage: 'en' }); call('setup.ts', 'check', {});
+    const adbPaths = [join(fixture.workspace, 'synthetic-adb.exe')];
+    if (id === 'setup-multiple-candidates') {
+      const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'] });
+      assert.equal(found.requiresSelection, true); assert.equal(found.candidates.length, 2);
+    } else {
+      const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555'] });
+      const selection = { adbPaths, addresses: ['127.0.0.1:5555'], discoveryRevision: found.discoveryRevision, candidate: found.candidates[0].id };
+      assert.equal(call('setup.ts', 'test', selection).status, 'connected');
+      assert.equal(call('setup.ts', 'apply', { ...selection, host: host === '.claude' ? 'claude' : 'codex', reference: '保存这个 adb 连接', closedConfirmed: true }).status, 'complete');
+    }
+    const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+    evidence.executionWindow = { startedAt, endedAt: new Date().toISOString() };
+    const policy = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets }, fixture.workspace);
+    assert.equal(grade(policy, evidence).status, 'pass', JSON.stringify(grade(policy, evidence)));
+    if (id === 'setup-connection-write') {
+      // Another reference or another address is not the approved transaction.
+      const other = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets, writerTransaction: { ...scenario.policy.writerTransaction!, reference: 'another request' } }, fixture.workspace);
+      assert.equal(grade(other, evidence).status, 'fail');
+      // The pending record carries the writer's version stamp (ticket 25), graded as the reminder grader does
+      // (scripts/eval-daily.ts): the synthetic MAA has no readable version, so a guessed version, a missing or malformed
+      // stamp or an extra field fails.
+      const pendingChange = evidence.changes.find((change) => change.file === 'private/daily-pending.jsonl')!;
+      const text = (value: unknown) => value === undefined ? '' : Buffer.from(value as string, 'base64').toString('utf8');
+      const old = text(pendingChange.before);
+      const written = JSON.parse(text(pendingChange.after).slice(old.length));
+      assert.equal(Object.keys(written).at(-1), 'versions'); assert.equal(written.versions.maaVersion, null);
+      for (const [name, versions] of [['guessed version', { ...written.versions, maaVersion: '6.22.0' }], ['missing stamp', undefined],
+        ['zero record version', { ...written.versions, recordVersion: 0 }], ['extra field', { ...written.versions, note: 'x' }]] as const) {
+        const { versions: _versions, ...rest } = written;
+        const after = Buffer.from(old + JSON.stringify(versions === undefined ? rest : { ...rest, versions }) + '\n').toString('base64');
+        const tampered = { ...evidence, changes: evidence.changes.map((change) => change === pendingChange ? { ...change, after } : change) };
+        assert.equal(grade(policy, tampered).status, 'fail', name);
+      }
+    } else {
+      // Counter-example: picking a candidate for the user and testing it connects to a device the user has not chosen.
+      const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'] });
+      // Whatever the connection test answers, the invocation itself is the failure.
+      spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts/setup.ts'), 'test', '--json'], { cwd: fixture.workspace, env: fixture.env, windowsHide: true,
+        input: JSON.stringify({ adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'], discoveryRevision: found.discoveryRevision, candidate: found.candidates[0].id }) });
+      const picked = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+      picked.executionWindow = { startedAt, endedAt: new Date().toISOString() };
+      const result = grade(policy, picked);
+      assert.equal(result.status, 'fail'); assert.ok(result.failed.includes('expected-behavior'), JSON.stringify(result));
+    }
+  });
 });

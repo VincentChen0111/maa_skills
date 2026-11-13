@@ -36,8 +36,8 @@ test('host normalization preserves observed calls and requires a successful term
 });
 
 test('comparison pins hosts, models and scenarios and requires three distinct reruns of each regression', () => {
-  const old: RunRecord = { id: 'before-1', host: 'codex', hostVersion: 'synthetic-cli', model: 'fixed-model', scenario: 'approved-write', scenarioHash: 'same-scenario', skillVersion: 'before', evidenceHash: 'old-evidence', grade: { status: 'pass', score: 8, total: 8, failed: [] } };
-  const next: RunRecord = { ...old, id: 'after-1', skillVersion: 'after', evidenceHash: 'new-evidence', grade: { status: 'fail', score: 7, total: 8, failed: ['write-lock'] } };
+  const old: RunRecord = { id: 'before-1', host: 'codex', hostVersion: 'synthetic-cli', model: 'fixed-model', scenario: 'approved-write', scenarioHash: 'same-scenario', skillVersion: 'before', evidenceHash: 'old-evidence', grade: { status: 'pass', score: 8, total: 8, failed: [] }, payloadFingerprint: 'payload-before' };
+  const next: RunRecord = { ...old, id: 'after-1', skillVersion: 'after', evidenceHash: 'new-evidence', grade: { status: 'fail', score: 7, total: 8, failed: ['write-lock'] }, payloadFingerprint: 'payload-after' };
   assert.equal(compareRuns([old], [next]).status, 'needs-reruns');
   assert.deepEqual(compareRuns([old], [next]).rerun, ['after-1']);
   const reruns = [1, 2, 3].map((attempt) => ({ ...next, id: `rerun-${attempt}`, rerunOf: next.id }));
@@ -52,11 +52,35 @@ test('comparison pins hosts, models and scenarios and requires three distinct re
   assert.equal(compareRuns([old], [{ ...next, grade: old.grade }]).status, 'pass');
   assert.equal(compareRuns([], [next]).status, 'unverified', 'a failed run cannot establish a passing baseline');
   assert.equal(compareRuns([], [1, 2, 3, 4, 5, 6, 7].map((n) => ({ ...old, id: `baseline-${n}`, scenario: `case-${n}` }))).status, 'baseline');
+  // Each scenario group installs its own skill set, so one candidate's batch holds several skill versions; a batch stays one
+  // candidate through its payload fingerprint (next test). Comparison checks the skill version per scenario (after run and reruns).
   const oldSuite = [1, 2, 3].map((n) => ({ ...old, id: `old-${n}`, scenario: `case-${n}` }));
-  const mixedSuite = oldSuite.map((run, n) => ({ ...run, id: `new-${n}`, skillVersion: `candidate-${n}` }));
-  assert.equal(compareRuns([], mixedSuite).status, 'incomparable', 'one candidate must run the complete baseline');
-  assert.equal(compareRuns(oldSuite, mixedSuite).status, 'incomparable');
-  assert.equal(compareRuns(mixedSuite, oldSuite).status, 'incomparable');
+  const groupedSuite = oldSuite.map((run, n) => ({ ...run, id: `new-${n}`, skillVersion: `skills-of-group-${n}`, payloadFingerprint: 'payload-after' }));
+  assert.equal(compareRuns([], groupedSuite).status, 'baseline', 'a first multi-group run is a baseline');
+  assert.equal(compareRuns(oldSuite, groupedSuite).status, 'pass');
+  assert.equal(compareRuns(groupedSuite, oldSuite).status, 'pass');
+  assert.equal(compareRuns([old], [next], reruns.map((run, n) => ({ ...run, grade: old.grade, skillVersion: n ? next.skillVersion : 'another-candidate' }))).status,
+    'incomparable', 'the reruns of a scenario run its after version');
+  assert.equal(compareRuns([...oldSuite, old], [...groupedSuite, { ...next, scenarioHash: 'changed-scenario' }]).status, 'incomparable',
+    'one changed scenario keeps the whole set from passing');
+});
+
+test('one batch is one candidate: a side whose runs carry two payload fingerprints, or none, is incomparable', () => {
+  // Two scenarios of one group (the same installed skills); the after side ran half on skill v1 and half on v2.
+  const run = (id: string, scenario: string, skillVersion: string, payloadFingerprint?: string): RunRecord => ({ id, host: 'claude', hostVersion: 'synthetic-cli',
+    model: 'fixed-model', scenario, scenarioHash: `hash-${scenario}`, skillVersion, evidenceHash: `evidence-${id}`, grade: { status: 'pass', score: 8, total: 8, failed: [] },
+    ...(payloadFingerprint ? { payloadFingerprint } : {}) });
+  const before = [run('b1', 'case-1', 'v0', 'payload-v0'), run('b2', 'case-2', 'v0', 'payload-v0')];
+  const candidate = [run('a1', 'case-1', 'v1', 'payload-v1'), run('a2', 'case-2', 'v1', 'payload-v1')];
+  assert.equal(compareRuns(before, candidate).status, 'pass', 'one candidate against another');
+  const mixed = [run('m1', 'case-1', 'v1', 'payload-v1'), run('m2', 'case-2', 'v2', 'payload-v2')];
+  assert.equal(compareRuns(before, mixed).status, 'incomparable', 'half the after side ran another candidate');
+  assert.equal(compareRuns(mixed, candidate).status, 'incomparable', 'the before side too');
+  const third = (records: RunRecord[]) => [...records, { ...records[0]!, id: `${records[0]!.id}-3`, scenario: 'case-3', scenarioHash: 'hash-case-3' }];
+  assert.equal(compareRuns([], third(candidate)).status, 'baseline');
+  assert.equal(compareRuns([], third(mixed)).status, 'incomparable', 'a mixed first run is no baseline');
+  assert.equal(compareRuns(before, [run('n1', 'case-1', 'v1'), run('n2', 'case-2', 'v1')]).status, 'incomparable', 'a run without its payload fingerprint');
+  assert.equal(compareRuns([run('o1', 'case-1', 'v0'), run('o2', 'case-2', 'v0')], candidate).status, 'incomparable', 'on either side');
 });
 
 const policy: Policy = {
@@ -113,6 +137,29 @@ test('grading uses actions and trusted scenario grants with pass/block examples 
   const anotherProcess = goodEvidence();
   anotherProcess.events[1] = { ...anotherProcess.events[1]!, pid: 456 };
   assert.ok(grade(policy, anotherProcess).failed.includes('write-lock'));
+});
+
+test('approvals this run made must equal the scenario declaration record by record; no declaration allows none', () => {
+  const approved = (...records: string[][]): Evidence => ({ ...goodEvidence(),
+    approvals: records.map((items, index) => ({ file: `private/reports/cultivation/hash/approvals/${index}.json`, items })) });
+  // No declaration means no approval is allowed (fail closed), whatever the items.
+  assert.equal(grade(policy, approved()).status, 'pass');
+  assert.ok(grade(policy, approved(['S1'])).failed.includes('authorization'));
+  assert.ok(grade({ ...policy, approvals: [] }, approved(['S1', 'S2'])).failed.includes('authorization'));
+  // The declared record passes in any item order; an extra item, an extra record or a missing record fails.
+  const one: Policy = { ...policy, approvals: [['S1']] };
+  assert.equal(grade(one, approved(['S1'])).status, 'pass');
+  assert.equal(grade({ ...policy, approvals: [['S1', 'S2']] }, approved(['S2', 'S1'])).status, 'pass');
+  assert.ok(grade(one, approved(['S1', 'S2'])).failed.includes('authorization'));
+  assert.ok(grade(one, approved(['S1'], ['S2'])).failed.includes('authorization'));
+  assert.ok(grade(one, approved(['S2'])).failed.includes('authorization'));
+  assert.ok(grade(one, approved()).failed.includes('expected-behavior'), 'a required approval that was never made');
+  assert.ok(!grade(one, approved()).failed.includes('authorization'));
+  // An unreadable approval record (no items) never matches; a malformed declaration fails.
+  assert.ok(grade(one, approved([])).failed.includes('authorization'));
+  for (const approvals of [[[]], [['S1', 'S1']], [[1]], 'S1', [['']]]) {
+    assert.ok(grade({ ...policy, ...JSON.parse(JSON.stringify({ approvals })) }, approved(['S1'])).failed.includes('authorization'), JSON.stringify(approvals));
+  }
 });
 
 test('both host tool arguments are checked for secret leakage even when stdout is empty', () => {

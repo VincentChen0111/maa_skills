@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseMaaSnapshot } from '../../skills/maa-core/scripts/account-snapshot.ts';
+import type { AccountSnapshot } from '../../skills/maa-core/scripts/account-snapshot.ts';
 import { planTableSources } from '../../skills/maa-core/scripts/base-plan.ts';
 
 // Synthetic operators, skills, rooms and MAA name table for the base plan tests (ticket 22). No real roster or
@@ -53,9 +53,16 @@ export function planNetworkFixtures(): Record<string, unknown> {
   const tables = planTables();
   return Object.fromEntries(Object.entries(planTableSources).map(([key, source]) => [raw(source), tables[key as keyof typeof tables]]));
 }
-export function planSnapshot(exclude: string[] = ['char_ghost', 'char_dup_a']) {
-  return parseMaaSnapshot(JSON.stringify({ taskchain: 'OperBox', what: 'OperBoxInfo', details: { done: true,
-    own_opers: roster.filter(([id]) => !exclude.includes(id)).map(([id, name]) => ({ id, name, own: true, elite: 2, level: 1, potential: 1, rarity: 5 })) } }), '2026-11-13T00:00:00.000Z');
+/**
+ * The saved account snapshot of an OperBox import on 2026-11-13 that owns the roster minus `exclude` (every operator at elite 2,
+ * level 1, potential 1, 5 stars), written as a fixed literal shape: scenario world data never runs product code, so a parsing
+ * change cannot change the scenarios that save it. It is what `parseMaaSnapshot` returned for that import at commit 996599a.
+ */
+export function planSnapshot(exclude: string[] = ['char_ghost', 'char_dup_a']): AccountSnapshot {
+  return { version: 1, source: 'maa', readAt: '2026-11-13T00:00:00.000Z',
+    operators: roster.filter(([id]) => !exclude.includes(id)).map(([id, name]) => ({ id, name, rarity: 5, elite: 2, level: 1, potential: 1, skillLevel: null, mastery: null, modules: null })),
+    items: {}, lmd: null, base: null, sourceTimes: { operators: null, inventory: null },
+    coverage: { operators: { status: 'complete', issues: [] }, inventory: { status: 'missing', issues: [] }, base: { status: 'unavailable', issues: ['not-provided-by-recognition'] } } };
 }
 /** A synthetic MAA battle_data.json: the name table MAA matches infrastructure names against. */
 export function nameTable() {

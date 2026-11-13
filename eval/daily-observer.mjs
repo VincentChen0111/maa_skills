@@ -7,14 +7,19 @@ import { pathToFileURL } from 'node:url';
 const actions = [];
 export function observeProcess(action, state) { actions.push({ kind: 'process', action, state }); }
 
-export function observeDaily(workspace, file) {
-  const startedAt = new Date().toISOString();
+/** Replaces only the documented MAA process boundary of the entry script with the synthetic one in the workspace. */
+export function redirectMaaProcess(workspace) {
   const entry = realpathSync(process.argv[1]);
   const boundary = new URL('./maa-process.ts', pathToFileURL(entry)).href;
   registerHooks({ resolve(specifier, context, nextResolve) {
     const result = nextResolve(specifier, context);
     return result.url === boundary ? { url: pathToFileURL(join(workspace, '.eval-maa-process.mjs')).href, shortCircuit: true } : result;
   } });
+}
+
+export function observeDaily(workspace, file) {
+  const startedAt = new Date().toISOString();
+  redirectMaaProcess(workspace);
   // Observe completed real filesystem operations. No filesystem operation is replaced by a fake.
   const { readFile, open, rename, appendFile, unlink } = promises;
   const config = join(workspace, 'config/gui.new.json');

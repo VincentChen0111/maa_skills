@@ -4,11 +4,15 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { readFileSync, realpathSync } from 'node:fs';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
 export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure';
-export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown> };
+export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode;
+  networkFixtures?: Record<string, unknown>; setupBoundary?: boolean };
+/** Bookkeeping files of the trusted boundaries; they are not product effects and never enter the file differences. */
+const setupBoundaryFiles = ['.setup-boundary.jsonl', '.setup-maa-running'];
 
 async function files(root: string, directory = ''): Promise<Map<string, Buffer>> {
   const result = new Map<string, Buffer>();
@@ -21,12 +25,15 @@ async function files(root: string, directory = ''): Promise<Map<string, Buffer>>
   return result;
 }
 
+/** Every fixture root is `<temporary directory>/<fixturePrefix><six generated characters>`; redaction covers any of them. */
+export const fixturePrefix = 'maa-evaluation-';
+
 export async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   for (const url of Object.keys(options.networkFixtures ?? {})) {
     if (!/^https:\/\/raw\.githubusercontent\.com\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[a-f0-9]{40}\/[A-Za-z0-9][A-Za-z0-9._/-]*\.json$/.test(url)
       || url.split('/').slice(6).some(part => !part || part === '.' || part === '..')) throw new Error('network-fixture-url');
   }
-  const root = await mkdtemp(join(tmpdir(), 'maa-evaluation-'));
+  const root = await mkdtemp(join(tmpdir(), fixturePrefix));
   const workspace = join(root, 'workspace');
   const home = join(root, 'home');
   try {
@@ -64,12 +71,19 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       env.NODE_OPTIONS = `--import=${pathToFileURL(observer).href}`;
     }
     if (options.maaProcess) {
-      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !sources.subject || !sources['maa-core']) throw new Error('daily-process-fixture');
+      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !(sources.subject || sources['maa-daily']) || !sources['maa-core']) throw new Error('daily-process-fixture');
       for (const [source, target] of [['daily-observer.mjs', '.eval-daily-observer.mjs'], ['maa-process.mjs', '.eval-maa-process.mjs']]) {
         await writeFile(join(workspace, target!), await readFile(new URL('../eval/' + source, import.meta.url)));
       }
       env.MAA_EVAL_MAA_PROCESS = options.maaProcess;
       env.MAA_EVAL_DAILY_JOURNAL = join(workspace, '.eval-daily-observations.jsonl');
+    }
+    if (options.setupBoundary) {
+      if (!sources['maa-core']) throw new Error('setup-boundary-fixture');
+      const loader = join(workspace, '.eval-setup-boundary.mjs');
+      await writeFile(loader, await readFile(new URL('../eval/setup-boundary.mjs', import.meta.url)));
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(loader).href}`.trim();
+      env.MAA_EVAL_SETUP_BOUNDARY = '1';
     }
     for (const [file, value] of Object.entries(options.jsonInputs ?? {})) {
       const target = resolve(workspace, file);
@@ -101,6 +115,7 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
   for (const file of new Set([...fixture.original.keys(), ...current.keys()])) {
     if (file === 'events.jsonl') continue;
     if (fixture.env.MAA_EVAL_MAA_PROCESS && file === '.eval-daily-observations.jsonl') continue;
+    if (fixture.env.MAA_EVAL_SETUP_BOUNDARY && setupBoundaryFiles.includes(file)) continue;
     const before = fixture.original.get(file);
     const after = current.get(file);
     if (before && after && before.equals(after)) continue;
@@ -138,4 +153,29 @@ function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefi
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.hasOwn(value, '$exists') || Object.hasOwn(value, '$file')) return undefined;
     return value as Record<string, unknown>;
   } catch { return undefined; }
+}
+
+/**
+ * Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`, the version of the maa-core
+ * copy installed in this workspace as `{{maa-core-version}}`, and the version of that copy's packaged MAA verification record
+ * (`references/verified-versions.json`, ticket 25) as `{{maa-record-version}}`; all are rendered before the host starts and before
+ * grading, so the scenario definition holds neither this run's path nor a product value (a release that only bumps either
+ * version keeps the scenario). Without a readable installed value the placeholder stays as it is and the grant cannot match.
+ */
+export function renderPolicy<T>(value: T, workspace: string): T {
+  const root = realpathSync.native(workspace);
+  const installed = new Map<string, unknown>();
+  const read = (placeholder: string, file: string, field: string, valid: (found: unknown) => boolean) => {
+    if (!installed.has(placeholder)) {
+      let found: unknown;
+      try { found = (JSON.parse(readFileSync(join(root, '.agents/skills/maa-core', file), 'utf8')) as Record<string, unknown>)[field]; } catch { /* unreadable */ }
+      installed.set(placeholder, valid(found) ? found : placeholder);
+    }
+    return installed.get(placeholder);
+  };
+  return JSON.parse(JSON.stringify(value), (_key, item: unknown) => typeof item !== 'string' ? item
+    : item.startsWith('{{workspace}}') ? join(root, item.slice('{{workspace}}'.length))
+    : item === '{{maa-core-version}}' ? read(item, 'package.json', 'version', (found) => typeof found === 'string' && !!found)
+    : item === '{{maa-record-version}}' ? read(item, 'references/verified-versions.json', 'recordVersion', (found) => Number.isSafeInteger(found) && (found as number) >= 1)
+    : item);
 }

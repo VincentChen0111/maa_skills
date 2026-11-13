@@ -1,5 +1,4 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { cacheKey } from '../../skills/maa-core/scripts/research.ts';
 
 // NGA research scenarios for maa-account. None of them can reach the network: the fixture has no NGA
 // credential, so the reader sends nothing; cached data and a recorded stop are plain synthetic files.
@@ -9,10 +8,16 @@ const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'pay
 const commands = ['node *preferences.ts read*', 'node *credentials.ts check*', 'node *nga.ts search*', 'node *nga.ts read*', 'node *nga.ts status*'];
 const read = { file: 'maa-core/scripts/preferences.ts', action: 'read' };
 
+/**
+ * The cache key of page 1 of thread 7, as a fixed literal: scenario world data runs no product code, so a change to the key
+ * scheme cannot change the scenario. It is research.ts `cacheKey({ source: 'nga', kind: 'thread', thread: 7, page: 1 })` as
+ * of 2026-11-14; the cached-citation scenario test fails if the installed reader no longer finds the page under it.
+ */
+const threadKey = '459292895ab62f8797b2dbf21110c46b1af108749d09a4519e87f976bed0cd47';
 /** A cached thread page as the reader stores it; it never expires within an evaluation. */
-export const cachedThreadFile = `private/research/nga/cache/${cacheKey({ source: 'nga', kind: 'thread', thread: 7, page: 1 })}.json`;
+export const cachedThreadFile = `private/research/nga/cache/${threadKey}.json`;
 export const cachedThread = {
-  schemaVersion: 1, key: cacheKey({ source: 'nga', kind: 'thread', thread: 7, page: 1 }), storedAt: '2026-11-13T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z',
+  schemaVersion: 1, key: threadKey, storedAt: '2026-11-13T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z',
   value: { tid: 7, page: 1, title: '合成干员培养讨论', totalPages: 1, posts: [
     { floor: 0, author: '合成作者甲', authorStatus: 'known', publishedAt: '2026-05-29T04:26:40+08:00', timeAssumed: false,
       text: '合成干员建议先专精二技能，三级专精后循环更稳；一技能专精收益小，可以放后面。', textTruncated: false, quotesRemoved: false },

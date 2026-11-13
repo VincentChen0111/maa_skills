@@ -29,7 +29,7 @@
 
 `recovery.versions` 比较待执行记录写下的 MAA 版本和核实记录版本与当前的值：`state` 为 same、changed（`changed` 列出变了的一项或两项）、unknown（某一边读不出）或 unrecorded（25 之前写的记录没有版本），没有可核对的待执行记录时为 null。`repair` 的结果带同一个 `versions`。差异只向用户报告，不阻止修法，也不计入 `evidenceRevision`；待执行记录里版本字段格式不对时，该事务不能自动恢复。
 
-通过标准输入向 `repair --json` 传 JSON：
+通过标准输入向 `doctor.ts repair --json` 传 JSON：
 
 ```json
 {

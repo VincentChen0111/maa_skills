@@ -1,5 +1,4 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { cacheKey } from '../../skills/maa-core/scripts/research.ts';
 
 // Skland community and experimental Bilibili research scenarios for maa-account. None of them can reach a real
 // service: the Bilibili video and subtitles are cached until 2099; the Skland scenarios either stop before any
@@ -15,8 +14,15 @@ const read = { file: 'maa-core/scripts/preferences.ts', action: 'read' };
 
 export const bilibiliVideoId = 'BV1Sy4y1x7Kt';
 const entry = (key: string, value: unknown) => ({ schemaVersion: 1, key, storedAt: '2026-11-13T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z', value });
-const videoKey = cacheKey({ source: 'bilibili', kind: 'video', id: bilibiliVideoId });
-const subtitleKey = cacheKey({ source: 'bilibili', kind: 'subtitles', id: bilibiliVideoId, part: 1 });
+/**
+ * The cache keys of the world's cached entries, as fixed literals: scenario world data runs no product code, so a change to the
+ * key scheme cannot change the scenarios. They are research.ts `cacheKey` of `{ source: 'bilibili', kind: 'video', id }`,
+ * `{ source: 'bilibili', kind: 'subtitles', id, part: 1 }` and `{ source: 'skland-community', kind: 'post', post }` for this video
+ * and post as of 2026-11-14 (commit bd3b3e6); the community scenario test fails if the installed readers no longer use them.
+ */
+const videoKey = 'bbbe90744d89eefe558eb0f42567449612ca9aed1ae8fa8dde504eeca9922ae5';
+const subtitleKey = 'd65b2cc62f3bf4cd87cbb03c449e63e0ca7afb2f185c500168988b7054381e58';
+const postKey = 'da5c728c97bb5a976c3decc7fd9f3fa281d68ee35c5924f2140e76bf2a1c8fcf';
 /** A cached video and its machine subtitles as the reader stores them. */
 export const cachedBilibili = {
   [`private/research/bilibili/cache/${videoKey}.json`]: entry(videoKey, { bvid: bilibiliVideoId, aid: 9001, title: '合成干员专精推荐', author: '合成UP主',
@@ -44,7 +50,6 @@ function savedToken(value: string) {
 }
 const gateFile = 'private/research/skland-community/gate.json';
 const statusFile = 'private/credentials/skland.status.json';
-const postKey = cacheKey({ source: 'skland-community', kind: 'post', post: sklandPost });
 const postFile = `private/research/skland-community/cache/${postKey}.json`;
 /** What the reader stores for the synthetic post: title, author nickname, time and cleaned text, never the author's account id. */
 export const sklandStoredPost = { id: sklandPost, title: '合成干员培养心得', author: '合成博士', publishedAt: '2026-05-29T04:26:40+08:00',
