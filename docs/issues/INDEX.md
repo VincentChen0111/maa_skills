@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、09、11、13、14、15、16、17、18、21、24、29。当前可开始：08、10、12、19、20、27、28、30。
+当前已完成：01、02、03、04、05、06、07、09、11、12、13、14、15、16、17、18、21、24、29。当前可开始：08、10、19、20、27、28、30。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -23,7 +23,7 @@
 | 09 | [用户手动设置凭据](09-manual-credentials.md) | [#11](https://github.com/VincentChen0111/maa_skills/issues/11) | 07 | 已完成 |
 | 10 | [doctor 完整检查与转介](10-doctor-checks-referral.md) | [#12](https://github.com/VincentChen0111/maa_skills/issues/12) | 09 | 未开始 |
 | 11 | [MAA 识别结果转账号快照](11-maa-account-snapshot.md) | [#13](https://github.com/VincentChen0111/maa_skills/issues/13) | 04 | 已完成 |
-| 12 | [森空岛账号快照](12-skland-account-snapshot.md) | [#14](https://github.com/VincentChen0111/maa_skills/issues/14) | 09、11 | 未开始 |
+| 12 | [森空岛账号快照](12-skland-account-snapshot.md) | [#14](https://github.com/VincentChen0111/maa_skills/issues/14) | 09、11 | 已完成 |
 | 13 | [单干员培养成本查询](13-operator-cost-query.md) | [#15](https://github.com/VincentChen0111/maa_skills/issues/15) | 11 | 已完成 |
 | 14 | [加工与材料凭证后的缺口](14-crafting-voucher-gaps.md) | [#16](https://github.com/VincentChen0111/maa_skills/issues/16) | 13 | 已完成 |
 | 15 | [指定关卡作业准备](15-stage-job-preparation.md) | [#17](https://github.com/VincentChen0111/maa_skills/issues/17) | 05、11 | 已完成 |
