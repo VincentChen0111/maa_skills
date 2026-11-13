@@ -195,6 +195,23 @@ test('configuration field checks validate the fields this project writes and nam
     ['Configuration cannot be parsed.', 'managed-fields-unknown', 'remote-control-unknown', 'connection-unreadable']);
 });
 
+/**
+ * Merge of 27 with 10 (2026-11-14): the field check keeps 10's scope (task, medicine and timer fields). Stone and expiring
+ * medicine are MAA's own states that the read summary classifies through the consumption predicate; a null stone switch is
+ * what the MAA GUI saves when stone is on without "allow saving", so it must not become a blocking configuration error.
+ */
+test('stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing', async (t) => {
+  const f = await fixture(t);
+  const config = structuredClone(f.config);
+  const fight = { $type: 'FightTask', TaskType: 'Fight', IsEnable: true, UseMedicine: false, MedicineCount: 0, StoneCount: 3, UseStoneAllowSave: false,
+    UseExpiringMedicine: true, MedicineExpireDays: 2, UseExpireMedicineForActivity: false };
+  config.Configurations[profile].TaskQueue = [{ ...fight, UseStone: null }, { ...fight, UseStone: true, UseStoneAllowSave: true }];
+  await writeFile(f.file, JSON.stringify(config));
+  const result = await runChecks(f.context, f.maa, quiet);
+  assert.deepEqual([row(result, 'configuration-fields').status, row(result, 'configuration-fields').reason], ['normal', 'managed-fields-valid']);
+  assert.equal(result.exitCode, 0);
+});
+
 test('remote control reports only configured or not, with no endpoint or identity', async (t) => {
   const secrets = { RemoteControlGetTaskEndpointUri: 'synthetic-endpoint-ciphertext-marker', RemoteControlReportStatusUri: 'synthetic-report-marker',
     RemoteControlUserIdentity: 'synthetic-user-identity-marker', RemoteControlDeviceIdentity: 'synthetic-device-identity-marker', RemoteControlPollIntervalMs: 1000 };

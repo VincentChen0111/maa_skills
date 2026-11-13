@@ -288,3 +288,9 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
    - 经 `raw.githubusercontent.com` 只读取 8 个文件在 v6.21.4（`52d0b2a`）和 v6.22.0（`901e01c`）上的内容，用 `scripts/maa-version-check.ts` 自己的读取器和 `gitBlobSha` 算 blob。v6.21.4 的 blob 与上面「固定 MAA 源码核实」表逐一一致。6 个文件两个版本相同；`tasks.json` 和 `integration.md` 变了，逐段对比后 27 依赖的任务和行都没变，所以 `sourceVerified` 为两个版本，指纹取 v6.22.0。结论和对比表写在 [MAA 版本来源](maa-version-sources.md)「27 交付时登记的条目」。
    - 条目的文件是待登记的 6 个，加上本页表格引用、待登记里没有列的 `AsstFightTask.cs` 和 `tasks.json`；`pending` 现在为空。随包核实记录重新生成后不变（源码已核 v6.22.0，记录版本 2）。
    - `tests/maa-version-check.test.ts` 13 项通过：改之前「the repository registry covers the delivered MAA dependencies」失败，因为本页引用的 `AsstFightTask.cs` 既没有登记也不在待登记里；登记之后覆盖扫描、「已完成的工单不能留在待登记」和记录生成三项检查都通过。
+
+6. doctor（10）：
+   - 并存：`doctor.ts` 的命令行同时有 10 的 `analyze`（`run`、`interfaceUnobscured`、`conclusion`、`processExitCode`）和 27 的 `repair` 输入白名单（加 `stoneCount`、`expiringMedicine`）；文档一致性测试的接口表两项都列。27 的恢复规则在 `executeConfigRecovery` 里，10 的检查行和 `blockingChecks` 不经过恢复，互不改动。maa-doctor 的 skill 正文按 10 的新结构合并，27 的恢复说明落在第 9 步。
+   - 一个判断（记在这里，不是产品限制）：10 的字段检查 `inspectManagedFields` 只核对任务、理智药和定时字段，不扩到碎石和临期药。理由：MAA 自己会存 null 的碎石开关（界面打开碎石而没有允许保存时），这一行出错会挡住关卡运行（`blockingChecks`），扩进来就会把 MAA 的正常状态当作阻塞错误；这些字段的状态已经由读取摘要按谓词列出。函数注释写明了这一点。
+   - `tests/doctor-checks.test.ts` 的「stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing」：null 的碎石开关、开着的碎石和临期药，字段检查为 `normal`，退出码 0。这是合并后的现状，测试一写就通过，用来防止以后扩检查时把这些状态变成阻塞错误。
+   - 运行：`doctor` 97 项、`doctor-checks` 28 项、`doctor-scenarios` 22 项、`check-purposes` 5 项，全部通过。

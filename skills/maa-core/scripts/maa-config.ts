@@ -258,6 +258,8 @@ export async function readConfiguration(maaDirectory: string): Promise<RecordVal
  * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with.
  * Returns field kinds only (never a profile name or value); `timerProfileMissing` marks an enabled timer whose
  * configuration no longer exists. Unknown task types and fields the writer never manages are not judged.
+ * Stone and expiring medicine (27) are not judged here either: they are MAA's own states (the GUI saves a null stone switch when
+ * stone is on without allow-save), shown in the read summary as the consumption predicate classifies them; an error here blocks.
  */
 export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {
   const config = object(value); const invalid = new Set<string>(); let timerProfileMissing = false;
