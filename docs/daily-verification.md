@@ -230,3 +230,30 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 实际运行（2026-11-14，工作区逐个运行，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过；单个测试文件全部通过：`consumption-grant` 19 项、`maa-config` 128 项、`doctor` 85 项、`setup-integration` 5 项、`training-integration` 13 项、`training-plan` 8 项、`evaluation` 9 项、`eval-fixture` 7 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`doctor-scenarios` 9 项、`docs-consistency` 3 项。审查者的三份离线探针在修复后的工作区重跑：关闭理智药的三种请求都完成；只改保存开关、只改碎石数量、只改临期天数都以对应的缺授权原因拒绝；`UseMedicine` 为 null 的任务没有授权时不能启用；不带授权的恢复以 `stone-grant-required` 拒绝。
 
 仍未验证：真模型评测和真实 MAA 同上一节。
+
+### 第二轮修复
+
+2026-11-14，针对第二轮独立审查里协调者接受的一项（P3，第一轮修复带来的回退），作者修复，未经独立审查。代码和测试在提交 `f34f508`，文档另有一个提交。问题和用例的细节见 [doctor 验证记录](doctor-verification.md) 的「第二轮修复」。
+
+规则：没有某一类的授权时只能写关闭值，这条规则有一个例外，只在 doctor 的 `restore-config` 里成立。三个条件都要满足：恢复后这一类仍关着；每个改动的值都等于中断事务备份里同一任务的值；请求是当次请求。满足时不需要这一类的授权。恢复后重新打开这一类，仍要修复请求自己的当次授权。普通写入不适用。规格两张表和「MAA 配置写入」「检查与修法」正文都已登记（设计默认值，2026-11-14）。
+
+归属：例外仍由谓词 `decideConsumption` 判断。是不是恢复，由一个显式输入决定：消费方 `doctor-restore`，加上目标里的 `restore`（备份里的同一任务）。写入器只在 `restore-config` 传入备份时才用这个消费方。目标带 `restore` 而消费方不是 `doctor-restore` 时，谓词整体拒绝。一致性测试的消费方表登记了 `doctor-restore`，有允许和拒绝两个样例，都走真实的 doctor 恢复路径。
+
+先红后绿：新用例写好、代码未改时运行 `node --test tests/consumption-grant.test.ts`，33 项中 10 项失败：H1、H2、理智药、一次恢复里关回和重新打开并存这 4 个子项及其父项，被中断恢复的再核对，谓词直接用例，调用点登记，`doctor-restore` 的允许和拒绝样例。备份让这一类重新打开的 2 个子项和普通写入写旧值的用例改之前就通过：它们测的是原来就有的防线，下面的 R1a、R3 确认它们能抓到放宽。改代码之后 33 项全过。
+
+变异：用 `git archive` 把 `f34f508` 导出到临时目录，未变异时 `consumption-grant` 33 项全过。每次只改一处，按 `consumption-grant`、`maa-config`、`doctor` 的顺序一次跑一个文件，第一个失败的文件记为抓到。每次跑完还原被改的文件，全部跑完后删除临时目录。
+
+| 编号 | 变异 | 结果 |
+| --- | --- | --- |
+| R1a | 普通写入也拿到放行（写入器对每次写入都把自己的值当作备份值） | `consumption-grant` 抓到（普通写入写旧值的用例） |
+| R1b | 谓词不看消费方，任何消费方的目标带 `restore` 都放行 | `consumption-grant` 抓到 |
+| R2 | 放行不比较备份值（谓词） | `consumption-grant` 抓到 |
+| R3 | 恢复后这一类开着也放行 | `consumption-grant` 抓到（真实恢复路径的重新打开用例） |
+| R4 | 重放 doctor 自己的待执行记录时不放行 | `consumption-grant` 抓到（被中断恢复的再核对） |
+| R5 | `restore-config` 不传备份（第一轮的行为） | `consumption-grant` 抓到 |
+| R6 | 放行不要求当次请求 | `consumption-grant` 抓到 |
+| R7 | 写入器在 `restore-config` 里把请求自己的值当作备份值 | 三个文件都没抓到。这是等价变异：`restore-config` 的每个改动值本来就是从同一份备份里取的，两种写法结果相同。谓词层面的比较由 R2 检验 |
+
+实际运行（2026-11-14，在工作区一次跑一个文件，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过。单个测试文件全部通过：`consumption-grant` 33 项、`maa-config` 128 项、`doctor` 85 项、`doctor-scenarios` 9 项、`setup-integration` 5 项、`training-integration` 13 项、`evaluation` 9 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`docs-consistency` 3 项。审查者的探针 `probe5.ts` 在修复后的工作区重跑，H1、H2、H3 不带授权都恢复完成，锁已释放。
+
+仍未验证：doctor 的 skill 正文改了，真模型的 doctor 行为评测（改动前后对比）没有运行，留给工单 26；其余同上一节。
