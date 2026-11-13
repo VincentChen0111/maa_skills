@@ -45,6 +45,16 @@
 - 完整离线入口 `node scripts/check.ts`，在提交 `72ab48a` 上：449 项中 447 通过、1 失败、1 跳过（非 Windows 进程适配分支）。失败的是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI and completes a CLI configuration transaction」，报 `maa-start-timeout`。入口在测试失败后直接退出，所以另行运行了它的其余步骤：tracker 无错误、隐私检查无发现、元数据检查无错误、评分规则自检 7 条规则 14 份样例通过。
 - 该文件单独连续运行三次：每次 16 项中 14 通过、1 失败、1 跳过，失败的都是同一项，都报 `maa-close-timeout`（用时 21.6、18.9、20.7 秒）。从 09 的头 `6df8ed0` 导出的冻结副本上单独运行一次，同一项同样失败（14/1/1）。本票没有改动 `maa-process.ts`、这份测试或它的合成窗口程序；与协调者已知的本机问题一致，不能据此判为偶发，交协调者另行处理。
 
+## 第 1 轮审查后的修复（2026-11-13）
+
+第 1 轮独立审查不通过（P2 一项、P3 两项），协调者复核后全部接受：
+
+- P2：`inspectConnection` 会运行配置里任意存在的 `AdbPath`（例如误选的模拟器主程序或 MAA.exe）。修法：`setup-connection.ts` 新增唯一的判断 `isAdbExecutablePath`（沿用 07 发现时的 `…adb….exe` 文件名规则）和 `resolveAdbExecutable`（实际目标也要通过同一判断），setup 发现和 doctor 的 `check`／`analyze` 都经它；不是 adb 时不运行任何程序，报 `adb-path-unrecognized`，修法交 setup 的连接流程。全仓库执行 adb 的地方只有 `setup-connection.ts` 的 `adb.run`，候选都来自这一判断。
+- P3：网络地址不在 `adb devices` 列表里被说成「模拟器可能没开」。修法：按 Android 官方 adb 文档区分 `device-not-connected`（网络地址未连接，不推断模拟器状态，修法为用户确认模拟器、开着就经 setup 的测试流程或在 MAA 里连接）和 `device-not-listed`（只用于 adb 自动发现的本机端口）；`emulator-<N>` 与本机端口 N+1 视为同一设备。`analyze` 的 `currentState` 只回报这个状态，不据此判断模拟器关着；排查对照和 SKILL 写明。
+- P3：`--online` 的 10 秒超时和 1 MiB 上限、私有记录 64 MiB 上限补进规格正文和「规则来源」行；文件名判断和未连接状态也登记。
+
+先红后绿：`tests/doctor-analysis.test.ts` 在修复前 19 项中 5 项失败，其中新测试「the current-state connection check never runs a configured program that is not adb」显示 adb 替身被用 MAA.exe 调用；`tests/doctor-checks.test.ts` 在修复前因缺少共用判断的导出而整体失败。修复后：`tests/doctor-checks.test.ts` 26/26（新增：配置成 MAA.exe、HD-Player.exe、adb.exe.bak 时替身从未被调用；setup 发现同样不调用；判断的正反例；网络地址未连接、本机端口按 emulator 序号匹配、emulator 序号未列出），`tests/doctor-analysis.test.ts` 19/19，`tests/setup.test.ts` 29/29，`npm run typecheck` 通过；审查员的离线复现（HD-Player.exe、MAA.exe 两种 AdbPath）现在都返回 `adb-path-unrecognized` 且没有执行任何程序。按维护者 2026-11-13 的负载要求，本轮没有运行完整离线入口，只逐个运行了上面三个文件；`tests/setup-scenarios.test.ts`、`tests/doctor.test.ts`、`tests/doctor-scenarios.test.ts` 本轮未重跑（它们的样例没有配置连接，期望不受影响），留给协调者的完整入口。
+
 ## 设计默认值
 
 带限制的默认值都登记在规格「默认值及其来源」以「10 」开头的各行。只记在这里的实现选择：

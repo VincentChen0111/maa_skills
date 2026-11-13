@@ -13,7 +13,7 @@
 
 `analyze` 把下面三类标为环境类（`classification.environment: true`），给出原因（`cause`）、证据（`evidence`）和当前状态（`currentState`）：
 
-1. 连接（`connection`）：`ConnectFailed`、`Disconnect`、`ScreencapFailed`、`TouchModeNotAvailable`。先看 `currentState.connection`（与 `check` 的连接检查同一个函数，只运行 `adb devices`）：设备离线、未授权、不在列表里，还是已恢复在线。对应官方「Common Pitfalls / 连接类」：连接问题以 `asst.log` 为准，`offline` 多半是模拟器或 adb 状态异常。
+1. 连接（`connection`）：`ConnectFailed`、`Disconnect`、`ScreencapFailed`、`TouchModeNotAvailable`。先看 `currentState.connection`（与 `check` 的连接检查同一个函数，只运行 `adb devices`）：设备离线、未授权、不在列表里，还是已恢复在线。`device-not-connected` 只说明 adb 现在没有连到配置的网络地址：adb 只在有人 `connect` 之后才列出这种地址（例如 MuMu 的 `127.0.0.1:16384` 在 MAA 连接之前），所以它不能证明模拟器关着；请用户确认模拟器是否开着，开着就经 maa-setup 的测试流程或在 MAA 里连接一次再看。`device-not-listed` 只用于 adb 会自动发现的本机端口（5555–5585 的奇数端口，列为 `emulator-<端口减一>`），也可能只是 adb 还没发现。`adb-path-unrecognized` 表示配置的 adb 路径不是 adb 程序，doctor 没有运行它，连接未核对。对应官方「Common Pitfalls / 连接类」：连接问题以 `asst.log` 为准，`offline` 多半是模拟器或 adb 状态异常。
 2. 识别环境不对（`recognition-environment`）：`UnsupportedResolution`、`ResolutionError`、`ResolutionChanged`。请用户在模拟器设置里核对分辨率，或确认运行中没有改过分辨率。
 3. MAA 进程异常（`maa-process`）：`InitFailed`、`InternalError`，以及 TaskChainError 的 `OutOfMemory`、`GpuDeviceRemoved`（固定版本里这两种会清空剩余任务，需要重启 MAA）。看 `currentState.maa`，重启 MAA 由用户做。
 

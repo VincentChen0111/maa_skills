@@ -9,7 +9,7 @@
 | group | 检查 | 内容 |
 | --- | --- | --- |
 | installation | `platform`、`maa`、`server`、`node`、`settings`、`private-directory`、`version` | 与 setup 相同。`version` 读 MAA.exe 的产品版本并对照随包核实记录：记录缺失、为空（`verification-record-empty`）、版本未知或未完全核实都只是提醒，不阻止使用 |
-| connection | `connection` | 读当前配置的 adb 路径和地址，只运行 `adb devices`（adb 服务没在运行时 adb 会自行启动它，与 setup 的发现相同）：在线正常；离线、未授权为错误；不在列表里、adb 无法运行、未配置为提醒。不连接、不选择、不写入，不输出地址或路径 |
+| connection | `connection` | 读当前配置的 adb 路径和地址，只运行 `adb devices`（adb 服务没在运行时 adb 会自行启动它，与 setup 的发现相同）：在线正常；离线、未授权、adb 不存在为错误；其余为提醒：`device-not-connected`（adb 没连到配置的网络地址，adb 只在 `connect` 之后列出这种地址，不说明模拟器是否开着）、`device-not-listed`（adb 自动发现的本机端口不在列表里）、`adb-unavailable`、`adb-path-unrecognized`（配置的路径不是 adb 程序，没有运行）、`connection-not-configured`。只运行文件名是 adb 程序的路径（与 setup 发现共用 `isAdbExecutablePath`），不连接、不选择、不写入，不输出地址或路径 |
 | configuration | `configuration`、`configuration-fields`、`remote-control` | 能否解析；本项目写入的任务开关、理智药和定时字段的类型与范围（只给字段种类）；MAA 远程控制是否已配置 |
 | write-lock | `write-lock` | 遗留写入核对，规则见下文 |
 | credentials | `credential-nga`、`credential-skland`、`credential-bilibili` | 见下一段 |
