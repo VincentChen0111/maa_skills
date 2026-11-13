@@ -215,6 +215,35 @@ function changedFields(before: ObjectValue, after: ObjectValue): string[] {
   return fields;
 }
 
+/**
+ * Everything a draft re-reads or recalculates, flattened by field name: snapshot facts, step results, citations
+ * and the shared calculation. Public tables are identified by repository, commit, file and content hash, so the
+ * same pinned table read again later is not a change; any other re-read difference is.
+ */
+function resultView(value: unknown): Record<string, unknown> {
+  const content = object(value), snapshot = object(content.snapshot), gaps = object(content.gaps), view: Record<string, unknown> = {};
+  for (const key of ['readAt', 'sourceTimes', 'coverage']) view[`snapshot.${key}`] = snapshot[key];
+  for (const key of ['mode', 'supportedThrough', 'itemNames']) view[key] = content[key];
+  (Array.isArray(content.steps) ? content.steps : []).forEach((step, index) => {
+    for (const key of ['operator', 'cost', 'uncertainties', 'crossCheck', 'cumulative', 'supported']) view[`steps[${index}].${key}`] = object(step)[key];
+  });
+  for (const entry of Array.isArray(content.evidence) ? content.evidence.map(object) : []) {
+    const { id, item, ...rest } = entry;
+    for (const [key, field] of Object.entries(rest)) view[`evidence.${String(id)}.${key}`] = field;
+    for (const [key, field] of Object.entries(object(item))) view[`evidence.${String(id)}.item.${key}`] = field;
+  }
+  for (const key of Object.keys(gaps)) if (key !== 'costs') view[`gaps.${key}`] = gaps[key];
+  const costs = Array.isArray(gaps.costs) ? gaps.costs.map(object) : [];
+  view['gaps.costs'] = costs.map(({ sources: _sources, snapshot: _snapshot, ...rest }) => rest);
+  view.sources = (Array.isArray(costs[0]?.sources) ? costs[0]!.sources as unknown[] : []).map(object).map(source => [source.repository, source.commit, source.file, source.sha256]);
+  return view;
+}
+/** Re-read data and tool results that differ from the reviewed version; they are listed because they were not reviewed. */
+function changedResults(before: unknown, after: unknown): string[] {
+  const old = resultView(before), next = resultView(after);
+  return [...new Set([...Object.keys(old), ...Object.keys(next)])].filter(key => JSON.stringify(old[key]) !== JSON.stringify(next[key]));
+}
+
 /** Validates, cites, calculates and saves one report version; returns needs-input instead of guessing. */
 export async function draftCultivationReport(value: unknown, options: DraftOptions = {}): Promise<DraftResult> {
   const { input, issues } = parseDraft(value);
@@ -234,7 +263,8 @@ export async function draftCultivationReport(value: unknown, options: DraftOptio
   if (object(value).revisionOf !== undefined) {
     const parent = await loadAdviceReport(settings.privateDirectory, kind, String(revision.reportHash));
     built.content.revisionOf = { reportHash: parent.hash, corrections: (revision.corrections as ObjectValue[]).map(entry => ({ finding: String(entry.finding ?? ''), change: String(entry.change ?? '') })),
-      changedFields: changedFields(object(object(parent.content).input), built.content.input as unknown as ObjectValue) };
+      changedFields: changedFields(object(object(parent.content).input), built.content.input as unknown as ObjectValue),
+      changedResults: changedResults(parent.content, built.content) };
   }
   const saved = await saveAdviceReport(settings.privateDirectory, built.content);
   return { status: 'saved', reportHash: saved.hash, state: await loadAdviceReport(settings.privateDirectory, kind, saved.hash) as ReportState<CultivationContent> };

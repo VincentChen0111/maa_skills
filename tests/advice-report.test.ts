@@ -78,12 +78,14 @@ test('the default review runs once from a self-contained brief; an accepted erro
   refused('review', { reportHash: next, reviewer, briefSha256: written.json.sha256, findings: [] }, 'report-revision-already-reviewed');
   refused('brief', { reportHash: next }, 'report-revision-already-reviewed');
   const state = run('read', { reportHash: next }).json.report as ReportState<CultivationContent>;
-  assert.deepEqual(state.content.revisionOf, { reportHash: hash, corrections: [{ finding: 'F1', change: '按依据改写 S1 的推荐理由' }], changedFields: ['steps[0].reason'] });
+  assert.deepEqual(state.content.revisionOf, { reportHash: hash, corrections: [{ finding: 'F1', change: '按依据改写 S1 的推荐理由' }], changedFields: ['steps[0].reason'],
+    changedResults: [] }, 'nothing the draft re-read changed, so no tool result or citation differs');
 
   const approved = run('approve', { reportHash: next, items: ['S1'], userWords: '只批准第一步' });
   assert.deepEqual(approved.json, { ok: true, status: 'reviewed', approved: [{ id: 'S1', reference: `cultivation/${next}#S1` }] });
   const markdown = run('read', { reportHash: next, format: 'markdown' }).stdout;
-  for (const expected of ['【已审查，已按审查改正】', '## 审查后的改动', '改正 F1：按依据改写 S1 的推荐理由', 'F2（拒绝）', '与原版本不同的输入：steps\\[0\\].reason', '批准 S1（你的原话：「只批准第一步」；当时已审查）',
+  for (const expected of ['【已审查，已按审查改正】', '## 审查后的改动', '改正 F1：按依据改写 S1 的推荐理由', 'F2（拒绝）', '与原版本不同的输入：steps\\[0\\].reason',
+    '与原版本不同的工具结果和资料：无', '批准 S1（你的原话：「只批准第一步」；当时已审查）',
     'maa-daily 可据此安排：无（这一步没有 daily 能执行的部分）', '你在游戏里自己完成：精英化和等级', '审查通过不等于批准，批准也不等于执行']) assert.ok(markdown.includes(expected), expected);
   assert.ok(!markdown.includes('批准 S2') && !markdown.includes('S1、S2'), 'only the named item is approved');
 
@@ -95,6 +97,29 @@ test('the default review runs once from a self-contained brief; an accepted erro
   assert.ok(!evidence.changes.some(change => change.file.startsWith('maa/')), 'MAA configuration is never touched');
   const other = run('read', { reportHash: next }, '.claude');
   assert.equal(other.json.report.hash, next, 'the second host layout reads the same records');
+});
+
+test('a correction drafted after the account snapshot changed lists every changed tool result and citation, not only the agent input', async (t) => {
+  const { home, hash } = await saved(t);
+  const { sha256 } = await brief(home, hash);
+  await recordReview(home, 'cultivation', hash, { reviewer, briefSha256: sha256, findings: [finding('F1', 'accepted')] });
+  const parent = (await loadAdviceReport(home, 'cultivation', hash)).content as CultivationContent;
+  const snapshot = reportSnapshot(); snapshot.lmd = 100150; snapshot.items.mat = 50; // the user re-scanned between review and correction
+  await writeFile(join(home, 'account-snapshot.json'), JSON.stringify(snapshot));
+  const revision = await draftCultivationReport({ ...reportDraft(), revisionOf: { reportHash: hash, corrections: [{ finding: 'F1', change: '按依据改写 S1 的推荐理由' }] } },
+    { home, fetcher: reportFetcher() });
+  assert.equal(revision.status, 'saved');
+  if (revision.status !== 'saved') return;
+  const content = revision.state.content;
+  assert.deepEqual([parent.supportedThrough, content.supportedThrough], [1, 2], 'the re-read stock changes the result');
+  assert.deepEqual(content.revisionOf!.changedFields, [], 'the agent input itself is unchanged');
+  for (const field of ['steps[0].cumulative', 'steps[1].cumulative', 'steps[1].supported', 'supportedThrough', 'gaps.comparison'])
+    assert.ok(content.revisionOf!.changedResults.includes(field), field);
+  assert.ok(!content.revisionOf!.changedResults.some(field => field.startsWith('sources')), 'the same pinned tables re-read later are not a change');
+  const markdown = formatCultivationReportMarkdown(revision.state);
+  assert.match(markdown, /\*\*【已审查，已按审查改正】\*\*.*改正时重新读取的快照、资料或公开表有变化，变化的部分没有经过审查/);
+  assert.ok(markdown.includes('与原版本不同的输入：无'));
+  assert.match(markdown, /与原版本不同的工具结果和资料：.*supportedThrough/);
 });
 
 test('an explicit skip starts no review, marks the report 未审查 at the top and still allows item approval', async (t) => {

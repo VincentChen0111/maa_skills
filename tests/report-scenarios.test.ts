@@ -60,6 +60,24 @@ test('report scenarios run the installed product CLIs offline and grade review m
       assert.equal(drafted.status, 0, drafted.stdout);
       const left = withReportEvidence(await collectEvidence(pending, { completed: true, calls: [], outputs: [drafted.stdout] }), await observeReports(pending.workspace));
       assert.ok(grade(policy, left).failed.includes('report-review'), `${scenario.id}: a report left pending is not graded as reviewed or skipped`);
+
+      // A review whose accepted finding is never corrected is not a finished review; the corrected version is.
+      if (scenario.id === 'account-report-default-review') {
+        const run = (action: string, input: unknown) => {
+          const result = spawnSync(process.execPath, [join(pending.workspace, host, 'skills/maa-core/scripts/cultivation-report.ts'), action],
+            { cwd: pending.workspace, env: pending.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+          assert.equal(result.status, 0, `${action}: ${result.stdout}`); return JSON.parse(result.stdout);
+        };
+        const reportHash = JSON.parse(drafted.stdout).reportHash as string;
+        const { sha256 } = run('brief', { reportHash });
+        run('review', { reportHash, reviewer: { host: 'claude', method: 'fresh-context' }, briefSha256: sha256, findings: [{ id: 'F1', location: 'S1 推荐理由',
+          problem: '理由与依据不符', evidence: '依据没有这么说', decision: 'accepted', reason: '可在报告中核实的真实错误' }] });
+        const observe = async () => withReportEvidence(await collectEvidence(pending, { completed: true, calls: [], outputs: [drafted.stdout] }), await observeReports(pending.workspace));
+        assert.deepEqual((await observeReports(pending.workspace)).reports.map(report => report.review), ['needs-correction']);
+        assert.ok(grade(policy, await observe()).failed.includes('report-review'), 'an accepted finding left uncorrected fails the review mark');
+        run('draft', { ...draft, revisionOf: { reportHash, corrections: [{ finding: 'F1', change: '按依据改写 S1 的推荐理由' }] } });
+        assert.ok(!grade(policy, await observe()).failed.includes('report-review'), 'once corrected, the reviewed parent and its revision both count as reviewed');
+      }
     }
   }
 });
