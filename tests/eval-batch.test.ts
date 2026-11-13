@@ -177,8 +177,10 @@ test('the tracked compare command reads saved records only and names each scenar
     await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
     return directory;
   };
+  // One payload fingerprint per batch, named by the id's letter (b…, a…, r…).
   const record = (id: string, scenario: string, status: 'pass' | 'fail', extra: Partial<RunRecord> = {}): RunRecord => ({ id, host: 'claude', hostVersion: '2.1.321', model: 'fixed-model',
-    scenario, scenarioHash: `hash-${scenario}`, skillVersion: extra.skillVersion ?? 'skill-a', evidenceHash: `evidence-${id}`, grade: { status, score: status === 'pass' ? 8 : 7, total: 8, failed: [] }, ...extra });
+    scenario, scenarioHash: `hash-${scenario}`, skillVersion: extra.skillVersion ?? 'skill-a', evidenceHash: `evidence-${id}`, grade: { status, score: status === 'pass' ? 8 : 7, total: 8, failed: [] },
+    payloadFingerprint: `payload-${id.replace(/\d+$/, '')}`, ...extra });
   const before = await batch([record('b1', 'one', 'pass'), record('b2', 'two', 'pass')]);
   const after = await batch([record('a1', 'one', 'pass', { skillVersion: 'skill-b' }), record('a2', 'two', 'fail', { skillVersion: 'skill-b' })]);
   const snapshot = async (directory: string) => Promise.all((await files(directory)).map(async (path) => createHash('sha256').update(await readFile(path)).digest('hex')));
@@ -261,7 +263,7 @@ test('a release that changes only a product script stays comparable: same scenar
     const [entry] = select(['core-language']);
     const outcome = await runScenario({ host: 'claude', model: 'fixed-model', scenario: entry!.definition as ScenarioDefinition, executable: process.execPath,
       executableArgs: [join(checkout, 'eval/host-double.mjs'), await script({ host: 'claude', steps: [] })], auth: { mode: 'host-double' }, artifactParent: join(copy, 'runs'),
-      ...(entry!.skillDirectory ? { skillDirectory: entry!.skillDirectory } : {}), companionSkills: entry!.companionSkills });
+      ...(entry!.skillDirectory ? { skillDirectory: entry!.skillDirectory } : {}), companionSkills: entry!.companionSkills, payloadFingerprint: `payload-of-${checkout === copy ? 'release' : 'checkout'}` });
     // Compared as real records are: only the double mark and the grade differ from a model run.
     const { double: _double, ...record } = outcome.record;
     records.push({ ...record, grade: { ...record.grade, status: 'pass' } });

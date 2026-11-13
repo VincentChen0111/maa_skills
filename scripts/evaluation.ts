@@ -210,6 +210,8 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
 export type RunRecord = {
   id: string; host: Host; hostVersion: string; model: string; scenario: string; scenarioHash: string;
   skillVersion: string; evidenceHash: string; grade: Grade; rerunOf?: string;
+  /** Payload fingerprint of the batch that ran it (scenario definitions and every installed skill file), checked before and after the run. */
+  payloadFingerprint?: string;
   /** Runner's category for the run; every value other than `completed` grades `unverified`. */
   reason?: string; auth?: 'plan' | 'api-key' | 'host-double';
   /** Set when the host was `eval/host-double.mjs`: such a record is never a model baseline and never compared. */
@@ -237,9 +239,11 @@ export type ScenarioIdentityInput = {
   definition: object;
 };
 /**
- * What identifies a scenario across releases. Product files and product-derived values never enter it: product files are
- * part of the installed skills (the skill version), and network fixtures are keyed by source without the pinned commit, in
- * a fixed order. Everything the scenario itself defines does enter it, so a real scenario change makes a new scenario.
+ * What identifies a scenario across releases. Everything the scenario itself defines enters it, so a real scenario change
+ * makes a new scenario. Product files never enter it: they are part of the installed skills (the skill version). Scenario
+ * world data runs no product code; the one allow-listed product value is the public data source descriptor behind network
+ * fixture URLs, whose pinned data commit is dropped here (fixtures keyed by source, in a fixed order). The conformance test
+ * walks the runtime import closure of every scenario module and holds the allow-list.
  */
 export function scenarioIdentity(input: ScenarioIdentityInput): string {
   const { networkFixtures, ...rest } = input.definition as { networkFixtures?: Record<string, unknown> };
@@ -257,7 +261,8 @@ const precedence: Comparison['status'][] = ['incomparable', 'unverified', 'needs
 
 /** One scenario: its run before, its run after, and the reruns of the after run. */
 function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[]): Comparison['status'] {
-  // The after run and its reruns are one candidate: one skill version. Different scenarios may install different skills.
+  // The after run and its reruns run one skill version. Different scenarios may install different skills; the payload
+  // fingerprint (one per side, checked in compareRuns) keeps them one candidate.
   if (!sameScenario(old, next) || attempts.some((run) => !sameScenario(run, next) || run.skillVersion !== next.skillVersion)) return 'incomparable';
   if ([old, next, ...attempts].some((run) => run.grade.status === 'unverified')) return 'unverified';
   if (old.grade.status === 'pass' && next.grade.status === 'fail') {
@@ -270,14 +275,17 @@ function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[])
 /**
  * Compares record sets scenario by scenario (host and scenario id) and aggregates: any incomparable scenario makes the whole
  * incomparable, then unverified, needs-reruns, regression, unstable, pass. With nothing before, the after set is a baseline
- * once every run passed and each host has at least three. A batch is one candidate by construction (resume refuses another
- * payload), so a record set may hold several skill versions, one per installed skill set.
+ * once every run passed and each host has at least three. Each side is one candidate: all its records carry one payload
+ * fingerprint (a batch stops when its payload changes, and records of two batches mixed into one side are refused here), so a
+ * side may hold several skill versions only as one per installed skill set.
  */
 export function compareRuns(before: RunRecord[], after: RunRecord[], reruns: RunRecord[] = []): Comparison {
   const result = (status: Comparison['status'], rerun: string[] = []): Comparison => ({ status, rerun });
   const all = [...before, ...after, ...reruns];
+  const candidates = (runs: RunRecord[]) => new Set(runs.map((run) => run.payloadFingerprint)).size;
   if (!after.length || all.some((run) => run.double === true) || new Set(all.map((run) => run.id)).size !== all.length ||
-    all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash) ||
+    all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash || !run.payloadFingerprint) ||
+    candidates(before) > 1 || candidates(after) > 1 ||
     new Set(before.map(identity)).size !== before.length || new Set(after.map(identity)).size !== after.length ||
     reruns.some((run) => !after.some((next) => run.rerunOf === next.id))) return result('incomparable');
   if (!before.length) {

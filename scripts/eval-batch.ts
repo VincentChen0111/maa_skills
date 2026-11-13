@@ -59,8 +59,11 @@ export async function readManifest(directory: string): Promise<BatchManifest> {
   if (manifest.kind !== 'maa-skills-evaluation-batch' || manifest.version !== 1) throw new Error('batch-manifest');
   return manifest;
 }
-/** A run counts toward completion unless a host-level stop or the user's interrupt ended it. */
-const counts = (run: BatchRun) => !(abortReasons as readonly string[]).includes(run.reason) && run.reason !== 'interrupted';
+/**
+ * A run counts toward completion unless a host-level stop or the user's interrupt ended it, or the payload changed while it
+ * ran (`fingerprint-mismatch`: which candidate it installed is unknown).
+ */
+const counts = (run: BatchRun) => !(abortReasons as readonly string[]).includes(run.reason) && run.reason !== 'interrupted' && run.reason !== 'fingerprint-mismatch';
 /** A scenario counts as done once it has a run that counts. */
 export const completedScenarios = (manifest: BatchManifest) => new Set(manifest.runs.filter(counts).map((run) => run.scenario));
 
@@ -68,6 +71,7 @@ export const completedScenarios = (manifest: BatchManifest) => new Set(manifest.
  * Runs scenarios for one host and one fixed model, strictly one after another: one process at a time uses the host's login
  * directory (a lock file beside it refuses a second batch, in any process), and there is no parallel option. Plan login runs the auth preflight and the read-protection check first and stops
  * the batch on any failure; a quota, auth or network failure during the batch aborts it, and `resume` runs only the rest.
+ * A payload that changes during the batch stops it (`fingerprint-mismatch`); the batch is never marked complete on two candidates.
  */
 export async function runBatch(options: BatchOptions): Promise<{ directory: string; manifest: BatchManifest }> {
   const auth = options.auth ?? 'plan';
@@ -142,6 +146,9 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
       }
     }
     await save();
+    // A batch is one candidate: the payload (scenario definitions and every installed skill file) is checked again before each
+    // scenario starts, after each run and before the batch is marked complete; any change stops the batch (fail closed).
+    const samePayload = async () => await payloadFingerprint(options.entries) === fingerprint.payload;
     const done = completedScenarios(manifest);
     const repeat = options.repeat ?? 1;
     for (const entry of options.entries) {
@@ -150,18 +157,24 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
       if (done.has(scenario) && finished >= repeat) continue;
       for (let index = finished; index < repeat; index++) {
         if (interrupted()) return await abort('interrupted', 'scenario', scenario);
+        if (!await samePayload()) return await abort('fingerprint-mismatch', 'scenario', scenario);
         const outcome = await runScenario({ host: options.host, model: options.model, scenario: entry.definition as ScenarioName | ScenarioDefinition, executable, executableArgs,
           auth: runAuth, artifactParent: directory, ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills,
-          ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(manifest.rerunOf?.[scenario] ? { rerunOf: manifest.rerunOf[scenario] } : {}) });
-        // A run the user interrupted is kept as saved, but the manifest marks it so that resume runs the scenario again.
+          ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(manifest.rerunOf?.[scenario] ? { rerunOf: manifest.rerunOf[scenario] } : {}),
+          payloadFingerprint: fingerprint.payload });
+        // A run the user interrupted, or one the payload changed under, is kept as saved, but the manifest marks it so that
+        // it does not count and resume runs the scenario again.
         const stopped = interrupted();
+        const changed = !await samePayload();
         manifest.runs.push({ scenario, directory: relative(directory, outcome.artifactDirectory).replaceAll('\\', '/'), id: outcome.record.id,
-          reason: stopped ? 'interrupted' : outcome.reason, grade: outcome.record.grade.status, ...(outcome.record.rerunOf ? { rerunOf: outcome.record.rerunOf } : {}) });
+          reason: changed ? 'fingerprint-mismatch' : stopped ? 'interrupted' : outcome.reason, grade: outcome.record.grade.status, ...(outcome.record.rerunOf ? { rerunOf: outcome.record.rerunOf } : {}) });
         await save();
+        if (changed) return await abort('fingerprint-mismatch', 'scenario', scenario);
         if (stopped) return await abort('interrupted', 'scenario', scenario);
         if ((abortReasons as readonly string[]).includes(outcome.reason)) return await abort(outcome.reason, 'scenario', scenario);
       }
     }
+    if (!await samePayload()) return await abort('fingerprint-mismatch', 'scenario');
     manifest.status = 'complete';
     await save();
     return { directory, manifest };

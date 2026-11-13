@@ -24,6 +24,8 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
  */
 export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts',
   './eval-redact.ts'];
+/** Harness files the fixture installs next to the workspace (observers, process and network doubles); each one's text is part of the scenario hash. */
+export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs', '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs'];
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.
@@ -36,7 +38,9 @@ export type ScenarioDefinition = { id: string; prompt: string; policy: Omit<Poli
  */
 export type RunAuth = { mode: 'plan'; readProtection?: ReadProtectionPass } | { mode: 'api-key' } | { mode: 'host-double' };
 export type RunOptions = { host: Host; model: string; scenario: ScenarioName | ScenarioDefinition; executable?: string; executableArgs?: string[]; timeoutMs?: number;
-  reviewBrief?: string; skillDirectory?: string; companionSkills?: Record<string, string>; auth?: RunAuth; artifactParent?: string; rerunOf?: string };
+  reviewBrief?: string; skillDirectory?: string; companionSkills?: Record<string, string>; auth?: RunAuth; artifactParent?: string; rerunOf?: string;
+  /** The batch's payload fingerprint, recorded in the run so that a side of a comparison holds one candidate. */
+  payloadFingerprint?: string };
 export type RunOutcome = { record: RunRecord; reason: RunReason; artifactDirectory: string; fixtureDirectory: string };
 export const defaultTimeoutMs = 45_000;
 
@@ -113,11 +117,10 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       id: randomUUID(), host: options.host, hostVersion: version.available ? version.version : 'unavailable', model: options.model,
       scenario: options.reviewBrief ? 'independent-review-smoke' : custom?.id ?? options.scenario as ScenarioName,
       // The scenario as defined (unrendered: a rendered policy holds this run's own workspace path), never the product.
-      scenarioHash: scenarioIdentity({ prompt, runner: sources, harness: Object.fromEntries(['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs',
-        '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs'].map((file) => [file, fixture.original.get(file)?.toString()])),
+      scenarioHash: scenarioIdentity({ prompt, runner: sources, harness: Object.fromEntries(scenarioHarnessFiles.map((file) => [file, fixture.original.get(file)?.toString()])),
         definition: custom ?? { policy: { ...fixture.policy, secrets: ['<synthetic-secret>'] }, jsonFiles: fixture.jsonFiles } }),
       skillVersion: digest(skill + fixture.original.get('probe.ts')), evidenceHash: digest(JSON.stringify(evidence) + raw + stderr), grade: graded,
-      ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}), reason, auth: auth.mode, ...(version.double ? { double: true } : {}), reportedModel: usage.reportedModel, usage: usage.usage,
+      ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}), ...(options.payloadFingerprint ? { payloadFingerprint: options.payloadFingerprint } : {}), reason, auth: auth.mode, ...(version.double ? { double: true } : {}), reportedModel: usage.reportedModel, usage: usage.usage,
       ...(executionWindow ? { durationMs: Date.parse(executionWindow.endedAt) - Date.parse(executionWindow.startedAt) } : {}),
     };
     // Paths are replaced by fixed placeholders before anything reaches disk.
