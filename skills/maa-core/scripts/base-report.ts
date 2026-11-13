@@ -8,7 +8,7 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkPlanText, gateTitles, generateBasePlan, loadPlanTables, parsePlanSpec, planFreshness, readMaaNameTable, readPrivateFile, readSnapshot, snapshotFingerprint,
-  suppliedPlanTables, tablesFingerprint, type Fill, type GenerateOptions, type GenerateResult, type OperatorFacts, type PlanCheck, type PlanInputs, type Freshness } from './base-plan.ts';
+  specChecks, suppliedPlanTables, tablesFingerprint, type Fill, type GenerateOptions, type GenerateResult, type OperatorFacts, type PlanCheck, type PlanInputs, type Freshness } from './base-plan.ts';
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
 import { readSettings } from './preferences.ts';
@@ -149,9 +149,8 @@ export async function baseReportFreshness(privateDirectory: string, hash: string
   if (states.check === 'fresh' || text === null || snapshot === null || !tables) return { states, recheck: null };
   const spec = parsePlanSpec(Object.fromEntries(Object.entries(content.input).filter(([key]) => !reportKeys.includes(key))), ['target', 'base', 'snapshotFile', 'tablesFile', 'format']).spec;
   if (!spec) return { states, recheck: null };
-  return { states, recheck: checkPlanText(text, { layout: spec.layout, snapshot, tables: tables.tables, names, mood: spec.mood, moodDefault: spec.moodDefault, combos: spec.combos,
-    exclusions: spec.exclusions, efficiency: spec.efficiency, tolerance: spec.tolerance, shifts: spec.shifts.length, reexport: `${JSON.stringify(content.plan.json, null, 2)}\n`,
-    texts: [] }) };
+  return { states, recheck: checkPlanText(text, { layout: spec.layout, snapshot, tables: tables.tables, names, ...specChecks(spec), shifts: spec.shifts.length,
+    reexport: `${JSON.stringify(content.plan.json, null, 2)}\n`, texts: [] }) };
 }
 
 // ---- Markdown (Chinese template; the agent translates for other languages) ------------------------------------

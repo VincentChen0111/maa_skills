@@ -16,7 +16,9 @@ type Plan = { title?: string; plans: Record<string, any>[]; [key: string]: unkno
 const baseText = () => exportMaaPlan(parsePlanSpec(planInput()).spec!).text;
 const context = (overrides: Partial<CheckContext> = {}): CheckContext => ({ layout: layout() as CheckContext['layout'], snapshot: planSnapshot(), tables: planTables(),
   names: parseNameTable(JSON.stringify(nameTable())), moodDefault: planInput().moodDefault, combos: [], exclusions: [], efficiency: planInput().efficiency,
-  tolerance: 1, shifts: 2, texts: [], ...overrides });
+  tolerance: 1, runs: ['08:00', '20:00'], shifts: 2, texts: [], ...overrides });
+/** The periods as the user says the shifts, 08:00-20:00 and 20:00-08:00, with MAA taken to run at their starts (no runs). */
+const atPeriodStarts = (plan: Plan, ctx: CheckContext) => { plan.plans[0]!.period = [['08:00', '20:00']]; plan.plans[1]!.period = [['20:00', '23:59'], ['00:00', '08:00']]; delete ctx.runs; };
 function checked(mutate: (plan: Plan, ctx: CheckContext) => void = () => undefined, overrides: Partial<CheckContext> = {}) {
   const plan = JSON.parse(baseText()) as Plan, ctx = context(overrides);
   mutate(plan, ctx);
@@ -36,7 +38,7 @@ test('generation writes a plan file inside the private directory from the layout
   const written = await readFile(result.file, 'utf8');
   assert.equal(written, result.text, 'the delivered file is the export');
   const plan = JSON.parse(written) as Plan;
-  assert.deepEqual(plan.plans.map(entry => entry.period), [[['08:00', '20:00']], [['20:00', '23:59'], ['00:00', '08:00']]], 'a cross-day shift is split into two hh:mm segments');
+  assert.deepEqual(plan.plans.map(entry => entry.period), [[['07:00', '19:00']], [['19:00', '23:59'], ['00:00', '07:00']]], 'a cross-day shift is split into two hh:mm segments');
   assert.deepEqual(plan.plans.map(entry => entry.duration), [720, 720]);
   assert.deepEqual(Object.keys(plan.plans[0]!.rooms), ['control', 'manufacture', 'trading', 'power', 'meeting', 'hire', 'dormitory', 'processing', 'training', 'recycle']);
   assert.deepEqual(plan.plans[0]!.rooms.power, [], 'a facility the layout does not have is left as it is, never the default algorithm');
@@ -78,9 +80,9 @@ test('each of the 15 gates passes for the consistent plan and fails for a synthe
     11: [['a drone target outside the layout', plan => { plan.plans[0]!.drones = { enable: true, room: 'trading', index: 2, order: 'pre' }; }],
       ['a Fiammetta switch without a target', plan => { plan.plans[0]!.Fiammetta = { enable: true, target: '', order: 'pre' }; }]],
     12: [['a total that is not the sum of its parts', (_plan, ctx) => { ctx.efficiency = [{ plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, total: 170, basis: '合成假设' }]; }]],
-    14: [['an uncovered hour when the user is early', plan => { plan.plans[1]!.period = [['20:00', '23:59'], ['00:00', '07:00']]; }],
+    14: [['an uncovered hour when the user is early', plan => { plan.plans[1]!.period = [['19:00', '23:59'], ['00:00', '06:00']]; }],
       ['a mood margin that breaks one hour late', (_plan, ctx) => { ctx.mood = { 合成金一: { work: 1.9, rest: 3, basis: '合成假设' } }; }],
-      ['an early run keeps the previous plan until the next change', (_plan, ctx) => { ctx.moodDefault = { work: 1.5, rest: 2, basis: '合成假设' }; }]],
+      ['an early run keeps the previous plan until the next change', (plan, ctx) => { atPeriodStarts(plan, ctx); ctx.moodDefault = { work: 1.5, rest: 2, basis: '合成假设' }; }]],
     15: [['a claim that the plan is optimal', plan => { plan.title = '合成最优两班'; }]],
   };
   for (const [id, cases] of Object.entries(failing)) for (const [name, mutate] of cases) {
@@ -92,13 +94,14 @@ test('each of the 15 gates passes for the consistent plan and fails for a synthe
   const changed = checkPlanText(text, { ...context(), reexport: text.replace('白班', '早班') });
   assert.equal(gate(changed, 13).verdict, 'fail', 'gate 13: the delivered file differs from a deterministic re-export');
   assert.equal(gate(checked(undefined, { mood: { 合成金一: { work: 1.9, rest: 3, basis: '合成假设' } } }), 4).verdict, 'pass', 'gate 4 alone allows 22.8 of 24');
-  const early = checked(undefined, { moodDefault: { work: 1.5, rest: 2, basis: '合成假设' } });
+  const early = checked(atPeriodStarts, { moodDefault: { work: 1.5, rest: 2, basis: '合成假设' } });
   assert.equal(gate(early, 4).verdict, 'pass', '18 of 24 per 12-hour shift holds on time');
-  assert.ok(gate(early, 14).evidence.some(entry => entry.includes('提前') && entry.includes('36')), JSON.stringify(gate(early, 14)));
+  // MAA runs at 07:00, still inside the night period: the night shift stays on from 20:00 until the 08:00 run a day later.
+  assert.ok(gate(early, 14).evidence.some(entry => entry.includes('提前 1 小时（07:00）') && entry.includes('36 小时 × 每小时 1.5 = 54')), JSON.stringify(gate(early, 14)));
   const fiammetta = checked((plan, ctx) => { onDutyWithFiammetta(plan, [0, 1]); ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; });
   for (const id of [4, 5]) assert.equal(gate(fiammetta, id).verdict, 'pass', `gate ${id}: a target swapped at every change, with Fiammetta resting in between, may stay on duty: ${JSON.stringify(gate(fiammetta, id))}`);
   // Four changes a day with two alternating plans: each stretch is 6 hours, not the 12 hours a plan holds in total.
-  const rotation = checked((plan, ctx) => { plan.plans[0]!.period = [['00:00', '06:00'], ['12:00', '18:00']]; plan.plans[1]!.period = [['06:00', '12:00'], ['18:00', '23:59']];
+  const rotation = checked((plan, ctx) => { delete ctx.runs; plan.plans[0]!.period = [['00:00', '06:00'], ['12:00', '18:00']]; plan.plans[1]!.period = [['06:00', '12:00'], ['18:00', '23:59']];
     ctx.mood = { 合成金一: { work: 2.5, rest: 3, basis: '合成假设' } }; });
   assert.equal(gate(rotation, 4).verdict, 'pass', JSON.stringify(gate(rotation, 4)));
 });
@@ -111,6 +114,64 @@ function onDutyWithFiammetta(plan: Plan, swaps: number[]) {
   fiammettaInDorms(plan);
   for (const index of swaps) plan.plans[index]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' };
 }
+
+test('an early run that MAA still sends to the previous plan names its remedy, and following the remedy passes gate 14', async (t) => {
+  const rate = { work: 1.5, rest: 2, basis: '合成假设' };
+  const before = gate(checked(atPeriodStarts, { moodDefault: rate }), 14), text = before.evidence.join('\n');
+  assert.equal(before.verdict, 'fail');
+  assert.match(text, /提前 1 小时（07:00）运行时 MAA 选 plans\[1\]/);
+  assert.match(text, /把 plans\[0\] 时间段的开始提前到 07:00 或更早/);
+  assert.match(text, /runs/, 'the remedy keeps MAA at 08:00 and says so in runs');
+  // Following the message: both periods start an hour earlier while MAA still runs at 08:00 and 20:00.
+  const earlier = (plan: Plan) => { plan.plans[0]!.period = [['07:00', '19:00']]; plan.plans[1]!.period = [['19:00', '23:59'], ['00:00', '07:00']]; };
+  const after = checked(earlier, { moodDefault: rate, runs: ['08:00', '20:00'] });
+  assert.equal(gate(after, 14).verdict, 'pass', JSON.stringify(gate(after, 14)));
+  assert.equal(after.applicable, true, JSON.stringify(after.gates.filter(entry => entry.verdict !== 'pass')));
+  assert.deepEqual(after.facts.runs, ['08:00', '20:00']);
+  // Without runs the run is taken to be the period start again, so an hour early is again in the previous period.
+  assert.equal(gate(checked((plan, ctx) => { earlier(plan); delete ctx.runs; }, { moodDefault: rate }), 14).verdict, 'fail');
+  // Only the day period moved: the night change, an hour early at 19:00, is still in the day period.
+  const half = gate(checked(plan => { plan.plans[0]!.period = [['07:00', '20:00']]; plan.plans[1]!.period = [['20:00', '23:59'], ['00:00', '07:00']]; },
+    { moodDefault: rate, runs: ['08:00', '20:00'] }), 14);
+  assert.equal(half.verdict, 'fail');
+  assert.match(half.evidence.join('\n'), /提前 1 小时（19:00）运行时 MAA 选 plans\[0\]/);
+  // The day plan's period is 13 hours, but MAA keeps each plan on duty from its run to the next: 12 hours each.
+  const weighted = checked(plan => { plan.plans[0]!.period = [['07:00', '20:00']]; plan.plans[1]!.period = [['20:00', '23:59'], ['00:00', '07:00']]; },
+    { efficiency: [{ plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成假设' }, { plan: 1, room: 'manufacture[0]', base: 100, skill: 0, global: 5, basis: '合成假设' }] });
+  assert.deepEqual(weighted.efficiency.daily, { 'manufacture[0]': 135 });
+  // A plan no run time selects, and malformed run times, are refused.
+  assert.equal(gate(checked(undefined, { runs: ['09:00', '10:00'] }), 3).verdict, 'fail', 'plans[1] is never selected');
+  assert.ok(checked(undefined, { runs: ['8:00'] }).errors.includes('runs-invalid'));
+  assert.deepEqual(parsePlanSpec({ ...planInput(), runs: ['08:00', '08:00'] }).issues, ['runs-invalid']);
+  // The proposal carries the run times through generation into the check.
+  const home = await planHome(); t.after(() => rm(home, { recursive: true, force: true }));
+  const input = { ...planInput(), moodDefault: rate };
+  const result = await generateBasePlan(input, { home, fetcher: planNetwork() });
+  if (result.status !== 'written') return assert.fail(JSON.stringify(result));
+  assert.equal(gate(result.check, 14).verdict, 'pass', JSON.stringify(gate(result.check, 14)));
+  assert.match(formatPlanMarkdown(result.check), /MAA 运行时间 08:00、20:00/);
+});
+
+test('Fiammetta order "post" is refused: MAA runs the pair after the dormitory task and dormitory 1 keeps only the target and Fiammetta', async (t) => {
+  const input = planInput() as ReturnType<typeof planInput> & { shifts: Record<string, unknown>[] };
+  input.shifts[0]!.fiammetta = { target: '合成控一', order: 'post' };
+  assert.deepEqual(parsePlanSpec(input).issues, ['shift-fiammetta-post:0']);
+  const home = await planHome(); t.after(() => rm(home, { recursive: true, force: true }));
+  assert.deepEqual(await generateBasePlan(input, { home, fetcher: planNetwork() }), { status: 'needs-input', issues: ['shift-fiammetta-post:0'] });
+  input.shifts[0]!.fiammetta = { target: '合成控一' };
+  assert.deepEqual((exportMaaPlan(parsePlanSpec(input).spec!).plan.plans as Plan['plans'])[0]!.Fiammetta, { enable: true, target: '合成控一', order: 'pre' });
+  const post = checked((plan, ctx) => { onDutyWithFiammetta(plan, [0, 1]); for (const entry of plan.plans) entry.Fiammetta.order = 'post'; ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; });
+  assert.equal(gate(post, 11).verdict, 'fail');
+  assert.ok(gate(post, 11).evidence.some(entry => entry.includes('post') && entry.includes('宿舍 1') && entry.includes('不恢复')), JSON.stringify(gate(post, 11)));
+  assert.equal(post.applicable, false);
+});
+
+test('a room left unassigned keeps whoever MAA seated there last, so the previous shift stays on duty', () => {
+  const result = checked(plan => { plan.plans[1]!.rooms.trading = [{ skip: true }]; plan.plans[1]!.rooms.dormitory[0].operators[4] = '合成贸三'; });
+  assert.ok(gate(result, 5).evidence.some(entry => entry.startsWith('合成贸一 每个班次都在岗')), JSON.stringify(gate(result, 5)));
+  assert.equal(gate(result, 4).verdict, 'fail', JSON.stringify(gate(result, 4)));
+  assert.equal(result.applicable, false);
+});
 
 test('a gate that cannot be verified is listed separately and never counts as a pass', () => {
   const result = checked(undefined, { moodDefault: undefined, combos: undefined, exclusions: undefined, efficiency: undefined, snapshot: null });
@@ -230,6 +291,15 @@ test('unassigned rooms are filled from owned operators whose active skills match
   const first = await generateBasePlan({ ...cycle, fill: true }, { home, fetcher: planNetwork() });
   if (first.status !== 'written') return assert.fail(JSON.stringify(first));
   assert.deepEqual(first.fills, [{ plan: 0, room: 'trading[0]', operators: ['合成贸二'] }], '合成贸一 works the last shift, so the first shift does not take it');
+  // Three shifts: the first one avoids both neighbours, the one before it around the ring and the one after it.
+  const ring = { ...planInput(), shifts: [
+    { name: '合成早班', period: '06:00-14:00', rooms: { control: [['合成控一']], manufacture: [['合成金一', '合成金二']], dormitory: [['合成宿一', '合成控二', '合成金三', '合成金四', '合成控三']] } },
+    { name: '合成中班', period: '14:00-22:00', rooms: { control: [['合成控二']], manufacture: [['合成金三', '合成金四']], trading: [['合成贸一']], dormitory: [['合成宿一', '合成控三', '合成金一', '合成金二', '合成贸三']] } },
+    { name: '合成夜班', period: '22:00-06:00', rooms: { control: [['合成控三']], manufacture: [['合成金一', '合成金二']], trading: [['合成贸三']], dormitory: [['合成宿一', '合成控一', '合成金三', '合成金四', '合成贸一']] } },
+  ] };
+  const both = await generateBasePlan({ ...ring, fill: true }, { home, fetcher: planNetwork() });
+  if (both.status !== 'written') return assert.fail(JSON.stringify(both));
+  assert.deepEqual(both.fills, [{ plan: 0, room: 'trading[0]', operators: ['合成贸二'] }], '合成贸一 works the next shift and 合成贸三 the previous one');
 });
 
 test('a different layout and roster: three shifts and two factories with different products, filled only with skills that fit each product', async (t) => {
@@ -245,8 +315,12 @@ test('a different layout and roster: three shifts and two factories with differe
     assert.deepEqual(result.fills.filter(fill => fill.room === 'manufacture[0]').map(fill => fill.operators), records, 'only the record skill goes to the record factory, and nobody works two shifts in a row');
     assert.deepEqual(plans.map(plan => plan.rooms.manufacture[1].operators), [['合成金一'], ['合成金二'], ['合成金三']], 'the last shift also avoids the first one');
     assert.deepEqual(plans.map(plan => plan.rooms.control[0].operators), [['合成控一'], ['合成控二'], ['合成控三']]);
-    assert.equal(result.check.applicable, true, JSON.stringify(result.check));
-    for (const id of [1, 3, 5, 9, 10, 11, 13, 15]) assert.equal(gate(result.check, id).verdict, 'pass', `gate ${id}: ${JSON.stringify(gate(result.check, id))}`);
+    // The record factory is filled in the first shift only and skipped in the others, where MAA keeps whoever it
+    // seated last: the record operator never leaves, and gate 5 says so.
+    assert.deepEqual(plans.map(plan => plan.rooms.manufacture[0]), records.length ? [{ operators: ['合成记一'] }, { skip: true }, { skip: true }] : [{ skip: true }, { skip: true }, { skip: true }]);
+    assert.deepEqual(gate(result.check, 5).evidence.filter(entry => entry.endsWith(' 每个班次都在岗')), records.length ? ['合成记一 每个班次都在岗'] : []);
+    assert.equal(result.check.applicable, !records.length, JSON.stringify(result.check.gates.filter(entry => entry.verdict === 'fail')));
+    for (const id of [1, 3, 9, 10, 11, 13, 15]) assert.equal(gate(result.check, id).verdict, 'pass', `gate ${id}: ${JSON.stringify(gate(result.check, id))}`);
     for (const id of [4, 7, 8, 12, 14]) assert.equal(gate(result.check, id).verdict, 'unverified', `gate ${id} has no declared rates, combinations, exclusions or figures`);
   }
 });
@@ -271,8 +345,8 @@ test('the CLI checks a plan file read-only and prints the same result as Markdow
   await writeFile(join(home, 'base-plans', 'mine.json'), baseText());
   const run = (action: string, input: unknown) => spawnSync(process.execPath, [script, action], { input: JSON.stringify(input), encoding: 'utf8', windowsHide: true,
     env: { ...process.env, MAA_SKILLS_HOME: home } });
-  const { layout: rooms, moodDefault, combos, exclusions, efficiency } = planInput();
-  const json = run('check', { planFile: 'base-plans/mine.json', layout: rooms, shifts: 2, moodDefault, combos, exclusions, efficiency, tablesFile: join(home, 'tables.json') });
+  const { layout: rooms, moodDefault, combos, exclusions, efficiency, runs } = planInput();
+  const json = run('check', { planFile: 'base-plans/mine.json', layout: rooms, shifts: 2, moodDefault, combos, exclusions, efficiency, runs, tablesFile: join(home, 'tables.json') });
   assert.equal(json.status, 0, json.stdout + json.stderr);
   const output = JSON.parse(json.stdout);
   assert.equal(output.ok, true); assert.equal(output.result.applicable, true);

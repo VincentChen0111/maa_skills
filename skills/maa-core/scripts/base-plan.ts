@@ -50,13 +50,13 @@ const endMinute = (value: number) => value === 1439 ? 1440 : value;
 export type LayoutRoom = { type: Facility; level: number; product?: string; position?: string };
 export type RoomSpec = { operators: string[]; sort?: true } | null;
 export type ShiftSpec = { name: string; description: string | null; period: [string, string][]; rooms: Partial<Record<Facility, (RoomSpec | undefined)[]>>;
-  fiammetta: { target: string; order: 'pre' | 'post' } | null; drones: { room: 'trading' | 'manufacture'; index: number; order: 'pre' | 'post' } | null; reasons: Record<string, string> };
+  fiammetta: { target: string; order: 'pre' } | null; drones: { room: 'trading' | 'manufacture'; index: number; order: 'pre' | 'post' } | null; reasons: Record<string, string> };
 export type MoodRate = { work: number; rest: number; basis: string };
 export type Combo = { name?: string; members: string[]; dependsOn?: string[]; basis: string };
 export type Exclusion = { members: string[]; basis: string };
 export type EfficiencyClaim = { plan: number; room: string; base: number; skill: number; global: number; total?: number; basis: string; conditions?: string; unmodelled?: string };
 export type PlanSpec = { title: string | null; description: string | null; layout: LayoutRoom[]; shifts: ShiftSpec[]; fill: boolean; mood?: Record<string, MoodRate>;
-  moodDefault?: MoodRate; combos?: Combo[]; exclusions?: Exclusion[]; efficiency?: EfficiencyClaim[]; tolerance: number };
+  moodDefault?: MoodRate; combos?: Combo[]; exclusions?: Exclusion[]; efficiency?: EfficiencyClaim[]; tolerance: number; runs?: string[] };
 /** Design default 2026-11-13: a plan must still hold when the shift change happens one hour late or early. */
 export const defaultTolerance = 1;
 
@@ -113,12 +113,14 @@ function parseShift(raw: unknown, index: number, layout: LayoutRoom[], issues: s
   }
   if (shift.rooms !== undefined && !isObject(shift.rooms)) issues.push(`shift-room-invalid:${index}`);
   const fia = object(shift.fiammetta), drone = object(shift.drones);
-  const fiammetta = shift.fiammetta === undefined ? null : filled(fia.target) && [undefined, 'pre', 'post'].includes(fia.order as string) && Object.keys(fia).every(key => ['target', 'order'].includes(key))
-    ? { target: fia.target, order: (fia.order ?? 'pre') as 'pre' | 'post' } : undefined;
+  // "post" is refused: MAA v6.21.4 runs the Fiammetta pair after every facility task (InfrastTask.cpp 513-525), so
+  // dormitory 1 ends with only the target and Fiammetta and the target leaves its work room for the whole shift.
+  const fiammetta = shift.fiammetta === undefined ? null : filled(fia.target) && [undefined, 'pre'].includes(fia.order as string) && Object.keys(fia).every(key => ['target', 'order'].includes(key))
+    ? { target: fia.target, order: 'pre' as const } : undefined;
   const drones = shift.drones === undefined ? null : ['trading', 'manufacture'].includes(drone.room as string) && Number.isSafeInteger(drone.index) && Number(drone.index) >= 1
     && [undefined, 'pre', 'post'].includes(drone.order as string) && Object.keys(drone).every(key => ['room', 'index', 'order'].includes(key))
     ? { room: drone.room as 'trading' | 'manufacture', index: Number(drone.index), order: (drone.order ?? 'pre') as 'pre' | 'post' } : undefined;
-  if (fiammetta === undefined) issues.push(`shift-fiammetta-invalid:${index}`);
+  if (fiammetta === undefined) issues.push(fia.order === 'post' ? `shift-fiammetta-post:${index}` : `shift-fiammetta-invalid:${index}`);
   if (drones === undefined) issues.push(`shift-drones-invalid:${index}`);
   const reasons = object(shift.reasons);
   if (shift.reasons !== undefined && (!isObject(shift.reasons) || Object.values(reasons).some(text => !filled(text)))) issues.push(`shift-reasons-invalid:${index}`);
@@ -126,7 +128,9 @@ function parseShift(raw: unknown, index: number, layout: LayoutRoom[], issues: s
     fiammetta: fiammetta ?? null, drones: drones ?? null, reasons: reasons as Record<string, string> };
 }
 
-const specKeys = ['title', 'description', 'layout', 'shifts', 'fill', 'mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance'];
+const specKeys = ['title', 'description', 'layout', 'shifts', 'fill', 'mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance', 'runs'];
+/** The user's daily MAA run times: at least one `hh:mm`, none twice. */
+const runTimes = (value: unknown) => Array.isArray(value) && value.length > 0 && value.every(entry => minuteOf(entry) !== null) && new Set(value).size === value.length ? [...value as string[]] : null;
 /** Validates the agent's proposal; returns issues instead of guessing. `allowed` names the caller's own extra keys. */
 export function parsePlanSpec(value: unknown, allowed: string[] = []): { spec?: PlanSpec; issues: string[] } {
   const input = object(value);
@@ -166,10 +170,16 @@ export function parsePlanSpec(value: unknown, allowed: string[] = []): { spec?: 
   }
   const tolerance = input.tolerance === undefined ? defaultTolerance : input.tolerance;
   if (!finite(tolerance) || tolerance < 0 || tolerance > 24) issues.push('tolerance-invalid');
+  const runs = input.runs === undefined ? undefined : runTimes(input.runs);
+  if (runs === null) issues.push('runs-invalid');
   if (issues.length || !layout) return { issues };
   return { spec: { title: typeof input.title === 'string' ? input.title : null, description: typeof input.description === 'string' ? input.description : null, layout,
     shifts: shifts as ShiftSpec[], fill: input.fill === true, ...(input.mood === undefined ? {} : { mood }), ...(moodDefault ? { moodDefault } : {}),
-    ...(combos ? { combos } : {}), ...(exclusions ? { exclusions } : {}), ...(efficiency ? { efficiency } : {}), tolerance: tolerance as number }, issues };
+    ...(combos ? { combos } : {}), ...(exclusions ? { exclusions } : {}), ...(efficiency ? { efficiency } : {}), tolerance: tolerance as number, ...(runs ? { runs } : {}) }, issues };
+}
+/** The check settings a proposal carries. Generation, the CLI check and the report's recheck all take them from here. */
+export function specChecks(spec: PlanSpec): Pick<CheckContext, 'mood' | 'moodDefault' | 'combos' | 'exclusions' | 'efficiency' | 'tolerance' | 'runs'> {
+  return { mood: spec.mood, moodDefault: spec.moodDefault, combos: spec.combos, exclusions: spec.exclusions, efficiency: spec.efficiency, tolerance: spec.tolerance, runs: spec.runs };
 }
 
 // ---- tables, facts and the MAA name table ---------------------------------------------------------------------------
@@ -295,23 +305,22 @@ export type Fill = { plan: number; room: string; operators: string[] };
 const fillOrder: Facility[] = ['control', 'trading', 'manufacture', 'power', 'meeting', 'hire', 'processing', 'recycle'];
 /**
  * Fills only rooms the proposal left out: owned operators, in snapshot order, with an active skill for that room and
- * no product mismatch, not already used in the shift and not on duty in the neighbouring shift (the previous one, and
- * for the last shift also the first, since shifts form a cycle). No benefit is compared.
+ * no product mismatch, not already used in the shift and not on duty in either neighbouring shift (the one before and
+ * the one after, around the cycle: the first shift's neighbours include the last one), as those shifts stand at that
+ * point, proposal plus earlier fills. No benefit is compared.
  */
 function fillShifts(spec: PlanSpec, owned: { name: string; skills: OperatorFacts['skills'] }[], facts: GameFacts): Fill[] {
   const fills: Fill[] = [];
   const working = (shift: ShiftSpec) => new Set(Object.entries(shift.rooms).filter(([facility]) => facility !== 'dormitory').flatMap(([, entries]) => (entries ?? []).flatMap(entry => entry?.operators ?? [])));
   spec.shifts.forEach((shift, index) => {
     const used = new Set(Object.values(shift.rooms).flatMap(entries => (entries ?? []).flatMap(entry => entry?.operators ?? [])));
-    // The shifts form a cycle: the first shift follows the last one (as proposed, before any filling), and the last
-    // shift is also followed by the first one.
     const count = spec.shifts.length;
-    const previous = new Set(count < 2 ? [] : [...working(spec.shifts[(index + count - 1) % count]!), ...index === count - 1 ? working(spec.shifts[0]!) : []]);
+    const neighbours = new Set(count < 2 ? [] : [...working(spec.shifts[(index + count - 1) % count]!), ...working(spec.shifts[(index + 1) % count]!)]);
     for (const facility of fillOrder) spec.layout.filter(room => room.type === facility).forEach((room, k) => {
       const entries = shift.rooms[facility] ??= [];
       const size = facts.capacity[facility]?.[room.level - 1];
       if (entries[k] !== undefined || !size) return;
-      const pick = owned.filter(operator => !used.has(operator.name) && !previous.has(operator.name)
+      const pick = owned.filter(operator => !used.has(operator.name) && !neighbours.has(operator.name)
         && operator.skills.some(skill => skill.status === 'active' && skill.room === gameRoom[facility] && !mismatched(skill.text, room.product))).slice(0, size).map(operator => operator.name);
       if (!pick.length) return;
       entries[k] = { operators: pick };
@@ -352,7 +361,7 @@ export function exportMaaPlan(spec: PlanSpec, base?: unknown): { plan: ObjectVal
     }
     const path = `plans[${index}].`;
     return keep(before, { name: shift.name, ...(shift.description ? { description: shift.description } : {}), period: shift.period.map(pair => [...pair]), duration: minutesOf(shift.period),
-      ...(shift.fiammetta ? { Fiammetta: keep(before.Fiammetta, { enable: true, target: shift.fiammetta.target, order: shift.fiammetta.order }, keys.Fiammetta, keys.Fiammetta, `${path}Fiammetta.`, dropped) } : {}),
+      ...(shift.fiammetta ? { Fiammetta: keep(before.Fiammetta, { enable: true, target: shift.fiammetta.target, order: 'pre' }, keys.Fiammetta, keys.Fiammetta, `${path}Fiammetta.`, dropped) } : {}),
       ...(shift.drones ? { drones: keep(before.drones, { enable: true, room: shift.drones.room, index: shift.drones.index, order: shift.drones.order }, keys.drones, keys.drones, `${path}drones.`, dropped) } : {}),
       rooms: keep(oldRooms, rooms, facilities, facilities, `${path}rooms.`, dropped) }, keys.plan, keys.plan, path, dropped);
   });
@@ -404,10 +413,10 @@ export async function writePlanFile(privateDirectory: string, target: unknown, t
 export type Verdict = 'pass' | 'fail' | 'unverified';
 export type GateResult = { gate: number; verdict: Verdict; evidence: string[] };
 export type CheckContext = { layout: LayoutRoom[]; snapshot: unknown; tables: PlanTables | null; names: NameTable; mood?: Record<string, MoodRate>; moodDefault?: MoodRate;
-  combos?: Combo[]; exclusions?: Exclusion[]; efficiency?: EfficiencyClaim[]; tolerance?: number; shifts?: number; reexport?: string | null; texts?: string[] };
+  combos?: Combo[]; exclusions?: Exclusion[]; efficiency?: EfficiencyClaim[]; tolerance?: number; runs?: string[]; shifts?: number; reexport?: string | null; texts?: string[] };
 export type PlanCheck = { applicable: boolean; errors: string[]; warnings: string[]; unverified: string[]; gates: GateResult[];
   efficiency: { claims: (EfficiencyClaim & { total: number })[]; daily: Record<string, number | null> }; operators: Record<string, OperatorFacts>;
-  facts: { moodCap: number | null; beds: number | null; fiammettaRate: number | null; tolerance: number } };
+  facts: { moodCap: number | null; beds: number | null; fiammettaRate: number | null; tolerance: number; runs: string[] | null } };
 export const gateTitles = ['同班次不重复、不切换异格', '持有、房间存在、不超容量', '计划数与布局一致', '心情上限与恢复', '没有干员全班次在岗', '宿舍床位', '组合与挂件同班',
   '互斥技能不同时', '技能与产物匹配', '控制中枢满员、光环不重复', '无人机与菲亚梅塔', '效率三部分之和与按时长加权', '文件与重新导出一致', '晚上线或早上线仍成立', '不称最优'];
 type Entry = { facility: Facility; index: number; path: string; operators: string[]; mentioned: string[]; dynamic: boolean; skip: boolean; autofill: boolean; product: unknown };
@@ -470,7 +479,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
   const errors: string[] = [], warnings: string[] = [], open: string[] = [], gates: GateResult[] = [];
   const tolerance = context.tolerance ?? defaultTolerance, facts = context.tables ? gameFacts(context.tables) : null;
   const empty: PlanCheck = { applicable: false, errors, warnings, unverified: open, gates, efficiency: { claims: [], daily: {} }, operators: {},
-    facts: { moodCap: facts?.moodCap ?? null, beds: null, fiammettaRate: facts?.fiammettaRate ?? null, tolerance } };
+    facts: { moodCap: facts?.moodCap ?? null, beds: null, fiammettaRate: facts?.fiammettaRate ?? null, tolerance, runs: null } };
   if (!isObject(file) || !Array.isArray(file.plans)) {
     errors.push(file === undefined ? 'plan-json-invalid' : 'plan-structure-invalid');
     gateTitles.forEach((_title, index) => gates.push({ gate: index + 1, verdict: 'unverified', evidence: ['排班文件结构无效，无法检查'] }));
@@ -536,6 +545,175 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
   const add = (gate: number, failures: string[], unsure: string[], notes: string[] = []) => gates.push({ gate, verdict: verdict(failures.length > 0, unsure.length > 0),
     evidence: [...new Set(failures.length ? failures : unsure.length ? unsure : notes)] });
 
+  // ---- the timeline: one owner for gates 3 (plans no run selects), 4, 5, 11 (Fiammetta swaps) and 14 ---------------
+  // An event model of MAA v6.21.4; tests/base-plan-conformance.test.ts holds it against an independent minute-by-minute
+  // model. At each run the GUI picks the first plan whose period holds the run time, both ends inclusive at hh:mm
+  // (InfrastTaskUserControlModel.cs 784-786). A run lands during its minute, so a run in a period's last minute, and any
+  // run during 23:59, is outside it; no match means plan 0. Without periods MAA moves to the next plan after each run.
+  // MaaCore clears and seats every listed room (a skipped room keeps whoever is in it) and runs the Fiammetta pair,
+  // dormitory 1 cleared to the target and then to the target and Fiammetta, before ("pre") or after ("post") the facility
+  // tasks (InfrastTask.cpp 478-527); she trades moods with the target only at full mood. Between runs a work room costs
+  // the work rate per hour, a dormitory gives the rest rate up to the cap (Fiammetta her own rate), and an operator in no
+  // room keeps its mood. Runs are the user's MAA times (`runs`), by default the points where the selected plan changes.
+  const runList = context.runs === undefined ? null : context.runs.map(minuteOf);
+  const runsGiven = runList !== null && runList.length > 0 && runList.every(value => value !== null) && new Set(runList).size === runList.length;
+  if (runList !== null && !runsGiven) errors.push('runs-invalid');
+  const selecting = plans.some(plan => plan.segments !== null);
+  const pickAt = (time: number) => {
+    const minute = ((time % 1440) + 1440) % 1440;
+    const index = plans.findIndex(plan => (plan.segments ?? []).some(([from, to]) => from <= minute && minute < (to === 1440 ? 1439 : to)));
+    return index < 0 ? 0 : index;
+  };
+  const changePoints = () => {
+    const starts = [...new Set(plans.flatMap(plan => (plan.segments ?? []).map(([from]) => from)))].sort((a, b) => a - b);
+    const changes = starts.filter((from, k) => pickAt(from) !== pickAt(starts[(k + starts.length - 1) % starts.length]!));
+    return starts.length ? changes.length ? changes : [starts[0]!] : null;
+  };
+  const runMinutes = !plans.length ? null : runsGiven ? (runList as number[]).sort((a, b) => a - b) : selecting ? changePoints() : null;
+  const knownHours = runMinutes !== null;
+  const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
+  const days = knownHours && !selecting ? plans.length / gcd(plans.length, runMinutes.length) : 1, cycle = knownHours ? days * 1440 : Math.max(1, plans.length) * 60;
+  // One cycle of runs. Without periods the cycle lasts until the rotation and the day line up again; without periods
+  // or run times only the order is known, so the runs get placeholder times and no mood is measured.
+  const slots: { at: number; plan: number }[] = !plans.length ? [] : !knownHours ? plans.map((_plan, index) => ({ at: index * 60, plan: index }))
+    : Array.from({ length: days * runMinutes.length }, (_value, j) => {
+      const at = Math.floor(j / runMinutes.length) * 1440 + runMinutes[j % runMinutes.length]!;
+      return { at, plan: selecting ? pickAt(at) : j % plans.length };
+    });
+  const clockOf = (time: number) => hm(((Math.round(time) % 1440) + 1440) % 1440);
+  const runLabel = (plan: number, at: number) => `${plans[plan]!.path}${knownHours ? `（${clockOf(at)}）` : ''}`;
+  const runText = knownHours ? runMinutes.map(hm).join('、') : null;
+  const rateOf = (name: string) => context.mood?.[name] ?? context.moodDefault ?? null;
+  const cap = facts?.moodCap ?? null, measurable = knownHours && cap !== null;
+  const fiammetta = mentioned.find(name => operators[name]!.id !== null && (facts?.fiammettaIds ?? []).includes(operators[name]!.id!)) ?? '菲亚梅塔';
+  const tracked = [...new Set([...mentioned, fiammetta])];
+  const workRate = (name: string) => rateOf(name)?.work ?? null;
+  const restRate = (name: string) => name === fiammetta ? facts?.fiammettaRate ?? null : rateOf(name)?.rest ?? null;
+  const roomKeys = new Set(facilities.filter(facility => facility !== 'training').flatMap(facility => layoutOf(facility).map((_room, k) => `${facility}[${k}]`)));
+  const isDorm = (key: string) => key.startsWith('dormitory[');
+  const firstDorm = roomKeys.has('dormitory[0]') ? 'dormitory[0]' : null;
+  type Stretch = { since: number; mood: number | null };
+  type Dip = { name: string; at: number; stretch: Stretch | null; rate: number; until: number | null };
+  type State = { place: Map<string, string>; mood: Map<string, number | null>; stretch: Map<string, Stretch>; open: Map<string, Dip> };
+  type SwapEvent = { at: number; plan: number; target: string; happened: boolean | null; mood: number | null };
+  type Trace = { dips: Dip[]; swaps: SwapEvent[]; runs: { at: number; plan: number; duty: Set<string> }[] };
+  const fresh = (): State => ({ place: new Map(), mood: new Map(tracked.map(name => [name, measurable ? cap : null])), stretch: new Map(), open: new Map() });
+  /** A snapshot shares its open dips with the run it came from; a state about to be played gets its own copies. */
+  const clone = (state: State, own: boolean): State => ({ place: new Map(state.place), mood: new Map(state.mood), stretch: new Map(state.stretch),
+    open: new Map([...state.open].map(([name, dip]) => [name, own ? { ...dip } : dip])) });
+  const onDuty = (state: State, name: string) => { const room = state.place.get(name); return room !== undefined && !isDorm(room); };
+  const advance = (state: State, from: number, to: number, trace: Trace) => {
+    if (to <= from) return;
+    const hours = (to - from) / 60;
+    for (const [name, room] of state.place) {
+      const mood = state.mood.get(name) ?? null;
+      if (mood === null) continue;
+      if (isDorm(room)) { const rate = restRate(name); state.mood.set(name, rate === null ? null : Math.min(cap!, mood + rate * hours)); continue; }
+      const rate = workRate(name);
+      if (rate === null) { state.mood.set(name, null); continue; }
+      const next = mood - rate * hours;
+      if (next < -epsilon && !state.open.has(name)) {
+        const dip: Dip = { name, at: from + mood / rate * 60, stretch: state.stretch.get(name) ?? null, rate, until: null };
+        trace.dips.push(dip);
+        state.open.set(name, dip);
+      }
+      state.mood.set(name, Math.min(cap!, Math.max(0, next)));
+    }
+  };
+  const execute = (state: State, at: number, index: number, trace: Trace) => {
+    const plan = plans[index]!, before = new Set(tracked.filter(name => onDuty(state, name)));
+    const seat = (key: string, names: string[]) => {
+      for (const [name, room] of [...state.place]) if (room === key && !names.includes(name)) state.place.delete(name);
+      for (const name of names) state.place.set(name, key);
+    };
+    const target = plan.fiammetta?.enable && filled(plan.fiammetta.target) ? plan.fiammetta.target : null, late = plan.fiammetta?.order === 'post';
+    let swapped: string | null = null;
+    const pair = () => {
+      const event: SwapEvent = { at, plan: index, target: target!, happened: null, mood: null };
+      trace.swaps.push(event);
+      if (firstDorm === null) { event.happened = false; return; }
+      seat(firstDorm, [target!]);
+      seat(firstDorm, [target!, fiammetta]);
+      const mine = state.mood.get(fiammetta) ?? null, theirs = state.mood.get(target!) ?? null;
+      event.mood = mine;
+      if (mine === null) return;
+      event.happened = mine >= cap! - epsilon;
+      if (!event.happened) return;
+      swapped = target;
+      state.mood.set(target!, mine);
+      state.mood.set(fiammetta, theirs);
+    };
+    if (target !== null && !late) pair();
+    for (const entry of plan.entries) { const key = `${entry.facility}[${entry.index}]`; if (live(entry) && roomKeys.has(key)) seat(key, entry.operators); }
+    if (target !== null && late) pair();
+    const close = (name: string) => { const dip = state.open.get(name); if (dip) { dip.until = at; state.open.delete(name); } };
+    for (const name of tracked) {
+      if (!onDuty(state, name)) { close(name); state.stretch.delete(name); }
+      else if (!before.has(name) || name === swapped) { close(name); state.stretch.set(name, { since: at, mood: state.mood.get(name) ?? null }); }
+    }
+    trace.runs.push({ at, plan: index, duty: new Set(tracked.filter(name => onDuty(state, name))) });
+  };
+  /** The runs of `count` cycles from cycle `first`; `moved` shifts one run, which then picks its plan at the time it runs. */
+  const eventsOf = (first: number, count: number, moved?: { cycle: number; slot: number; by: number }) => Array.from({ length: count }, (_value, c) => slots.map((slot, k) => {
+    const shifted = moved !== undefined && moved.cycle === first + c && moved.slot === k, at = (first + c) * cycle + slot.at + (shifted ? moved.by : 0);
+    return { at, plan: shifted && selecting ? pickAt(at) : slot.plan };
+  })).flat().sort((a, b) => a.at - b.at);
+  const play = (state: State, events: { at: number; plan: number }[], from: number, to: number, trace: Trace) => {
+    let now = from;
+    for (const event of events) { if (event.at >= to) break; advance(state, now, event.at, trace); execute(state, event.at, event.plan, trace); now = event.at; }
+    advance(state, now, to, trace);
+  };
+  const same = (a: State, b: State) => a.place.size === b.place.size && [...a.place].every(([name, room]) => b.place.get(name) === room) && a.open.size === b.open.size
+    && [...a.open.keys()].every(name => b.open.has(name)) && tracked.every(name => { const x = a.mood.get(name) ?? null, y = b.mood.get(name) ?? null;
+      return x === null ? y === null : y !== null && Math.abs(x - y) < 1e-7; });
+  const origin = slots[0]?.at ?? 0;
+  /**
+   * Plays whole cycles from full mood until a cycle repeats (period 1 to 4); without a repeat in 64 cycles, who keeps
+   * losing. One more cycle closes the stretches still open at the end, so every stretch in the window has its length.
+   */
+  const steady = (() => {
+    const state = fresh(), marks: State[] = [], traces: Trace[] = [];
+    const cycleFrom = (c: number, trace: Trace) => play(state, eventsOf(c, 1), c * cycle + origin, (c + 1) * cycle + origin, trace);
+    for (let c = 0; c <= 64; c += 1) {
+      const period = [1, 2, 3, 4].find(p => c - p >= 0 && same(state, marks[c - p]!));
+      if (period !== undefined || c === 64) {
+        const first = period === undefined ? c - 1 : c - period;
+        const drifting = period !== undefined ? [] : tracked.flatMap(name => { const now = state.mood.get(name) ?? null, then = marks[first]!.mood.get(name) ?? null;
+          return now !== null && then !== null && now < then - 1e-7 ? [[name, then - now] as [string, number]] : []; });
+        cycleFrom(c, { dips: [], swaps: [], runs: [] });
+        return { cycle: first, state: marks[first]!, window: traces.slice(first), drifting, settled: period !== undefined };
+      }
+      marks.push(clone(state, false));
+      const trace: Trace = { dips: [], swaps: [], runs: [] };
+      cycleFrom(c, trace);
+      traces.push(trace);
+    }
+    throw new Error('unreachable');
+  })();
+  const cycleTrace = { dips: steady.window.flatMap(trace => trace.dips), swaps: steady.window.flatMap(trace => trace.swaps), runs: steady.window.flatMap(trace => trace.runs) };
+  const workers = [...new Set(cycleTrace.runs.flatMap(run => [...run.duty]))].sort();
+  /** One run moved by `by` minutes in the cycle after the steady one, then four ordinary cycles. */
+  const deviate = (slot: number, by: number) => {
+    const state = clone(steady.state, true), trace: Trace = { dips: [], swaps: [], runs: [] }, from = steady.cycle * cycle + origin;
+    play(state, eventsOf(steady.cycle, 6, { cycle: steady.cycle + 1, slot, by }), from, from + 6 * cycle, trace);
+    return trace;
+  };
+  const dipText = (dip: Dip) => {
+    const start = dip.stretch, hours = start && dip.until !== null ? (dip.until - start.since) / 60 : null;
+    return `${dip.name}：${start ? `从 ${clockOf(start.since)} 起` : ''}${hours === null ? `一直在岗，每小时 ${dip.rate}` : `连续上班 ${+hours.toFixed(2)} 小时 × 每小时 ${dip.rate} = ${+(hours * dip.rate).toFixed(2)}`}，`
+      + `开始时心情 ${start?.mood === null || !start ? '未知' : +start.mood.toFixed(2)}，${clockOf(dip.at)} 降到 0`;
+  };
+  /** The mood facts every timeline check needs; returns false when moods cannot be measured. */
+  const moodReady = (unsure: string[]) => {
+    if (cap === null) unsure.push('心情上限没有从固定游戏表得到');
+    if (!knownHours) unsure.push('计划没有时间段，也没有给出 MAA 运行时间，班次时长未知');
+    const missing = workers.filter(name => !rateOf(name));
+    if (missing.length) unsure.push(`没有心情速率：${missing.join('、')}`);
+    if (dynamic) unsure.push('有房间由 MAA 运行时选人，这些人的心情无法核对');
+    return measurable;
+  };
+  const nominal = [...new Set([...cycleTrace.dips, ...steady.state.open.values()].map(dipText))];
+
   // 1. Once per shift; no switching between alternate forms of one operator within the cycle.
   {
     const unsure: string[] = [], failures = duplicates.map(entry => `同一班次重复：${entry}`), stationed = [...new Set([...work, ...dorm].flatMap(set => [...set]))].sort();
@@ -569,110 +747,36 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       else if (count && entries !== count) failures.push(`${plan.path} 的 ${facility} 有 ${entries} 间，布局 ${count} 间`);
       else if (!count && entries) failures.push(`${plan.path} 写了布局没有的 ${facility}`);
     }
+    if (knownHours && selecting) plans.forEach((plan, index) => { if (!slots.some(slot => slot.plan === index)) failures.push(`${plan.path} 在 MAA 运行时间 ${runText} 里一次也选不到`); });
     add(3, failures, unsure, ['计划数等于班次数，房间数和布局一致']);
   }
-  // ---- the shift ring: one owner for gates 4, 5, 11 (Fiammetta swaps) and 14 -------------------------------------
-  // MAA's GUI picks the plan whose period contains the run time, so the nominal shift changes are the points where the
-  // plan changes along the day; each change is one MAA run that puts the plan's operators in and performs its
-  // Fiammetta swap. A plan with several periods comes on duty several times a day, each time a separate slot. Without
-  // periods MAA moves to the next plan after each run: slots follow file order and their length is unknown.
-  type Slot = { plan: number; from: number | null; hours: number | null };
-  const slots: Slot[] = (() => {
-    if (!plans.length) return [];
-    if (plans.some(plan => !plan.segments?.length)) return plans.map((_plan, index) => ({ plan: index, from: null, hours: null }));
-    const pieces = plans.flatMap((plan, index) => plan.segments!.map(([from]) => ({ plan: index, from }))).sort((a, b) => a.from - b.from || a.plan - b.plan);
-    const changes = pieces.filter((piece, k) => piece.plan !== pieces[(k + pieces.length - 1) % pieces.length]!.plan);
-    const points = changes.length ? changes : [pieces[0]!];
-    return points.map((point, k) => ({ plan: point.plan, from: point.from, hours: (((points[(k + 1) % points.length]!.from - point.from) % 1440 + 1440) % 1440 || 1440) / 60 }));
-  })();
-  const slotName = (k: number) => `${plans[slots[k]!.plan]!.path}${slots[k]!.from === null ? '' : `（${hm(slots[k]!.from!)}）`}`;
-  const working = (k: number, name: string) => work[slots[k]!.plan]!.has(name), resting = (k: number, name: string) => dorm[slots[k]!.plan]!.has(name);
-  const rateOf = (name: string) => context.mood?.[name] ?? context.moodDefault ?? null;
-  const workers = [...new Set(work.flatMap(set => [...set]))].sort();
-  const cap = facts?.moodCap ?? null, knownHours = slots.every(slot => slot.hours !== null);
-  // Fiammetta swaps with the target only when she is at full mood, and recovers only while a dormitory list keeps her
-  // in (MAA moves her out otherwise). So a swap happens only if she recovered the deficit taken at the previous swap.
-  const fiammettaNames = mentioned.filter(name => operators[name]!.id !== null && (facts?.fiammettaIds ?? []).includes(operators[name]!.id!));
-  const fiammettaResting = (k: number) => fiammettaNames.some(name => resting(k, name));
-  type Swap = { slot: number; target: string; effective: boolean | null; reason: string };
-  const swaps: Swap[] = slots.flatMap((slot, k) => { const fia = plans[slot.plan]!.fiammetta;
-    return fia?.enable && filled(fia.target) ? [{ slot: k, target: fia.target, effective: null, reason: '' }] : []; });
-  swaps.forEach((swap, j) => {
-    const previous = swaps[(j + swaps.length - 1) % swaps.length]!, speed = rateOf(previous.target), recovery = facts?.fiammettaRate ?? null;
-    if (!facts) { swap.reason = '固定游戏表不可用，菲亚梅塔的技能未核对'; return; }
-    if (!slots.some((_slot, k) => fiammettaResting(k))) { swap.effective = false; swap.reason = `${slotName(swap.slot)}：菲亚梅塔不在任何计划的宿舍名单里，换班时被换出宿舍，恢复不到满心情，不会互换`; return; }
-    if (recovery === null || !knownHours || !speed) { swap.reason = `${slotName(swap.slot)}：菲亚梅塔能否恢复满心情未核实（缺恢复速率、班次时长或目标的心情速率）`; return; }
-    let deficit = 0;
-    for (let step = 1, k = (previous.slot + slots.length - 1) % slots.length; step <= slots.length && working(k, previous.target); step += 1, k = (k + slots.length - 1) % slots.length) {
-      deficit += slots[k]!.hours! * speed.work;
-      if (swaps.some(entry => entry.slot === k && entry.target === previous.target)) break;
-    }
-    let regained = 0;
-    for (let step = 0, k = previous.slot; step === 0 || k !== swap.slot && step < slots.length; step += 1, k = (k + 1) % slots.length) if (fiammettaResting(k)) regained += slots[k]!.hours! * recovery;
-    swap.effective = regained + epsilon >= deficit;
-    if (!swap.effective) swap.reason = `${slotName(swap.slot)}：菲亚梅塔在上一次互换接到 ${+deficit.toFixed(2)} 的心情缺口，到这次只恢复 ${+regained.toFixed(2)}，不是满心情，不会互换`;
-  });
-  type Step = { from: number | null; hours: number | null; works: boolean; reset: boolean | null | undefined };
-  const stepsOf = (name: string): Step[] => slots.map((slot, k) => ({ from: slot.from, hours: slot.hours, works: working(k, name),
-    reset: swaps.find(swap => swap.slot === k && swap.target === name)?.effective }));
-  /** Continuous stretches on duty around the ring; a swap that happens (or may happen) starts a new one at full mood. */
-  const runs = (steps: Step[]): { from: number | null; hours: number; start: 'rest' | 'swap' | 'unsure' | 'endless' }[] => {
-    const n = steps.length, splits = (k: number) => steps[k]!.reset !== undefined && steps[k]!.reset !== false;
-    const begins = steps.map((step, k) => step.works && (!steps[(k + n - 1) % n]!.works || splits(k)));
-    if (!begins.some(Boolean)) return steps.some(step => step.works) ? [{ from: null, hours: steps.reduce((sum, step) => sum + step.hours!, 0), start: 'endless' }] : [];
-    return steps.flatMap((step, k) => {
-      if (!begins[k]) return [];
-      let hours = step.hours!;
-      for (let j = (k + 1) % n; j !== k && steps[j]!.works && !splits(j); j = (j + 1) % n) hours += steps[j]!.hours!;
-      return [{ from: step.from, hours, start: step.reset === true ? 'swap' : step.reset === null ? 'unsure' : 'rest' }];
-    });
-  };
-  /** The mood facts every check below needs; returns false when the stretches cannot be measured. */
-  const moodReady = (unsure: string[]) => {
-    if (cap === null) unsure.push('心情上限没有从固定游戏表得到');
-    if (!knownHours) unsure.push('有计划没有时间段，班次时长未知');
-    const missing = workers.filter(name => !rateOf(name));
-    if (missing.length) unsure.push(`没有心情速率：${missing.join('、')}`);
-    if (dynamic) unsure.push('有房间由 MAA 运行时选人，这些人的心情无法核对');
-    return cap !== null && knownHours;
-  };
-  const capCheck = (stepsFor: (name: string) => Step[], when: string, failures: string[], unsure: string[]) => {
-    for (const name of workers.filter(name => rateOf(name))) for (const run of runs(stepsFor(name))) {
-      const speed = rateOf(name)!, used = run.hours * speed.work;
-      if (run.start === 'unsure') unsure.push(`${name} 在 ${run.from === null ? '' : hm(run.from)} 的菲亚梅塔互换能否发生未核实`);
-      if (used > cap! + epsilon) failures.push(`${when}${name}：${run.start === 'endless' ? '一直在岗，' : `从 ${run.from === null ? '换班' : hm(run.from)} 起`}连续上班 ${+run.hours.toFixed(2)} 小时 × 每小时 ${speed.work} = ${+used.toFixed(2)}，超过心情上限 ${cap}`);
-    }
-  };
-  // 4. Each continuous stretch (a Fiammetta swap starts a new one) stays within the mood cap; what the operator must
-  //    regain by itself over the cycle does not exceed its dormitory recovery.
+  // 4. On the timeline at the user's run times, played until it repeats, nobody's mood falls to 0.
   {
     const failures: string[] = [], unsure: string[] = [];
     if (moodReady(unsure)) {
-      capCheck(stepsOf, '', failures, unsure);
-      for (const name of workers.filter(name => rateOf(name))) {
-        const speed = rateOf(name)!, own = runs(stepsOf(name)).filter(run => run.start === 'rest' || run.start === 'endless').reduce((sum, run) => sum + run.hours * speed.work, 0);
-        const regained = slots.reduce((sum, slot, k) => sum + (resting(k, name) ? slot.hours! : 0), 0) * speed.rest;
-        if (own > regained + epsilon) failures.push(`${name}：一个周期要自己恢复 ${+own.toFixed(2)}，宿舍只恢复 ${+regained.toFixed(2)}`);
-      }
+      failures.push(...nominal);
+      failures.push(...steady.drifting.map(([name, loss]) => `${name}：每个周期心情净减少 ${+loss.toFixed(2)}（宿舍恢复不够上班消耗），会一直降到 0`));
+      if (!steady.settled && !steady.drifting.length) unsure.push('心情时间线在 64 个周期内没有稳定');
     }
-    add(4, failures, unsure, ['连续上班（按时间段排成一圈，菲亚梅塔互换后重新算）不超过心情上限，周期内要自己恢复的不超过宿舍恢复（速率见输入，属推断）']);
+    add(4, failures, unsure, [`按 MAA 运行时间 ${runText ?? ''} 逐次换班，模拟到稳定后没有人心情降到 0（速率见输入，属推断）`]);
   }
   // 5. Nobody is on duty in every shift. The exception is a Fiammetta target that is swapped at the start of every
-  //    shift it works, with every swap able to happen, and that drains no faster than she recovers.
+  //    shift, with every swap happening, and that drains no faster than she recovers.
   {
     const failures: string[] = [], unsure: string[] = [];
-    for (const name of workers.filter(name => slots.length > 0 && slots.every((_slot, k) => working(k, name)))) {
-      const own = swaps.filter(swap => swap.target === name), without = slots.map((_slot, k) => k).filter(k => !own.some(swap => swap.slot === k));
+    const duty = cycleTrace.runs.map(run => run.duty), always = duty.length ? [...duty[0]!].filter(name => duty.every(set => set.has(name))).sort() : [];
+    for (const name of always) {
+      const own = cycleTrace.swaps.filter(swap => swap.target === name), without = cycleTrace.runs.filter(run => !own.some(swap => swap.at === run.at));
       if (!own.length) { failures.push(`${name} 每个班次都在岗`); continue; }
-      if (without.length) { failures.push(`${name} 每个班次都在岗，但 ${without.map(slotName).join('、')} 开始时没有菲亚梅塔和它互换`); continue; }
-      if (own.some(swap => swap.effective === false)) { failures.push(`${name} 每个班次都在岗，但有的菲亚梅塔互换不会发生（见第 11 项）`); continue; }
+      if (without.length) { failures.push(`${name} 每个班次都在岗，但 ${[...new Set(without.map(run => runLabel(run.plan, run.at)))].join('、')} 开始时没有菲亚梅塔和它互换`); continue; }
+      if (own.some(swap => swap.happened === false)) { failures.push(`${name} 每个班次都在岗，但有的菲亚梅塔互换不会发生（见第 11 项）`); continue; }
       const speed = rateOf(name), limit = facts?.fiammettaRate ?? null;
       if (!speed || limit === null) { unsure.push(`${name} 是菲亚梅塔的目标，但${speed ? '固定游戏表没有给出菲亚梅塔的恢复速率' : '没有心情速率'}`); continue; }
       if (speed.work > limit + epsilon) { failures.push(`${name} 是菲亚梅塔的目标，每小时消耗 ${speed.work}，超过她每小时恢复的 ${limit}`); continue; }
-      if (own.some(swap => swap.effective === null)) unsure.push(`${name} 的菲亚梅塔互换能否每次都发生未核实`);
+      if (own.some(swap => swap.happened === null)) unsure.push(`${name} 的菲亚梅塔互换能否每次都发生未核实`);
     }
     if (dynamic && !failures.length) unsure.push('有房间由 MAA 运行时选人');
-    add(5, failures, unsure, ['没有干员每个班次都在岗']);
+    add(5, failures, unsure, ['没有干员每个班次都在岗（跳过的房间里 MAA 保持原样，也算在岗）']);
   }
   // 6. Free beds = beds minus permanent dormitory residents; resting operators fit.
   let beds: number | null = null;
@@ -764,6 +868,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       }
       if (plan.fiammetta?.enable) {
         if (!filled(plan.fiammetta.target) || !['pre', 'post'].includes(String(plan.fiammetta.order))) { failures.push(`${plan.path} 菲亚梅塔没有目标或顺序不对`); continue; }
+        if (plan.fiammetta.order === 'post') failures.push(`${plan.path} 菲亚梅塔的顺序是 post：MAA v6.21.4 在所有设施换班之后才执行菲亚梅塔的两步（InfrastTask.cpp 513–525），宿舍 1 被清空、只留目标 ${String(plan.fiammetta.target)} 和菲亚梅塔（不自动补满），宿舍 1 名单里的其他人这一班都不恢复心情，目标也离开工作的房间；只用 pre`);
         const index = plans.indexOf(plan);
         if (!work[index]!.has(plan.fiammetta.target) && !dorm[index]!.has(plan.fiammetta.target)) failures.push(`${plan.path} 菲亚梅塔的目标 ${plan.fiammetta.target} 不在这个班次`);
         const owner = facts?.fiammettaIds ?? [];
@@ -771,14 +876,23 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
         else if (!list(object(context.snapshot).operators).some(row => owner.includes(String(object(row).id)))) failures.push('账号快照里没有菲亚梅塔');
       }
     }
-    for (const swap of swaps) if (swap.effective === false) failures.push(swap.reason); else if (swap.effective === null && swap.reason) unsure.push(swap.reason);
+    const listed = plans.some(plan => plan.entries.some(entry => live(entry) && entry.facility === 'dormitory' && entry.operators.includes(fiammetta)));
+    for (const swap of [...new Map(cycleTrace.swaps.map(swap => [`${swap.plan}:${swap.at % 1440}:${swap.happened}`, swap])).values()]) {
+      const label = runLabel(swap.plan, swap.at);
+      if (swap.happened === false) failures.push(firstDorm === null ? `${label}：布局里没有宿舍，菲亚梅塔无法和 ${swap.target} 互换`
+        : `${label}：菲亚梅塔心情 ${swap.mood === null ? '未知' : +swap.mood.toFixed(2)}，不是满心情 ${cap}，不会和 ${swap.target} 互换${listed ? '' : '（她不在任何计划的宿舍名单里，换班时被换出宿舍，恢复不了心情）'}`);
+      else if (swap.happened === null) unsure.push(`${label}：菲亚梅塔能否恢复满心情未核实（缺心情上限、她的恢复速率、班次时长或目标的心情速率）`);
+    }
     add(11, failures, unsure, ['每次换班最多一个无人机目标；菲亚梅塔只在换班开始时使用一次，每次互换前都能恢复满心情']);
   }
   // 12. Efficiency = base + skill + global; daily values weighted by shift length.
   const claims: PlanCheck['efficiency']['claims'] = [], daily: Record<string, number | null> = {};
   {
     const failures: string[] = [], unsure = context.efficiency?.length ? [] : ['没有报告效率数字'];
-    const hours = plans.map(plan => plan.hours), known = hours.every(value => value !== null);
+    // Each plan is on duty from a run that selects it to the next run, so the timeline gives its hours a day.
+    const hours = knownHours ? plans.map((_plan, index) => slots.reduce((sum, slot, k) => sum + (slot.plan === index ? ((slots[(k + 1) % slots.length]!.at - slot.at + cycle) % cycle || cycle) : 0), 0) / 60 / days)
+      : plans.map(plan => plan.hours);
+    const known = hours.every(value => value !== null);
     for (const claim of context.efficiency ?? []) {
       const match = /^([a-z]+)\[(\d+)\]$/.exec(claim.room), total = claim.base + claim.skill + claim.global;
       if (!match || !isFacility(match[1]) || Number(match[2]) >= layoutOf(match[1]).length || !plans[claim.plan]) { failures.push(`效率条目 ${claim.room}（计划 ${claim.plan}）不在方案里`); continue; }
@@ -790,7 +904,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       daily[room] = known && each.every(value => value !== undefined) ? +(each.reduce((sum: number, value, index) => sum + value! * hours[index]!, 0) / hours.reduce((sum: number, value) => sum + value!, 0)).toFixed(6) : null;
       if (daily[room] === null) unsure.push(`${room} 不是每个计划都有效率数字或班次时长未知，没有按时长加权`);
     }
-    add(12, failures, unsure, ['效率为基础、技能、全局三部分之和，每日数值按班次时长加权（数字本身是推断）']);
+    add(12, failures, unsure, ['效率为基础、技能、全局三部分之和，每日数值按每个计划在时间线上的上班时长加权（数字本身是推断）']);
   }
   // 13. The delivered file equals a deterministic re-export of the same result.
   add(13, typeof context.reexport === 'string' && context.reexport !== text ? ['排班文件与重新导出的结果不同'] : [],
@@ -805,21 +919,32 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       if (cursor < 1440) failures.push(`${hm(cursor)}–24:00 没有计划（MAA 会退回第一个计划）`);
       notes.push('时间段覆盖全天（23:59 到 24:00 这一分钟 MAA 用第一个计划）');
     } else if (!timed.length) notes.push('没有时间段：MAA 每次换班后切到下一个计划，早晚上线不改变选中的计划');
-    // One change at a time, on the same ring as gate 4. Late: the previous plan stays on `tolerance` hours longer.
-    // Early: MAA's GUI still picks the plan whose period contains the run time, i.e. the previous one, so that change
-    // does not happen and the previous plan stays on until the next run.
+    // One run at a time, once, on the same timeline as gate 4: moved by the whole tolerance either way, and to both sides
+    // of every point within it where MAA would pick another plan. An early run that lands before the period of its plan
+    // selects the plan still running, and that plan stays on until a later run selects another.
     if (tolerance === 0) notes.push('容差为 0：不检查晚上线或提前运行');
-    else if (moodReady(unsure) && slots.length > 1) {
-      for (let k = 0; k < slots.length; k += 1) {
-        const before = (k + slots.length - 1) % slots.length;
-        capCheck(name => stepsOf(name).map((step, j) => j === before ? { ...step, hours: step.hours! + tolerance }
-          : j === k ? { ...step, from: step.from === null ? null : (step.from + tolerance * 60) % 1440, hours: Math.max(0, step.hours! - tolerance) } : step),
-          `晚 ${tolerance} 小时换到 ${slotName(k)} 时，`, failures, unsure);
-        if (timed.length === plans.length) capCheck(name => { const steps = stepsOf(name), merged = { ...steps[before]!, hours: steps[before]!.hours! + steps[k]!.hours! };
-          return steps.flatMap((step, j) => j === k ? [] : j === before ? [merged] : [step]); },
-        `提前运行时 MAA 仍选 ${slotName(before)} 的计划（还没到 ${slotName(k)} 的时间段），这次不换班，上一班一直上到下一次运行；要能提前换班，把这一班时间段的开始再提前 ${tolerance} 小时。`, failures, unsure);
+    else if (moodReady(unsure) && slots.length) {
+      if (nominal.length || steady.drifting.length) failures.push('按时运行已经有人心情降到 0（见第 4 项），早晚运行只会更差');
+      else {
+        const span = Math.round(tolerance * 60);
+        slots.forEach((slot, k) => {
+          // The same outcome from a smaller move to the same plan is said once.
+          const offsets = new Set([-span, span]), said = new Set<string>();
+          if (selecting) for (let by = 1 - span; by <= span; by += 1) if (pickAt(slot.at + by) !== pickAt(slot.at + by - 1)) for (const entry of [by - 1, by]) if (entry) offsets.add(entry);
+          for (const by of [...offsets].sort((a, b) => a - b)) {
+            const at = slot.at + by, picked = selecting ? pickAt(at) : slot.plan, moved = picked !== slot.plan, early = by < 0;
+            const lead = `${early ? '提前' : '晚'} ${+(Math.abs(by) / 60).toFixed(2)} 小时（${clockOf(at)}）运行时 MAA 选 ${plans[picked]!.path}${!moved ? '' : early
+              ? `（${clockOf(at)} 还不在 ${plans[slot.plan]!.path} 的时间段里），这次不换班` : `，不是 ${plans[slot.plan]!.path}`}`;
+            const texts = [...new Set(deviate(k, by).dips.map(dipText))].filter(text => !said.has(`${picked}|${text}`));
+            if (!texts.length) { if (moved && !said.has(`${picked}|`)) notes.push(`${lead}，心情仍不降到 0`); said.add(`${picked}|`); continue; }
+            texts.forEach(text => said.add(`${picked}|${text}`));
+            failures.push(...texts.map(text => `${lead}：${text}`));
+            if (early && moved && !said.has('remedy') && said.add('remedy')) failures.push(`${lead}；要能提前换班，把 ${plans[slot.plan]!.path} 时间段的开始提前到 ${clockOf(slot.at - span)} 或更早（前一个时间段相应提前结束），`
+              + `MAA 仍在 ${clockOf(slot.at)} 运行${runsGiven ? '' : `，并把 MAA 的运行时间写进 runs（${runText}）；不写 runs 时检查把时间段里换计划的时刻当成运行时间`}`);
+          }
+        });
+        notes.push(`MAA 运行时间 ${runText}（${runsGiven ? '输入的 runs' : '时间段里换计划的时刻'}）；任何一次运行提前或推迟不超过 ${tolerance} 小时，心情都不降到 0`);
       }
-      notes.push(`晚 ${tolerance} 小时换班，或提前运行（MAA 仍选上一班的计划，直到下一次运行），心情都不超限`);
     }
     add(14, failures, unsure, notes);
   }
@@ -830,7 +955,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
   }
   open.push(...gates.filter(entry => entry.verdict === 'unverified').map(entry => `gate-${entry.gate}`));
   return { applicable: errors.length === 0 && gates.every(entry => entry.verdict !== 'fail'), errors: [...new Set(errors)], warnings: [...new Set(warnings)], unverified: [...new Set(open)],
-    gates, efficiency: { claims, daily }, operators, facts: { moodCap: facts?.moodCap ?? null, beds, fiammettaRate: facts?.fiammettaRate ?? null, tolerance } };
+    gates, efficiency: { claims, daily }, operators, facts: { moodCap: facts?.moodCap ?? null, beds, fiammettaRate: facts?.fiammettaRate ?? null, tolerance, runs: knownHours ? runMinutes.map(hm) : null } };
 }
 
 // ---- freshness ---------------------------------------------------------------------------------------------------------
@@ -893,8 +1018,8 @@ export async function generateBasePlan(value: unknown, options: GenerateOptions 
   const exported = exportMaaPlan(spec, base), again = exportMaaPlan(spec, base);
   const written = await writePlanFile(root, input.target ?? `base-plans/plan-${digest(exported.text).slice(0, 16)}.json`, exported.text);
   const text = await readFile(written.file, 'utf8');
-  const check = checkPlanText(text, { layout: spec.layout, snapshot, tables: loaded.tables, names, mood: spec.mood, moodDefault: spec.moodDefault, combos: spec.combos,
-    exclusions: spec.exclusions, efficiency: spec.efficiency, tolerance: spec.tolerance, shifts: spec.shifts.length, reexport: again.text, texts: [...specTexts(spec), ...options.texts ?? []] });
+  const check = checkPlanText(text, { layout: spec.layout, snapshot, tables: loaded.tables, names, ...specChecks(spec), shifts: spec.shifts.length, reexport: again.text,
+    texts: [...specTexts(spec), ...options.texts ?? []] });
   const shot = object(snapshot);
   return { status: 'written', file: written.file, relative: written.relative, sha256: digest(text), text, plan: exported.plan, dropped: exported.dropped, fills, check, operators: check.operators, spec,
     inputs: { snapshot: snapshotFingerprint(snapshot), tables: tablesFingerprint(loaded.files), names: names.status === 'available' ? names.sha256 : null, plan: digest(text) },
@@ -923,28 +1048,28 @@ export function formatPlanMarkdown(check: PlanCheck, file?: { relative: string; 
   for (const claim of check.efficiency.claims) lines.push(`- 计划 ${claim.plan + 1} ${inline(claim.room)}：基础 ${claim.base} + 技能 ${claim.skill} + 全局 ${claim.global} = ${claim.total}；依据：${inline(claim.basis)}${
     claim.conditions ? `；条件：${inline(claim.conditions)}` : ''}${claim.unmodelled ? `；未建模：${inline(claim.unmodelled)}` : ''}`);
   for (const [room, value] of Object.entries(check.efficiency.daily)) lines.push(`- ${inline(room)} 每日加权：${value ?? '未核实'}`);
-  lines.push('', `心情上限 ${check.facts.moodCap ?? '未知'}；宿舍床位 ${check.facts.beds ?? '未知'}；菲亚梅塔每小时恢复 ${check.facts.fiammettaRate ?? '未知'}；早晚容差 ${check.facts.tolerance} 小时。`);
+  lines.push('', `心情上限 ${check.facts.moodCap ?? '未知'}；宿舍床位 ${check.facts.beds ?? '未知'}；菲亚梅塔每小时恢复 ${check.facts.fiammettaRate ?? '未知'}；早晚容差 ${check.facts.tolerance} 小时；MAA 运行时间 ${check.facts.runs?.join('、') ?? '未知'}。`);
   return `${lines.join('\n')}\n`;
 }
 
 // ---- CLI -------------------------------------------------------------------------------------------------------------
 
-const checkKeys = ['planFile', 'layout', 'shifts', 'mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance', 'snapshotFile', 'tablesFile', 'format'];
+const checkKeys = ['planFile', 'layout', 'shifts', 'mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance', 'runs', 'snapshotFile', 'tablesFile', 'format'];
 async function runCheck(input: ObjectValue): Promise<PlanCheck> {
   if (Object.keys(input).some(key => !checkKeys.includes(key))) throw new Error('plan-input-invalid');
   const { layout } = parseLayout(input.layout);
   if (!layout) throw new Error('plan-layout-invalid');
   const shifts = input.shifts;
   if (shifts !== undefined && (!Number.isSafeInteger(shifts) || Number(shifts) < 1)) throw new Error('plan-input-invalid');
-  const { spec, issues } = parsePlanSpec({ layout: input.layout, shifts: [{ name: 'check', period: '00:00-23:59' }], ...Object.fromEntries(['mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance']
+  const { spec, issues } = parsePlanSpec({ layout: input.layout, shifts: [{ name: 'check', period: '00:00-23:59' }], ...Object.fromEntries(['mood', 'moodDefault', 'combos', 'exclusions', 'efficiency', 'tolerance', 'runs']
     .filter(key => input[key] !== undefined).map(key => [key, input[key]])) });
   if (!spec) throw new Error(`plan-input-invalid`, { cause: issues });
   const settings = await readSettings(), root = await realpath(resolve(settings.privateDirectory)).catch(() => { throw new Error('plan-private-missing'); });
   const text = await readPrivateFile(root, input.planFile);
   const snapshot = await readSnapshot(root, input.snapshotFile);
   const loaded = input.tablesFile !== undefined ? await suppliedPlanTables(String(input.tablesFile)) : await loadPlanTables();
-  return checkPlanText(text, { layout, snapshot, tables: loaded.tables, names: await readMaaNameTable(settings.maaDirectory), mood: spec.mood, moodDefault: spec.moodDefault,
-    combos: spec.combos, exclusions: spec.exclusions, efficiency: spec.efficiency, tolerance: spec.tolerance, ...(shifts === undefined ? {} : { shifts: Number(shifts) }), reexport: null });
+  return checkPlanText(text, { layout, snapshot, tables: loaded.tables, names: await readMaaNameTable(settings.maaDirectory), ...specChecks(spec),
+    ...(shifts === undefined ? {} : { shifts: Number(shifts) }), reexport: null });
 }
 /** Owned operators with an active skill for each layout room; not ranked, since text percentages are not final yield. */
 async function runCandidates(input: ObjectValue): Promise<{ room: string; product: string | null; operators: { name: string; skills: string[]; productMismatch: boolean }[] }[]> {
