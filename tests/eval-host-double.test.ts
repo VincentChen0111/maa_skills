@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runScenario } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
-import { classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
+import { classifyHostRun, hostArguments, pathRedactor } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
@@ -138,4 +138,18 @@ test('the host-double mode refuses an executable that is not the double, and pla
     assert.equal(result.record.grade.status, 'unverified');
   }
   await assert.rejects(readFile(journal), /ENOENT/, 'the host was never started');
+});
+
+test('path placeholders cover every spelling a host or nested JSON may print, without touching a longer sibling name', () => {
+  const slash = String.fromCharCode(92);
+  const login = ['C:', 'Users', 'someone', '.maa-skills-eval', 'claude-config'].join(slash);
+  const redact = pathRedactor([[login, '<login-dir>']]);
+  for (const sample of [login + slash + 's.txt', JSON.stringify(login + slash + 's.txt'), JSON.stringify(JSON.stringify(JSON.stringify(login))),
+    login.replaceAll(slash, '/') + '/s.txt', '/c/Users/someone/.maa-skills-eval/claude-config/s.txt', '//c/Users/someone/.maa-skills-eval/claude-config/**',
+    'c:' + login.slice(2), 'file:///C:/Users/someone/.maa-skills-eval/claude-config']) {
+    assert.ok(!redact(sample).includes('maa-skills-eval'), sample);
+  }
+  assert.equal(redact(login + '-old' + slash + 'x'), login + '-old' + slash + 'x', 'a sibling with a longer name is a different path');
+  const spaced = pathRedactor([['/home/someone/eval login', '<login-dir>']]);
+  assert.equal(spaced('file:///home/someone/eval%20login/a'), 'file://<login-dir>/a');
 });

@@ -124,7 +124,8 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     await save('host.jsonl', raw);
     await save('stderr.txt', stderr);
     await save('invocation.json', JSON.stringify({ args, prompt, reason }, null, 2));
-    await save('scenario.json', JSON.stringify({ policy: { ...fixture.policy, secrets }, jsonInputs: custom?.jsonInputs ?? {}, jsonFiles: fixture.jsonFiles, commands: custom?.commands,
+    // The login directory never reaches disk, in any spelling: the saved scenario names it by placeholder only.
+    await save('scenario.json', JSON.stringify({ policy: { ...fixture.policy, secrets: [...fixture.policy.secrets, ...(loginDirectory ? ['<login-dir>'] : [])] }, jsonInputs: custom?.jsonInputs ?? {}, jsonFiles: fixture.jsonFiles, commands: custom?.commands,
       maaProcess: custom?.maaProcess, networkFixtures: custom?.networkFixtures, setupBoundary: custom?.setupBoundary, skills: custom?.skills }, null, 2));
     return { record, reason, artifactDirectory, fixtureDirectory: fixture.root };
   } finally { await fixture.dispose(); }

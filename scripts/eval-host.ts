@@ -1,5 +1,4 @@
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import type { Host } from './evaluation.ts';
 
 /** Version output prefix of `eval/host-double.mjs`; a run whose host reports it is a double, never a host success. */
@@ -158,17 +157,23 @@ export function claudeIsolationProblems(raw: string, expected: { tools: string[]
 
 /** Replaces each path, in every spelling a host or JSON may print it, with a fixed placeholder before anything is saved. */
 export function pathRedactor(entries: [string | undefined, string][]): (text: string) => string {
-  const variants: [string, string][] = [];
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Any run of slashes or backslashes separates segments: forward slashes, Windows separators, and any depth of JSON escaping.
+  const separator = '[\\\\/]+';
+  const patterns: { regex: RegExp; placeholder: string; length: number }[] = [];
   for (const [path, placeholder] of entries) {
     if (!path || path.length < 4) continue;
-    const forward = path.replaceAll('\\', '/');
-    for (const spelling of new Set([path, forward, path.replaceAll('\\', '\\\\'), JSON.stringify(path).slice(1, -1), pathToFileURL(path).href, claudePermissionPath(path)])) {
-      variants.push([spelling, placeholder]);
-    }
+    const parts = path.split(/[\\/]+/).filter(Boolean);
+    const drive = parts[0]?.match(/^([A-Za-z]):$/);
+    const segment = (part: string) => escape(part) === escape(encodeURIComponent(part)) ? escape(part) : `(?:${escape(part)}|${escape(encodeURIComponent(part))})`;
+    const body = (drive ? parts.slice(1) : parts).map(segment).join(separator);
+    // A drive letter also appears in MSYS and permission-rule form: `/c/...`, `//c/...`.
+    const head = drive ? `(?:${drive[1]}:|/${drive[1]})${separator}` : '[\\\\/]';
+    // A longer sibling name (`login-10` beside `login-1`) is a different path.
+    patterns.push({ regex: new RegExp(`${head}${body}(?![\\p{L}\\p{N}_.-])`, 'giu'), placeholder, length: path.length });
   }
-  variants.sort((a, b) => b[0].length - a[0].length);
-  const pattern = variants.length ? new RegExp(variants.map(([spelling]) => spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi') : undefined;
-  return (text) => pattern ? text.replace(pattern, (match) => variants.find(([spelling]) => spelling.toLowerCase() === match.toLowerCase())?.[1] ?? '<path>') : text;
+  patterns.sort((a, b) => b.length - a.length);
+  return (text) => patterns.reduce((current, { regex, placeholder }) => current.replace(regex, () => placeholder), text);
 }
 
 export function probeVersion(executable: string, executableArgs: string[], cwd: string, env: NodeJS.ProcessEnv): { available: boolean; version: string; double: boolean } {

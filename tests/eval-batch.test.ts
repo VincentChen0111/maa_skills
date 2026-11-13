@@ -33,7 +33,12 @@ Object.assign(process.env, { USERPROFILE: home, HOME: home, MAA_SKILLS_HOME: set
 process.on('exit', () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
 let counter = 0;
 const script = async (value: Record<string, unknown>) => { const file = join(root, `script-${counter++}.json`); await writeFile(file, JSON.stringify(value)); return file; };
-const login = async () => { const directory = join(root, `login-${counter++}`); await mkdir(directory); return directory; };
+// Each login directory carries a unique marker segment, so a leak is found in any spelling or escaping.
+const login = async () => {
+  const directory = join(root, `UniqueLoginMarker${counter++}x${Math.random().toString(36).slice(2, 8)}`, 'claude-config');
+  await mkdir(directory, { recursive: true }); return directory;
+};
+const marker = (directory: string) => directory.split(/[\\/]/).at(-2)!;
 const lines = async (file: string) => { try { return (await readFile(file, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)); } catch { return []; } };
 const planHost = { authStatus: { loggedIn: true, authMethod: 'claude.ai' }, steps: [{ fileRead: '{{sentinel}}', deny: true }, { shellRead: '{{sentinel}}', deny: true }] };
 async function files(directory: string): Promise<string[]> {
@@ -110,10 +115,9 @@ test('a quota stop aborts the rest of the batch, resume runs only unfinished sce
   assert.equal(resumed.manifest.attempts.length, 2, 'the resume repeats the auth preflight and read-protection check');
   const scenarioRuns = (await lines(journal)).length;
   assert.equal(scenarioRuns, (1 + 1 + 2) + (1 + 1 + 2), 'each attempt: preflight request, check, then scenarios; the finished first scenario never reran');
-  // Nothing saved for the batch names the login directory.
+  // Nothing the batch writes names the login directory, in any spelling: search every file for its unique segment.
   for (const path of await files(first.directory)) {
-    const text = await readFile(path, 'utf8');
-    for (const spelling of [directory, directory.replaceAll('\\', '/'), directory.replaceAll('\\', '\\\\')]) assert.ok(!text.toLowerCase().includes(spelling.toLowerCase()), relative(first.directory, path));
+    assert.ok(!(await readFile(path, 'utf8')).toLowerCase().includes(marker(directory).toLowerCase()), relative(first.directory, path));
   }
 });
 
