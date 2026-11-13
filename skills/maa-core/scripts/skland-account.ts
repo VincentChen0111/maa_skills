@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { createHash, createHmac } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,10 +16,11 @@ import { saveAccountSnapshot, snapshotFiles, type AccountSnapshot, type BaseOper
  */
 export type SklandFetch = (url: string, init: RequestInit) => Promise<Response>;
 export type SklandFailure = 'credential-unset' | 'credential-unreadable' | 'credential-expired' | 'windows-required' | 'protection-failed'
-  | 'network-failed' | 'service-error' | 'response-invalid' | 'binding-missing' | 'binding-ambiguous';
+  | 'network-failed' | 'service-error' | 'signature-rejected' | 'response-invalid' | 'binding-missing' | 'binding-ambiguous';
 export type CredentialReport = 'usable' | 'expired' | 'unreadable' | 'unset' | 'unchanged';
 export type SklandRead = { status: 'ok'; snapshot: AccountSnapshot; credential: CredentialReport } | { status: SklandFailure; snapshot: null; credential: CredentialReport };
-type Issue = 'network-failed' | 'service-error' | 'response-invalid' | 'credential-rejected' | 'binding-missing' | 'binding-ambiguous';
+type Issue = 'network-failed' | 'service-error' | 'signature-rejected' | 'response-invalid' | 'credential-rejected' | 'binding-missing' | 'binding-ambiguous';
+export type SnapshotDomain = 'operators' | 'inventory' | 'base';
 
 const grantUrl = 'https://as.hypergryph.com/user/oauth2/v2/grant';
 const zonai = 'https://zonai.skland.com';
@@ -71,13 +72,14 @@ const status = (value: unknown) => Number.isSafeInteger(value) ? value as number
 
 /**
  * Session with the two-level refresh: a 10000 reply refreshes the signing key once with the cred; a 10002
- * reply, or a refresh that is refused or does not help, exchanges the saved token again once. A grant the
- * service refuses, or 10000/10002 after both levels, is an explicit rejection of the credential.
+ * reply, or a refresh that is refused or does not help, exchanges the saved token again once. Only a grant
+ * the service explicitly refuses rejects the credential. Every data request follows a grant that accepted
+ * the token in this same read, so 10000/10002 after both levels is a signature, clock or header problem.
  */
 class SklandSession {
   private cred = ''; private key = ''; private refreshed = false; private exchangedAgain = false;
-  private readonly fetcher: SklandFetch; private readonly userToken: string;
-  constructor(fetcher: SklandFetch, userToken: string) { this.fetcher = fetcher; this.userToken = userToken; }
+  private readonly fetcher: SklandFetch; private readonly userToken: string; private readonly clock: () => number;
+  constructor(fetcher: SklandFetch, userToken: string, clock: () => number) { this.fetcher = fetcher; this.userToken = userToken; this.clock = clock; }
   async start() { await this.exchange(); }
   private async exchange() {
     const grant = await call(this.fetcher, grantUrl, { method: 'POST', headers: json, body: JSON.stringify({ appCode: skland.appCode, ['token']: this.userToken, type: 0 }) });
@@ -98,7 +100,7 @@ class SklandSession {
     return false;
   }
   private signed(path: string, query: string): Record<string, string> {
-    const header = { platform: '', timestamp: String(Math.floor(Date.now() / 1000) - 1), dId: '', vName: '' };
+    const header = { platform: '', timestamp: String(Math.floor(this.clock() / 1000) - 1), dId: '', vName: '' };
     const hex = createHmac('sha256', this.key).update(`${path}${query}${header.timestamp}${JSON.stringify(header)}`).digest('hex');
     return { cred: this.cred, sign: createHash('md5').update(hex).digest('hex'), ...header };
   }
@@ -108,7 +110,7 @@ class SklandSession {
       if (reply.code === 0) { if (!isObject(reply.data)) throw new ReadFailure('response-invalid'); return reply.data; }
       if (reply.code !== 10000 && reply.code !== 10002) throw new ReadFailure(status(reply.code) !== undefined ? 'service-error' : 'response-invalid');
       if (reply.code === 10000 && !this.refreshed && !this.exchangedAgain) { this.refreshed = true; if (await this.refreshKey()) continue; }
-      if (this.exchangedAgain) throw new ReadFailure('credential-rejected');
+      if (this.exchangedAgain) throw new ReadFailure('signature-rejected');
       this.exchangedAgain = true; await this.exchange();
     }
   }
@@ -140,13 +142,16 @@ export async function readSklandAccount(options: { privateDirectory: string; fet
   const record = async (outcome: 'usable' | 'expired') => {
     if (await recordCredentialOutcome('skland', saved.revision, outcome, { privateDirectory }).catch(() => false)) credential = outcome;
   };
-  const session = new SklandSession(options.fetcher ?? ((url, init) => fetch(url, init)), saved.values['token'] ?? '');
+  const now = options.now ?? (() => new Date(Date.now()));
+  const session = new SklandSession(options.fetcher ?? ((url, init) => fetch(url, init)), saved.values['token'] ?? '', () => now().getTime());
   try {
     await session.start();
     const binding = await session.get(skland.binding);
     await record('usable');
     const query = `uid=${encodeURIComponent(chosenRole(binding))}`;
     const info = await session.get(skland.info, query);
+    // Player info without the checked operator structure means the interface changed: no usable read.
+    if (operators(isObject(info) ? info : {}).coverage.status === 'invalid') throw new ReadFailure('response-invalid');
     let cultivate: unknown; let cultivateIssue: Issue | undefined;
     try { cultivate = await session.get(skland.cultivate, query); }
     catch (error) {
@@ -154,8 +159,7 @@ export async function readSklandAccount(options: { privateDirectory: string; fet
       cultivateIssue = error.issue;
       if (error.issue === 'credential-rejected') await record('expired');
     }
-    const readAt = (options.now ?? (() => new Date()))().toISOString();
-    return { status: 'ok', snapshot: sklandSnapshot({ info, cultivate, cultivateIssue }, readAt), credential };
+    return { status: 'ok', snapshot: sklandSnapshot({ info, cultivate, cultivateIssue }, now().toISOString()), credential };
   } catch (error) {
     const issue: Issue = error instanceof ReadFailure ? error.issue : 'response-invalid';
     if (issue === 'credential-rejected') { await record('expired'); return { status: 'credential-expired', snapshot: null, credential }; }
@@ -286,6 +290,14 @@ export function sklandSnapshot(parts: Parts, readAt: string): AccountSnapshot {
     coverage: { operators: operatorPart.coverage, inventory: inventoryPart.coverage, base: basePart.coverage,
       medicine: noSource(), vouchers: noSource(), stageClears: noSource() } };
 }
+/**
+ * Domains this read did not obtain, because the request failed (`unavailable`), the reply did not have the
+ * checked structure (`invalid`) or the domain was not returned (`missing`). Such a read never replaces an
+ * existing Skland snapshot; it may only become the first one, with the reasons kept in `coverage`.
+ */
+export function incompleteDomains(snapshot: AccountSnapshot): SnapshotDomain[] {
+  return (['operators', 'inventory', 'base'] as const).filter(domain => !['complete', 'partial'].includes(snapshot.coverage[domain].status));
+}
 
 // ---- comparing MAA and Skland snapshots ------------------------------------------------------------
 
@@ -338,7 +350,9 @@ export function compareAccountSnapshots(leftInput: unknown, rightInput: unknown)
 const zh = (language: string) => language.toLowerCase().startsWith('zh');
 const repairs: Record<SklandFailure, string> = { 'credential-unset': 'enter-credential', 'credential-unreadable': 'reenter-credential', 'credential-expired': 'reenter-credential',
   'windows-required': 'use-windows', 'protection-failed': 'retry-later', 'network-failed': 'retry-later', 'service-error': 'retry-later',
-  'response-invalid': 'report-issue', 'binding-missing': 'bind-role-in-skland', 'binding-ambiguous': 'set-default-role-in-skland' };
+  'signature-rejected': 'check-system-time', 'response-invalid': 'report-issue', 'binding-missing': 'bind-role-in-skland', 'binding-ambiguous': 'set-default-role-in-skland' };
+/** A partial read: a domain whose reply had the wrong structure points to an interface change; a failed request to a retry. */
+const partialRepair = (snapshot: AccountSnapshot) => incompleteDomains(snapshot).some(domain => snapshot.coverage[domain].status === 'invalid') ? 'report-issue' : 'retry-later';
 const disclosureText = (language: string) => zh(language)
   ? ['请注意：', '1. 截至 2026-11-13，没有找到鹰角网络对第三方调用森空岛接口的公开表态。', '2. 森空岛数据比游戏内实际状态滞后多久没有测过；读取时间不等于游戏内的数据时间。']
   : ['Please note:', '1. As of 2026-11-13, we found no public statement from Hypergryph about third parties calling the Skland API.',
@@ -357,6 +371,8 @@ export function formatSklandFailure(failure: SklandFailure, language = 'zh-CN'):
     'network-failed': ['连不上森空岛或超时。凭据状态不变，稍后再试。', 'Skland could not be reached or timed out. The credential state is unchanged; try again later.'],
     'service-error': ['森空岛拒绝了这次请求，但没有表明是凭据问题（可能是限流或风控）。凭据状态不变，本工具不会自动重试，请稍后再试。',
       'Skland refused this request without saying the credential is bad (possibly rate limiting or risk control). The credential state is unchanged; this tool does not retry automatically. Try again later.'],
+    'signature-rejected': ['森空岛在本次读取中接受了 token，却仍拒绝请求签名，所以不是 token 过期，凭据状态不变。请检查电脑的系统时间和时区是否准确；时间正确仍失败时，接口可能已经变化，请报告问题。',
+      'Skland accepted the token in this read but still refused the request signature, so the token has not expired and its state is unchanged. Check that the computer\'s clock and time zone are correct; if they are and it still fails, the interface may have changed, so please report it.'],
     'response-invalid': ['森空岛的回复格式和已核对的不一致，本次不采用。接口可能已经变化，请报告问题。',
       'The Skland reply does not match the checked format and was not used. The interface may have changed; please report it.'],
     'binding-missing': ['这个森空岛账号下没有可用的明日方舟角色。请先在森空岛 App 里绑定角色。', 'No usable Arknights role is bound to this Skland account. Bind one in the Skland app first.'],
@@ -366,8 +382,9 @@ export function formatSklandFailure(failure: SklandFailure, language = 'zh-CN'):
   const first = zh(language) ? '没有读到新的账号数据；已有的森空岛快照（如果有）保持原样，不能当作本次读取的数据。' : 'No new account data was read; an existing Skland snapshot (if any) is unchanged and is not data from this read.';
   return `${first}\n\n${text[failure][zh(language) ? 0 : 1]}\n`;
 }
-export function formatSklandSummary(snapshot: AccountSnapshot, credential: CredentialReport, language = 'zh-CN'): string {
+export function formatSklandSummary(snapshot: AccountSnapshot, credential: CredentialReport, language = 'zh-CN', save?: 'saved' | 'first' | 'kept'): string {
   const z = zh(language), c = snapshot.coverage;
+  const failed = incompleteDomains(snapshot).map(domain => z ? { operators: '干员', inventory: '仓库', base: '基建' }[domain] : domain).join(z ? '、' : ', ');
   const unknown = z ? '未知' : 'unknown';
   const lines = z ? ['# 森空岛账号快照', '', '来源：森空岛（只读；不保存账号标识）', '', `读取时间：${snapshot.readAt}（本次从森空岛读取的时间，不是游戏内的数据时间）`, '',
     `- 干员：${c.operators.status} (${snapshot.operators.length})`, '- 技能等级、专精和模组：来自森空岛；没有返回的保持未知',
@@ -381,6 +398,17 @@ export function formatSklandSummary(snapshot: AccountSnapshot, credential: Crede
       '- Sanity potions and other medicine: no source', '- Vouchers and tickets: no source', '- Per-stage clear status: no source'];
   const partial = (['operators', 'inventory', 'base'] as const).filter(key => c[key].issues.length).map(key => `${key}: ${c[key].issues.join(', ')}`);
   if (partial.length) lines.push('', (z ? '缺失或未采用：' : 'Missing or not used: ') + partial.join('; '));
+  if (failed) {
+    const retry = partialRepair(snapshot) === 'report-issue'
+      ? (z ? '回复格式和已核对的不一致，接口可能已经变化，请报告问题。' : 'A reply did not have the checked format; the interface may have changed, so please report it.')
+      : (z ? '请稍后再试。' : 'Try again later.');
+    lines.push('', save === 'kept'
+      ? (z ? `本次读取不完整（没有读到：${failed}），已有的森空岛快照保持不变，这次结果没有保存。${retry}` : `This read is incomplete (not read: ${failed}). The existing Skland snapshot is unchanged and this result was not saved. ${retry}`)
+      : save === 'first'
+        ? (z ? `本次读取不完整（没有读到：${failed}）。这是第一份森空岛快照，已保存，没读到的部分标为不可用或无效并写明原因；之后完整读取时会替换它。${retry}`
+          : `This read is incomplete (not read: ${failed}). It is the first Skland snapshot and was saved with those parts marked unavailable or invalid with the reason; a later complete read replaces it. ${retry}`)
+        : (z ? `本次读取不完整（没有读到：${failed}）。${retry}` : `This read is incomplete (not read: ${failed}). ${retry}`));
+  }
   if (credential === 'expired') lines.push('', z ? '森空岛在本次读取中途拒绝了 token，已记为已知过期；请重新粘贴 token。' : 'Skland refused the token during this read; it is now recorded as expired. Paste a new token.');
   lines.push('', ...disclosureText(language), '', z ? '只包含已读取的事实；未列出的库存是未知，不是零。' : 'Only facts that were read are included; unlisted inventory is unknown, not zero.');
   return `${lines.join('\n')}\n`;
@@ -407,6 +435,11 @@ export function formatComparison(comparison: Comparison, language = 'zh-CN', lim
 // ---- CLI -----------------------------------------------------------------------------------------------
 
 type Request = { currentLanguage?: string; format?: 'json' | 'markdown'; maaFile?: string; sklandFile?: string };
+class KeepExisting extends Error {}
+/** Whether a snapshot file is there; anything but "does not exist" counts as present, so it is never replaced blindly. */
+async function present(path: string): Promise<boolean> {
+  try { await stat(path); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ENOENT'; }
+}
 function request(value: unknown, action: string): Request {
   const input = object(value);
   const allowed = action === 'compare' ? ['currentLanguage', 'format', 'maaFile', 'sklandFile'] : ['currentLanguage', 'format'];
@@ -443,10 +476,21 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       const result = await readSklandAccount({ privateDirectory: settings.privateDirectory });
       if (result.status !== 'ok') fail({ error: result.status, credential: result.credential, repair: repairs[result.status], summary: formatSklandFailure(result.status, language) });
       else {
-        const snapshot = action === 'import' ? await saveAccountSnapshot(settings.privateDirectory, snapshotFiles.skland, async () => result.snapshot) : result.snapshot;
-        const summary = formatSklandSummary(snapshot, result.credential, language);
+        const snapshot = result.snapshot, failedDomains = incompleteDomains(snapshot);
+        let save: 'saved' | 'first' | 'kept' | undefined;
+        if (action === 'import') {
+          // Decided under the shared write lock: an incomplete read may only become the first Skland snapshot.
+          const target = join(settings.privateDirectory, snapshotFiles.skland);
+          await saveAccountSnapshot(settings.privateDirectory, snapshotFiles.skland, async () => {
+            if (failedDomains.length && await present(target)) { save = 'kept'; throw new KeepExisting(); }
+            save = failedDomains.length ? 'first' : 'saved';
+            return snapshot;
+          }).catch(error => { if (!(error instanceof KeepExisting)) throw error; });
+        }
+        const summary = formatSklandSummary(snapshot, result.credential, language, save);
         if (input.format === 'markdown') process.stdout.write(summary);
-        else console.log(JSON.stringify({ ok: true, saved: action === 'import', source: 'skland', readAt: snapshot.readAt, coverage: snapshot.coverage,
+        else console.log(JSON.stringify({ ok: true, saved: save === 'saved' || save === 'first', source: 'skland', readAt: snapshot.readAt, coverage: snapshot.coverage,
+          failedDomains, ...(failedDomains.length ? { repair: partialRepair(snapshot) } : {}),
           operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd, baseRoomCount: snapshot.base?.rooms.length ?? 0,
           credential: result.credential, disclosures: sklandDisclosures, summary }));
       }

@@ -168,45 +168,58 @@ test('a token the service refuses to exchange is recorded expired; nothing else 
   assert.equal(await state(f), 'expired');
 });
 
-test('the two-level refresh follows the verified order and gives up with an expired credential', async (t) => {
-  const cases: [Record<string, unknown[]>, string[], string][] = [
-    [{ binding: [{ code: 10000 }, 'ok'] }, ['grant', 'cred', 'binding', 'refresh', 'binding', 'info', 'cultivate'], 'ok'],
-    [{ binding: [{ code: 10002 }, 'ok'] }, ['grant', 'cred', 'binding', 'grant', 'cred', 'binding', 'info', 'cultivate'], 'ok'],
-    [{ info: [{ code: 10000 }, { code: 10002 }, 'ok'] }, ['grant', 'cred', 'binding', 'info', 'refresh', 'info', 'grant', 'cred', 'info', 'cultivate'], 'ok'],
-    [{ binding: [{ code: 10000 }], refresh: [{ code: 10002 }] }, ['grant', 'cred', 'binding', 'refresh', 'grant', 'cred', 'binding'], 'credential-expired'],
-    [{ binding: [{ code: 10002 }, { code: 10000 }] }, ['grant', 'cred', 'binding', 'grant', 'cred', 'binding'], 'credential-expired'],
-    [{ binding: [{ code: 10000 }, { code: 10000 }, { code: 10000 }] }, ['grant', 'cred', 'binding', 'refresh', 'binding', 'grant', 'cred', 'binding'], 'credential-expired'],
-    [{ binding: [{ code: 10002 }], grant: ['ok', { status: 3 }] }, ['grant', 'cred', 'binding', 'grant'], 'credential-expired'],
+test('the two-level refresh follows the verified order; only an explicit grant refusal records expiry', async (t) => {
+  const cases: [Record<string, unknown[]>, string[], string, string][] = [
+    [{ binding: [{ code: 10000 }, 'ok'] }, ['grant', 'cred', 'binding', 'refresh', 'binding', 'info', 'cultivate'], 'ok', 'usable'],
+    [{ binding: [{ code: 10002 }, 'ok'] }, ['grant', 'cred', 'binding', 'grant', 'cred', 'binding', 'info', 'cultivate'], 'ok', 'usable'],
+    [{ info: [{ code: 10000 }, { code: 10002 }, 'ok'] }, ['grant', 'cred', 'binding', 'info', 'refresh', 'info', 'grant', 'cred', 'info', 'cultivate'], 'ok', 'usable'],
+    // The grant endpoint accepted the token again in this read, so a persisting 10000/10002 is a signature or header problem.
+    [{ binding: [{ code: 10000 }], refresh: [{ code: 10002 }] }, ['grant', 'cred', 'binding', 'refresh', 'grant', 'cred', 'binding'], 'signature-rejected', 'unverified'],
+    [{ binding: [{ code: 10002 }, { code: 10000 }] }, ['grant', 'cred', 'binding', 'grant', 'cred', 'binding'], 'signature-rejected', 'unverified'],
+    [{ binding: [{ code: 10000 }, { code: 10000 }, { code: 10000 }] }, ['grant', 'cred', 'binding', 'refresh', 'binding', 'grant', 'cred', 'binding'], 'signature-rejected', 'unverified'],
+    [{ binding: [{ code: 10002 }], grant: ['ok', { status: 3 }] }, ['grant', 'cred', 'binding', 'grant'], 'credential-expired', 'expired'],
   ];
-  for (const [steps, expected, status] of cases) {
+  for (const [steps, expected, status, saved] of cases) {
     const f = await fixture(t);
     const { double, result } = read(f, { steps });
     const outcome = await result;
     assert.deepEqual(kinds(double.trace), expected, JSON.stringify(steps));
     assert.equal(outcome.status, status, JSON.stringify(steps));
-    assert.equal(await state(f), status === 'ok' ? 'usable' : 'expired');
+    assert.equal(await state(f), saved, JSON.stringify(steps));
     for (const entry of double.trace.filter(item => item.kind === 'refresh')) assert.equal(entry.credMatches, true);
   }
+});
+
+test('a reader clock ten minutes off is reported as a signature problem and never marks the valid token expired', async (t) => {
+  const f = await fixture(t);
+  const double = doubles.createSklandDouble();
+  const outcome = await readSklandAccount({ privateDirectory: f.privateDirectory, fetcher: double.fetch, protector, now: () => new Date(Date.now() - 600_000) });
+  assert.deepEqual(kinds(double.trace), ['grant', 'cred', 'binding', 'refresh', 'binding', 'grant', 'cred', 'binding']);
+  assert.ok(double.trace.filter(entry => entry.kind === 'binding').every(entry => entry.signed === false), 'the double saw stale signatures');
+  assert.equal(outcome.status, 'signature-rejected'); assert.equal(outcome.credential, 'unchanged'); assert.equal(outcome.snapshot, null);
+  assert.equal(await state(f), 'unverified', 'the token the grant endpoint accepted stays as it was');
 });
 
 test('network failures, refusals the service does not tie to the credential and broken responses are reported without marking expiry', async (t) => {
   for (const [steps, status] of [
     [{ grant: ['network'] }, 'network-failed'], [{ binding: ['network'] }, 'network-failed'], [{ grant: [{ http: 503 }] }, 'service-error'],
     [{ grant: [{ http: 429 }] }, 'service-error'], [{ cred: [{ code: 10001 }] }, 'service-error'], [{ binding: [{ code: 10001 }] }, 'service-error'],
-    [{ info: [{ code: 50000 }] }, 'service-error'], [{ binding: ['not-json'] }, 'response-invalid'], [{ info: [{ data: { chars: 'broken' } }] }, 'ok'],
+    [{ info: [{ code: 50000 }] }, 'service-error'], [{ binding: ['not-json'] }, 'response-invalid'], [{ info: [{ data: { chars: 'broken' } }] }, 'response-invalid'],
+    [{ info: [{ data: { status: {}, charList: [], buildingInfo: {} } }] }, 'response-invalid'],
   ] as [Record<string, unknown[]>, string][]) {
     const f = await fixture(t);
     const { double, result } = read(f, { steps });
     const outcome = await result;
     assert.equal(outcome.status, status, JSON.stringify(steps));
+    assert.equal(outcome.snapshot, null, 'player info without the checked operator structure is not a usable read');
     assert.notEqual(await state(f), 'expired', `${JSON.stringify(steps)} must not mark the credential expired`);
     assert.equal(double.trace.filter(item => item.kind === 'refresh').length, 0, 'no refresh without an authorization signal');
-    if (status === 'ok') assert.deepEqual(outcome.snapshot!.coverage.operators, { status: 'invalid', issues: ['invalid-player-info'] });
   }
 });
 
-test('an incomplete cultivation read still yields a new snapshot with unknown inventory instead of old data', async (t) => {
-  for (const [step, issue] of [['network', 'network-failed'], [{ code: 10001 }, 'service-error'], [{ data: { items: 'x' } }, 'invalid-cultivate']] as const) {
+test('a failed cultivation request leaves inventory unavailable with its reason in the read result', async (t) => {
+  for (const [step, issue] of [['network', 'network-failed'], [{ code: 10001 }, 'service-error'], [{ code: 10000 }, 'signature-rejected'],
+    [{ data: { items: 'x' } }, 'invalid-cultivate']] as const) {
     const f = await fixture(t);
     const { result } = read(f, { steps: { cultivate: [step] } });
     const outcome = await result;
@@ -271,7 +284,9 @@ test('inspect reads without saving; failures exit non-zero with an actionable co
   const earlier = await readFile(join(f.privateDirectory, 'account-snapshot-skland.json'), 'utf8');
   for (const [steps, error, repair] of [
     [{ grant: [{ status: 3 }] }, 'credential-expired', 'reenter-credential'], [{ binding: ['network'] }, 'network-failed', 'retry-later'],
-    [{ binding: [{ code: 10001 }] }, 'service-error', 'retry-later'],
+    [{ binding: [{ code: 10001 }] }, 'service-error', 'retry-later'], [{ binding: [{ code: 10000 }] }, 'signature-rejected', 'check-system-time'],
+    // The reviewer's format change: code 0, but player info and cultivation no longer have the checked structure.
+    [{ info: [{ data: { status: {}, charList: [], buildingInfo: {} } }], cultivate: [{ data: { itemList: [] } }] }, 'response-invalid', 'report-issue'],
   ] as [Record<string, unknown[]>, string, string][]) {
     const failed = runCli(f, 'import', {}, { steps });
     assert.equal(failed.code, 1, failed.stdout);
@@ -287,6 +302,37 @@ test('inspect reads without saving; failures exit non-zero with an actionable co
   assert.equal(output.error, 'credential-unset'); assert.equal(output.repair, 'enter-credential');
   assert.match(output.summary, /credentials\.ts input skland/); assert.doesNotMatch(output.summary, /密码/);
   assert.deepEqual(JSON.parse(await readFile(missing.traceFile, 'utf8')), []);
+});
+
+test('a read with a failed domain never replaces an existing Skland snapshot; only a first snapshot may be partial', async (t) => {
+  const noBuilding: Record<string, unknown> = sklandInfo(); delete noBuilding.building;
+  const partialReads: [Record<string, unknown[]>, string, string, string][] = [
+    [{ cultivate: ['network'] }, 'inventory', 'network-failed', 'retry-later'], [{ info: [{ data: noBuilding }] }, 'base', 'not-returned', 'retry-later'],
+    [{ cultivate: [{ http: 429 }] }, 'inventory', 'service-error', 'retry-later'], [{ cultivate: [{ code: 10001 }] }, 'inventory', 'service-error', 'retry-later'],
+    [{ cultivate: [{ data: { itemList: [] } }] }, 'inventory', 'invalid-cultivate', 'report-issue'],
+  ];
+  const f = await fixture(t);
+  assert.equal(runCli(f, 'import', {}).code, 0);
+  const file = join(f.privateDirectory, 'account-snapshot-skland.json');
+  const earlier = await readFile(file, 'utf8');
+  for (const [steps, domain, reason, repair] of partialReads) {
+    const partial = runCli(f, 'import', {}, { steps });
+    assert.equal(partial.code, 0, partial.stderr);
+    const output = JSON.parse(partial.stdout);
+    assert.equal(output.ok, true); assert.equal(output.saved, false); assert.deepEqual(output.failedDomains, [domain]); assert.equal(output.repair, repair);
+    assert.ok(output.coverage[domain].issues.includes(reason), JSON.stringify(output.coverage[domain]));
+    assert.match(output.summary, /已有的森空岛快照保持不变/);
+    assert.equal(await readFile(file, 'utf8'), earlier, `${JSON.stringify(steps)} must not replace the existing snapshot`);
+  }
+  const fresh = await fixture(t);
+  const first = runCli(fresh, 'import', {}, { steps: partialReads[0]![0] });
+  assert.equal(first.code, 0, first.stderr);
+  const output = JSON.parse(first.stdout);
+  assert.equal(output.saved, true); assert.deepEqual(output.failedDomains, ['inventory']);
+  const saved = JSON.parse(await readFile(join(fresh.privateDirectory, 'account-snapshot-skland.json'), 'utf8')) as AccountSnapshot;
+  assert.deepEqual(saved.coverage.inventory, { status: 'unavailable', issues: ['network-failed'] });
+  assert.deepEqual(saved.items, {}); assert.equal(saved.lmd, null); assert.equal(saved.operators.length, 2);
+  assert.match(output.summary, /这是第一份森空岛快照/);
 });
 
 test('the same synthetic account through MAA and Skland is readable by the same tool, and compare shows conflicts with times without merging', async (t) => {
