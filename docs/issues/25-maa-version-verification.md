@@ -10,7 +10,9 @@ Blocked by: [10: doctor 完整检查与转介](10-doctor-checks-referral.md)
 
 ## 背景与目标
 
-实施进度：进行中。
+实施进度：已完成。
+
+2026-11-13 交付：MAA 依赖登记与整文件指纹核对、每日 Action（正式版全部未变开 PR，变化或 beta 变化开 issue）、版本化的核实记录、setup 与 doctor 的升级提醒，以及计划和待执行记录里的版本标记；[独立审查](../reviews/2026-11-13-25-maa-version.md)三轮，没有未解决的意见。[验证记录](../maa-version-verification.md)写明实际运行的检查和未验证项：Action 在 GitHub 上的真实运行、真实 MAA.exe 的版本标记、实机核对（26 登记）和真模型评测（留给 26）。
 
 MAA 的配置和回调行为会变化。只记录一个历史实测版本不足以让用户知道新版本是否仍符合当前依赖。
 
@@ -28,17 +30,17 @@ MAA 的配置和回调行为会变化。只记录一个历史实测版本不足�
 
 ## 验收条件
 
-- [ ] 依赖条目记录行为、对应源码位置/指纹、受影响 skill，以及源码已核和实机已核版本；仅存指纹和定位，不打包 MAA 源码。
-- [ ] 为当前已实现的配置、定时、回调等依赖登记证据，后续行为实现时补条目；不把起点版本的历史经验自动登记为本仓库已核。
-- [ ] 2026-11-13 新增：登记 [27](27-approved-stone-expiring-medicine.md) 依赖的 MAA 源码位置，27 尚未交付时由 27 实现时补上。条目包括 `FightTask.cs` 的 `UseStone`、`StoneCount`、`UseStoneAllowSave`、`UseExpiringMedicine`、`MedicineExpireDays`、`UseExpireMedicineForActivity` 字段和 `OnDeserialized` 对 `UseStone` 的重置；`FightTaskUserControlModel.cs` 里界面设置到 MaaCore 参数的换算；MaaCore `FightTask.cpp` 对 `medicine_expire_days`、`stone` 的处理和临期药 9999 的确认次数上限；`MedicineCounterTaskPlugin.cpp` 的临期药处理；界面的临期天数范围。
-- [ ] 2026-11-13 新增：安装的 MAA 版本沿用 07 已有的读法（读 `MAA.exe` 的产品版本号，见 `skills/maa-core/scripts/setup.ts`），本票不另写一种。核实记录带自己的版本号；maa-core 生成的计划和待执行记录（配置写入、作业准备、专精排程，以及之后的基建排班）写入生成时读到的 MAA 版本和核实记录版本。执行或恢复时，两者任一和当前不同，就在结果里报告这一差异；未核实的版本仍然只提醒、不拒绝。
-- [ ] 2026-11-13 新增：依赖条目包含 MAA 的任务类型集合，因为本项目的任务身份核对依赖 `$type` 和 `TaskType`。「任务类型集合从 v6.19.0 到当前开发分支没有变化」这一说法没有在本仓库核对，核实后采用：实现时在固定源码上列出任务类型并登记指纹，核对之前不把它写成已核事实。
-- [ ] 2026-11-13 新增：登记 [10](10-doctor-checks-referral.md)、[16](16-stage-run-tracking.md)、[22](22-base-report-and-plan.md) 这次新增依赖的 MAA 位置，对应工单尚未交付时由它们实现时补上：回调协议里的消息名、`what` 值和 `StageDrops` 的关卡字段；中文界面文案里任务出错、完成任务等文案键；远程控制协议的任务类型和设置类字段；官方日志分析说明目录 `.agents/skills/maa-issue-log-analysis/`；基建排班协议的 `period`。
-- [ ] 每日检查正式版：全部条目未变才开 PR 添加源码已核版本；变化或条目缺失开 issue，列明受影响条目和 skill，不错误认证。
-- [ ] beta 变化开提前预警 issue，beta 不进入源码已核列表；相同版本/变化重复检查不会持续制造重复通知。
-- [ ] 把生成的核实记录接入 setup/doctor；正式版源码已核后提醒可升级，未核实版本只提醒不拒绝。
-- [ ] 发布信息分别列源码已核和实机已核；源码相同不等于实机已核，不伪造设备验证。
-- [ ] Action 只执行版本与指纹核对，不运行真模型、真实 MAA 或账号操作；公开输出不携带用户配置。
+- [x] 依赖条目记录行为、对应源码位置/指纹、受影响 skill，以及源码已核和实机已核版本；仅存指纹和定位，不打包 MAA 源码。
+- [x] 为当前已实现的配置、定时、回调等依赖登记证据，后续行为实现时补条目；不把起点版本的历史经验自动登记为本仓库已核。
+- [x] 2026-11-13 新增：登记 [27](27-approved-stone-expiring-medicine.md) 依赖的 MAA 源码位置，27 尚未交付时由 27 实现时补上。条目包括 `FightTask.cs` 的 `UseStone`、`StoneCount`、`UseStoneAllowSave`、`UseExpiringMedicine`、`MedicineExpireDays`、`UseExpireMedicineForActivity` 字段和 `OnDeserialized` 对 `UseStone` 的重置；`FightTaskUserControlModel.cs` 里界面设置到 MaaCore 参数的换算；MaaCore `FightTask.cpp` 对 `medicine_expire_days`、`stone` 的处理和临期药 9999 的确认次数上限；`MedicineCounterTaskPlugin.cpp` 的临期药处理；界面的临期天数范围。
+- [x] 2026-11-13 新增：安装的 MAA 版本沿用 07 已有的读法（读 `MAA.exe` 的产品版本号，见 `skills/maa-core/scripts/setup.ts`），本票不另写一种。核实记录带自己的版本号；maa-core 生成的计划和待执行记录（配置写入、作业准备、专精排程，以及之后的基建排班）写入生成时读到的 MAA 版本和核实记录版本。执行或恢复时，两者任一和当前不同，就在结果里报告这一差异；未核实的版本仍然只提醒、不拒绝。
+- [x] 2026-11-13 新增：依赖条目包含 MAA 的任务类型集合，因为本项目的任务身份核对依赖 `$type` 和 `TaskType`。「任务类型集合从 v6.19.0 到当前开发分支没有变化」这一说法没有在本仓库核对，核实后采用：实现时在固定源码上列出任务类型并登记指纹，核对之前不把它写成已核事实。
+- [x] 2026-11-13 新增：登记 [10](10-doctor-checks-referral.md)、[16](16-stage-run-tracking.md)、[22](22-base-report-and-plan.md) 这次新增依赖的 MAA 位置，对应工单尚未交付时由它们实现时补上：回调协议里的消息名、`what` 值和 `StageDrops` 的关卡字段；中文界面文案里任务出错、完成任务等文案键；远程控制协议的任务类型和设置类字段；官方日志分析说明目录 `.agents/skills/maa-issue-log-analysis/`；基建排班协议的 `period`。
+- [x] 每日检查正式版：全部条目未变才开 PR 添加源码已核版本；变化或条目缺失开 issue，列明受影响条目和 skill，不错误认证。
+- [x] beta 变化开提前预警 issue，beta 不进入源码已核列表；相同版本/变化重复检查不会持续制造重复通知。
+- [x] 把生成的核实记录接入 setup/doctor；正式版源码已核后提醒可升级，未核实版本只提醒不拒绝。
+- [x] 发布信息分别列源码已核和实机已核；源码相同不等于实机已核，不伪造设备验证。
+- [x] Action 只执行版本与指纹核对，不运行真模型、真实 MAA 或账号操作；公开输出不携带用户配置。
 
 参考，只对照思路，不复制代码：读产品版本号、把规则版本写进每个计划，可参考 [yumi233/maa-control-center](https://github.com/yumi233/maa-control-center)（MIT）。
 
