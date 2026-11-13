@@ -144,7 +144,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 
 ## 添加产品场景
 
-每个新 skill 起步 3–6 个场景，数量不是上限。场景结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`），写进 `eval/<skill>/` 并加入 `scripts/eval-scenarios.ts` 的组。提示词里替用户贴进对话的合成值写在可选的 `chatSecrets`，评分时与样例的随机秘密一起检查秘密输出，并计入场景摘要。自定义 `.json` 场景仍可交给 `eval-run.ts`，第四个参数指定 CLI 可执行文件，第五个参数指定待测 skill 源目录：
+每个新 skill 起步 3–6 个场景，数量不是上限。场景结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`），写进 `eval/<skill>/` 并加入 `scripts/eval-scenarios.ts` 的组；`tests/eval-batch.test.ts` 逐个导入 `eval/<skill>/` 下的模块，导出的场景不在目录里就失败。提示词里替用户贴进对话的合成值写在可选的 `chatSecrets`，评分时与样例的随机秘密一起检查秘密输出，并计入场景摘要。自定义 `.json` 场景仍可交给 `eval-run.ts`，第四个参数指定 CLI 可执行文件，第五个参数指定待测 skill 源目录：
 
 ```text
 node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/maa-example
@@ -172,7 +172,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测](daily-evaluation.md)的窄接缝。`expectedInvocations.exitCode` 默认 0；失败分支可明确要求 1，不接受任意非零。
 
-文档一致性测试（`tests/docs-consistency.test.ts`）扫描 `skills/` 下每个 `SKILL.md` 和 `references/*.md`：脚本命令的脚本存在、动作是该脚本接受的动作；示例 JSON（```json 代码块，或以 `{"` 开头、或为 `{}` 的行内代码）能解析且顶层键属于该动作；脚本契约表逐项绑定脚本源码；每个场景的命令模式放行文档规定的调用形式。不一致时指出文件和行。
+文档一致性测试（`tests/docs-consistency.test.ts`）扫描 `skills/` 下每个 `SKILL.md` 和 `references/*.md`：脚本命令的脚本存在、动作是该脚本接受的动作（更长文件名的尾部，如 `tests/x.test.ts`，不算脚本）；示例 JSON（```json 代码块，围栏可以随列表项缩进，没有结束围栏时到文件末尾；或以 `{"` 开头、或为 `{}` 的行内代码）能解析且顶层键属于该动作，冒号后不加引号的 `<…>` 占位按数字解析；每个文件只顺序扫描一遍；脚本契约表逐项绑定脚本源码；每个场景的命令模式放行文档规定的调用形式。不一致时指出文件和行。
 
 ## 固定版本与回归判断
 

@@ -181,3 +181,49 @@
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。
+
+## 合并 main 后的调整（2026-11-14）
+
+分支合并 `origin/main`（09 #59 凭据、29 #60 关卡作业匹配、18 #64 NGA 调研、16 #61 关卡运行跟踪）到 `04af397` 后，两项测试确定性失败。修复在提交 `a5b3ed7`（文档扫描）和 `16a12c9`（世界数据与场景目录），**未经独立审查**。更早的合并提交 `cf9f722` 已把 doctor 的凭据场景改成字面值、改了两处说明文字，保持不变。工单 28 的规则不变：场景世界数据不运行产品代码，只发布产品不改变场景身份；允许名单仍是原来三条，没有放宽。
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码 | 场景模块的运行时导入闭包多出 5 条进入 `skills/` 的导入：`research-scenarios.ts` 用 `cacheKey` 算缓存文件名和 `key`；`tests/fixtures/stage-run-data.ts` 的 `syntheticRunRecord` 用 `stage-run-state` 的分类器把合成日志行变成六条运行记录。改缓存键方案或分类器的产品发布会改变这些场景的身份。另外，合成日志的时间按本机时区书写，同一份代码在 UTC 与 UTC+8 下生成的六条记录不同（`at` 和由它算出的发现 `id`），场景身份随机器时区变化 | 缓存键写成字符串字面值；六条运行记录写成 `tests/fixtures/stage-run-records.ts` 里的固定字面值（只 `import type` 产品类型）；原生成器没有别的使用方，删除，`stage-run-data.ts` 只服务产品自己的测试（`stage-run`、`stage-run-flow`、`stage-run-rerun-gate`、演示脚本）。一致性测试的闭包清单加上三个新模块；产品发布副本另把缓存键改成 `'v2:'` 前缀、把运行发现 `id` 从 24 位改成 32 位 | `.tmp/logs/merge-red-comparability.log`（`04af397`：7 项中 1 项失败，闭包多出上述 5 条）；新测试配原生成器（`.tmp/logs/merge-red-comparability-old-producers.log`）：7 项中 2 项失败，第一项报 `account-nga-cached-citation: a product-only release keeps the scenario`，闭包一项报允许名单之外的导入；修复后 7 项通过 |
+| 16、18 的场景不在场景目录里 | 两组场景写在 `eval/` 下，但 `scripts/eval-scenarios.ts` 没有收录，批次入口跑不到；可达性测试手写模块清单，没有发现 | `research`（3 个）加入 `maa-account` 组，`stage-run`（6 个）加入 `maa-daily` 组；可达性测试另外逐个导入 `eval/<skill>/` 下的模块，导出的场景数组（带 `id` 和 `prompt` 的对象）不在目录里就失败 | `.tmp/logs/merge-red-catalog.log`（只跑这一项：缺 9 个场景）；接入后通过；变异核对：把 `researchScenarios` 同时从目录和手写清单去掉，新断言报出缺少的 3 个场景，改回后通过 |
+| 文档一致性测试堆溢出 | 代码块结束围栏用 `lines.indexOf('```', index + 1)` 按不缩进的整行查找。`skills/maa-daily/references/stage-run.md` 第 10–12 行把 ```json 块放在列表项里，两道围栏都缩进三格，找不到结束围栏得到 -1，扫描位置被设回 -1，从第一行重扫，每一遍都追加提及和示例，直到堆溢出 | 向前找 trim 后为 ``` 的行，没有结束围栏时块到文件末尾，扫描只向前；块上方两行改为往回找最多两行非空行，不再每块过滤整段前文。新增回归测试（缩进围栏、未闭合围栏） | `.tmp/logs/merge-red-docs.log`（`04af397`，256 MB 堆：第一项通过后堆溢出）；回归测试单独在修复前运行也堆溢出（`.tmp/logs/merge-red-docs-regression.log`）；修复后 4 项通过，256 MB 堆下约 27 毫秒 |
+| 循环修好后扫出的 10 处不一致 | 扫描第一次读完合并进来的说明（`.tmp/logs/merge-docs-after-loopfix.log`）：7 处示例 JSON 所属的 `nga.ts`、`stage-run.ts` 不在契约表里；`research.md:123` 的 `tests/research.test.ts` 被读成脚本 `test.ts`；`stage-run.md:31` 的 `"completedRuns":<次数>` 不能解析 | 契约表补上三个合并进来的命令行脚本：`credentials.ts`（`check`、`input`，都不从标准输入读 JSON）、`stage-run.ts`（六个动作，键取自脚本的 `allowed` 表）、`nga.ts`（`search`、`read` 的请求键加 `format`，`status` 无输入）；脚本名必须从词首开始（前面不是字母、数字、下划线、点或连字符）；冒号后不加引号的 `<…>` 占位按数字 0 解析，周围的键照样核对，其他不合法的 JSON 仍报不能解析。回归测试覆盖这两种形状 | 变异核对：临时把 `stage-run.md:10` 的 `operation`、`stage-run.md:31` 的 `stages`、`research.md:23` 的 `keyword` 和 `credentials.md:16` 的动作 `input` 改错，测试按文件和行报出四处，改回后通过 |
+
+字面值与修复前逐字节相同的核对方法（会话临时脚本，不提交）：脚本加载检出目录的场景目录和 16、18 两个场景模块，对全部 72 个场景打印 id、`scenarioIdentity`（提示词、运行器、替身都传空，与一致性测试相同）和整份定义 `JSON.stringify` 的 sha256，并打印 9 个新场景的完整 `jsonInputs`。修复前（`04af397`，本机时区 UTC+8）与修复后的输出除最后一行的目录计数（63→72）外逐行相同；修复后在 `TZ=UTC` 下的输出与本机相同；修复前在 `TZ=UTC` 下 6 个 `daily-run-*` 不同。六条记录由另一个会话临时脚本从 `04af397` 的场景模块的 `jsonInputs` 取出（时区 UTC+8），经 JSON 往返后写成字面值。
+
+这一轮的选择（不是产品限制，记在这里）：
+- 运行记录冻结为 UTC+8 下的输出：维护者在本机（UTC+8）运行真模型评测，记录的 `createdAt`（02:00Z）与日志时间（10:00）在这个时区下一致。`stage-run-scenarios` 在本机和 `TZ=UTC` 下都通过。
+- 不加「字面值等于生成器输出」的测试：那样分类器一改，场景就得跟着改，正是要避免的情况。产品读不懂这些记录或缓存时，场景自己的离线测试（已安装 CLI 读取记录和缓存）会失败。
+- 删除生成器而不是留作无人调用的导出，与 `stage-data.ts` 的先例（`2a60443`）一致；来源写在字面值模块的注释里（`04af397` 的 `syntheticRunRecord`）。
+- 新场景加入目录：[行为评测](evaluation.md)「添加产品场景」要求场景加入 `scripts/eval-scenarios.ts` 的组。
+- 数字占位与词首规则只放宽了文档写法，不放宽核对：键仍逐个核对，其他不能解析的 JSON 仍报错。
+
+按负载规则一次一个运行（Windows，Node 24，在提交 `16a12c9` 的内容上；文档提交不改代码）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/docs-consistency.test.ts` | 4 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/evaluation.test.ts` | 8 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/stage-run-scenarios.test.ts` | 1 项通过；`TZ=UTC` 下也 1 项通过 |
+| `node --test tests/stage-run.test.ts` | 14 项通过 |
+| `node --test tests/stage-run-flow.test.ts` | 4 项通过 |
+| `node --test tests/stage-run-demo.test.ts` | 1 项通过 |
+| `node --test tests/stage-run-rerun-gate.test.ts` | 11 项通过 |
+| `node --test tests/research-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/nga.test.ts` | 13 项通过 |
+| `node --test tests/nga-cli.test.ts` | 3 项通过 |
+| `node --test tests/research.test.ts` | 7 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 10 项通过 |
+| `node --test tests/credentials.test.ts` | 6 项通过 |
+| `node scripts/privacy.ts`；元数据（含相对链接）和 tracker 检查（只调用检查函数） | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：9 个新收录场景的真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
