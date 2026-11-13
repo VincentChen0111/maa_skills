@@ -66,7 +66,7 @@ function projectSkills(entry: unknown, buffs: Record<string, unknown>, elite: nu
 function accountInput(input: unknown): AccountSnapshot {
   try {
     const data = object(input), coverage = object(object(data.coverage).operators);
-    if (data.version !== 1 || data.source !== 'maa' || typeof data.readAt !== 'string' || !Number.isFinite(Date.parse(data.readAt))
+    if (data.version !== 1 || !['maa', 'skland'].includes(String(data.source)) || typeof data.readAt !== 'string' || !Number.isFinite(Date.parse(data.readAt))
       || !['complete', 'partial', 'pending', 'missing', 'invalid', 'unavailable'].includes(String(coverage.status))) throw new Error();
     const ids = new Set<string>();
     for (const raw of list(data.operators)) {

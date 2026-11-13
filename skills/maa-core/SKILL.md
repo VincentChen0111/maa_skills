@@ -17,10 +17,12 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |
 | `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
+| `scripts/skland-account.ts` | 用用户已保存的森空岛 token 只读读取账号数据，保存森空岛快照，对比 MAA 与森空岛两份快照 | [森空岛接口](../maa-account/references/skland.md) |
 | `scripts/operator-cost.ts` | 按快照和明确目标只读查询单干员逐级培养成本 | [成本接口](../maa-account/references/cost.md) |
 | `scripts/cultivation-gaps.ts` | 多目标共用库存，比较加工、材料券及券换投入后加工的缺口，只给建议 | [缺口接口](../maa-account/references/gaps.md) |
 | `scripts/base-query.ts` | 只读查询已持有干员基建技能、解锁条件和交叉核对差异 | [基建查询接口](references/base-query.md) |
 | `scripts/stage-jobs.ts` | 查询明确关卡的作业、逐成员核对，准备已批准的地图批次 | [关卡作业接口](../maa-daily/references/stage-jobs.md) |
+| `scripts/stage-run.ts` | 从用户开始信号起跟踪已准备批次，按 MAA 回调记录每关结果；对 MAA 只读，只有 `switch` 在同一个再打判断允许后经统一写入换上已批准的备选。回调行解析（`maa-callback.ts`）和日志起点（`maa-log-window.ts`）各只有一份，专精核对共用 | [运行跟踪接口](../maa-daily/references/stage-run.md) |
 | `scripts/training-time.ts`、`scripts/training-plan.ts` | 查询已授权目标的助手/时长，记录训练并逐阶段安排原生单次定时 | [训练接口](references/training.md) |
 | `scripts/nga.ts`、`scripts/research.ts`、`scripts/research-transport.ts` | NGA 只读检索与读帖；调研共用的引用结果格式、缓存、跨进程限速与风控停止、按平台的传输 | [社区调研接口](references/research.md) |
 | `scripts/advice-report.ts`、`scripts/cultivation-report.ts` | 建议报告的保存、默认独立审查（两个宿主共用一份审查说明模板）、明确跳过、改正与逐项批准；培养报告复用共享缺口计算和调研资料 | [建议报告接口](references/advice-report.md)、[培养报告接口](../maa-account/references/cultivation-report.md) |
