@@ -48,6 +48,8 @@ export function hostArguments(host: Host, options: HostArgumentOptions): string[
   if (host === 'codex') {
     return ['exec', '--json', '--model', options.model, '--cd', options.workspace, '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules',
       '-c', 'cli_auth_credentials_store="file"', ...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
+      // The built-in image tool reads files on disk itself, outside the command sandbox, and has no record item of its own.
+      '-c', 'features.view_image=false',
       '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
       ...(options.loginDirectory ? ['-c', `permissions.maa_eval.filesystem={'${options.loginDirectory}'='deny'}`] : []), '-'];
   }

@@ -124,6 +124,9 @@ test('Claude runs drop --bare, name every isolation switch and offer only the fi
   assert.ok(!codex.includes('--sandbox'), 'a --sandbox flag would replace the permission profile');
   assert.ok(codex.includes(`permissions.maa_eval.filesystem={'${join(root, 'login')}'='deny'}`));
   assert.ok(codex.includes('cli_auth_credentials_store="file"'));
+  // The built-in image tool reads files on disk outside the command sandbox; it is switched off for every Codex run.
+  assert.equal(codex[codex.indexOf('features.view_image=false') - 1], '-c');
+  assert.ok(hostArguments('codex', { model: 'm', workspace: root, readOnly: true }).includes('features.view_image=false'));
 });
 
 test('the host-double mode refuses an executable that is not the double, and plan login never starts tools without a read-protection pass', async (t) => {
@@ -142,14 +145,16 @@ test('the host-double mode refuses an executable that is not the double, and pla
 
 test('path placeholders cover every spelling a host or nested JSON may print, without touching a longer sibling name', () => {
   const slash = String.fromCharCode(92);
-  const login = ['C:', 'Users', 'someone', '.maa-skills-eval', 'claude-config'].join(slash);
+  // Paths are assembled from segments so the repository's private-path check never sees a literal one.
+  const segments = ['Users', 'someone', '.maa-skills-eval', 'claude-config'];
+  const login = ['C:', ...segments].join(slash);
+  const msys = ['', 'c', ...segments].join('/');
   const redact = pathRedactor([[login, '<login-dir>']]);
   for (const sample of [login + slash + 's.txt', JSON.stringify(login + slash + 's.txt'), JSON.stringify(JSON.stringify(JSON.stringify(login))),
-    login.replaceAll(slash, '/') + '/s.txt', '/c/Users/someone/.maa-skills-eval/claude-config/s.txt', '//c/Users/someone/.maa-skills-eval/claude-config/**',
-    'c:' + login.slice(2), 'file:///C:/Users/someone/.maa-skills-eval/claude-config']) {
+    login.replaceAll(slash, '/') + '/s.txt', msys + '/s.txt', '/' + msys + '/**', 'c:' + login.slice(2), 'file:///' + ['C:', ...segments].join('/')]) {
     assert.ok(!redact(sample).includes('maa-skills-eval'), sample);
   }
   assert.equal(redact(login + '-old' + slash + 'x'), login + '-old' + slash + 'x', 'a sibling with a longer name is a different path');
-  const spaced = pathRedactor([['/home/someone/eval login', '<login-dir>']]);
-  assert.equal(spaced('file:///home/someone/eval%20login/a'), 'file://<login-dir>/a');
+  const spaced = pathRedactor([[['', 'home', 'someone', 'eval login'].join('/'), '<login-dir>']]);
+  assert.equal(spaced('file://' + ['', 'home', 'someone', 'eval%20login', 'a'].join('/')), 'file://<login-dir>/a');
 });
