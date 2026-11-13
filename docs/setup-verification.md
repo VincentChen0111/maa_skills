@@ -238,6 +238,32 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 未验证：新提交上的 Windows CI；真实发行包的结构（仍没有下载任何发行包）；合并后 skill 文字的行为评测（待 26）。
 
+### 合并 28 之后（2026-11-14，未经独立审查）
+
+合并提交 `8c82a8b` 把 28 的最终头 `1b39e9f`（评测可运行化，即将 squash 进 main）并入本分支。只有 `eval/maa-setup/scenarios.ts` 冲突：两边都在 `setupScenarios` 之后追加，28 推入 `setup-connection-write`、`setup-multiple-candidates`，本分支加下载映射和 `setupDownloadScenarios`，两段都保留（28 的在前）。INDEX 取本分支后用 `node scripts/tracker.ts --write` 重新生成（28 那一行按其工单文件为「进行中」）。`eval/network-fixture.mjs` 只有本分支改过，保留下载映射；setup 边界本分支没有改，用 28 的唯一实现 `eval/setup-boundary.mjs`（`tests/fixtures/setup-boundary.mjs` 只导入它）。
+
+合并后按 28 的规则适配（本节所在提交），先红后绿：
+
+| 项 | 合并后的红 | 修法 |
+| --- | --- | --- |
+| 下载场景不在场景目录里 | `tests/eval-batch.test.ts` 报导出的 6 个 `setup-download-*` 不在目录里（`.tmp/logs/m28-red-batch.log`） | `setupDownloadScenarios` 加入 `maa-setup` 组，测试的全量清单同步加上 |
+| 下载世界在加载时计算 | 不是产品代码（只用 `node:crypto` 和 `Buffer`），闭包测试本来就通过；按 28「世界数据是固定字面值」改写 | 样例大小 28、SHA-256、两个下载地址和中断记录的文件名、来源、大小都写成字面值，场景模块不再导入任何运行时模块；新测试「the literal download world is consistent…」按样例字节重算大小、摘要和 `content-length`，并核对中断记录指向映射里的文件 |
+| doctor 场景的 Node 修法文字过期 | 28 的字面检查行取自 `bd3b3e6`，本分支把 `official-node-24-installation` 的说明改成可经 setup plan 出官方方案；`tests/doctor-scenarios.test.ts` 20/22 失败、`tests/eval-host-double.test.ts` 的 doctor 一项失败（`.tmp/logs/m28-t-doctor-scenarios.log`、`m28-t-host-double.log`） | 字面行换成本分支的说明，注释写明出处 `5b11222` |
+| 文档一致性扫描报 3 处 | `maa-setup/SKILL.md` 提到的 `setup.ts downloads`、`plan`、`recheck` 不在契约表（`.tmp/logs/m28-red-docs.log`） | 契约表加上 `plan`、`download`、`install`、`downloads`、`recheck`，键取自 `setup.ts` 的 `downloadActions` |
+
+批准声明：下载场景不声明 `approvals`。按 `Policy.approvals` 的约定，不声明就是没有批准，与其他 setup 场景相同；场景身份因此不变。占位 `{{maa-core-version}}`、`{{maa-record-version}}` 在下载场景里用不到，场景里没有 maa-core 版本或核实记录版本。
+
+字面值与生成器逐字节相同的核对方法（会话临时脚本，不提交）：遍历 `eval/<目录>/` 下每个模块导出的场景定义，打印 id 和整份定义 `JSON.stringify` 的 sha256，6 个下载场景另打印完整 JSON。结果：
+
+- 与合并提交 `8c82a8b` 相比，改字面值前后 109 个场景的输出（含 6 个下载场景的完整 JSON）逐行相同；之后改 doctor 的 Node 行，只有 9 个 doctor 场景改变。
+- 与本分支合并前 `5b11222` 的导出副本（生成器版，102 个场景）相比：共同的 102 个，把两个占位换回 `0.1.0-dev.0` 和 `2`、去掉 28 加的 `approvals` 声明（17 个场景）后，逐个相同，包括 9 个 doctor 中的 8 个（`doctor-reconcile-approved` 是 28 的场景，`5b11222` 没有）和 6 个下载场景。
+- 与 `1b39e9f` 的 103 个场景相比，94 个相同，只有 9 个 doctor 场景不同（Node 行）。所以 08 前后这 9 个场景的场景摘要不同，不能混作同语义前后比较；评测说明已写明。
+- 本节的提交在 `TZ=UTC` 下的输出与本机（UTC+8）相同；`5b11222` 在 `TZ=UTC` 下有 10 个 `daily-*` 场景不同，是 28 已记录的旧生成器随时区变化。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 21/21、setup-download-vendors 67/67、setup 29/29、setup-scenarios 27/27、setup-integration 5/5、check-purposes 7/7、evaluation 10/10、eval-comparability 7/7、eval-batch 10/10、eval-fixture 7/7、eval-host-double 12/12、eval-network 3/3、docs-consistency 5/5、maa-version-check 13/13、offline-network 2/2，另跑 doctor-scenarios 22/22、cross-skill-scenarios 7/7；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载、真模型。
+
+未验证：新提交上的 Windows CI；这些场景的真模型运行（待 26）；合并 28 的这次适配未经独立审查。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

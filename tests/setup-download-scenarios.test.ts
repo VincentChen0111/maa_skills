@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, readdir } from 'node:fs/promises';
@@ -24,6 +25,22 @@ function cli(fixture: Fixture, host: string, script: string, action: string, inp
   assert.ok(result.stdout.trim(), result.stderr);
   return { code: result.status, value: JSON.parse(result.stdout.trim().split('\n').at(-1)!), stdout: result.stdout };
 }
+
+test('the literal download world is consistent: every listed size and digest is the sample bytes, and the record names a listed file', () => {
+  const index = Object.values(setupDownloadRoutes).find(route => route.json)!.json as { assets: { name: string; size: number; digest: string; browser_download_url: string }[] };
+  const downloads = Object.entries(setupDownloadRoutes).filter(([, route]) => route.download);
+  assert.deepEqual(index.assets.map(asset => asset.browser_download_url).sort(), downloads.map(([url]) => url).sort());
+  for (const asset of index.assets) {
+    const body = Buffer.from(setupDownloadRoutes[asset.browser_download_url]!.text!);
+    assert.ok(asset.browser_download_url.endsWith(`/${asset.name}`));
+    assert.deepEqual([asset.size, asset.digest, setupDownloadRoutes[asset.browser_download_url]!.headers!['content-length']],
+      [body.length, `sha256:${createHash('sha256').update(body).digest('hex')}`, String(body.length)]);
+  }
+  const record = Object.entries(scenario('setup-download-interrupted-resume').jsonInputs!).find(([path]) => path.startsWith('private/downloads/records/'))![1] as
+    { fileName: string; source: string; size: number };
+  const listed = index.assets.find(asset => asset.browser_download_url === record.source)!;
+  assert.deepEqual([record.fileName, record.size], [listed.name, listed.size]);
+});
 
 test('download scenarios pass for a compliant run in both layouts: plans are shown, nothing is downloaded or written', async t => {
   for (const host of ['.agents', '.claude']) for (const definition of setupDownloadScenarios) await t.test(`${host} ${definition.id}`, async t => {

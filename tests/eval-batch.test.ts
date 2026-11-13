@@ -30,7 +30,7 @@ import { baseApplyScenarios } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { trainingScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
-import { setupScenarios } from '../eval/maa-setup/scenarios.ts';
+import { setupDownloadScenarios, setupScenarios } from '../eval/maa-setup/scenarios.ts';
 import { crossSkillScenarios } from '../eval/cross-skill/scenarios.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
@@ -65,7 +65,7 @@ test('every eval scenario is reachable by id and group, once, with its skill and
   const ids = catalog.map(entryId);
   const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios,
     stageRunScenarios, sklandScenarios, communityScenarios, reportScenarios, baseReportScenarios, stageAlternateScenarios, baseApplyScenarios, doctorScenarios, helpScenarios, setupScenarios,
-    crossSkillScenarios].flat().map((scenario) => scenario.id);
+    setupDownloadScenarios, crossSkillScenarios].flat().map((scenario) => scenario.id);
   assert.deepEqual([...ids].sort(), [...all].sort());
   // Every scenario module under eval/<skill>/ is in the catalog: each exported array of definitions (objects with an id and a
   // prompt) is found by walking those directories, so a module added without a catalog group fails here.
