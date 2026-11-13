@@ -20,7 +20,7 @@
 | 1 用 09 的凭据入口和 11 的快照格式；无需模拟器；不代替登录 | 读取器只调用 `readCredential`／`recordCredentialOutcome`；「a read exchanges the pasted token …」核对请求只有换取和三类读取；「the same synthetic account through MAA and Skland …」核对两种来源被同一成本工具和基建查询接受 | 通过（离线替身） |
 | 2 只读，不签到、发帖、点赞、付费或其他写操作 | 同上第一项：只有授权码和 cred 两步用 POST，绑定、玩家信息、养成只用 GET，都带 `redirect: "error"`；替身对任何其他接口记录并拒绝，轨迹必须恰好是五步 | 通过（离线替身） |
 | 3 覆盖干员、仓库、龙门币和基建，带读取时间和森空岛来源，缺失为未知 | 「a read exchanges …」（来源、读取时间、空的原扫描时间、物品和龙门币）；「the base keeps rooms …」；「an incomplete cultivation read …」；「skill level, mastery and modules …」的缺字段部分 | 通过（离线替身）；龙门币来源见未验证 |
-| 4 凭据缺失、过期、网络失败或响应不完整时给可行动状态，不伪造成功、不沿用旧数据 | 「a missing credential stops before any request …」；「a token the service refuses …」；「network failures, refusals …」；「inspect reads without saving; failures exit non-zero …」（错误码、`repair`、已有快照字节不变）；`tests/skland-scenarios.test.ts` 的未设置场景 | 通过（离线替身） |
+| 4 凭据缺失、过期、网络失败或响应不完整时给可行动状态，不伪造成功、不沿用旧数据 | 「a missing credential stops before any request …」；「a token the service refuses …」；「network failures, refusals …」（玩家信息结构不符为 `response-invalid`，不产出快照）；「inspect reads without saving; failures exit non-zero …」（错误码、`repair`、已有快照字节不变，含签名被拒和字段改名两种）；「a read with a failed domain never replaces an existing Skland snapshot …」（五种部分读取都不替换已有快照，只有第一份快照可以是部分快照）；`tests/skland-scenarios.test.ts` 的未设置场景 | 通过（离线替身） |
 | 5 MAA 与森空岛来源可区分；冲突时展示差异和时间，不静默合并 | 「the same synthetic account through MAA and Skland …」：`compare` 列出两边读取时间与原扫描时间、等级冲突和物品冲突、只在一边的条目，不写文件、不联网；缺一边时报 `snapshot-missing` | 通过 |
 | 6 秘密及账号标识不进入对话、Markdown 或错误日志；快照留在私有目录；MAA 配置不变 | `assertNoSecrets` 在读取结果、CLI 的 JSON 和 Markdown 输出、失败输出以及临时根目录下所有文件里搜索合成 token、授权码、cred、签名 token、角色号、昵称、用户 ID 和头像地址；「the import CLI …」核对私有目录只多出 `account-snapshot-skland.json`、MAA 快照和 MAA 目录逐字节不变 | 通过（离线替身） |
 | 7 接口和字段核对之后才写进读取器和来源记录 | [接口来源核对](skland-account-sources.md)：三个 MIT 项目的固定提交、逐项结论和与工单表的差别 | 通过（公开资料）；真实服务未验证 |
@@ -28,7 +28,7 @@
 | 9 技能等级、专精和模组能取得时写入并标明来源，取不到的保持未知 | 「skill level, mastery and modules …」；成本工具用森空岛快照的专精当前值，`currentSources` 为 `snapshot`，同一请求用 MAA 快照时为未知 | 通过 |
 | 10 三类没有来源的事实写成无来源，不补零、不推断 | 「the three categories without a source …」；「the import CLI …」核对摘要里三行「无来源」 | 通过 |
 | 11 用户文档和读取结果写明两点 | [用户说明](skland-account.md)「使用前请了解」；「the import CLI …」核对 JSON 的 `disclosures` 和摘要文字 | 通过 |
-| 12 鉴权只用 09 的 token；换取、签名、两级刷新在读取器内部；刷新失败报告过期，不要密码 | 「the two-level refresh follows the verified order …」七条轨迹；替身用独立实现核对每个数据请求的签名；失败摘要不含「密码」 | 通过（离线替身）；真实信号未验证 |
+| 12 鉴权只用 09 的 token；换取、签名、两级刷新在读取器内部；刷新失败报告过期，不要密码 | 「the two-level refresh follows the verified order; only an explicit grant refusal records expiry」七条轨迹：换取被明确拒绝记过期，两级之后仍被拒报 `signature-rejected` 且凭据状态不变；「a reader clock ten minutes off …」；替身用独立实现核对每个数据请求的签名；失败摘要不含「密码」 | 通过（离线替身）；真实信号未验证 |
 
 工单的验证方式逐项对应：成功、过期、缺字段、失败都有替身覆盖；同一合成账号经两来源产出的快照被同一工具读取，并检查来源冲突和秘密泄漏；合成响应覆盖两处差一、技能与模组字段的有和无、三类无来源的写法。
 
@@ -54,15 +54,30 @@
 - 门禁因测试失败提前结束，其余步骤单独运行：`scripts/eval-selftest.ts` 通过（7 条规则、14 个样例）；tracker、隐私检查和相对链接检查见提交前的最后一次运行（下一条）。
 - 隐私检查 `node scripts/privacy.ts`、`node scripts/tracker.ts`、链接与插件描述检查（`inspectMetadata`）：均无问题。
 
+## 审查第 1 轮修复
+
+第 1 轮结论不通过（P1 0、P2 2、P3 1），协调者接受全部三条。审查记录由协调者保存。
+
+| 意见 | 修复 | 证据 |
+| --- | --- | --- |
+| P2：同一次读取里重新换取已成功，数据接口仍回 10000/10002 时，有效 token 被记成过期（读取器时钟慢 10 分钟可复现），用户会被反复要求重新粘贴 | 新增 `signature-rejected`（`repair` 为 `check-system-time`），凭据状态不变；只有换取授权码被明确拒绝才记过期。签名时间改由读取器的时钟参数提供，便于测试 | 「the two-level refresh follows the verified order; only an explicit grant refusal records expiry」、「a reader clock ten minutes off …」；CLI 失败测试新增签名被拒一例 |
+| P2：玩家信息和养成数据改了字段名但外层 code 为 0 时，`import` 用 0 个干员的快照替换了已有快照 | 玩家信息没有已核对的干员结构时整次读取为 `response-invalid`（`report-issue`），不写入 | 「network failures, refusals …」新增两例；CLI 失败测试新增审查员复现的字段改名一例，已有快照字节不变 |
+| P3：养成请求失败时 `import` 仍替换旧快照，与文档相反，规则也未登记 | 任一域没读到的读取不替换已有快照（`saved: false`、`failedDomains`、`repair`）；只有第一份快照可以是部分快照；规格正文和两张来源表登记 | 「a read with a failed domain never replaces an existing Skland snapshot …」（网络失败、429、其他 code、养成格式不符、玩家信息缺基建五种）；「a failed cultivation request leaves inventory unavailable …」 |
+
+先红后绿：改实现之前，更新后的测试文件 17 项中 6 项失败（两级刷新轨迹、时钟偏差、结构不符、养成签名被拒、CLI 失败、部分读取），改动后 17 项全部通过。审查员的复现脚本（只读，未修改）各运行一次：`skew.ts` 结果为 `signature-rejected`、`credential` 为 `unchanged`、凭据状态 `unverified`；`format.ts` 的第二次导入退出码 1（`response-invalid`，输出在标准错误），脚本按旧行为解析标准输出而报错，已有快照未被替换由上面的 CLI 测试覆盖。
+
+本轮按维护者 2026-11-13 关于本机负载的要求，只运行 `npm run typecheck`（通过）和受影响的单个测试文件各一次：`tests/skland-account.test.ts` 17 项通过、`tests/skland-scenarios.test.ts` 1 项通过；另运行隐私检查、tracker 和相对链接检查，均无问题。没有运行完整离线门禁，由协调者统一运行。
+
 ## 设计默认值
 
 都登记在[规格](spec.md)「默认值及其来源」以「12」开头的行，日期 2026-11-13：
 
 - 只请求两个固定主机上的六个接口，数据接口只用 GET；不跟随重定向；每个请求 20 秒、单个回复最多 16 MiB。
 - 签名头不生成、不伪造设备标识，不冒充森空岛客户端的 User-Agent。
-- 两级刷新各最多一次；刷新后仍未授权时再走第二级（比参考项目多一步）；换取授权码被明确拒绝或两级之后仍被拒才记过期；其他失败不记过期，也不自动重试；访问凭证和签名 token 不落盘。
+- 两级刷新各最多一次；刷新后仍未授权时再走第二级（比参考项目多一步）；只有换取授权码被明确拒绝才记过期，两级之后仍被拒报 `signature-rejected`、凭据状态不变（第 1 轮修订）；其他失败不记过期，也不自动重试；访问凭证和签名 token 不落盘。
 - 多个角色时取森空岛默认角色，没有默认又不止一个时停止。
-- 森空岛快照另存为 `account-snapshot-skland.json`，与 MAA 快照共用写入锁；读取失败不写新快照；查询工具要显式传 `snapshotFile` 才用森空岛快照；两份不合并。
+- 森空岛快照另存为 `account-snapshot-skland.json`，与 MAA 快照共用写入锁；读取失败不写新快照；玩家信息没有已核对的干员结构时按 `response-invalid` 处理、不写入；查询工具要显式传 `snapshotFile` 才用森空岛快照；两份不合并。
+- 干员、仓库、基建任一域没读到（请求失败、回复不合格或没有返回）的读取不替换已有森空岛快照，输出 `saved: false`、`failedDomains` 和建议；只有还没有森空岛快照时才保存部分快照并在 `coverage` 写明原因；判断在写入锁内（第 1 轮由协调者选定）。
 - 转换：单项越界记未知并写原因，结构错误使该域无效；模组锁定记 0；技能专精按列表顺序；基建只记房间、驻员和心情原始值及其时间；不写账号标识、理智和公招；原扫描时间为空。
 - 对比只比较两边都已知的字段，Markdown 每类最多列 50 条。
 

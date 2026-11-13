@@ -26,8 +26,9 @@
 | 刷新签名 token：`GET https://zonai.skland.com/api/v1/auth/refresh`，请求头带 `cred`，新签名 token 在 `data.token` | nonebot、arknights-toolbox | 采用 |
 | 数据接口回复 `code` 10000 表示未授权（签名 token 失效，先刷新），10002 表示登录失效（用用户 token 重新换取） | nonebot `api/request.py`、`services/auth.py` 及其测试；arknights-toolbox `isCredTokenExpiredError`、`isNotLoginError` | 采用 |
 | 两级刷新的次序：10000 先刷新签名 token 再重试；10002 用用户 token 重新换取再重试；重新换取后仍被拒即失败 | nonebot `tests/test_auth.py` 的轨迹 | 采用；本仓库测试 `tests/skland-account.test.ts` 用同样的轨迹核对 |
-| 刷新签名 token 后仍是 10000 | nonebot 直接失败 | 不同：本实现再走一次第二级（用用户 token 重新换取），仍被拒才记过期。理由：记过期之前先确认用户 token 本身换出的会话也被拒 |
-| 换取失败时 `status` 的具体取值及含义 | 三个项目都只判断非 0，没有列出取值 | 未验证。读取器把格式正常、`status` 非 0 的换取回复当作对方明确拒绝 token |
+| 刷新签名 token 后仍是 10000 | nonebot 直接失败 | 不同：本实现再走一次第二级（用用户 token 重新换取） |
+| 两级之后仍是 10000 或 10002 | 参考项目都当作登录或授权失败 | 不同：这时本次读取里换取接口刚接受过 token，问题在签名、时间或请求头，报告 `signature-rejected`，不记过期（第 1 轮审查修复：读取器时钟慢 10 分钟时，有效 token 曾被记成过期） |
+| 换取失败时 `status` 的具体取值及含义 | 三个项目都只判断非 0，没有列出取值 | 未验证。读取器把格式正常、`status` 非 0 的换取回复当作对方明确拒绝 token；这是唯一会记过期的信号 |
 
 ## 读取接口和字段
 
