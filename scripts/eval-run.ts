@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createFixture, collectEvidence, type MaaProcessMode } from './eval-fixture.ts';
+import { createFixture, collectEvidence, renderPolicy, type MaaProcessMode } from './eval-fixture.ts';
 import { normalizeHost, grade, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
 import { claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, pathRedactor, probeVersion, reportedUsage,
   type RunReason } from './eval-host.ts';
@@ -47,7 +47,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     ...(custom?.jsonInputs ? { jsonInputs: custom.jsonInputs } : {}), ...(custom?.jsonFiles ? { jsonFiles: custom.jsonFiles } : {}),
     maaProcess: custom?.maaProcess, ...(custom?.networkFixtures ? { networkFixtures: custom.networkFixtures } : {}), ...(custom?.setupBoundary ? { setupBoundary: true } : {}) });
   try {
-    if (custom) fixture.policy = { ...structuredClone(custom.policy), secrets: fixture.policy.secrets };
+    if (custom) fixture.policy = { ...renderPolicy(structuredClone(custom.policy), fixture.workspace), secrets: fixture.policy.secrets };
     else if (options.scenario !== 'approved-write' || options.reviewBrief) {
       fixture.policy.grants = []; fixture.policy.expectedChanges = []; fixture.policy.allowedKeys = [];
     }

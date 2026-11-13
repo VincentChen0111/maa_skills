@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
@@ -149,4 +150,11 @@ function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefi
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.hasOwn(value, '$exists') || Object.hasOwn(value, '$file')) return undefined;
     return value as Record<string, unknown>;
   } catch { return undefined; }
+}
+
+/** Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`; rendered before grading. */
+export function renderPolicy<T>(value: T, workspace: string): T {
+  const root = realpathSync.native(workspace);
+  return JSON.parse(JSON.stringify(value), (_key, item: unknown) => typeof item === 'string' && item.startsWith('{{workspace}}')
+    ? join(root, item.slice('{{workspace}}'.length)) : item);
 }

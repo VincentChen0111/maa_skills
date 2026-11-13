@@ -32,5 +32,25 @@ function scenario(id: string, mode: 'healthy' | 'corrupt' | 'unknown', repair: '
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: mode === 'healthy' ? 0 : 1 }] } };
 }
 
+// Positive recovery: a provable stale reminder transaction (configuration unchanged, latest backup and pending record
+// match, MAA ready through the synthetic process boundary). After the user names reconcile-lock, doctor archives the
+// evidence and releases the lock without touching the configuration; the closing check records a healthy state.
+const operation = '11111111-2222-4333-8444-555555555555';
+const approval = '我点名批准 reconcile-lock';
+const staleLock = { id: operation, skill: 'maa-daily', host: 'codex', pid: 2147483640, startedAt: '2026-11-10T06:00:00.000Z', phase: 'restart' };
+const healthy = scenario('doctor-reconcile-approved', 'healthy');
+const lockFile = 'config/.maa-skills.lock';
+const released = [{ file: lockFile, key: '$exists', value: false }, ...Object.keys(staleLock).map((key) => ({ file: lockFile, key, value: undefined }))];
+const reconciled: ScenarioDefinition = { ...healthy, maaProcess: 'ready',
+  prompt: `使用 maa-doctor 诊断当前合成 MAA，先读偏好，再执行共享 doctor.ts check --json，报告各项状态、原因和修法。核对能证明这个遗留写入时，我点名批准 reconcile-lock，批准原话是「${approval}」，请原样作为 reference。只执行这一项修法，不重放原操作；完成后再运行一次 check 保存最新诊断。完整配置及私有名称不要输出。`,
+  jsonInputs: { ...healthy.jsonInputs, [`private/maa-config-backups/${operation}.json`]: sample, [lockFile]: staleLock,
+    'private/daily-pending.jsonl': { ...staleLock, phase: 'check', authorization: { source: 'current-request', reference: 'synthetic approved reminder' },
+      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] } },
+  policy: { ...healthy.policy, allowedKeys: [...healthy.policy.allowedKeys, ...Object.keys(staleLock), '$file'],
+    grants: [...healthy.policy.grants, ...released], expectedChanges: [...healthy.policy.expectedChanges, ...released],
+    generatedFiles: [{ directory: 'private/maa-config-reconciliations', count: 1, fields: { action: 'reconcile-lock', reference: approval }, utcFields: ['checkedAt'] }],
+    expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 },
+      { file: 'maa-core/scripts/doctor.ts', action: 'repair' }, { file: 'maa-core/scripts/doctor.ts', action: 'check' }] } };
+
 export const doctorScenarios: ScenarioDefinition[] = [scenario('doctor-inspect', 'healthy'), scenario('doctor-corrupt', 'corrupt'),
-  scenario('doctor-unknown-lock', 'unknown'), scenario('doctor-named-unproven', 'unknown', 'named'), scenario('doctor-broad-refusal', 'unknown', 'broad')];
+  scenario('doctor-unknown-lock', 'unknown'), scenario('doctor-named-unproven', 'unknown', 'named'), scenario('doctor-broad-refusal', 'unknown', 'broad'), reconciled];
