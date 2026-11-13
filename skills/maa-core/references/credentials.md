@@ -7,7 +7,7 @@
 - 输入只由用户本人在自己的终端运行 `input`。agent 不运行 `input`，不代用户输入，不替用户登录，也不请用户把 token、Cookie 或 SESSDATA 贴到对话里。
 - 用户已经把值贴进对话时：不复述、不保存、不传给任何脚本；告诉用户对话里的值已经不是只在本机，建议在对应网站退出登录或换新后，再用本地脚本输入新值。
 - agent 只运行 `check`，只报告状态。不要读取、复制或展示私有目录 `credentials/` 下的文件内容。
-- 读取器（森空岛账号快照、NGA 与 B 站调研）在进程内用导出函数取值，用完不打印、不写日志、不另存。
+- 读取器（森空岛账号快照和森空岛社区帖子、NGA 与 B 站调研）在进程内用导出函数取值，用完不打印、不写日志、不另存。
 
 ## 命令
 
@@ -65,4 +65,4 @@ import { inspectCredentials, credentialCheck, readCredential, recordCredentialOu
 - `recordCredentialOutcome(service, revision, outcome, { privateDirectory, expiresAt? })`：实际读取后记下结果。`revision` 不是当前记录的修订号时不写，返回 `false`，旧值的结果不会把新值标成可用。只有对方明确拒绝凭据（例如未授权、token 换取访问凭证失败）才记 `expired`；网络失败、超时、风控、响应不完整不记，按读取器自己的状态报告。
 - `saveCredential`、`normalizeCredentialValue` 只供输入流程和测试使用，skill 不调用。
 
-测试用 `--import` 加载器替换 `credential-protection.ts`（见仓库 `tests/fixtures/credential-boundary.mjs`），文件和 CLI 保持真实；不读取维护者的真实凭据。森空岛 token 换取访问凭证、请求签名和刷新属于读取器 `skland-account.ts`（见 maa-account 的[森空岛接口](../../maa-account/references/skland.md)），本接口不联网。
+测试用 `--import` 加载器替换 `credential-protection.ts`（见仓库 `tests/fixtures/credential-boundary.mjs`），文件和 CLI 保持真实；不读取维护者的真实凭据。森空岛 token 换取访问凭证、请求签名和刷新属于两个森空岛读取器共用的会话 `skland-session.ts`（账号快照见 maa-account 的[森空岛接口](../../maa-account/references/skland.md)，社区帖子见[社区调研接口](research.md)），本接口不联网。
