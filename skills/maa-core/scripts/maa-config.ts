@@ -58,7 +58,13 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   }
   return JSON.stringify(value);
 }
-function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery') {
+/**
+ * `restoreTo` is given only on doctor's restore-config path: the interrupted transaction's backup, whose values the request
+ * writes back; or 'recorded-values' when replaying the pending record of such a restore, whose values this writer took from
+ * that backup. The changed-field decision then goes to the predicate as `doctor-restore` with each task's backup task, so a
+ * class that ends closed may take back its pre-transaction values without its grant. Ordinary writes never pass it.
+ */
+function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', restoreTo?: RecordValue | 'recorded-values') {
   const plans = ['jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key));
   if (plans.length > 1) throw new Error('conflicting-authorizations');
   // The consumption predicate owns which grants may accompany a plan: only the expiring-medicine grant may.
@@ -176,7 +182,11 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
       && path[3] === request.authorization.trainingPlan!.binding.progressTask)) throw new Error('unsafe-task-settings');
   };
   const changedTasks = [...consumptionTasks].map(value => JSON.parse(value) as (string | number)[]);
-  const changed = decide(decideConsumption(request.authorization, changedTasks.map(path => ({ task: at(next, path), before: at(config, path) })), { consumer: 'writer-whitelist', plan }));
+  const changedTargets = changedTasks.map(path => ({ task: at(next, path), before: at(config, path) }));
+  const restoring = restoreTo === undefined ? null : changedTasks.map((path, index) => ({ ...changedTargets[index]!, restore: restoreTo === 'recorded-values' ? changedTargets[index]!.task : at(restoreTo, path) }));
+  const changed = decide(restoring
+    ? decideConsumption(request.authorization, restoring, { consumer: 'doctor-restore', plan })
+    : decideConsumption(request.authorization, changedTargets, { consumer: 'writer-whitelist', plan }));
   enabledTasks.forEach(identity);
   const activated = decide(decideConsumption(request.authorization, enabledTasks.map(path => ({ task: at(next, path), activated: true })), { consumer: 'indirect-consumption', plan }));
   // A profile consumes when this request changes an open medicine or stone quantity, or activates a task holding one.
@@ -314,7 +324,9 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       const record = transactionPending(matches[0]);
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
-      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined).config;
+      // A doctor record is a restore this writer built from an earlier backup: replay it with the same restore allowance.
+      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined,
+        record.skill === 'maa-doctor' ? 'recorded-values' : undefined).config;
       summary.backup = 'matched-latest';
       if (!current || summary.configuration !== 'valid') throw new Error('current-invalid');
       summary.comparison = revision(current) === revision(backup) ? 'unchanged' : revision(current) === revision(expected) ? 'applied' : 'unknown';
@@ -345,6 +357,7 @@ export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaPr
   if (!['codex', 'claude'].includes(request.host) || !['reconcile-lock', 'restore-config'].includes(request.action)
     || typeof request.reference !== 'string' || !request.reference.trim() || !/^[a-f0-9]{64}$/.test(request.evidenceRevision)) return rejected('approval-required');
   // Only the repair request's own current grant may reopen consumption; the original transaction's grant is never reused.
+  // A class that stays closed may take back the backup's values without a grant (the writer passes the backup as restoreTo).
   const grant = Object.fromEntries((['medicineCount', 'stoneCount', 'expiringMedicine'] as const).filter(key => request[key] !== undefined).map(key => [key, request[key]]));
   const granted = decideConsumption({ source: 'current-request', ...grant }, [], { consumer: 'doctor-recovery' });
   if (!granted.allowed) return rejected(granted.reason!);
@@ -375,7 +388,7 @@ export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaPr
         return await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
           expectedRevision: revision(evidence.current!), closedConfirmed: request.closedConfirmed,
           authorization: { source: 'current-request', reference: request.reference, ...grant }, changes }, maa,
-        { lock, rawLock: evidence.rawLock! });
+        { lock, rawLock: evidence.rawLock!, restoreTo: evidence.backup! });
       } finally { await lock.close(); }
     }
     await unlink(join(request.maaDirectory, 'config', '.maa-skills.lock'));
@@ -481,7 +494,7 @@ export async function executeSetupConfigWrite(request: SetupWriteRequest, contex
   return writeConfiguration(write, boundary, undefined, 'setup');
 }
 
-async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string }, connection?: 'setup') {
+async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string; restoreTo: RecordValue }, connection?: 'setup') {
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
@@ -516,7 +529,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
       }
     }
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
-    const prepared = prepare(original, request, recovery ? 'recovery' : connection);
+    const prepared = prepare(original, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
     targets = request.changes.map(change => {
@@ -569,7 +582,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
-    const preview = prepare(original, request, recovery ? 'recovery' : connection);
+    const preview = prepare(original, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
     if (!checkMaintenanceWindow(original, closeStarted, deadline) || !checkMaintenanceWindow(preview.config, closeStarted, deadline)) throw new Error('timer-window');
@@ -581,7 +594,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
     await checkAsset();
-    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection);
+    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');

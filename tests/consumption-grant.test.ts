@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -69,6 +69,22 @@ const conformance: Record<ConsumptionConsumer, { file: string; allow: (t: Parame
       const f = await maaFixture(t, config([fight()])); const before = await readFile(f.file);
       await refusedBeforeProcess(f, await write(f, {}, stoneOn(0, 2)), before, 'stone-grant-required');
       assert.equal(decide({ source: 'current-request' }, [{ task: fight({ UseStone: true, UseStoneAllowSave: true, StoneCount: 2 }), before: fight() }], 'writer-whitelist').reason, 'stone-grant-required');
+    },
+  },
+  'doctor-restore': {
+    file: 'skills/maa-core/scripts/maa-config.ts',
+    allow: async t => {
+      // Expiring medicine goes back to closed at its pre-transaction 2 days with only the current repair request.
+      await restoreOutcome(t, { name: 'closed days', tasks: [fight({ IsEnable: true })], grant: days(3), attempts: [[{}, 'complete']],
+        changes: [{ path: restoreField(0, 'UseExpiringMedicine'), value: true }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }] });
+      assert.equal(decide({ source: 'current-request' }, [{ task: fight(), before: fight({ UseExpiringMedicine: true, MedicineExpireDays: 3 }), restore: fight() }], 'doctor-restore').allowed, true);
+    },
+    refuse: async t => {
+      // Restoring reopens expiring medicine at 2 days: only the current grant for 2 days works.
+      await restoreOutcome(t, { name: 'reopened days', tasks: [fight({ IsEnable: true, UseExpiringMedicine: true, MedicineExpireDays: 2 })], grant: days(3),
+        attempts: [[{}, 'expiring-grant-required'], [days(2), 'complete']],
+        changes: [{ path: restoreField(0, 'UseExpiringMedicine'), value: false }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }] });
+      assert.equal(decide({ source: 'current-request' }, [{ task: fight({ MedicineExpireDays: 4 }), before: fight({ UseExpiringMedicine: true, MedicineExpireDays: 3 }), restore: fight() }], 'doctor-restore').reason, 'expiring-grant-required');
     },
   },
   'indirect-consumption': {
@@ -256,6 +272,132 @@ test('doctor recovery never reuses the interrupted transaction grant when restor
     assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), original);
     assert.deepEqual(await readdir(join(f.maaDirectory, 'config')), ['gui.new.json']);
   });
+});
+
+/** Restore attempts in order: the repair's own grant and the expected reason, or 'complete'. Each refusal leaves every byte unchanged. */
+type RestoreCase = { name: string; tasks: Record<string, unknown>[]; grant: Record<string, unknown>; changes: { path: (string | number)[]; value: unknown }[]; attempts: [Record<string, unknown>, string][] };
+const restoreField = (index: number, name: string) => ['Configurations', profile, 'TaskQueue', index, name];
+const days = (value: number) => ({ expiringMedicine: { days: value, forActivity: false } });
+async function restoreOutcome(t: Parameters<typeof maaFixture>[0], sample: RestoreCase) {
+  const original = config(sample.tasks);
+  const f = await maaFixture(t, original);
+  const evidenceRevision = await abandonedTransaction(f, sample.grant, sample.changes);
+  const lockFile = join(f.maaDirectory, 'config', '.maa-skills.lock');
+  for (const [grant, expected] of sample.attempts) {
+    const before = await readFile(f.file); const lock = await readFile(lockFile);
+    const result = await executeRepairs({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
+      approved: ['restore-config'], reference: 'restore the earlier settings', evidenceRevision, closedConfirmed: true, ...grant }, f.maa);
+    if (expected === 'complete') {
+      assert.equal(result.status, 'complete', `${JSON.stringify(grant)} ${JSON.stringify(result)}`);
+      assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), original);
+      assert.deepEqual(await readdir(join(f.maaDirectory, 'config')), ['gui.new.json']);
+      return f;
+    }
+    assert.equal(result.status, 'rejected', JSON.stringify(grant)); assert.equal(result.reason, expected, JSON.stringify(grant));
+    assert.deepEqual(await readFile(f.file), before); assert.deepEqual(await readFile(lockFile), lock);
+    assert.deepEqual((await readdir(join(f.maaDirectory, 'config'))).sort(), ['.maa-skills.lock', 'gui.new.json']);
+  }
+  assert.fail('every sample ends with a completed restore');
+}
+
+test('doctor restore returns a class that stays closed to its pre-transaction values without a class grant; reopening still needs the current grant', async t => {
+  const cases: RestoreCase[] = [
+    // Expiring medicine was closed with MAA's default 2 days; the interrupted request opened it for the approved 3 days.
+    { name: 'expiring medicine closed at 2 days, opened for 3', tasks: [fight({ IsEnable: true })], grant: days(3),
+      changes: [{ path: restoreField(0, 'UseExpiringMedicine'), value: true }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }],
+      attempts: [[{}, 'complete']] },
+    // Stone was closed with a leftover count of 5; the interrupted request opened it for the approved 2.
+    { name: 'stone closed with 5 left, opened for 2', tasks: [fight({ IsEnable: true, StoneCount: 5 })], grant: { stoneCount: 2 },
+      changes: [{ path: restoreField(0, 'UseStone'), value: true }, { path: restoreField(0, 'UseStoneAllowSave'), value: true }, { path: restoreField(0, 'StoneCount'), value: 2 }],
+      attempts: [[{}, 'complete']] },
+    // Medicine closed with 4 left, opened for the approved 1.
+    { name: 'medicine closed with 4 left, opened for 1', tasks: [fight({ IsEnable: true, MedicineCount: 4 })], grant: { medicineCount: 1 },
+      changes: [{ path: restoreField(0, 'UseMedicine'), value: true }, { path: restoreField(0, 'MedicineCount'), value: 1 }],
+      attempts: [[{}, 'complete']] },
+    // One restore closes the first task back at 2 days and reopens the second task's own 5 days: only the reopening needs a grant.
+    { name: 'closed days go back while another task reopens', tasks: [fight({ IsEnable: true }), fight({ UseExpiringMedicine: true, MedicineExpireDays: 5 })], grant: days(3),
+      changes: [{ path: restoreField(0, 'UseExpiringMedicine'), value: true }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }, { path: restoreField(1, 'UseExpiringMedicine'), value: false }],
+      attempts: [[{}, 'expiring-grant-required'], [days(3), 'expiring-days-mismatch'], [days(5), 'complete']] },
+    // The same restores when the backup had the class open: restoring reopens it, so only the current grant for the backup's value works.
+    { name: 'expiring medicine open at 2 days, closed at 3', tasks: [fight({ IsEnable: true, UseExpiringMedicine: true, MedicineExpireDays: 2 })], grant: days(3),
+      changes: [{ path: restoreField(0, 'UseExpiringMedicine'), value: false }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }],
+      attempts: [[{}, 'expiring-grant-required'], [days(3), 'expiring-days-mismatch'], [days(2), 'complete']] },
+    { name: 'stone open with 5, closed at 2', tasks: [fight({ IsEnable: true, UseStone: true, UseStoneAllowSave: true, StoneCount: 5 })], grant: { stoneCount: 2 },
+      changes: [{ path: restoreField(0, 'UseStone'), value: false }, { path: restoreField(0, 'UseStoneAllowSave'), value: false }, { path: restoreField(0, 'StoneCount'), value: 2 }],
+      attempts: [[{}, 'stone-grant-required'], [{ stoneCount: 2 }, 'stone-quantity-exceeded'], [{ stoneCount: 5 }, 'complete']] },
+  ];
+  for (const sample of cases) await t.test(sample.name, async t => { await restoreOutcome(t, sample); });
+});
+
+test('an interrupted restore that took a closed class back without a grant can itself be reconciled', async t => {
+  const f = await maaFixture(t, config([fight({ IsEnable: true })]));
+  const original = await readFile(f.file, 'utf8');
+  const evidenceRevision = await abandonedTransaction(f, days(3),
+    [{ path: restoreField(0, 'UseExpiringMedicine'), value: true }, { path: restoreField(0, 'MedicineExpireDays'), value: 3 }]);
+  const backups = join(f.privateDirectory, 'maa-config-backups'); const past = new Date(Date.now() - 60000);
+  for (const file of await readdir(backups)) await utimes(join(backups, file), past, past);
+  const start = f.maa.start;
+  f.maa.start = async () => { throw new Error('synthetic restart failure'); };
+  const interrupted = await executeRepairs({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
+    approved: ['restore-config'], reference: 'restore the earlier settings', evidenceRevision, closedConfirmed: true }, f.maa);
+  assert.equal(interrupted.status, 'unknown', JSON.stringify(interrupted));
+  assert.equal(await readFile(f.file, 'utf8') === original, false, 'the restore wrote its formatted configuration before the restart');
+  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), JSON.parse(original));
+  // The doctor process that held the retained lock has exited.
+  const dead = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid;
+  const lockFile = join(f.maaDirectory, 'config', '.maa-skills.lock'); const lock = JSON.parse(await readFile(lockFile, 'utf8'));
+  assert.equal(lock.skill, 'maa-doctor');
+  await writeFile(lockFile, JSON.stringify({ ...lock, pid: dead }));
+  const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
+  const lines = (await readFile(pendingFile, 'utf8')).trim().split('\n');
+  lines[lines.length - 1] = JSON.stringify({ ...JSON.parse(lines.at(-1)!), pid: dead });
+  await writeFile(pendingFile, lines.join('\n') + '\n');
+  const closed = await inspectConfigRecovery(f, f.maa);
+  assert.equal(closed.comparison, 'applied', JSON.stringify(closed)); assert.equal(closed.process, 'closed'); assert.equal(closed.canRestore, true);
+  f.maa.start = start; await f.maa.start();
+  const ready = await inspectConfigRecovery(f, f.maa);
+  assert.equal(ready.canReconcile, true, JSON.stringify(ready));
+  const reconciled = await executeRepairs({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
+    approved: ['reconcile-lock'], reference: 'keep the restored settings', evidenceRevision: ready.evidenceRevision }, f.maa);
+  assert.equal(reconciled.status, 'complete', JSON.stringify(reconciled));
+  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), JSON.parse(original));
+  assert.deepEqual(await readdir(join(f.maaDirectory, 'config')), ['gui.new.json']);
+});
+
+test('an ordinary write of the pre-transaction values gets no restore allowance', async t => {
+  const cases = [
+    { name: 'expiring medicine', task: fight({ IsEnable: true, UseExpiringMedicine: true, MedicineExpireDays: 3 }), reason: 'expiring-grant-required',
+      changes: [{ path: task(0, 'UseExpiringMedicine'), value: false }, { path: task(0, 'MedicineExpireDays'), value: 2 }] },
+    { name: 'stone', task: fight({ IsEnable: true, UseStone: true, UseStoneAllowSave: true, StoneCount: 2 }), reason: 'stone-grant-required',
+      changes: [{ path: task(0, 'UseStone'), value: false }, { path: task(0, 'UseStoneAllowSave'), value: false }, { path: task(0, 'StoneCount'), value: 5 }] },
+  ];
+  for (const sample of cases) await t.test(sample.name, async t => {
+    const f = await maaFixture(t, config([sample.task])); const before = await readFile(f.file);
+    await refusedBeforeProcess(f, await write(f, {}, sample.changes), before, sample.reason);
+  });
+});
+
+test('the restore allowance needs the doctor-restore consumer, values equal to the backup task and a class that ends closed', () => {
+  const current = { source: 'current-request' as const };
+  const opened = fight({ UseExpiringMedicine: true, MedicineExpireDays: 3 });
+  const stoneOpened = fight({ UseStone: true, UseStoneAllowSave: true, StoneCount: 2 });
+  // Allowed: closed again, every changed value equal to the backup task's.
+  assert.equal(decide(current, [{ task: fight(), before: opened, restore: fight() }], 'doctor-restore').allowed, true);
+  assert.equal(decide(current, [{ task: fight({ StoneCount: 5 }), before: stoneOpened, restore: fight({ StoneCount: 5 }) }], 'doctor-restore').allowed, true);
+  // A value that is not the backup's, while the class stays closed.
+  assert.equal(decide(current, [{ task: fight({ MedicineExpireDays: 4 }), before: opened, restore: fight() }], 'doctor-restore').reason, 'expiring-grant-required');
+  assert.equal(decide(current, [{ task: fight({ StoneCount: 6 }), before: stoneOpened, restore: fight({ StoneCount: 5 }) }], 'doctor-restore').reason, 'stone-grant-required');
+  // The backup task is not a Fight task.
+  assert.equal(decide(current, [{ task: fight({ StoneCount: 5 }), before: stoneOpened, restore: { StoneCount: 5 } }], 'doctor-restore').reason, 'stone-grant-required');
+  // The class ends open: the backup's values reopen it.
+  const reopened = fight({ UseExpiringMedicine: true, MedicineExpireDays: 2 });
+  assert.equal(decide(current, [{ task: reopened, before: fight({ MedicineExpireDays: 3 }), restore: reopened }], 'doctor-restore').reason, 'expiring-grant-required');
+  // Not a current request.
+  assert.equal(decide({ source: 'approved-report' }, [{ task: fight(), before: opened, restore: fight() }], 'doctor-restore').reason, 'current-request-required');
+  // Every other consumer refuses a target that carries a backup task.
+  for (const consumer of consumptionConsumers.filter(item => item !== 'doctor-restore')) {
+    assert.equal(decide(current, [{ task: fight(), before: opened, restore: fight() }], consumer).reason, 'consumption-grant-invalid', consumer);
+  }
 });
 
 async function codeFiles(directory: string): Promise<string[]> {

@@ -1,8 +1,9 @@
 /**
  * The one decision about what a grant may open (ticket 27). Input: the grant a request declares and the final settings of
  * the target tasks; output: allowed or a static reason, plus the consumption state classified for every target. The writer's
- * field whitelist, indirect-consumption and quantity checks, pending-record validation, doctor recovery, the read summary and
- * the eval grader all call `decideConsumption`; tests/consumption-grant.test.ts enumerates every call site.
+ * field whitelist (and its doctor-restore variant), indirect-consumption and quantity checks, pending-record validation, doctor
+ * recovery, the read summary and the eval grader all call `decideConsumption`; tests/consumption-grant.test.ts enumerates
+ * every call site.
  *
  * MAA facts (pinned v6.21.4, see docs/daily-verification.md): FightTask.cs holds `UseMedicine`/`MedicineCount`,
  * `UseStone`/`StoneCount`, `UseStoneAllowSave` (reading a configuration resets `UseStone` when it is not true),
@@ -10,8 +11,11 @@
  * the switch is not false, so a null switch consumes.
  */
 
-/** Every caller, by role. A new call site needs a new label here and a row in the conformance test. */
-export const consumptionConsumers = ['writer-whitelist', 'indirect-consumption', 'quantity-budget', 'pending-record', 'doctor-recovery', 'read-summary', 'eval-grader'] as const;
+/**
+ * Every caller, by role. A new call site needs a new label here and a row in the conformance test. `doctor-restore` is the
+ * writer's changed-field decision on doctor's restore-config path, the only consumer whose targets may carry `restore`.
+ */
+export const consumptionConsumers = ['writer-whitelist', 'doctor-restore', 'indirect-consumption', 'quantity-budget', 'pending-record', 'doctor-recovery', 'read-summary', 'eval-grader'] as const;
 export type ConsumptionConsumer = typeof consumptionConsumers[number];
 
 /** Static reasons; none carries configuration content. */
@@ -40,8 +44,13 @@ const quantityKinds: Kind[] = ['medicine', 'stone'];
  */
 const closingValue = (field: string, value: unknown) =>
   field === 'MedicineCount' || field === 'StoneCount' ? value === 0 : field !== 'MedicineExpireDays' && value === false;
-/** How a request changes one kind: not at all, only with closing values, or otherwise. */
-type KindChange = 'none' | 'closing' | 'other';
+/**
+ * How a request changes one kind: not at all, only with closing values, also with values equal to the doctor-restore backup
+ * task's (`restoring`), or otherwise. Listed in rising order: a kind takes the highest of its changed fields.
+ */
+const kindChanges = ['none', 'closing', 'restoring', 'other'] as const;
+type KindChange = typeof kindChanges[number];
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
 export type ExpiringMedicineGrant = { days: number; forActivity: boolean };
 /** The consumption part of a request's authorization; other authorization keys are ignored here. */
@@ -52,8 +61,12 @@ export type ConsumptionGrant = { source: unknown; medicineCount?: unknown; stone
  * `activated`: the request makes the task run (enable, reorder of an enabled task, timer). `counted`: an enabled task whose
  * medicine and stone count against the grant. `runs`: scheduled single runs (an explicit allocation counts at least once).
  * `recurring`: reached by a daily-repeating timer.
+ * `restore`: the same task in the interrupted transaction's backup, given only by the `doctor-restore` consumer (any other
+ * consumer refuses a target carrying it). A kind that ends closed may take back the backup task's values with only a current
+ * request: they were in the configuration before that transaction, so restoring them presets no new consumption. A kind that
+ * ends open still needs the repair's own current grant.
  */
-export type ConsumptionTarget = { task: unknown; before?: unknown; activated?: boolean; counted?: boolean; runs?: number; recurring?: boolean };
+export type ConsumptionTarget = { task: unknown; before?: unknown; restore?: unknown; activated?: boolean; counted?: boolean; runs?: number; recurring?: boolean };
 export type ConsumptionContext = { consumer: ConsumptionConsumer; plan?: 'job' | 'training' };
 /** `on`: true or false as configured; null when the switch is not a boolean, which MAA (and this decision) treats as on. */
 export type TaskConsumption = {
@@ -103,11 +116,11 @@ function readGrant(value: unknown, plan: ConsumptionContext['plan']): Grant | Co
 function checkKind(kind: Kind, task: Settings, state: TaskConsumption, grant: Grant, change: KindChange, plan: ConsumptionContext['plan']): ConsumptionRefusal | null {
   if (!consumes(state, kind)) {
     // A kind that ends closed: closing values need only an ordinary current request, for medicine as for stone and expiring
-    // medicine, and a remaining quantity is not compared. Any other value written to it, even while it stays closed, needs the
-    // kind's own current grant: a quantity within it, expiring days equal to it.
+    // medicine, and a remaining quantity is not compared; so do a doctor restore's backup values. Any other value written to
+    // it, even while it stays closed, needs the kind's own current grant: a quantity within it, expiring days equal to it.
     if (change === 'none') return null;
     if (!grant.current) return 'current-request-required';
-    if (change === 'closing') return null;
+    if (change === 'closing' || change === 'restoring') return null;
     if (kind === 'medicine') {
       if (grant.medicine === undefined) return 'medicine-grant-required';
       if (state.medicine.count === null) return 'medicine-settings-invalid';
@@ -145,6 +158,8 @@ export function decideConsumption(grantValue: ConsumptionGrant, targets: Consump
   const tasks = targets.map(target => { const task = typed(target.task, 'Fight'); return task ? classify(task) : null; });
   const refuse = (reason: ConsumptionRefusal): ConsumptionDecision => ({ allowed: false, reason, tasks });
   if (!consumptionConsumers.includes(context?.consumer)) return refuse('consumption-grant-invalid');
+  // Only doctor's restore path may name a backup task; an ordinary write never gets the restore allowance.
+  if (context.consumer !== 'doctor-restore' && targets.some(target => target.restore !== undefined)) return refuse('consumption-grant-invalid');
   const grant = readGrant(grantValue, context.plan);
   if (typeof grant === 'string') return refuse(grant);
   const totals = { medicine: 0, stone: 0 };
@@ -161,11 +176,12 @@ export function decideConsumption(grantValue: ConsumptionGrant, targets: Consump
     const task = typed(target.task, 'Fight'); const state = tasks[index];
     if (!task || !state) continue;
     const before = target.before === undefined ? undefined : record(target.before) ?? {};
+    const restore = context.consumer === 'doctor-restore' ? typed(target.restore, 'Fight') : null;
     const changed = new Map<Kind, KindChange>();
     if (before) for (const [field, owner] of Object.entries(consumptionFields)) {
-      if (JSON.stringify(before[field]) === JSON.stringify(task[field])) continue;
-      if (!closingValue(field, task[field])) changed.set(owner, 'other');
-      else if (!changed.has(owner)) changed.set(owner, 'closing');
+      if (same(before[field], task[field])) continue;
+      const change = closingValue(field, task[field]) ? 'closing' : restore && same(restore[field], task[field]) ? 'restoring' : 'other';
+      if (kindChanges.indexOf(change) > kindChanges.indexOf(changed.get(owner) ?? 'none')) changed.set(owner, change);
     }
     const evaluated = new Set<Kind>(changed.keys());
     if (target.activated) for (const kind of kinds) evaluated.add(kind);
