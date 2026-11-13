@@ -39,7 +39,7 @@ export type LoginRefusal = 'not-absolute' | 'unsupported-character' | 'inside-re
  * Locates the maintainer's real private directory with the product's own rule (settingsHome/readSettings) and compares paths only.
  * Nothing else in the private directory or any login directory is read; the paths are never written to a record.
  */
-export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string } = {}): Promise<LoginRefusal | undefined> {
+export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string; host?: Host } = {}): Promise<LoginRefusal | undefined> {
   if (!isAbsolute(directory)) return 'not-absolute';
   if (/['\r\n\0]/.test(directory)) return 'unsupported-character';
   const login = await canonical(directory);
@@ -51,7 +51,9 @@ export async function loginDirectoryRefusal(directory: string, context: { fixtur
   if (overlaps(login, await canonical(home))) return 'overlaps-settings-directory';
   if (context.fixtureRoot && overlaps(login, await canonical(context.fixtureRoot))) return 'overlaps-temporary-fixture';
   for (const daily of ['.claude', '.codex', '.claude.json']) if (overlaps(login, await canonical(join(homedir(), daily)))) return 'daily-host-directory';
-  if (context.otherLoginDirectory && overlaps(login, await canonical(context.otherLoginDirectory))) return 'overlaps-other-login-directory';
+  // The other host's directory comes from the caller or, for a named host, from the same variable/default resolution.
+  const other = context.otherLoginDirectory ?? (context.host ? resolveLoginDirectory(context.host === 'claude' ? 'codex' : 'claude') : undefined);
+  if (other && overlaps(login, await canonical(other))) return 'overlaps-other-login-directory';
   return undefined;
 }
 
@@ -103,7 +105,7 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
     if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) return fail('other', 'ci-disabled');
     if (auth === 'plan') {
       if (!options.loginDirectory) return fail('other', 'login-directory-missing');
-      const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root });
+      const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host });
       if (refusal) return fail('other', `login-directory-refused:${refusal}`);
     }
     const env = childEnvironment(fixture, host, auth, options.loginDirectory);
@@ -183,7 +185,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
   const value = `maa-eval-sentinel-value-${randomUUID()}`;
   let written = false;
   try {
-    const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root });
+    const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host });
     if (refusal) return Object.assign(result, { category: 'other', detail: `login-directory-refused:${refusal}` });
     if (!(await exists(options.loginDirectory))) return Object.assign(result, { category: 'not-logged-in', detail: 'maintainer-login-required' });
     const version = probeVersion(options.executable, executableArgs, fixture.workspace, fixture.env);

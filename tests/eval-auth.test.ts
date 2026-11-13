@@ -34,6 +34,9 @@ test('login directories are refused inside the repository, a temporary fixture, 
   assert.equal(await loginDirectoryRefusal(join(home, '.codex', 'nested')), 'daily-host-directory');
   assert.equal(await loginDirectoryRefusal(join(root, 'fixture', 'home', 'login'), { fixtureRoot: join(root, 'fixture') }), 'overlaps-temporary-fixture');
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'a'), { otherLoginDirectory: join(root, 'eval', 'a', 'b') }), 'overlaps-other-login-directory');
+  process.env.MAA_EVAL_CODEX_LOGIN_DIR = join(root, 'eval', 'shared');
+  assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'shared', 'claude'), { host: 'claude' }), 'overlaps-other-login-directory', 'the other host directory comes from its own variable');
+  delete process.env.MAA_EVAL_CODEX_LOGIN_DIR;
   assert.equal(await loginDirectoryRefusal('relative/login'), 'not-absolute');
   assert.equal(await loginDirectoryRefusal(join(root, "it's")), 'unsupported-character');
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'claude-config')), undefined);

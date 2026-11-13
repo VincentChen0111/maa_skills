@@ -74,7 +74,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       if (auth.mode === 'host-double' && !version.double) reason = 'host-double-required';
       else if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) reason = 'ci-disabled';
       else if (auth.mode === 'plan' && !isReadProtectionPass(auth.readProtection, options.host)) reason = 'read-protection-required';
-      else if (auth.mode === 'plan' && await loginDirectoryRefusal(loginDirectory!, { fixtureRoot: fixture.root })) reason = 'login-directory-refused';
+      else if (auth.mode === 'plan' && await loginDirectoryRefusal(loginDirectory!, { fixtureRoot: fixture.root, host: options.host })) reason = 'login-directory-refused';
       else if (auth.mode === 'plan' && credentialVariables(env, options.host).length) reason = 'api-key-in-environment';
       else {
         // Never copy the caller's auth files: plan login is used in place in its dedicated directory, API keys only from MAA_EVAL_*.
