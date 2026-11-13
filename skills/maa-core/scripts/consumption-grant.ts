@@ -67,7 +67,11 @@ export type ConsumptionGrant = { source: unknown; medicineCount?: unknown; stone
  * ends open still needs the repair's own current grant.
  */
 export type ConsumptionTarget = { task: unknown; before?: unknown; restore?: unknown; activated?: boolean; counted?: boolean; runs?: number; recurring?: boolean };
-export type ConsumptionContext = { consumer: ConsumptionConsumer; plan?: 'job' | 'training' };
+/**
+ * `plan`: the approved plan the request writes. A job or training plan may carry only the expiring-medicine grant; a base plan
+ * (ticket 23) never touches consumption fields and carries none (design default, 2026-11-14, merge of 27 with 23).
+ */
+export type ConsumptionContext = { consumer: ConsumptionConsumer; plan?: 'job' | 'training' | 'base' };
 /** `on`: true or false as configured; null when the switch is not a boolean, which MAA (and this decision) treats as on. */
 export type TaskConsumption = {
   medicine: { on: boolean | null; count: number | null };
@@ -105,8 +109,10 @@ function readGrant(value: unknown, plan: ConsumptionContext['plan']): Grant | Co
   const expiring = grant.expiringMedicine === undefined ? undefined : record(grant.expiringMedicine);
   if (grant.expiringMedicine !== undefined && (!expiring || Object.keys(expiring).length !== 2 || !Number.isInteger(expiring.days)
     || Number(expiring.days) < 1 || Number(expiring.days) > 30 || typeof expiring.forActivity !== 'boolean')) return 'consumption-grant-invalid';
+  const granted = [grant.medicineCount, grant.stoneCount, grant.expiringMedicine].some(item => item !== undefined);
+  if (plan === 'base' && granted) return 'conflicting-authorizations';
   const current = grant.source === 'current-request';
-  if (!current && [grant.medicineCount, grant.stoneCount, grant.expiringMedicine].some(item => item !== undefined)) return 'current-request-required';
+  if (!current && granted) return 'current-request-required';
   if (plan && (grant.medicineCount !== undefined || grant.stoneCount !== undefined)) return 'conflicting-authorizations';
   return { current, medicine: grant.medicineCount as number | undefined, stone: grant.stoneCount as number | undefined,
     expiring: expiring ? { days: Number(expiring.days), forActivity: expiring.forActivity as boolean } : undefined };

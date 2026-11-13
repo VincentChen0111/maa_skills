@@ -83,8 +83,9 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   restoreTo?: RecordValue | 'recorded-values') {
   const plans = ['jobPlan', 'trainingPlan', 'basePlan'].filter(key => Object.hasOwn(request.authorization, key));
   if (plans.length > 1) throw new Error('conflicting-authorizations');
-  // The consumption predicate owns which grants may accompany a plan: only the expiring-medicine grant may.
-  const plan = plans[0] === 'jobPlan' ? 'job' as const : plans[0] === 'trainingPlan' ? 'training' as const : undefined;
+  // The consumption predicate owns which grants may accompany a plan: only the expiring-medicine grant may accompany a job or
+  // training plan, and none a base plan (it never touches consumption fields).
+  const plan = plans[0] === 'jobPlan' ? 'job' as const : plans[0] === 'trainingPlan' ? 'training' as const : plans[0] === 'basePlan' ? 'base' as const : undefined;
   const decide = (decision: ConsumptionDecision) => { if (!decision.allowed) throw new Error(decision.reason!); return decision; };
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
@@ -93,7 +94,9 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
   const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
   // The derived set may be empty (fields already at target): then the transaction only installs the copy (see writeConfiguration).
-  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan'].includes(key)) || request.authorization.source !== 'approved-report'
+  // A consumption grant alongside reaches the predicate, which refuses it for a base plan with its static reason.
+  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
+    || request.authorization.source !== 'approved-report'
     || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();

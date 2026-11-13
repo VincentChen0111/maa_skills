@@ -257,3 +257,12 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 实际运行（2026-11-14，在工作区一次跑一个文件，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过。单个测试文件全部通过：`consumption-grant` 33 项、`maa-config` 128 项、`doctor` 85 项、`doctor-scenarios` 9 项、`setup-integration` 5 项、`training-integration` 13 项、`evaluation` 9 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`docs-consistency` 3 项。审查者的探针 `probe5.ts` 在修复后的工作区重跑，H1、H2、H3 不带授权都恢复完成，锁已释放。
 
 仍未验证：doctor 的 skill 正文改了，真模型的 doctor 行为评测（改动前后对比）没有运行，留给工单 26；其余同上一节。
+
+### 合并 28 最终版和 main 之后的适配（2026-11-14）
+
+27 原来叠在 28 的旧提交 `d2b0edf` 上。这次先合入 28 的最终版 `1b39e9f`（它已经合入 main 的 10、12、16、17、19、20、22、23、25），再合 `origin/main`（`bd3b3e6` 已经在 `1b39e9f` 里，合并没有新内容）。冲突按两边都保留解决，下面每一项是合并之后单独提交的语义适配。作者验证，未经独立审查。
+
+1. 写入器授权（23 的 `basePlan`、17 的 `jobPlan.continuation`、27 的消耗授权）：
+   - 授权字段白名单正好是两边的并集：`source`、`reference`、`medicineCount`、`stoneCount`、`expiringMedicine`、`jobPlan`、`trainingPlan`、`basePlan`。17 的「CLI 拒绝带 `continuation` 的作业计划」和 23 的「CLI 拒绝 `basePlan`，只能经 `base-apply.ts`」都在命令行入口，原样保留。
+   - 设计默认值（已登记在规格两张表和「MAA 配置写入」正文）：基建排班是和作业计划、专精计划互斥的第三种计划；它不碰消耗字段，所以理智药、碎石和临期药授权都不能和它同请求。拒绝由谓词负责：`ConsumptionContext.plan` 加 `'base'`，带任何消耗授权都返回 `conflicting-authorizations`；写入器的基建范围检查放行这三个授权键，让它们走到谓词。
+   - 先红后绿：`tests/base-apply.test.ts` 的「a base plan carries no consumption grant: medicine, stone or expiring medicine alongside it is refused by the consumption predicate」。改之前三种授权都被基建范围检查以 `request-invalid` 拒绝（测试要求谓词的原因码，失败）；改之后三种都以 `conflicting-authorizations` 在访问进程之前拒绝，不写任何文件，同一份基建授权不带消耗授权时照常完成。
