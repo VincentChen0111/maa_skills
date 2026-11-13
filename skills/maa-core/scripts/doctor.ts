@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { executeConfigRecovery, inspectConfigRecovery, type MaaProcess, type RecoveryRequest } from './maa-config.ts';
 import { readSettings } from './preferences.ts';
+import { inspectCredentials, userCredentialRepairs } from './credentials.ts';
 
 export type CheckContext = { maaDirectory: string; privateDirectory: string };
 export type CheckResult = { id: string; status: 'normal' | 'warning' | 'error'; reason: string;
@@ -11,6 +12,8 @@ export type CheckResult = { id: string; status: 'normal' | 'warning' | 'error'; 
 
 export type RepairRequest = Omit<RecoveryRequest, 'action'> & { approved: string[] };
 export async function executeRepairs(request: RepairRequest, maa: MaaProcess) {
+  // Entering or re-entering a credential is done by the user in a local script; no approval lets the skill do it.
+  if (Array.isArray(request.approved) && request.approved.some(id => (userCredentialRepairs as readonly unknown[]).includes(id))) return { status: 'rejected', reason: 'user-manual-repair' };
   if (!Array.isArray(request.approved) || !request.approved.length || new Set(request.approved).size !== request.approved.length
     || request.approved.some(id => !['reconcile-lock', 'restore-config'].includes(id))) return { status: 'rejected', reason: 'named-approval-required' };
   if (request.approved.includes('reconcile-lock') && request.approved.includes('restore-config')) return { status: 'rejected', reason: 'conflicting-repairs' };
@@ -30,6 +33,7 @@ export async function runChecks(context: CheckContext, maa: MaaProcess) {
     repair: { id: recovery.canReconcile ? 'reconcile-lock' : recovery.canRestore ? 'restore-config' : 'manual-lock',
       executor: recovery.canReconcile || recovery.canRestore ? 'skill' : 'user',
       description: recovery.canReconcile ? 'Approve reconciliation of this evidence and release the retained lock.' : recovery.canRestore ? 'Approve restoring only the recorded changed fields through the configuration writer.' : 'Preserve the evidence; wait for the writer or inspect MAA manually.' } });
+  checks.push(...(await inspectCredentials(context.privateDirectory)).checks);
   const result = { checkedAt: new Date().toISOString(), exitCode: checks.some(item => item.status === 'error') ? 1 : 0, checks, recovery };
   await mkdir(context.privateDirectory, { recursive: true });
   const temporary = join(context.privateDirectory, `doctor-latest.${randomUUID()}.tmp`);
@@ -44,10 +48,10 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   const emit = (result: unknown) => {
     if (json) console.log(JSON.stringify(result));
     else {
-      const value = result as { checks?: CheckResult[]; checkedAt?: string; recovery?: unknown; status?: string; reason?: string };
+      const value = result as { checks?: (CheckResult & { message?: string })[]; checkedAt?: string; recovery?: unknown; status?: string; reason?: string };
       if (value.checks) {
         console.log(`Checked: ${value.checkedAt}`);
-        for (const item of value.checks) console.log(`${item.status} ${item.id}: ${item.reason}\n  ${item.repair.id} (${item.repair.executor}): ${item.repair.description}`);
+        for (const item of value.checks) console.log(`${item.status} ${item.id}: ${item.message ?? item.reason}\n  ${item.repair.id} (${item.repair.executor}): ${item.repair.description}`);
         console.log(`Evidence: ${JSON.stringify(value.recovery)}`);
       } else console.log(`${value.status}: ${value.reason ?? 'complete'}`);
     }

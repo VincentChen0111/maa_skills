@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type ApprovedJob = { id: number; hash: string; sourceHash: string; source: { url: string; readAt: string; sha256?: string } };
+// support: the user explicitly approved borrowing one support unit for this slot (需借助战); the GUI 「借助战」 switch is set by the user.
+export type ApprovedJob = { id: number; hash: string; sourceHash: string; source: { url: string; readAt: string; sha256?: string }; support?: { slot: string; members: string[] } };
 /**
  * Ticket 17: after MAA reported a stage failed (or the model switched after a verified environment failure), the same
  * approval continues with each stage's current job and the runs still left. Only `stage-run.ts switch` writes one; it
@@ -33,7 +34,9 @@ export function approvedJobStages(plan: ApprovedJobPlan) {
     const ids = new Set<number>();
     for (const job of [entry.primary, ...entry.alternates]) {
       if (!job || !hash(job.hash) || !hash(job.sourceHash) || !Number.isSafeInteger(job.id) || job.id < 1 || ids.has(job.id)
-        || job.source?.url !== `https://prts.maa.plus/copilot/get/${job.id}` || !Number.isFinite(Date.parse(job.source.readAt))) throw new Error('job-plan-invalid');
+        || job.source?.url !== `https://prts.maa.plus/copilot/get/${job.id}` || !Number.isFinite(Date.parse(job.source.readAt))
+        || job.support !== undefined && (typeof job.support?.slot !== 'string' || !job.support.slot || !Array.isArray(job.support.members) || !job.support.members.length
+          || job.support.members.some(name => typeof name !== 'string' || !name))) throw new Error('job-plan-invalid');
       ids.add(job.id);
     }
   }

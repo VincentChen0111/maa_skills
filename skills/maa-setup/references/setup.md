@@ -14,6 +14,8 @@
 
 设置损坏／不可读时，`check` 返回退出码 1、`settings-unreadable` 及保留原文件后修复 JSON、字段或访问权限的用户修法。Windows、Node 和明确提供的 MAA 目录仍检查；未知私有目录返回 `private-directory-unverified`，不猜默认目录、不显示首次偏好提示，也不覆盖或自动创建。修复后重新检查。
 
+`check` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 doctor 及 `credentials.ts check` 是同一个函数。它只读、不解密、不联网：已知过期或无法读取是错误，尚未验证是提醒，未设置是正常（凭据是可选项）。设置损坏时私有目录未知，三项都是 `credential-unknown`，不猜位置。修法只能由用户在自己的终端运行输入脚本，见 [凭据接口](../../maa-core/references/credentials.md)。`prepare` 保存的环境记录里也只有这些状态。
+
 发现范围：当前配置的 adb 路径、MAA 目录的 `adb.exe`／`adb/adb.exe`／`adb/platform-tools/adb.exe`、当前配置中模拟器程序目录相邻的 adb、PATH 的 adb，以及用户给定路径。相对 MAA 配置路径按 MAA 安装目录解析。只调用已存在且文件名以 adb 段结尾的 `.exe`，参数数组调用，不经过 shell；没有候选时不扫描全盘、不猜测安装位置。候选地址来自现有 Address／AddressHistory、`adb devices` 和用户输入，本票自动测试仅接收 `127.0.0.1:端口`、`localhost:端口`、`emulator-编号`，其它连接交用户手动核对。发现数量最多 32 个 adb、128 对连接，用户补充列表各最多 32 项；每个 adb 命令最多 5 秒、64 KiB 输出，失败不回显底层输出。
 
 多个候选必须由用户选；返回的 id 只绑定本次候选，不是账号标识。地址、路径与私人配置名称不会出现在摘要。候选来源或状态无法帮助用户定位时，让其在本机 MAA／模拟器界面查看并提供所选路径与地址。显式 `adbPaths` 将 adb 发现限定到这些路径；显式 `addresses` 将地址限定到这些值，空列表表示不选择任何项。重新 discover 后再使用新指纹。`discovery-changed` 表示配置或候选集合变化，应重新检查与选择，不能重用旧选择。

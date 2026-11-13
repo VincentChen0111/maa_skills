@@ -106,7 +106,7 @@ test('every consumer refuses a re-run for every producer of an unproven chain or
     await assert.rejects(switchStageRun(await switchRequest(c), c.batch.maa), /switch-not-decided/, `${name}: switch`);
     assert.equal(rerunGate(await injected(c, 'switch-alternate'), { kind: 'switch', runId: c.runId, stageId: 'synthetic_01' }).allowed, false,
       `${name}: even with a recorded switch decision`);
-    const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：每关都打满了', stages: fullProgress });
+    const stated = await recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：每关都打满了', stages: fullProgress });
     if (producer.unlockedByProgress) assert.ok(stated.allowedDecisions.includes('retry-within-approval'), `${name}: the user's statement settles the unknown attempt`);
     else assert.deepEqual(stated.allowedDecisions, ['stop-and-tell-user'], `${name}: a statement does not lift a batch-wide hold`);
     assert.ok(!stated.allowedDecisions.includes('switch-alternate'), `${name}: every run stated done leaves nothing to switch`);
@@ -151,7 +151,7 @@ test('medicine reported, unreadable or possibly enabled: no alternate switch, no
     await assert.rejects(switchStageRun(await switchRequest(c), c.batch.maa), /switch-not-decided/, name);
     assert.deepEqual(rerunGate(await injected(c, 'switch-alternate'), { kind: 'switch', runId: c.runId, stageId: 'synthetic_01' }), { allowed: false, reason: producer.reason }, name);
     assert.equal(rerunGate(await injectedRetry(c), { kind: 'start', retryOf: c.runId }).allowed, false, name);
-    const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：SYN-1 打完一次，就是失败的那次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+    const stated = await recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：SYN-1 打完一次，就是失败的那次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
     assert.deepEqual(stated.allowedDecisions, ['stop-and-tell-user'], `${name}: a statement does not lift it`);
     const list = (await readFile(join(c.batch.maaDirectory, 'config/gui.new.json'), 'utf8'));
     assert.ok(!list.includes(`"CopilotId": 2`) && !list.includes('"CopilotId":2'), `${name}: the alternate was never written`);
@@ -190,9 +190,9 @@ test('stage progress below the callback evidence is refused; a retry needs the f
   await settledThenDisconnect(c);
   await observe(c);
   assert.equal((await verify(c)).next, 'ask-progress');
-  await assert.rejects(recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：一次都没打完', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] }),
+  await assert.rejects(recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：一次都没打完', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] }),
     /progress-contradicts-evidence/);
-  const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：SYN-1 结算过一次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  const stated = await recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：SYN-1 结算过一次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   assert.deepEqual(stated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
   await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户已说明进度' });
   await assert.rejects(startStageRun({ ...c.paths, operation: c.batch.operation, reference: '全部还勾着', retryOf: c.runId }), /finished-items-ticked/);
@@ -310,7 +310,7 @@ async function statedThenProven(t: test.TestContext, lastItem: 'failed' | 'disco
   const c: Context = { batch, paths, runId: first.runId };
   await batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
   await observe(c); assert.equal((await verify(c)).next, 'ask-progress');
-  await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: first.runId, reference: '用户：断连那一把打完了，三星', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  await recordStageProgress({ ...paths, runId: first.runId, reference: '用户：断连那一把打完了，三星', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   await decideStageRun({ ...paths, runId: first.runId, decision: 'retry-within-approval', reason: '用户说明 SYN-1 完成一次' });
   const file = join(batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
   config.Configurations['Synthetic profile'].Copilot.TaskList[0].IsChecked = false;
@@ -348,7 +348,7 @@ test('runs done = the latest statement plus 3-star runs proven after it, for bot
 });
 test('a progress statement is refused while a later run of the batch is still tracking', async t => {
   const { first } = await statedThenProven(t, null);
-  await assert.rejects(recordStageProgress({ privateDirectory: first.paths.privateDirectory, runId: first.runId, reference: '用户：又打完一次', stages: [{ stageId: 'synthetic_01', completedRuns: 2 }] }),
+  await assert.rejects(recordStageProgress({ ...first.paths, runId: first.runId, reference: '用户：又打完一次', stages: [{ stageId: 'synthetic_01', completedRuns: 2 }] }),
     /run-unresolved/);
 });
 
@@ -382,7 +382,7 @@ async function secondStatement(t: test.TestContext, timing: Timing, second: numb
   const first: Context = { batch, paths, runId: (await startStageRun({ ...paths, operation: batch.operation, reference: '开始' })).runId };
   await batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
   await observe(first); await verify(first);
-  await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: first.runId, reference: '用户：第一次说明，打完 1 次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  await recordStageProgress({ ...paths, runId: first.runId, reference: '用户：第一次说明，打完 1 次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   let last = first;
   if (timing === 'after') {
     await decideStageRun({ ...paths, runId: first.runId, decision: 'retry-within-approval', reason: '用户说明完成一次' });
@@ -392,7 +392,7 @@ async function secondStatement(t: test.TestContext, timing: Timing, second: numb
       ...attempt(t1 + 60, 2, files[2]!, 'open', [connection(t1 + 70, 'Disconnect')]), ...chainEnd(t1 + 71, 'TaskChainError')], 2));
     await observe(last); assert.equal((await verify(last)).next, 'ask-progress');
   }
-  const outcome = await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: last.runId, reference: `用户：第二次说明，打完 ${second} 次`,
+  const outcome = await recordStageProgress({ ...paths, runId: last.runId, reference: `用户：第二次说明，打完 ${second} 次`,
     stages: [{ stageId: 'synthetic_01', completedRuns: second }] }).then(() => 'accepted', (error: Error) => error.message);
   return { batch, paths, first, last, outcome, tick, files };
 }

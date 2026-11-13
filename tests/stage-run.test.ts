@@ -95,16 +95,16 @@ test('disconnect mid-battle is an environment failure: not a stage failure; veri
   assert.deepEqual(failed.environment.map(item => [item.category, item.message, item.what]), [['connection', 'ConnectionInfo', 'Reconnecting'], ['connection', 'ConnectionInfo', 'Disconnect']]);
   assert.deepEqual(Object.keys(failed.environment[1]!.diagnosis).sort(), ['id', 'reason', 'repair', 'status']);
   assert.equal(failed.next, 'verify'); assert.deepEqual(failed.allowedDecisions, ['stop-and-tell-user']);
-  await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
+  await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, maaDirectory: batch.maaDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
   const verified = await verifyStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, runId }, batch.maa);
   assert.equal(verified.verification.clear, true); assert.equal(verified.verification.preparedList, 'matches');
   assert.deepEqual(verified.verification.unknown, ['sanity', 'medicine-inventory', 'originium', 'stage-progress']);
   assert.deepEqual(verified.allowedDecisions, ['stop-and-tell-user'], 'the interrupted attempt was in battle; its outcome is unknown');
   assert.equal(verified.next, 'ask-progress');
-  await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
-  const stated = await recordStageProgress({ privateDirectory: batch.privateDirectory, runId, reference: '合成用户：断连那一把没打完，SYN-1 一次都没完成', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] });
+  await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, maaDirectory: batch.maaDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
+  const stated = await recordStageProgress({ privateDirectory: batch.privateDirectory, maaDirectory: batch.maaDirectory, runId, reference: '合成用户：断连那一把没打完，SYN-1 一次都没完成', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] });
   assert.deepEqual(stated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']); assert.equal(stated.next, 'decide');
-  const decided = await decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '连接已恢复，用户说明没有完成，原批准范围内由用户再点开始' });
+  const decided = await decideStageRun({ privateDirectory: batch.privateDirectory, maaDirectory: batch.maaDirectory, runId, decision: 'retry-within-approval', reason: '连接已恢复，用户说明没有完成，原批准范围内由用户再点开始' });
   assert.equal(decided.decisions.at(-1)!.decision, 'retry-within-approval');
   const retry = await startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '合成用户：重新点开始', retryOf: runId });
   assert.equal(retry.retryOf, runId);
@@ -218,9 +218,11 @@ test('run record and summaries keep paths only for MAA debug images and never de
   const summary = await observe();
   assert.deepEqual(summary.screenshots, ['debug/interface/failure.png']);
   const record = await readFile(join(batch.privateDirectory, 'stage-runs', `${runId}.json`), 'utf8');
-  for (const text of [JSON.stringify(summary), record, JSON.stringify(summarizeStageRun(await readStageRun(batch.privateDirectory, runId)))]) {
+  const texts = { summary: JSON.stringify(summary), record, reread: JSON.stringify(summarizeStageRun(await readStageRun(batch.privateDirectory, runId))) };
+  for (const [where, text] of Object.entries(texts)) {
     for (const secret of [syntheticDevice, syntheticAdb.address, syntheticAdb.config, batch.files[0]!, batch.privateDirectory, batch.maaDirectory, 'Synthetic profile']) {
-      assert.ok(!text.includes(secret), `leaked ${secret}`);
+      // JSON text escapes Windows backslashes, so look for the escaped form too; otherwise the check passes vacuously on Windows.
+      for (const form of new Set([secret, JSON.stringify(secret).slice(1, -1)])) assert.ok(!text.includes(form), `${where} leaked ${secret}`);
     }
   }
 });
