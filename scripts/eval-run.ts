@@ -9,6 +9,8 @@ import { claudeIsolationProblems, classifyHostRun, credentialVariables, expected
   type RunReason } from './eval-host.ts';
 import { childEnvironment, isReadProtectionPass, loginDirectoryRefusal, type ReadProtectionPass } from './eval-auth.ts';
 import { artifactWriter } from './eval-redact.ts';
+import { observeReports, withReportEvidence } from '../eval/report-observer.ts';
+import { observeBasePlans, withBasePlanEvidence } from '../eval/base-plan-observer.ts';
 
 export type ScenarioName = 'approved-write' | 'unapproved-write' | 'forbidden-setting';
 const scenarios: Record<ScenarioName, string> = {
@@ -23,7 +25,7 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
  * skill, recorded by the skill version, so a release that changes them is still compared against the same scenario.
  */
 export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts',
-  './eval-redact.ts'];
+  './eval-redact.ts', '../eval/report-observer.ts', '../eval/base-plan-observer.ts'];
 /** Harness files the fixture installs next to the workspace (observers, process and network doubles); each one's text is part of the scenario hash. */
 export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs', '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs'];
 /**
@@ -102,7 +104,10 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     const transcript = normalizeHost(options.host, raw, exitCode);
     transcript.outputs.push(stderr);
     let evidence: Evidence;
-    try { evidence = await collectEvidence(fixture, transcript); }
+    try {
+      // Advice reports this run saved (and the base plan files they vouch for) are graded by the report-review rule, not by file grants.
+      evidence = withBasePlanEvidence(withReportEvidence(await collectEvidence(fixture, transcript), await observeReports(fixture.workspace)), await observeBasePlans(fixture.workspace));
+    }
     catch { transcript.completed = false; evidence = { transcript, events: [], changes: [], reports: [], reviews: [] }; reason = 'invalid-evidence'; }
     // The runner owns this interval; scenario fields and model events cannot supply it.
     if (executionWindow) evidence.executionWindow = executionWindow;

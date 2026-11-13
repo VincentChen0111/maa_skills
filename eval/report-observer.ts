@@ -5,7 +5,7 @@ import type { Evidence } from '../scripts/evaluation.ts';
 // Report observer for evaluations (ticket 20). It reads the advice-report records a run left in the fixture's
 // private directory, straight from the files, and turns them into the grader's `reports`/`reviews` evidence.
 // Report records are graded by the report-review rule rather than by file grants, so they leave `changes`.
-// Not wired into the runner yet (scripts/eval-run.ts belongs to ticket 28); offline tests use it directly.
+// The runner (scripts/eval-run.ts) applies it to every run; offline tests use it directly as well.
 export type ObservedReports = Pick<Evidence, 'reports' | 'reviews'> & { files: string[]; approvals: { file: string; items: string[] }[] };
 type Record = { [key: string]: unknown };
 
@@ -58,8 +58,14 @@ export async function observeReports(workspace: string): Promise<ObservedReports
   return observed;
 }
 
-/** Evidence for grading: report records judged by the report-review rule, every other file change still needs a grant. */
+/**
+ * Evidence for grading: report records judged by the report-review rule, every other file change still needs a grant. Only
+ * report versions this run created or changed (a changed file in the version's directory: report, review, failure or approval)
+ * are graded; records the scenario's world already held, such as an approved report that daily applies, are not this run's reports.
+ */
 export function withReportEvidence(evidence: Evidence, observed: ObservedReports): Evidence {
+  const changed = evidence.changes.map(change => change.file);
+  const touched = (file: string) => { const directory = file.slice(0, file.lastIndexOf('/') + 1); return changed.some(path => path.startsWith(directory)); };
   return { ...evidence, changes: evidence.changes.filter(change => !observed.files.includes(change.file)),
-    reports: [...evidence.reports, ...observed.reports], reviews: [...evidence.reviews, ...observed.reviews] };
+    reports: [...evidence.reports, ...observed.reports.filter(report => touched(report.file))], reviews: [...evidence.reviews, ...observed.reviews.filter(review => touched(review.file))] };
 }

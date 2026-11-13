@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { stageAlternateScenarios } from '../eval/maa-daily/stage-alternate-scenarios.ts';
-import { switchedOperation } from './fixtures/stage-alternate-data.ts';
+import { switchedOperation } from './fixtures/stage-alternate-records.ts';
 
 type Want = { execution: string; stages: string[]; next: string; decisions: string[]; first: { job: number; next: number | null }; medicine: number | 'unknown'; switch: string | null };
 /** These read-only workspaces hold no preparation and no MAA logs: batch-wide evidence is unavailable, so only stopping is offered. */

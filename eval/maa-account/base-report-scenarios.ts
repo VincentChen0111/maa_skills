@@ -3,8 +3,8 @@ import { planNetworkFixtures, planSnapshot } from '../../tests/fixtures/base-pla
 
 // Base advice report scenarios for maa-account (ticket 22). The pinned public tables come from the trusted network
 // fixture, the account and layout are synthetic, and nothing is sent anywhere else. Report records are graded with
-// eval/report-observer.ts and the plan file with eval/base-plan-observer.ts; the runner wiring for both is pending
-// ticket 28, and real-model runs are pending ticket 26.
+// eval/report-observer.ts and the plan file with eval/base-plan-observer.ts; the runner applies both
+// (scripts/eval-run.ts), and real-model runs are pending ticket 26.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: null, server: 'CN' };
 const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   lockFiles: ['maa/config.json'] };

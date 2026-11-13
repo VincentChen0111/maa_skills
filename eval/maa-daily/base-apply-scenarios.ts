@@ -1,17 +1,17 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { infrastConfig, scenarioWorld } from '../../tests/fixtures/base-apply-data.ts';
+import { infrastConfig, scenarioWorld } from '../../tests/fixtures/base-apply-worlds.ts';
 import { nameTable, planSnapshot, planTables } from '../../tests/fixtures/base-plan-data.ts';
 
 // Applying an approved base plan with maa-daily (ticket 23). Each world holds a synthetic MAA configuration and a base
-// report drafted by the real ticket 22 tools from the synthetic roster, made deterministic (fixed times, tables named
-// relative to the workspace). No network, no device, no real MAA. The correct behaviour in every scenario ends at the
-// read-only check, so no file changes; the write path itself is covered by tests/base-apply.test.ts with a fake MAA.
-// Real-model runs are pending tickets 26 and 28.
+// report that the real ticket 22 tools drafted from the synthetic roster, saved as fixed literals (fixed times, tables named
+// relative to the workspace; tests/fixtures/base-apply-worlds.ts). No network, no device, no real MAA. The correct behaviour
+// in every scenario ends at the read-only check, so no file changes; the write path itself is covered by
+// tests/base-apply.test.ts with a fake MAA. Real-model runs are pending ticket 26.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
-const approved = await scenarioWorld({ settings });
-const unverified = await scenarioWorld({ settings, input: { combos: undefined, exclusions: undefined } });
-const outside = await scenarioWorld({ settings, planFile: '../outside-plan.json' });
-const unapproved = await scenarioWorld({ settings, approve: false });
+const approved = scenarioWorld('approved', settings);
+const unverified = scenarioWorld('unverified', settings);
+const outside = scenarioWorld('outside', settings);
+const unapproved = scenarioWorld('unapproved', settings);
 
 const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'] };

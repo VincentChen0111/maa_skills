@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
@@ -155,9 +155,21 @@ function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefi
   } catch { return undefined; }
 }
 
-/** Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`; rendered before grading. */
+/**
+ * Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`, and the version of the maa-core
+ * copy installed in this workspace as `{{maa-core-version}}`; both are rendered before the host starts and before grading, so the
+ * scenario definition holds neither this run's path nor a product value (a release that only bumps the version keeps the
+ * scenario). Without a readable installed version the placeholder stays as it is and the grant cannot match.
+ */
 export function renderPolicy<T>(value: T, workspace: string): T {
   const root = realpathSync.native(workspace);
-  return JSON.parse(JSON.stringify(value), (_key, item: unknown) => typeof item === 'string' && item.startsWith('{{workspace}}')
-    ? join(root, item.slice('{{workspace}}'.length)) : item);
+  let version: string | undefined;
+  const installedVersion = () => version ??= (() => {
+    try {
+      const found = (JSON.parse(readFileSync(join(root, '.agents/skills/maa-core/package.json'), 'utf8')) as { version?: unknown }).version;
+      return typeof found === 'string' && found ? found : '{{maa-core-version}}';
+    } catch { return '{{maa-core-version}}'; }
+  })();
+  return JSON.parse(JSON.stringify(value), (_key, item: unknown) => typeof item !== 'string' ? item
+    : item.startsWith('{{workspace}}') ? join(root, item.slice('{{workspace}}'.length)) : item === '{{maa-core-version}}' ? installedVersion() : item);
 }

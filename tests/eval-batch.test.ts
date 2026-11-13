@@ -17,10 +17,15 @@ import { baseScenarios } from '../eval/maa-account/base-scenarios.ts';
 import { costScenarios } from '../eval/maa-account/cost-scenarios.ts';
 import { gapScenarios } from '../eval/maa-account/gap-scenarios.ts';
 import { researchScenarios } from '../eval/maa-account/research-scenarios.ts';
+import { sklandScenarios } from '../eval/maa-account/skland-scenarios.ts';
+import { reportScenarios } from '../eval/maa-account/report-scenarios.ts';
+import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { dailyScenarios } from '../eval/maa-daily/scenarios.ts';
 import { stageScenarios } from '../eval/maa-daily/stage-scenarios.ts';
 import { stageRunScenarios } from '../eval/maa-daily/stage-run-scenarios.ts';
+import { stageAlternateScenarios } from '../eval/maa-daily/stage-alternate-scenarios.ts';
+import { baseApplyScenarios } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { trainingScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
@@ -58,7 +63,8 @@ test('every eval scenario is reachable by id and group, once, with its skill and
   const catalog = scenarioCatalog();
   const ids = catalog.map(entryId);
   const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios,
-    stageRunScenarios, doctorScenarios, helpScenarios, setupScenarios, crossSkillScenarios].flat().map((scenario) => scenario.id);
+    stageRunScenarios, sklandScenarios, reportScenarios, baseReportScenarios, stageAlternateScenarios, baseApplyScenarios, doctorScenarios, helpScenarios, setupScenarios,
+    crossSkillScenarios].flat().map((scenario) => scenario.id);
   assert.deepEqual([...ids].sort(), [...all].sort());
   // Every scenario module under eval/<skill>/ is in the catalog: each exported array of definitions (objects with an id and a
   // prompt) is found by walking those directories, so a module added without a catalog group fails here.

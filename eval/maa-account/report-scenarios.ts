@@ -3,7 +3,7 @@ import { reportNetworkFixtures, reportSnapshot } from '../../tests/fixtures/repo
 
 // Cultivation report scenarios for maa-account (ticket 20). The pinned public tables come from the trusted
 // network fixture, the account is synthetic, and nothing is sent anywhere else. Report records are graded with
-// eval/report-observer.ts (reports and reviews evidence); the runner wiring for it is pending ticket 28.
+// eval/report-observer.ts (reports and reviews evidence); the runner applies it (scripts/eval-run.ts).
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: null, server: 'CN' };
 const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   lockFiles: ['maa/config.json'] };

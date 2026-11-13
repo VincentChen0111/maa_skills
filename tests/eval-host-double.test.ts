@@ -8,6 +8,10 @@ import { runScenario } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
 import { classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
+import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
+import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
+import { baseApplyScenarios, baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
+import { planInput } from './fixtures/base-plan-data.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
@@ -141,4 +145,50 @@ test('the host-double mode refuses an executable that is not the double, and pla
     assert.equal(result.record.grade.status, 'unverified');
   }
   await assert.rejects(readFile(journal), /ENOENT/, 'the host was never started');
+});
+
+test('the runner grades a doctor scenario against the installed maa-core version, which the scenario names only by placeholder', async (t) => {
+  const { root, write } = await scratch(t);
+  const doctor = doctorScenarios.find((item) => item.id === 'doctor-inspect')!;
+  assert.ok(JSON.stringify(doctor).includes('{{maa-core-version}}'), 'the scenario definition holds no product version');
+  const scripts = '.agents/skills/maa-core/scripts';
+  const script = await write('doctor.json', { host: 'codex', steps: [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } },
+    { shell: ['node', `${scripts}/doctor.ts`, 'check', '--json'], input: {} }] });
+  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario: doctor, skillDirectory: fileURLToPath(new URL('../skills/maa-doctor', import.meta.url)),
+    companionSkills: { 'maa-core': core }, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  assert.equal(result.reason, 'completed');
+  assert.equal(result.record.grade.status, 'pass', JSON.stringify(result.record.grade));
+});
+
+test('the runner grades report records with the report and base plan observers: a skipped and approved base report passes, a pending one fails', async (t) => {
+  const { root, write } = await scratch(t);
+  const scenario = baseReportScenarios.find((item) => item.id === 'base-report-skip-approve')!;
+  const scripts = '.agents/skills/maa-core/scripts';
+  const draft = { goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' }, ...planInput() };
+  const run = async (name: string, steps: unknown[]) => runScenario({ host: 'codex', model: 'requested-model', scenario,
+    skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)), companionSkills: { 'maa-core': core }, executable: process.execPath,
+    executableArgs: [double, await write(`${name}.json`, { host: 'codex', steps })], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  const read = { shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } };
+  const drafted = { shell: ['node', `${scripts}/base-report.ts`, 'draft'], input: draft };
+  const finished = await run('finished', [read, drafted, { shell: ['node', `${scripts}/base-report.ts`, 'skip'], input: { reportHash: '{{output:1:reportHash}}', userWords: '这次跳过审查' } },
+    { shell: ['node', `${scripts}/base-report.ts`, 'approve'], input: { reportHash: '{{output:1:reportHash}}', items: ['P1'], userWords: '我批准排班这一项 P1' } }]);
+  assert.equal(finished.reason, 'completed');
+  assert.equal(finished.record.grade.status, 'pass', JSON.stringify(finished.record.grade));
+  const pending = await run('pending', [read, drafted]);
+  assert.equal(pending.reason, 'completed');
+  assert.ok(pending.record.grade.failed.includes('report-review'), 'a report left pending is not reviewed or skipped');
+  assert.ok(!pending.record.grade.failed.includes('authorization'), 'the report records and the plan they name are not unauthorised file changes');
+});
+
+test('report records that were already in the world before the run are not graded as this run\'s reports', async (t) => {
+  const { root, write } = await scratch(t);
+  const scenario = baseApplyScenarios.find((item) => item.id === 'daily-base-apply-unapproved')!;
+  const scripts = '.agents/skills/maa-core/scripts';
+  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario, skillDirectory: fileURLToPath(new URL('../skills/maa-daily', import.meta.url)),
+    companionSkills: { 'maa-core': core }, executable: process.execPath, auth: { mode: 'host-double' }, artifactParent: join(root, 'records'),
+    executableArgs: [double, await write('apply.json', { host: 'codex', steps: [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } },
+      { shell: ['node', `${scripts}/maa-config.ts`, 'read'], input: {} },
+      { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference: baseApplyWorlds.unapproved.reference, profile: 0, task: 1 } }] })] });
+  assert.equal(result.reason, 'completed');
+  assert.equal(result.record.grade.status, 'pass', JSON.stringify(result.record.grade));
 });

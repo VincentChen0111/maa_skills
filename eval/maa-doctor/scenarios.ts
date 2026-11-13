@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { blockingChecks, groupOf, libraryCheck, type CheckStatus } from '../../skills/maa-core/scripts/checks.ts';
-import { connectionCheck } from '../../skills/maa-core/scripts/setup-connection.ts';
 
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const gui = { RuntimeSettings: { ClientType: 'Official' } };
@@ -16,7 +13,9 @@ const lock = { incomplete: 'synthetic retained evidence' };
 const record = 'private/doctor-latest.json';
 const analysisRecord = 'private/doctor-analysis-latest.json';
 const windows = process.platform === 'win32';
-const installed = JSON.parse(readFileSync(new URL('../../skills/maa-core/package.json', import.meta.url), 'utf8')).version as string;
+// The installed maa-core version doctor reports is the product's own: the policy names it by placeholder, rendered from the installed
+// copy before grading, so a release that only bumps the version keeps every doctor scenario (scripts/eval-fixture.ts renderPolicy).
+const installed = '{{maa-core-version}}';
 // Synthetic saved Skland record: metadata only, the ciphertext is placeholder bytes that no check decrypts.
 const revision = '00000000-0000-4000-8000-000000000009';
 const expiredSkland = {
@@ -40,33 +39,62 @@ const credentialChecks = (skland: 'unset' | 'expired') => [unsetCredential('nga'
   unsetCredential('bilibili', 'Bilibili (experimental)', 'experimental Bilibili research')];
 
 type Mode = 'healthy' | 'corrupt' | 'unknown' | 'remote';
-/** The exact rows the real check produces in the fixture: MAA.exe is a placeholder whose version reads as unknown. */
+// The rows doctor's full check (ticket 10) reports in the fixture, as fixed literals in its order with each row's group: MAA.exe is a
+// placeholder whose version reads as unknown, no adb is configured and the skill update is not looked up. They are what the shared
+// check library (libraryCheck, connectionCheck, groupOf) produced at commit 996599a; tests/doctor-scenarios.test.ts runs the
+// installed doctor against them.
+const noAction = { executor: 'user', description: 'No action is needed.' };
+const inspectMaa = { id: 'inspect-maa-configuration', executor: 'user', description: 'Inspect or initialize the current configuration in the MAA GUI.' };
+const row = (group: string, id: string, status: string, reason: string, message: string, repair: Record<string, string>) => ({ id, status, reason, message, repair, group });
+const windowsRepair = { id: 'use-windows-gui', executor: 'user', description: 'Use an existing Windows MAA GUI installation.' };
+const cnRepair = { id: 'select-cn-client-in-maa', executor: 'user', description: 'Check the selected client in the MAA GUI; use a CN profile.' };
 function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expired') {
   const corrupt = mode === 'corrupt';
-  const rows = [
-    libraryCheck('platform', windows ? 'normal' : 'error', windows ? 'windows' : 'windows-required', 'use-windows-gui'),
-    corrupt ? libraryCheck('maa', 'error', 'maa-configuration-unreadable', 'inspect-maa-configuration') : libraryCheck('maa', 'normal', 'maa-gui-present', 'inspect-maa-configuration'),
-    corrupt ? libraryCheck('server', 'error', 'client-unverified', 'select-cn-client-in-maa') : libraryCheck('server', 'normal', 'cn-client', 'select-cn-client-in-maa'),
-    libraryCheck('node', 'normal', 'node-24', 'official-node-24-installation'),
-    libraryCheck('settings', 'normal', 'settings-readable', 'set-preferences'),
-    libraryCheck('private-directory', 'normal', 'private-directory-present', 'prepare-private-directory'),
-    libraryCheck('version', 'warning', 'verification-record-empty', 'read-version-verification'),
-    connectionCheck(corrupt ? 'connection-unreadable' : 'connection-not-configured'),
+  return [
+    windows ? row('installation', 'platform', 'normal', 'windows', 'The host is Windows.', windowsRepair)
+      : row('installation', 'platform', 'error', 'windows-required', 'This workflow requires Windows.', windowsRepair),
+    corrupt ? row('installation', 'maa', 'error', 'maa-configuration-unreadable', 'The current MAA GUI configuration could not be read.', inspectMaa)
+      : row('installation', 'maa', 'normal', 'maa-gui-present', 'The MAA GUI executable and current configuration are present.', inspectMaa),
+    corrupt ? row('installation', 'server', 'error', 'client-unverified', 'The current client has not been verified.', cnRepair)
+      : row('installation', 'server', 'normal', 'cn-client', 'The current MAA profile selects a CN client.', cnRepair),
+    row('installation', 'node', 'normal', 'node-24', 'Node 24 is running.',
+      { id: 'official-node-24-installation', executor: 'user', description: 'Use the official Node download page and select version 24.x.' }),
+    row('installation', 'settings', 'normal', 'settings-readable', 'Existing settings were read.',
+      { id: 'set-preferences', executor: 'skill', description: 'Save the first-run choices using the shared preferences script.', channel: 'preferences.ts set' }),
+    row('installation', 'private-directory', 'normal', 'private-directory-present', 'The selected private directory exists.',
+      { id: 'prepare-private-directory', executor: 'skill', description: 'Run setup prepare after saving the selected private directory.', channel: 'setup.ts prepare' }),
+    row('installation', 'version', 'warning', 'verification-record-empty',
+      'The packaged verification record lists no verified MAA version yet, so no installed version can be confirmed; setup and doctor still continue.',
+      { id: 'read-version-verification', executor: 'user', description: 'Read the packaged version record and retain the unverified warning; no upgrade is required.' }),
+    corrupt ? row('connection', 'connection', 'warning', 'connection-unreadable', 'The connection settings could not be read; see the configuration checks.', inspectMaa)
+      : row('connection', 'connection', 'warning', 'connection-not-configured',
+        'No adb path or no address is configured; MAA may detect the emulator itself, so the connection was not verified.',
+        { id: 'connect-through-setup', executor: 'skill', description: 'With the user\'s named approval, use the maa-setup connection flow (discover, test, apply) to select and test a local connection.',
+          channel: 'setup.ts discover|test|apply' }),
     corrupt
-      ? { id: 'configuration', status: 'error', reason: 'Configuration cannot be parsed.', repair: { id: 'manual-configuration', executor: 'user', description: 'Inspect the configuration and retained backups manually.' } }
-      : { id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' } },
-    corrupt ? libraryCheck('configuration-fields', 'warning', 'managed-fields-unknown', 'inspect-maa-configuration') : libraryCheck('configuration-fields', 'normal', 'managed-fields-valid', 'no-field-repair-needed'),
-    corrupt ? libraryCheck('remote-control', 'warning', 'remote-control-unknown', 'inspect-maa-configuration')
-      : mode === 'remote' ? libraryCheck('remote-control', 'warning', 'remote-control-configured', 'review-remote-control-in-maa') : libraryCheck('remote-control', 'normal', 'remote-control-unconfigured', 'no-remote-control-action'),
+      ? { id: 'configuration', status: 'error', reason: 'Configuration cannot be parsed.', repair: { id: 'manual-configuration', executor: 'user', description: 'Inspect the configuration and retained backups manually.' }, group: 'configuration' }
+      : { id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' }, group: 'configuration' },
+    corrupt ? row('configuration', 'configuration-fields', 'warning', 'managed-fields-unknown', 'The configuration could not be read, so its fields were not checked.', inspectMaa)
+      : row('configuration', 'configuration-fields', 'normal', 'managed-fields-valid', 'The task, medicine and timer fields this project writes have valid types and ranges.',
+        { id: 'no-field-repair-needed', ...noAction }),
+    corrupt ? row('configuration', 'remote-control', 'warning', 'remote-control-unknown', 'The configuration could not be read, so remote control was not checked.', inspectMaa)
+      : mode === 'remote' ? row('configuration', 'remote-control', 'warning', 'remote-control-configured',
+        'MAA remote control is configured: a remote service can make MAA run tasks, including gacha, without passing through this project\'s writer.',
+        { id: 'review-remote-control-in-maa', executor: 'user', description: 'Decide in the MAA settings whether to keep remote control; doctor offers no automatic repair because the writer does not manage it.' })
+      : row('configuration', 'remote-control', 'normal', 'remote-control-unconfigured', 'MAA remote control is not configured.', { id: 'no-remote-control-action', ...noAction }),
     { id: 'write-lock', status: retained ? 'error' : 'normal', reason: retained ? 'The previous write result requires reconciliation.' : 'No write lock is present.',
-      repair: { id: 'manual-lock', executor: 'user', description: 'Preserve the evidence; wait for the writer or inspect MAA manually.' } },
-    ...credentialChecks(skland),
-    libraryCheck('private-files', 'normal', 'private-files-readable', 'no-private-file-action'),
-    libraryCheck('skill-version', 'normal', 'skill-update-not-checked', 'check-skill-update'),
-    libraryCheck('skill-links', 'normal', 'skill-links-intact', 'no-link-repair-needed'),
-  ] satisfies { id: string; status: CheckStatus; [key: string]: unknown }[];
-  return rows.map(item => ({ ...item, group: groupOf(item.id) }));
+      repair: { id: 'manual-lock', executor: 'user', description: 'Preserve the evidence; wait for the writer or inspect MAA manually.' }, group: 'write-lock' },
+    ...credentialChecks(skland).map(item => ({ ...item, group: 'credentials' })),
+    row('private-files', 'private-files', 'normal', 'private-files-readable', 'The records this project keeps in the private directory are readable.', { id: 'no-private-file-action', ...noAction }),
+    row('skill-version', 'skill-version', 'normal', 'skill-update-not-checked', 'The newest published release was not looked up; that needs network access and was not requested.',
+      { id: 'check-skill-update', executor: 'skill', description: 'Look up the newest published release (read-only network access).', channel: 'doctor.ts check --online' }),
+    row('skill-links', 'skill-links', 'normal', 'skill-links-intact', 'Every installed maa_skills directory, including directory links, resolves and has its SKILL.md.',
+      { id: 'no-link-repair-needed', ...noAction }),
+  ];
 }
+// doctor exits 1 when any row is an error (the `doctor-exit` purpose of the shared check library): the platform off Windows, the
+// unreadable configuration, a retained lock and an expired credential. Warnings (remote control, version, connection) do not count.
+const expectedExitCode = (mode: Mode, skland: 'unset' | 'expired') => windows && (mode === 'healthy' || mode === 'remote') && skland === 'unset' ? 0 : 1;
 
 function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = 'none', skland: 'unset' | 'expired' = 'unset'): ScenarioDefinition {
   const configuration = mode === 'corrupt' ? {} : mode === 'remote' ? remote : sample;
@@ -75,7 +103,7 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
     configuration: mode === 'corrupt' ? 'invalid' : 'valid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [] };
   recovery.evidenceRevision = createHash('sha256').update(JSON.stringify([retained ? JSON.stringify(retained) : null, JSON.stringify(configuration), null, null, recovery])).digest('hex');
   const checks = expectedChecks(mode, !!retained, skland);
-  const exitCode = blockingChecks(checks, 'doctor-exit').blocking.length ? 1 : 0;
+  const exitCode = expectedExitCode(mode, skland);
   const version = { installed: null, recordAvailable: true, recordEmpty: true, sourceVerified: false, deviceVerified: false };
   const skills = { version: { installed, latest: null, lookup: 'not-requested' }, links: [{ name: 'maa-core', kind: 'directory', state: 'ok' }] };
   const values = { $exists: true, exitCode, checks, recovery, version, skills };

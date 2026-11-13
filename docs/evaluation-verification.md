@@ -281,3 +281,42 @@ CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 W
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 未验证：改过的读保护检查还没有在真实 Codex 上运行（要由协调者在冻结副本上重跑同一条命令）；探测在运行器里的形式与协调者的手工探测相同，但运行器自己发出的 `codex sandbox` 调用没有在真实 CLI 上运行过；模型在 `exec` 里发出的读取命令是否同样被拒，这次没有直接观察到（模型没有执行命令）；首批试运行仍未运行。
+
+## 第二次合并 main 后的调整（2026-11-14）
+
+分支两次合并 `origin/main`：`ac3fa46`（12 #63 森空岛快照、17 #69 备选作业、20 #68 培养报告、10 #62 doctor 完整检查、22 #72 基建报告与排班）和 `996599a`（23 #73 执行已批准的基建排班，合并时刚进 main）。合并时的取舍：doctor 场景保留本分支的凭据字面值和 `doctor-reconcile-approved`，接上 main 的完整检查、远程控制和日志分析场景；16 的运行记录生成器保持删除，main 给它加的 `blocking`、`notBlocking` 两个字段写进字面值（与 main 的生成器在 UTC+8 下逐字节相同），17 的夹具改为取这份字面值。合并后五个工单带来的 24 个场景和 doctor 的新场景不符合工单 28 的规则，修复在本节的提交里，**未经独立审查**。工单 28 的规则不变：场景世界数据不运行产品代码，只发布产品不改变场景身份；允许名单仍是同一类值（网络夹具地址用的公开数据来源描述），没有放宽。
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码 | 闭包多出 13 条进入 `skills/` 的导入（`.tmp/logs/sync-red-closure.log`，在 `996599a` 的导出副本上运行），其中 10 条运行产品代码：10 的 doctor 场景用共享检查库的 `libraryCheck`、`groupOf`、`blockingChecks` 和 `connectionCheck` 生成预期检查行和退出码；17 的夹具用运行分类器和 `switchKey` 生成四条运行记录和换备选台账（经 `stage-run-data.ts` 的合成日志工具，又带进它的 3 条）；22 的 `planSnapshot` 用快照解析函数；23 的四个世界在加载时用 22 的报告工具起草、保存并批准报告。另外 3 条是 20、22 的网络夹具地址用的公开数据来源描述，属于允许的那一类 | doctor 的 18 行检查写成字面值（各行文字是 `996599a` 上共享检查库的输出），退出码按「有错误行就是 1」直接写出；17 的记录和台账写成 `tests/fixtures/stage-alternate-records.ts`（只 `import type`），原生成器没有别的使用方，删除；`planSnapshot` 改为直接写出快照（解析函数对同一导入的输出）；23 的三份报告（`approved`、`unverified`、`outside`，`unapproved` 是 `approved` 去掉批准记录）写成 `tests/fixtures/base-apply-worlds.ts`，`infrastConfig` 移到这里，原世界生成器删除，`base-apply-data.ts` 只服务产品测试。允许名单加上 `report-data.ts` 的两条和 `base-plan-data.ts` 的 `planTableSources`，来源列表多了 `char_meta_table.json` | 修复后 7 项通过 |
+| 世界数据读产品文件 | 10 的 doctor 场景在加载时读 `skills/maa-core/package.json` 的版本，写进预期的 `skills.version.installed`。只改版本号的发布会让全部 doctor 场景无法比较；原一致性测试只查导入，看不到读文件 | 场景里写成占位 `{{maa-core-version}}`；`renderPolicy` 在宿主启动前按本次工作区装入的 maa-core 副本渲染，读不到就保持原样（授权对不上，判不通过）。一致性测试另列出闭包模块里指向 `skills/` 的相对路径字面值，只允许场景目录的 skill 目录；只改产品的发布副本另把 maa-core 的版本号改掉 | 变异核对：把读版本的那一行改回去，两项失败（`.tmp/logs/sync-red-doctor-version.log`：`doctor-inspect: a product-only release keeps the scenario`、`world data reads no product file`）；改回后通过。新增 `tests/eval-host-double.test.ts`「the runner grades a doctor scenario against the installed maa-core version…」：修复前 `authorization`、`expected-behavior` 不通过（`.tmp/logs/sync-red-runner.log`），修复后通过 |
+| 报告和基建场景在运行器里永远不通过 | 20、22 的场景要求报告审查标记，观察器（`eval/report-observer.ts`、`eval/base-plan-observer.ts`）只在离线测试里用，两张工单都写明接入运行器留给 28。运行器不接时，报告记录和排班文件是未授权的文件改动，也看不到审查标记 | 运行器对每次运行接上两个观察器，两个文件进入场景摘要（`scenarioHashSources`）和运行器指纹（`runnerSources`）。只评本次运行新建或改动过的报告版本：23 的场景在世界里放了已批准（跳过审查）的报告，接上观察器后若把它当成本次的报告，`report-review` 会误判失败 | 新增两项：「the runner grades report records with the report and base plan observers…」（跳过审查并批准的基建报告通过，只起草不处理的报告 `report-review` 不通过且没有未授权改动）修复前 `authorization`、`allowed-keys`、`report-review` 不通过（`.tmp/logs/sync-red-runner.log`）；「report records that were already in the world…」接上观察器后、加只评本次报告之前 `report-review` 不通过（`.tmp/logs/sync-red-preexisting-report.log`）；修复后都通过 |
+| 新场景不在场景目录里 | 五组场景写在 `eval/` 下，`scripts/eval-scenarios.ts` 没有收录 | `skland`（3）、`report`（4）、`base-report`（3）加入 `maa-account` 组，`stage-alternate`（4）、`base-apply`（10）加入 `maa-daily` 组 | `.tmp/logs/sync-red-catalog.log`（`996599a`：缺 24 个场景）；修复后通过 |
+| 文档一致性扫描报 14 处 | 合并进来的说明用到契约表里没有的脚本和动作（`doctor.ts analyze`、`stage-run.ts switch`、`skland-account.ts`、`cultivation-report.ts`、`base-plan.ts`、`base-report.ts`、`base-apply.ts`），另有四种扫描认错的形状 | 契约表补上这些脚本的动作和键（两份报告工具的审查、跳过、批准键取自共享的 `advice-report.ts`，基建报告草稿的方案键取自 `base-plan.ts`；绑定检查因此也查脚本直接导入的共享模块）。扫描规则：代码里的动作名先归当前脚本，没有就归文档的主脚本（`configuration.md` 在一行 `base-apply.ts` 之后回到 `maa-config.ts write`）；块上方那行在最后一个显式命令之后又写了动作（「先运行 `maa-config.ts read` … 再运行 `switch`」）时取后者；值写成 `…` 的形状（`{"ok":false,"error":…}`）是字段示意；一个脚本都不提的文档（审查说明，JSON 是审查员的回复）不算输入示例；`base-plan.md` 的 `{"skip": true}` 是导出排班文件里的房间值，列入「不是标准输入」清单，清单项不再出现就失败 | `.tmp/logs/sync-red-docs.log`（`996599a` 的测试对合并后的说明：第一项 14 处；第二项是收录新场景后、契约表补上之前的 14 处「没有文档写法」）；修复后 5 项通过；新增回归测试覆盖四种形状。改规则前后对全部说明的抽取结果做了对比：除上面四处，没有别的示例换了归属 |
+
+字面值与修复前逐字节相同的核对方法（会话临时脚本，不提交）：脚本加载场景目录和五个新场景模块，对全部 98 个场景打印 id 和整份定义 `JSON.stringify` 的 sha256。修复前（`996599a`，本机时区 UTC+8）与修复后逐个相同，只有 9 个 doctor 场景的 `skills.version.installed` 由版本号变成占位；把占位换回版本号后，这 9 个也相同。修复后在 `TZ=UTC` 下的输出与本机相同；修复前在 `TZ=UTC` 下 3 个 `daily-alternate-*` 不同（第四个的底稿已经是 16 的字面值）。17 的记录和 23 的报告由会话临时脚本从 `996599a` 的生成器取出（时区 UTC+8），经 JSON 往返后写成字面值；`planSnapshot` 对测试用到的 8 种排除名单与解析函数的输出逐字节相同。doctor 的检查行在 Windows 上逐行核对；非 Windows 的平台行（`windows-required`）取自同一检查库的输出，没有在非 Windows 上运行。
+
+这一轮的选择（不是产品限制，记在这里；运行器的两条登记在规格）：
+- doctor 的退出码不再调 `blockingChecks`，因为场景不能运行产品代码；写成「Windows 上健康或只有远程控制提醒且凭据未设置时为 0，否则为 1」，与 `doctor-exit`「有错误就挡」的规则对这些固定世界的结果相同。`tests/check-purposes.test.ts` 的使用方清单相应去掉 `eval/maa-doctor/scenarios.ts`。
+- 只评本次运行的报告版本，按版本目录里是否有文件变化判断，放在 `withReportEvidence` 里，离线测试和运行器共用这一个判断；20、22 的离线测试里报告都是本次新建的，结果不变。
+- 23 的 `unapproved` 世界不单独存一份：它的报告与 `approved` 相同（同一哈希），只少一份批准记录。
+- 23 的合并提交里 main 还给网络夹具加了 `base-plan.ts`、`base-report.ts` 的动作；22 的基建报告场景在真模型运行里需要它，所以本次一并合并 23，没有只合并到 22。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 5 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 20 项通过 |
+| `node --test tests/check-purposes.test.ts` | 5 项通过 |
+| `node --test tests/skland-scenarios.test.ts`、`report-scenarios`、`base-report-scenarios`、`stage-alternate-scenarios`、`base-apply-scenarios` | 1、1、2、1、1 项通过 |
+| `node --test tests/base-apply.test.ts`、`base-plan`、`base-report` | 16、15、7 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：新收录的 24 个场景和 doctor 的 2 个新场景都没有真模型运行（留给工单 26）；报告场景的提示词要求模型用 `codex exec` 发起独立审查，这条路在真实 Codex 评测里是否可行没有验证；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
