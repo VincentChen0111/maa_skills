@@ -73,7 +73,8 @@
 - `npm run typecheck`：通过。
 - `node --test tests/base-apply.test.ts`：9/9 通过。
 - `node --test tests/base-apply-scenarios.test.ts`：1/1 通过（八个场景）。
-- 改动共享代码后的回归，逐个文件依次运行：`tests/maa-config.test.ts` 59/59、`tests/base-report.test.ts` 7/7、`tests/training-config.test.ts` 3/3 通过。
+- 改动共享代码后的回归，逐个文件依次运行：`tests/maa-config.test.ts` 59/59、`tests/base-report.test.ts` 7/7、`tests/training-config.test.ts` 3/3、`tests/doctor.test.ts` 74/74、`tests/setup.test.ts` 29/29、`tests/stage-jobs.test.ts` 6/6、`tests/training-integration.test.ts` 2/2 通过。
+- 只跑离线入口里的静态部分（tracker 和文档链接、隐私、元数据）：没有错误。
 - 完整离线入口 `node scripts/check.ts` 没有在本机运行（协调者在冻结的提交上统一运行）。
 
 ## 未验证
