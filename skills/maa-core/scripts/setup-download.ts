@@ -471,11 +471,84 @@ const inside = (parent: string, child: string) => {
   const path = relative(parent, child);
   return path === '' || !!path && !path.startsWith('..') && !isAbsolute(path);
 };
-const systemArchive: ArchiveBoundary = { extract: async (archive, target) => new Promise(resolveResult => {
+/**
+ * Zip extraction script for Windows PowerShell 5.1 (.NET Framework ZipArchive). .NET decodes UTF-8-flagged entry
+ * names straight to UTF-16 and writes through wide-character file APIs, so the ANSI code page never touches a name;
+ * Windows' tar.exe converts names to the process code page and skips any it cannot hold (docs/setup-sources.md).
+ * The text is constant: the archive and target paths arrive only in environment variables. It uses .NET calls and no
+ * cmdlets, so module loading cannot fail. Every entry name is checked on the ordinary full path before anything is
+ * written; writes use the extended-length (\\?\) form of the same path, so paths over 260 characters work as they did
+ * with tar.exe. Each folder is created one level at a time and must be a plain folder (never a reparse point); files
+ * are created, never overwritten. Exit codes: 0 extracted; 2 an entry name or a folder on its path was refused;
+ * 3 the target is not a plain drive or UNC folder path; anything else failed.
+ */
+const extractScript = `$ErrorActionPreference = 'Stop'
+try {
+  [void][Reflection.Assembly]::Load('System.IO.Compression, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089')
+  [void][Reflection.Assembly]::Load('System.IO.Compression.FileSystem, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089')
+  $separator = [string][char]92
+  $root = [IO.Path]::GetFullPath($env:MAA_SKILLS_EXTRACT_TARGET).TrimEnd([char]92)
+  $extended = $separator + $separator + '?' + $separator
+  if ($root.StartsWith($extended) -or $root.StartsWith($separator + $separator + '.' + $separator)) { exit 3 }
+  $long = if ($root.StartsWith($separator + $separator)) { $extended + 'UNC' + $root.Substring(1) } else { $extended + $root }
+  if (-not [IO.Directory]::Exists($long)) { exit 3 }
+  $prefix = $root + $separator
+  $longPrefix = $long + $separator
+  $invalid = [IO.Path]::GetInvalidFileNameChars()
+  $device = '^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9]|CONIN[$]|CONOUT[$])([.].*)?$'
+  $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $folders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $plan = [Collections.Generic.List[object]]::new()
+  $zip = [IO.Compression.ZipFile]::Open($env:MAA_SKILLS_EXTRACT_ARCHIVE, [IO.Compression.ZipArchiveMode]::Read, [Text.UTF8Encoding]::new($false, $true))
+  try {
+    foreach ($entry in $zip.Entries) {
+      $name = $entry.FullName
+      $folder = $name.EndsWith('/') -or $name.EndsWith($separator)
+      if ($folder) { $name = $name.Substring(0, $name.Length - 1) }
+      if ($name.Length -eq 0 -or $name.IndexOf([char]0xFFFD) -ge 0) { exit 2 }
+      $segments = $name.Split([char[]]@([char]47, [char]92))
+      foreach ($segment in $segments) {
+        if ($segment.Length -eq 0 -or $segment.EndsWith('.') -or $segment.EndsWith(' ') -or $segment.IndexOfAny($invalid) -ge 0 -or $segment -match $device) { exit 2 }
+      }
+      $path = $prefix + [string]::Join($separator, $segments)
+      if ([IO.Path]::GetFullPath($path) -cne $path -or -not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { exit 2 }
+      if ($files.Contains($path) -or (-not $folder -and $folders.Contains($path))) { exit 2 }
+      for ($i = 1; $i -lt $segments.Length; $i++) {
+        $ancestor = $prefix + [string]::Join($separator, $segments, 0, $i)
+        if ($files.Contains($ancestor)) { exit 2 }
+        [void]$folders.Add($ancestor)
+      }
+      if ($folder) { [void]$folders.Add($path) } else { [void]$files.Add($path) }
+      $plan.Add([object[]]@($entry, $segments, $folder))
+    }
+    $made = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $plain = [IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint
+    foreach ($item in $plan) {
+      $segments = $item[1]
+      $depth = if ($item[2]) { $segments.Length } else { $segments.Length - 1 }
+      for ($i = 1; $i -le $depth; $i++) {
+        $current = $longPrefix + [string]::Join($separator, $segments, 0, $i)
+        if ($made.Add($current)) {
+          $attributes = [IO.DirectoryInfo]::new($current).Attributes
+          if ([int]$attributes -eq -1) { [void][IO.Directory]::CreateDirectory($current) }
+          elseif (($attributes -band $plain) -ne [IO.FileAttributes]::Directory) { exit 2 }
+        }
+      }
+      if (-not $item[2]) { [IO.Compression.ZipFileExtensions]::ExtractToFile($item[0], $longPrefix + [string]::Join($separator, $segments), $false) }
+    }
+  } finally { $zip.Dispose() }
+  exit 0
+} catch { exit 1 }`;
+/** Extracts zip archives (MAA and platform-tools) with the script above; any refusal, error or time-out is a failure. */
+export const systemArchive: ArchiveBoundary = { extract: async (archive, target) => new Promise(resolveResult => {
   if (process.platform !== 'win32' || !process.env.SystemRoot) { resolveResult({ exitCode: 1 }); return; }
-  // Windows' bsdtar refuses absolute and '..' entry paths by default.
-  execFile(join(process.env.SystemRoot, 'System32', 'tar.exe'), ['-xf', archive, '-C', target], { windowsHide: true, timeout: extractTimeoutMs, maxBuffer: 1024 * 1024 },
-    error => resolveResult({ exitCode: error ? 1 : 0, timedOut: error?.killed === true }));
+  // A PowerShell 7 module path inherited from the caller can break Windows PowerShell 5.1; let it use its own.
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'));
+  const child = execFile(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', extractScript],
+    { env: { ...env, MAA_SKILLS_EXTRACT_ARCHIVE: archive, MAA_SKILLS_EXTRACT_TARGET: target }, windowsHide: true, timeout: extractTimeoutMs, maxBuffer: 1024 * 1024 },
+    error => resolveResult({ exitCode: !error ? 0 : typeof error.code === 'number' && error.code !== 0 ? error.code : 1, timedOut: error?.killed === true }));
+  child.stdin?.end();
 }) };
 
 /** Performs only the skill's own install step (archive extraction); installers and first runs stay with the user. */

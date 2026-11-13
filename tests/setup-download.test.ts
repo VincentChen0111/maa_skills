@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { planSetupDownload, downloadSetupProgram, setupDownloadStatus, installSetupDownload, recheckSetup, discoverSetupConnections, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
-import type { Fetcher } from '../skills/maa-core/scripts/setup-download.ts';
+import { systemArchive, type Fetcher } from '../skills/maa-core/scripts/setup-download.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { runChecks } from '../skills/maa-core/scripts/doctor.ts';
 import { storedZip } from './fixtures/zip.ts';
@@ -373,6 +373,70 @@ test('an archive that tries to escape its folder or fails to extract leaves the 
   assert.deepEqual([result.status, result.reason], ['failed', 'extract-failed']);
   assert.deepEqual(await files(join(f.root, 'inner')), []);
   assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => item.install), ['failed']);
+});
+
+/** The real Windows extraction boundary on a synthetic zip: `parent` holds only `target`, so anything else in it escaped. */
+async function extraction(t: { after: (fn: () => Promise<unknown>) => void }, folder = 'target') {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-extract-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const parent = join(root, 'parent'); const target = join(parent, folder); const archive = join(root, 'archive.zip');
+  await mkdir(target, { recursive: true });
+  const extract = async (entries: Parameters<typeof storedZip>[0]) => { await writeFile(archive, storedZip(entries)); return systemArchive.extract(archive, target); };
+  return { parent, target, extract };
+}
+
+test('the Windows extraction boundary keeps UTF-8 entry names and bytes exactly, whatever the ANSI code page', { skip: process.platform !== 'win32' }, async t => {
+  // No single legacy ANSI code page holds simplified Chinese, Hangul, an accented letter and an emoji together, so an
+  // extractor that converts names to the process code page fails here on every Windows whose code page is not UTF-8.
+  // The chosen folder's own name is not ASCII either.
+  const x = await extraction(t, '明日方舟 MAA');
+  const binary = Buffer.from(Array.from({ length: 1024 }, (_, index) => (index * 7) % 256));
+  const entries = [{ name: 'MAA.exe', data: binary, deflate: true }, { name: 'DependencySetup_依赖库安装.bat', data: 'rem synthetic' },
+    { name: 'resource/', data: '' }, { name: 'resource/한국어/données 😀.json', data: '{"stage":"1-7"}', deflate: true }];
+  assert.deepEqual(await x.extract(entries), { exitCode: 0, timedOut: false });
+  assert.deepEqual(await files(x.target), ['DependencySetup_依赖库安装.bat', 'MAA.exe', 'resource', 'resource/한국어', 'resource/한국어/données 😀.json']);
+  for (const entry of entries.filter(item => !item.name.endsWith('/'))) {
+    assert.deepEqual(await readFile(join(x.target, entry.name)), Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data), entry.name);
+  }
+  assert.deepEqual(await files(x.parent), (await files(x.target)).map(item => `明日方舟 MAA/${item}`).concat('明日方舟 MAA').sort());
+});
+
+test('the Windows extraction boundary writes paths longer than 260 characters, as tar.exe did', { skip: process.platform !== 'win32' }, async t => {
+  const x = await extraction(t, 'm'.repeat(120));
+  const name = `resource/${'r'.repeat(150)}.json`;
+  assert.ok(join(x.target, name).length > 260);
+  assert.deepEqual(await x.extract([{ name: 'MAA.exe', data: 'synthetic executable' }, { name, data: 'long', deflate: true }]), { exitCode: 0, timedOut: false });
+  assert.equal(await readFile(join(x.target, name), 'utf8'), 'long');
+});
+
+test('the Windows extraction boundary refuses unsafe entry names before writing anything', { skip: process.platform !== 'win32' }, async t => {
+  const cases: [string, (parent: string) => string | Buffer][] = [
+    ['parent segment', () => '../outside.txt'], ['parent segment after a folder', () => 'sub\\..\\..\\outside.txt'],
+    ['absolute path with a drive letter', parent => join(parent, 'outside.txt')], ['extended-length prefix', parent => `\\\\?\\${join(parent, 'outside.txt')}`],
+    ['rooted path', () => '/outside.txt'], ['alternate data stream', () => 'a:b'], ['device name', () => 'resource/NUL.txt'],
+    ['trailing dot', () => 'MAA.exe.'], ['name that is not UTF-8', () => Buffer.from([0x44, 0xd2, 0xc0, 0x2e, 0x62, 0x61, 0x74])],
+    ['duplicate name differing only in case', () => 'maa.EXE'], ['file used as a folder', () => 'MAA.exe/inner.txt'],
+  ];
+  for (const [label, name] of cases) {
+    await t.test(label, async t => {
+      const x = await extraction(t);
+      const result = await x.extract([{ name: 'MAA.exe', data: 'synthetic executable' }, { name: name(x.parent), data: 'escaped' }]);
+      assert.equal(result.exitCode, 2, 'refused by the entry-name check');
+      assert.deepEqual(await files(x.parent), ['target'], 'nothing written, inside or outside the target');
+    });
+  }
+});
+
+test('the Windows extraction boundary never overwrites an existing file and never follows a reparse point', { skip: process.platform !== 'win32' }, async t => {
+  const x = await extraction(t);
+  await writeFile(join(x.target, 'MAA.exe'), 'existing');
+  assert.notEqual((await x.extract([{ name: 'MAA.exe', data: 'replacement' }])).exitCode, 0);
+  assert.equal(await readFile(join(x.target, 'MAA.exe'), 'utf8'), 'existing');
+  const y = await extraction(t);
+  const outside = join(y.parent, 'outside'); await mkdir(outside);
+  await symlink(outside, join(y.target, 'link'), 'junction');
+  assert.equal((await y.extract([{ name: 'link/sub/escaped.txt', data: 'escaped' }])).exitCode, 2, 'refused at the reparse point');
+  assert.deepEqual(await files(outside), [], 'nothing created through the junction');
 });
 
 test('a downloaded file changed on disk is reported invalid and is never extracted', async t => {
