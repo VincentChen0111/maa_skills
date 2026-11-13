@@ -6,7 +6,7 @@
 
 - `skills/maa-core/scripts/maa-callback.ts`：MaaCore 日志回调行、`append_task`、`set_task_params` 的唯一解析；`training-state.ts` 改为调用它。
 - `skills/maa-core/scripts/maa-log-window.ts`：`asst.log`、`gui.log` 的起点（字节偏移、大小、文件身份 dev+ino、起点前 4096 字节的 SHA-256），按起点读完整行，跟到 `.bak` 的轮换，接不上记缺口。
-- `skills/maa-core/scripts/stage-run-state.ts`：只由回调分类的纯函数；`stage-run.ts`：`start`、`observe`、`verify`、`decide`、`read` 入口和运行记录 `<私有目录>/stage-runs/<runId>.json`。
+- `skills/maa-core/scripts/stage-run-state.ts`：只由回调分类的纯函数，以及能否再打的唯一判断 `rerunGate`；`stage-run.ts`：`start`、`observe`、`verify`、`decide`、`progress`、`read` 入口和运行记录 `<私有目录>/stage-runs/<runId>.json`。
 - `skills/maa-daily/references/stage-run.md` 和 daily、core 的 SKILL.md 路由；`scripts/stage-run-demo.ts` 演示；`eval/maa-daily/stage-run-scenarios.ts` 五个只读场景。
 - 给 17 的接口：`readStageRun`、`summarizeStageRun`、`stageRunOutcome` 和 `StageRunRecord` 类型（`stage-run.ts` 文件头说明）。`stageRunOutcome` 给每关主作业、已批准备选、业务结果、关卡核对、允许的决定和最后一次决定；切换本身不在本票。
 
@@ -17,8 +17,8 @@
 | 1 关联批次、关卡和运行，跟踪到各终态 | `tests/stage-run.test.ts`「normal: links batch…」「failure, not 3-star and explicit wait timeout…」「no sanity needs the recovery popup…」「silence or a quiet log is not failure…」「disconnect is an environment failure…」「exit code 0 never overrides…」；`tests/stage-run-flow.test.ts`「tracking starts only from a complete prepared batch…」 |
 | 2 回调分类、退出码 0 不覆盖失败、环境类与作业失败分开 | 「exit code 0 never overrides…」「disconnect…」「a manual session kicking MAA off…」「a copilot run started without list mode…」 |
 | 3 及时报告，沉默不算失败 | 「failure, not 3-star…reported as soon as they appear」（每条发现只报一次）；`stage-run-flow`「a waiting observer returns as soon as MAA reports a failure…」；「silence or a quiet log is not failure…」 |
-| 4 环境类失败先核对再由模型决定；不加授权；未知只核对 | 「disconnect…」：核对前只能停下，`verify` 清楚后才允许重试/换备选/停下，`decide` 拒绝不允许的选项，重试是带 `retryOf` 的新跟踪、一个决定只对应一次；「a rotation mid-run…」「native schedule takeover…」「medicine reported…」只允许停下 |
-| 5 手动玩、手动登录顶号 | 「a manual session kicking MAA off, or the user saying they are playing…」；`verify` 把理智、理智药、源石、关卡进度标为未知 |
+| 4 环境类失败先核对再由模型决定；不加授权；未知只核对 | `tests/stage-run-rerun-gate.test.ts`「every re-run entry point refuses while an outcome is unknown…」逐一核对四个入口（提供的决定、`decide`、不带和带 `retryOf` 的 `start`）在到过结算画面后断连、战斗中 MAA 进程消失、战斗中被接管、日志缺口四种未知情形下都拒绝，只有进入战斗前的环境类失败放开；「an unknown battle outcome reopens retry only after the user states the stage progress」；`tests/stage-run.test.ts`「disconnect mid-battle is an environment failure…」；「a rotation mid-run…」「native schedule takeover…」「medicine reported…」只允许停下 |
+| 5 手动玩、手动登录顶号 | 「a manual session kicking MAA off, or the user saying they are playing…」；`stage-run-rerun-gate`「a late report of manual play or a manual login…」：事后说明把已判的明确超时改为未知并注明；`verify` 把理智、理智药、源石、关卡进度标为未知 |
 | 6 共享诊断；输出不含凭据、账号标识或完整配置 | 环境类失败带 doctor 的 `CheckResult` 结构，`verify` 调用共享 `runChecks`；「run record and summaries keep paths only for MAA debug images…」检查设备号、adb 地址、连接配置名、作业文件路径、私有目录、MAA 目录和 MAA 配置名都不出现；`stage-run-flow`「CLI validates actions…」 |
 | 7 临时环境演示，不点游戏不操作设备 | `tests/stage-run-demo.test.ts`：已安装 CLI 从 query、prepare、用户开始信号到每关结果；进程替身在跟踪阶段没有任何 close/start |
 | 8 回调行解析只有一份；专精测试不改断言 | `tests/maa-callback.test.ts` 4 项；专精 9 个测试文件（training-state、training-attribution、training-plan、training-integration、training-assistants、training-config、training-time、training-smoke、training-evaluation）断言未改，全部通过 |
@@ -37,6 +37,16 @@
 - `npm ci --ignore-scripts`：通过。`npm run typecheck`：通过（多次）。
 - 单个测试文件：`maa-callback` 4/4、`maa-log-window` 4/4、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1；专精 9 个文件全部通过。
 - 完整离线入口 `node scripts/check.ts`：411 项中 410 通过、0 失败、1 项跳过（非 Windows 的原生进程适配器，按设计跳过）；tracker、隐私、链接检查无错误，评分规则自检 `{"ok":true,"rules":7,"samples":14}`。
+- 第 1 轮修复后：`npm run typecheck` 通过；单个文件 `stage-run-rerun-gate` 4/4、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1、`maa-callback` 4/4、`maa-log-window` 4/4。完整离线入口 415 项：413 通过、1 跳过（同上）、1 失败，失败的是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」（`maa-close-timeout`），本包没有改 `maa-process.ts`；该文件单独连跑三次为通过、失败（同一项）、通过，协调者说明它在基点 `4a1fd26` 上也会失败，另行调查。因测试失败，入口没有继续跑后面的检查，另外单独运行：隐私 `{"ok":true,"findings":[]}`、链接检查无错误、tracker 无错误、评分规则自检 `{"ok":true,"rules":7,"samples":14}`。
+
+## 独立审查第 1 轮后的修复（2026-11-13）
+
+第 1 轮结论不通过，协调者接受全部 5 项（P1 1、P2 1、P3 3）。修复：
+
+- P1、P2 属同一类缺陷（未知结果之后还能再打），按同类缺陷规则只建一个判断：`stage-run-state.ts` 的 `rerunGate`。`deriveRun` 提供的决定、`decide`、不带和带 `retryOf` 的 `start` 都只问它。规则：结果未知、且进入过战斗或到过结算画面的那一项，只有用户用 `progress` 说明这一关打完了几次后才放开重试或换备选；证据不全、被接管、列表或作业文件不符、用药相关等情形一直只能停下。同一批次只要有一条记录的任务链开始过，不带 `retryOf` 的 `start` 拒绝（`run-unresolved`）；还有记录在跟踪时，任何 `start` 都拒绝；`start` 先在批次锁内读完仍在跟踪的记录的新日志再判断。任务链没开始过的记录（开始前被接管，或用 `decide` 的 `stop-and-tell-user` 关掉、之后不再读日志）不挡重新开始。新增一致性测试 `tests/stage-run-rerun-gate.test.ts`，改正原来 `tests/stage-run.test.ts` 断连用例里错误的期望（原先核对清楚就允许重试）。审查员的离线复现 `retry-unknown.ts`、`restart-bypass.ts` 原样运行，现在分别以 `decision-not-allowed`、`run-unresolved` 拒绝。
+- P3（事后说明）：`applyUserReport` 把最后一项的明确超时、失败、未三星或理智不足改为未知，并注明 `user-report:<种类>`；审查员复现 `late-report.ts` 现在输出未知。
+- P3（登记）：截图只列 `debug/` 下三层以内、同一条运行记录只允许一个跟踪进程，补进规格「日常操作」正文和「规则来源」。
+- P3（等待时间）：`observe` 的等待上限从 600 秒降到 90 秒，说明里的例子改为 60 秒，并写明宿主命令超时要比等待时间多 30 秒（Claude Code 的 Bash 默认 120 秒）；规格正文和两张表的理由一并改正。
 
 ## 实现选择（不是产品限制）
 
