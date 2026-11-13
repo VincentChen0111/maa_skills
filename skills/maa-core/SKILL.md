@@ -22,6 +22,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/cultivation-gaps.ts` | 多目标共用库存，比较加工、材料券及券换投入后加工的缺口，只给建议 | [缺口接口](../maa-account/references/gaps.md) |
 | `scripts/base-query.ts` | 只读查询已持有干员基建技能、解锁条件和交叉核对差异 | [基建查询接口](references/base-query.md) |
 | `scripts/stage-jobs.ts` | 查询明确关卡的作业、逐成员核对，准备已批准的地图批次 | [关卡作业接口](../maa-daily/references/stage-jobs.md) |
+| `scripts/stage-run.ts` | 从用户开始信号起跟踪已准备批次，按 MAA 回调记录每关结果；对 MAA 只读。回调行解析（`maa-callback.ts`）和日志起点（`maa-log-window.ts`）各只有一份，专精核对共用 | [运行跟踪接口](../maa-daily/references/stage-run.md) |
 | `scripts/training-time.ts`、`scripts/training-plan.ts` | 查询已授权目标的助手/时长，记录训练并逐阶段安排原生单次定时 | [训练接口](references/training.md) |
 | `scripts/nga.ts`、`scripts/research.ts`、`scripts/research-transport.ts` | NGA 只读检索与读帖；调研共用的引用结果格式、缓存、跨进程限速与风控停止、按平台的传输 | [社区调研接口](references/research.md) |
 
