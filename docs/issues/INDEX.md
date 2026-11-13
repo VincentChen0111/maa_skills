@@ -40,7 +40,7 @@
 | 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24、27、28 | 未开始 |
 | 27 | [批准后的碎石与临期药](27-approved-stone-expiring-medicine.md) | [#44](https://github.com/VincentChen0111/maa_skills/issues/44) | 03、05、06 | 未开始 |
 | 28 | [行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md) | [#45](https://github.com/VincentChen0111/maa_skills/issues/45) | 03 | 未开始 |
-| 29 | [指定关卡作业匹配改进](29-stage-job-matching-improvements.md) | [#46](https://github.com/VincentChen0111/maa_skills/issues/46) | 15 | 未开始 |
+| 29 | [指定关卡作业匹配改进](29-stage-job-matching-improvements.md) | [#46](https://github.com/VincentChen0111/maa_skills/issues/46) | 15 | 进行中 |
 | 30 | [配置写入器加固：投影指纹与差异核对](30-config-writer-projection-diff.md) | [#47](https://github.com/VincentChen0111/maa_skills/issues/47) | 05 | 未开始 |
 
 <!-- tracker:end -->
