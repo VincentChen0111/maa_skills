@@ -12,7 +12,7 @@ import { readSettings, settingsHome } from './preferences.ts';
  */
 export type Program = 'maa' | 'node' | 'adb' | 'emulator';
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
-export interface ArchiveBoundary { extract(archive: string, target: string): Promise<{ exitCode: number }> }
+export interface ArchiveBoundary { extract(archive: string, target: string): Promise<{ exitCode: number; timedOut?: boolean }> }
 export type DownloadContext = { home?: string; arch?: string; fetch?: Fetcher; inactivityMs?: number; archive?: ArchiveBoundary };
 export type Checksum = { algorithm: 'sha256' | 'sha1'; value: string };
 export type Step = { id: string; executor: 'skill' | 'user'; description: string };
@@ -31,9 +31,13 @@ export const officialSources = {
     index: 'https://dl.google.com/android/repository/repository2-1.xml', indexHosts: ['dl.google.com'],
     downloadPrefix: 'https://dl.google.com/android/repository/', hosts: ['dl.google.com'], terms: 'https://developer.android.com/studio/terms' },
 } as const;
-/** Fully supported emulators from MAA's Windows emulator page; downloads must stay on the vendor's official domain. */
-export const emulatorVendors: Record<string, { name: string; officialPage: string; domains: string[] }> = {
-  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'] },
+/**
+ * Fully supported emulators from MAA's Windows emulator page; downloads must stay on the vendor's official domain
+ * (`domains`, subdomains included) or on exact official download hosts (`hosts`, no subdomains).
+ */
+export const emulatorVendors: Record<string, { name: string; officialPage: string; domains: string[]; hosts?: string[] }> = {
+  // MuMu's download button calls its download API, which redirects to NetEase's file host; see docs/setup-sources.md.
+  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'], hosts: ['mumu.nie.netease.com', 'a11.gdl.netease.com'] },
   ldplayer: { name: '雷电模拟器', officialPage: 'https://www.ldmnq.com/', domains: ['ldmnq.com'] },
   'bluestacks-cn': { name: '蓝叠模拟器 5', officialPage: 'https://www.bluestacks.cn/', domains: ['bluestacks.cn'] },
   bluestacks: { name: '蓝叠模拟器 5 国际版', officialPage: 'https://www.bluestacks.com/tw/index.html', domains: ['bluestacks.com'] },
@@ -41,7 +45,12 @@ export const emulatorVendors: Record<string, { name: string; officialPage: strin
   memu: { name: '逍遥模拟器', officialPage: 'https://www.xyaz.cn/', domains: ['xyaz.cn'] },
 };
 
+// Limits registered in docs/spec.md (默认值及其来源, 08 rows).
 const indexLimit = 8 * 1024 * 1024;
+const requestTimeoutMs = 30_000; // each index read and each HEAD request
+const extractTimeoutMs = 600_000;
+const referenceLimit = 2000;
+const urlLimit = 2048;
 const unknownSizeLimit = 4 * 1024 * 1024 * 1024;
 const maxRedirects = 5;
 const userAgent = 'maa-skills-setup';
@@ -61,7 +70,7 @@ function allowedHost(url: URL, hosts: readonly string[], domains: readonly strin
     && (hosts.includes(host) || domains.some(domain => host === domain || host.endsWith(`.${domain}`)));
 }
 function parseUrl(value: unknown) {
-  if (typeof value !== 'string' || value.length > 2048) return fail('unofficial-source');
+  if (typeof value !== 'string' || value.length > urlLimit) return fail('unofficial-source');
   try { return new URL(value); } catch { return fail('unofficial-source'); }
 }
 
@@ -85,7 +94,7 @@ async function request(fetcher: Fetcher, start: string, method: 'GET' | 'HEAD', 
   return fail('too-many-redirects');
 }
 async function text(fetcher: Fetcher, url: string, hosts: readonly string[], accept?: string) {
-  const signal = AbortSignal.timeout(30_000);
+  const signal = AbortSignal.timeout(requestTimeoutMs);
   const { response } = await request(fetcher, url, 'GET', candidate => allowedHost(candidate, hosts), signal, accept);
   if (response.status !== 200 || !response.body) { await response.body?.cancel().catch(() => undefined); return fail('source-unavailable'); }
   const chunks: Uint8Array[] = []; let total = 0;
@@ -143,7 +152,7 @@ async function resolveNode(fetcher: Fetcher, arch: string): Promise<Release> {
   const sums = await text(fetcher, `${source.downloadPrefix}${version}/SHASUMS256.txt`, source.hosts);
   const line = sums.split(/\r?\n/).map(item => /^([a-f0-9]{64}) {2}(\S+)$/.exec(item)).find(match => match?.[2] === fileName);
   if (!line) return fail('release-file-missing');
-  const { response } = await request(fetcher, url, 'HEAD', candidate => allowedHost(candidate, source.hosts), AbortSignal.timeout(30_000));
+  const { response } = await request(fetcher, url, 'HEAD', candidate => allowedHost(candidate, source.hosts), AbortSignal.timeout(requestTimeoutMs));
   await response.body?.cancel().catch(() => undefined);
   if (response.status === 404) fail('release-file-missing');
   return { program: 'node', vendor: null, fileName, version: version.slice(1), versionSource: 'nodejs-dist-index', url, officialPage: source.officialPage,
@@ -183,9 +192,9 @@ async function resolveEmulator(fetcher: Fetcher, vendorId: unknown, link: unknow
   if (typeof vendorId !== 'string' || !Object.hasOwn(emulatorVendors, vendorId)) return fail('emulator-vendor-unsupported');
   const vendor = emulatorVendors[vendorId]!;
   const url = parseUrl(link);
-  if (!allowedHost(url, [], vendor.domains)) fail('unofficial-source');
+  if (!allowedHost(url, vendor.hosts ?? [], vendor.domains)) fail('unofficial-source');
   if (typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/.test(version)) fail('version-required');
-  const { response, url: final } = await request(fetcher, url.href, 'HEAD', candidate => allowedHost(candidate, [], vendor.domains), AbortSignal.timeout(30_000));
+  const { response, url: final } = await request(fetcher, url.href, 'HEAD', candidate => allowedHost(candidate, vendor.hosts ?? [], vendor.domains), AbortSignal.timeout(requestTimeoutMs));
   await response.body?.cancel().catch(() => undefined);
   if (response.status === 404) fail('release-file-missing');
   let fromPath: string | undefined;
@@ -249,7 +258,7 @@ function planView(release: Release, planId: string) {
 type DownloadRecord = { schemaVersion: 1; planId: string; program: Program; vendor: string | null; fileName: string; version: string; versionSource?: string; source: string; officialPage?: string;
   size: number | null; checksum: Checksum | null; confirmation: { reference: string; termsAccepted: boolean }; status: 'downloading' | 'downloaded' | 'failed';
   reason?: string; pid: number; startedAt: string; finishedAt?: string; bytes?: number; sha256?: string;
-  install?: { status: 'extracted' | 'failed'; target?: string; at: string } };
+  install?: { status: 'extracted' | 'failed'; reason?: string; target?: string; at: string } };
 const planPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 async function locations(context: DownloadContext) {
@@ -326,7 +335,7 @@ export async function executeDownload(input: unknown, context: DownloadContext =
     || typeof body.planId !== 'string' || !planPattern.test(body.planId) || typeof body.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(body.fingerprint)
     || body.termsAccepted !== undefined && typeof body.termsAccepted !== 'boolean'
     || body.program !== 'emulator' && ['vendor', 'url', 'version'].some(key => body[key] !== undefined)) fail('request-invalid');
-  if (typeof body.reference !== 'string' || !body.reference.trim() || body.reference.length > 2000) return { status: 'rejected', reason: 'confirmation-required' };
+  if (typeof body.reference !== 'string' || !body.reference.trim() || body.reference.length > referenceLimit) return { status: 'rejected', reason: 'confirmation-required' };
   const planId = body.planId as string;
   const { downloads, records } = await locations(context);
   if (await exists(join(records, `${planId}.json`))) return { status: 'rejected', reason: 'plan-already-used' };
@@ -362,7 +371,7 @@ async function transfer(release: Release, partial: string, context: DownloadCont
   const controller = new AbortController();
   const inactivity = context.inactivityMs ?? 60_000;
   let timer = setTimeout(() => controller.abort(), inactivity);
-  const hosts = release.program === 'emulator' ? [] : officialSources[release.program].hosts;
+  const hosts = release.program === 'emulator' ? emulatorVendors[release.vendor!]!.hosts ?? [] : officialSources[release.program].hosts;
   const domains = release.program === 'emulator' ? emulatorVendors[release.vendor!]!.domains : [];
   try {
     const { response } = await request(fetcher, release.url, 'GET', url => allowedHost(url, hosts, domains), controller.signal);
@@ -422,8 +431,8 @@ const inside = (parent: string, child: string) => {
 const systemArchive: ArchiveBoundary = { extract: async (archive, target) => new Promise(resolveResult => {
   if (process.platform !== 'win32' || !process.env.SystemRoot) { resolveResult({ exitCode: 1 }); return; }
   // Windows' bsdtar refuses absolute and '..' entry paths by default.
-  execFile(join(process.env.SystemRoot, 'System32', 'tar.exe'), ['-xf', archive, '-C', target], { windowsHide: true, timeout: 600_000, maxBuffer: 1024 * 1024 },
-    error => resolveResult({ exitCode: error ? 1 : 0 }));
+  execFile(join(process.env.SystemRoot, 'System32', 'tar.exe'), ['-xf', archive, '-C', target], { windowsHide: true, timeout: extractTimeoutMs, maxBuffer: 1024 * 1024 },
+    error => resolveResult({ exitCode: error ? 1 : 0, timedOut: error?.killed === true }));
 }) };
 
 /** Performs only the skill's own install step (archive extraction); installers and first runs stay with the user. */
@@ -458,15 +467,16 @@ export async function installDownload(input: unknown, context: DownloadContext =
     await mkdir(target, { recursive: true }); created = true;
   }
   const archive = context.archive ?? systemArchive;
-  let result: { exitCode: number };
+  let result: { exitCode: number; timedOut?: boolean };
   try { result = await archive.extract(join(downloads, record.fileName), target); } catch { result = { exitCode: 1 }; }
   const at = new Date().toISOString();
   if (result.exitCode !== 0 || !await present(target, record.program)) {
     // The target was absent or empty before this step, so everything in it came from this extraction.
     if (created) await rm(target, { recursive: true, force: true });
     else for (const entry of await readdir(target)) await rm(join(target, entry), { recursive: true, force: true });
-    await saveRecord(records, { ...record, install: { status: 'failed', at } });
-    return { status: 'failed', reason: 'extract-failed', program: record.program };
+    const reason = result.timedOut ? 'extract-timeout' : 'extract-failed';
+    await saveRecord(records, { ...record, install: { status: 'failed', reason, at } });
+    return { status: 'failed', reason, program: record.program };
   }
   await saveRecord(records, { ...record, install: { status: 'extracted', target, at } });
   return { status: 'extracted', program: record.program, steps: nextSteps(record.program, 'extracted') };

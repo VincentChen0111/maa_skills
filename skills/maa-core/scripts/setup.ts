@@ -131,10 +131,15 @@ export async function installSetupDownload(request: unknown, context: DownloadCo
 
 const connectionReasons = new Set(['maa-directory-unset', 'cn-client-required', 'candidate-input-invalid', 'too-many-adb-candidates', 'too-many-connection-candidates']);
 /**
- * Final recheck after installation: Node, MAA and settings by the fresh check, adb and the connection by
- * discovery and, for a selected candidate, the adb transport test. Complete only when nothing is pending.
+ * Final recheck after installation: Node, MAA and settings by the fresh check, adb and the connection by a
+ * fresh discovery and, for the candidate the user chose, the adb transport test. The candidate id hashes only
+ * the adb path and address, so it survives the connection write and MAA rewriting its configuration, while a
+ * discovery revision would not. Complete only when nothing is pending.
  */
-export async function recheckSetup(request: Partial<ConnectionSelection> = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary) {
+export type RecheckRequest = { candidate?: string };
+export async function recheckSetup(request: RecheckRequest = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary) {
+  if (!request || typeof request !== 'object' || Array.isArray(request) || Object.keys(request).some(key => key !== 'candidate')
+    || request.candidate !== undefined && (typeof request.candidate !== 'string' || !/^[a-f0-9]{64}$/.test(request.candidate))) throw new Error('request-invalid');
   const home = resolve(context.home ?? settingsHome());
   if (!await isFile(join(home, 'config.json'))) throw new Error('set-preferences-first');
   const settings = await readSettings(home);
@@ -144,11 +149,11 @@ export async function recheckSetup(request: Partial<ConnectionSelection> = {}, c
   if (!['maa', 'server', 'settings'].every(id => result.checks.find(item => item.id === id)?.status === 'normal')) connection = { status: 'not-checked', reason: 'maa-check-required' };
   else try {
     const found = await discoverSetupConnections(context, adb);
-    if (request.discoveryRevision === undefined) {
-      connection = { status: found.candidates.length ? 'selection-required' : 'no-candidate', adbCount: found.adbCount, failedAdb: found.failedAdb,
-        candidates: found.candidates.length, discoveryRevision: found.discoveryRevision };
-    } else {
-      const tested = await testSetupConnection({ discoveryRevision: request.discoveryRevision, ...(request.candidate ? { candidate: request.candidate } : {}) }, context, adb);
+    const counts = { adbCount: found.adbCount, failedAdb: found.failedAdb, candidates: found.candidates.length };
+    if (request.candidate === undefined) connection = { status: found.candidates.length ? 'selection-required' : 'no-candidate', ...counts };
+    else if (!found.candidates.some(item => item.id === request.candidate)) connection = { status: 'candidate-unavailable', reason: 'chosen-candidate-not-found', ...counts };
+    else {
+      const tested = await testSetupConnection({ discoveryRevision: found.discoveryRevision, candidate: request.candidate }, context, adb);
       connection = { status: tested.status === 'connected' ? 'connected' : tested.status === 'failed' ? 'failed' : 'rejected', reason: tested.reason };
     }
   } catch (error) {
@@ -171,7 +176,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   try {
     const args = process.argv.slice(2); const action = args[0];
     const downloadActions: Record<string, string[]> = { plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
-      install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'] };
+      install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'candidate'] };
     if (!['check', 'prepare', 'discover', 'test', 'apply', ...Object.keys(downloadActions)].includes(action ?? '') || args.length > 2 || args.length === 2 && args[1] !== '--json') throw new Error('request-invalid');
     let text = ''; for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 65536) throw new Error('request-invalid'); }
     let body: Record<string, unknown>;
@@ -195,7 +200,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       if (!checkRuntime().windows) throw new Error('windows-required');
       if (action === 'recheck') {
         const { adbPaths: _adbPaths, addresses: _addresses, ...selection } = body;
-        result = await recheckSetup(selection as Partial<ConnectionSelection>, context); process.exitCode = result.exitCode;
+        result = await recheckSetup(selection as RecheckRequest, context); process.exitCode = result.exitCode;
       } else {
         result = action === 'plan' ? await planSetupDownload(body) : action === 'download' ? await downloadSetupProgram(body) : await installSetupDownload(body);
         process.exitCode = ['planned', 'not-needed', 'already-downloaded', 'downloaded', 'extracted', 'already-extracted', 'user-steps'].includes(result.status) ? 0 : 1;

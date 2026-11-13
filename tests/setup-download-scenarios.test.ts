@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { readFile, readdir } from 'node:fs/promises';
 import { createFixture, collectEvidence, type Fixture } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
-import { setupDownloadScenarios, setupDownloadRoutes } from '../eval/maa-setup/scenarios.ts';
+import { setupDownloadScenarios, setupDownloadRoutes, setupScenarios } from '../eval/maa-setup/scenarios.ts';
 
 const skillDirectory = fileURLToPath(new URL('../skills/maa-setup', import.meta.url));
 const companionSkills = { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) };
@@ -91,4 +91,30 @@ test('installed CLI downloads only a confirmed plan through the network double a
     const unofficial = cli(fixture, host, 'setup.ts', 'plan', { program: 'emulator', vendor: 'mumu', url: 'https://mumu.example.invalid/setup.exe', version: '4.0' });
     assert.deepEqual([unofficial.code, unofficial.value.reason], [1, 'unofficial-source']);
   });
+});
+
+test('installed CLI recheck after a real connection write finds the chosen candidate afresh and reports complete', { skip: process.platform !== 'win32' }, async t => {
+  const fixture = await createFixture({ skillDirectory, companionSkills, jsonFiles: ['private/config.json', 'config/gui.new.json'],
+    jsonInputs: { ...setupScenarios[0]!.jsonInputs, 'synthetic-adb.exe': { synthetic: true } } });
+  t.after(() => fixture.dispose());
+  const core = join(fixture.workspace, '.claude/skills/maa-core');
+  const env = { ...fixture.env, MAA_SETUP_TEST_CORE: core, MAA_SETUP_TEST_WORKSPACE: fixture.workspace };
+  const run = (action: string, input: unknown) => {
+    const result = spawnSync(process.execPath, ['--import', new URL('./fixtures/setup-boundary.mjs', import.meta.url).href, join(core, 'scripts/setup.ts'), action, '--json'],
+      { cwd: fixture.workspace, env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+    assert.ok(result.stdout.trim(), result.stderr); return { code: result.status, value: JSON.parse(result.stdout) };
+  };
+  const context = { adbPaths: [join(fixture.workspace, 'synthetic-adb.exe')], addresses: ['127.0.0.1:5555'] };
+  assert.equal(run('prepare', {}).code, 0);
+  const found = run('discover', context); const candidate = found.value.candidates[0].id;
+  assert.equal(run('test', { ...context, discoveryRevision: found.value.discoveryRevision, candidate }).value.status, 'connected');
+  const applied = run('apply', { ...context, discoveryRevision: found.value.discoveryRevision, candidate, host: 'claude', reference: 'synthetic connection request', closedConfirmed: true });
+  assert.equal(applied.value.status, 'complete');
+  const stale = run('recheck', { ...context, discoveryRevision: found.value.discoveryRevision, candidate });
+  assert.deepEqual([stale.code, stale.value.reason], [1, 'request-invalid'], 'a discovery revision is not accepted by recheck');
+  const recheck = run('recheck', { ...context, candidate });
+  assert.equal(recheck.code, 0, JSON.stringify(recheck.value));
+  assert.deepEqual([recheck.value.connection.status, recheck.value.complete, recheck.value.pending], ['connected', true, []]);
+  const saved = JSON.parse(await readFile(join(fixture.workspace, 'private/setup-environment.json'), 'utf8'));
+  assert.deepEqual([saved.complete, saved.connection.status], [true, 'connected']);
 });

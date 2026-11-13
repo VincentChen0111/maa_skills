@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
-import { planSetupDownload, downloadSetupProgram, setupDownloadStatus, installSetupDownload, recheckSetup, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
+import { planSetupDownload, downloadSetupProgram, setupDownloadStatus, installSetupDownload, recheckSetup, discoverSetupConnections, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
 import type { Fetcher } from '../skills/maa-core/scripts/setup-download.ts';
 import { storedZip } from './fixtures/zip.ts';
 
@@ -269,6 +269,30 @@ test('emulator plans accept only the vendor\'s official domain and report an unk
   assert.equal((await installSetupDownload({ planId: plan.planId }, { home: f.home })).status, 'user-steps');
 });
 
+test('MuMu downloads follow its official download API to the official file host only; other NetEase hosts are refused', async t => {
+  const f = await fixture(t); const bytes = Buffer.from('synthetic MuMu installer');
+  const api = 'https://mumu.nie.netease.com/api/dl/win';
+  const file = 'https://a11.gdl.netease.com/MuMu_9.0.1_synthetic_zh-Hans_1.exe?n=MuMu_9.0.1_synthetic.exe&key1=synthetic&key2=synthetic';
+  const net = network({ [api]: { status: 302, headers: { location: file } }, [file]: { body: bytes, headers: { 'content-length': String(bytes.length) } } });
+  const context = { home: f.home, fetch: net.fetch };
+  const plan = await planSetupDownload({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1' }, context) as Record<string, any>;
+  assert.deepEqual([plan.status, plan.fileName, plan.size, plan.officialPage], ['planned', 'MuMu_9.0.1_synthetic_zh-Hans_1.exe', bytes.length, 'https://mumu.163.com/']);
+  const done = await downloadSetupProgram({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1', planId: plan.planId, fingerprint: plan.fingerprint,
+    reference: 'Download the MuMu installer' }, context);
+  assert.equal(done.status, 'downloaded');
+  assert.deepEqual(net.binaryCalls().map(call => call.url), [api, file]);
+  const direct = await planSetupDownload({ program: 'emulator', vendor: 'mumu', url: file, version: '9.0.1' }, context) as Record<string, any>;
+  assert.equal(direct.status, 'planned', 'the address shown in the browser download list is accepted too');
+  const elsewhere = network({ [api]: { status: 302, headers: { location: 'https://cdn.netease.com/MuMu_9.0.1.exe' } }, 'https://cdn.netease.com/MuMu_9.0.1.exe': { body: bytes } });
+  await assert.rejects(planSetupDownload({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1' }, { home: f.home, fetch: elsewhere.fetch }), { message: 'unofficial-source' });
+  assert.equal(elsewhere.calls.some(call => call.url.includes('cdn.netease.com')), false);
+  for (const url of ['https://adl.netease.com/d/g/a11/c/gw_win', 'https://x.a11.gdl.netease.com/MuMu.exe', 'https://mumu.nie.netease.com.example.invalid/api/dl/win']) {
+    await assert.rejects(planSetupDownload({ program: 'emulator', vendor: 'mumu', url, version: '9.0.1' }, context), { message: 'unofficial-source' }, url);
+  }
+  await assert.rejects(planSetupDownload({ program: 'emulator', vendor: 'ldplayer', url: api, version: '9.0.1' }, context), { message: 'unofficial-source' },
+    'a host allowed for one vendor is not allowed for another');
+});
+
 test('MAA extraction is the skill\'s only install step, never marks MAA installed, and is not repeated on resume', { skip: process.platform !== 'win32' }, async t => {
   const f = await fixture(t);
   const archive = storedZip([{ name: 'MAA.exe', data: 'synthetic executable' }, { name: 'DependencySetup_依赖库安装.bat', data: 'rem synthetic' }]);
@@ -325,6 +349,19 @@ test('a downloaded file changed on disk is reported invalid and is never extract
   assert.equal((await planSetupDownload({ program: 'maa' }, context) as Record<string, any>).status, 'planned');
 });
 
+test('an extraction that hits the time limit is reported as such and leaves the chosen folder as it was', async t => {
+  const f = await fixture(t); const bytes = Buffer.from('synthetic MAA archive');
+  const net = network(maaRelease('v9.1.0', bytes).routes); const context = { home: f.home, arch: 'x64', fetch: net.fetch };
+  const plan = await planSetupDownload({ program: 'maa' }, context) as Record<string, any>;
+  await downloadSetupProgram({ program: 'maa', planId: plan.planId, fingerprint: plan.fingerprint, reference: 'Download it' }, context);
+  const target = join(f.root, 'MAA');
+  const slow = { extract: async (_archive: string, into: string) => { await writeFile(join(into, 'MAA.exe'), 'partly extracted'); return { exitCode: 1, timedOut: true }; } };
+  const result = await installSetupDownload({ planId: plan.planId, target }, { home: f.home, archive: slow });
+  assert.deepEqual([result.status, result.reason], ['failed', 'extract-timeout']);
+  await assert.rejects(readdir(target), { code: 'ENOENT' });
+  assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => item.install), ['failed']);
+});
+
 test('a record whose file name points outside the downloads folder is ignored and never extracted', async t => {
   const f = await fixture(t); const outside = Buffer.from('file outside the downloads folder');
   await writeFile(join(f.root, 'outside.zip'), outside);
@@ -338,23 +375,33 @@ test('a record whose file name points outside the downloads folder is ignored an
   assert.deepEqual([result.status, result.reason, extracted], ['rejected', 'download-unknown', 0]);
 });
 
-test('final recheck covers Node, MAA, adb and the connection and updates the environment record only when tested', async t => {
+test('final recheck covers Node, MAA, adb and the connection, finds the chosen candidate afresh after the connection is saved, and updates the environment record', async t => {
   const f = await fixture(t, { maa: true });
+  const configFile = join(f.maaDirectory, 'config/gui.new.json');
   const config = { Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { Gui: {
     ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } } };
-  await writeFile(join(f.maaDirectory, 'config/gui.new.json'), JSON.stringify(config));
+  await writeFile(configFile, JSON.stringify(config));
   const adbPath = join(f.maaDirectory, 'adb/platform-tools/adb.exe'); await mkdir(join(f.maaDirectory, 'adb/platform-tools'), { recursive: true }); await writeFile(adbPath, 'synthetic adb');
   const calls: string[][] = [];
   const adb: AdbBoundary = { run: async (_file, args) => { calls.push(args); return { exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : args.at(-1) === 'get-state' ? 'device\n' : 'connected' }; } };
   const context = { home: f.home, adbPaths: [adbPath] };
+  const step4 = await discoverSetupConnections(context, adb);
+  const chosen = step4.candidates[0]!.id;
   const untested = await recheckSetup({}, context, async () => null, adb) as Record<string, any>;
-  assert.deepEqual([untested.complete, untested.connection.status, untested.exitCode], [false, 'selection-required', 1]);
+  assert.deepEqual([untested.complete, untested.connection.status, untested.connection.candidates, untested.exitCode], [false, 'selection-required', 1, 1]);
   assert.ok(untested.pending.includes('connection'));
-  assert.deepEqual(calls.map(args => args[0]), ['devices'], 'no connection is opened without a selection');
+  assert.equal(calls.every(args => args[0] === 'devices'), true, 'no connection is opened without a chosen candidate');
   const recorded = JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8'));
   assert.equal(recorded.complete, false); assert.deepEqual(recorded.downloads, []);
-  const tested = await recheckSetup({ discoveryRevision: untested.connection.discoveryRevision }, context, async () => null, adb) as Record<string, any>;
+  // Step 5 apply rewrites the connection fields (and MAA may rewrite its configuration on start): the old discovery revision is stale.
+  const applied = JSON.parse(await readFile(configFile, 'utf8'));
+  Object.assign(applied.Configurations['Synthetic profile'].Gui.ConnectSettings, { AdbPath: 'adb/platform-tools/adb.exe', Address: '127.0.0.1:16384', AutoDetect: false, AlwaysAutoDetect: false });
+  applied.Configurations['Synthetic profile'].Gui.RuntimeSettings.LastStart = 'synthetic value written by MAA';
+  await writeFile(configFile, JSON.stringify(applied));
+  assert.notEqual((await discoverSetupConnections(context, adb)).discoveryRevision, step4.discoveryRevision);
+  const tested = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
   assert.equal(tested.connection.status, 'connected');
+  assert.deepEqual(calls.slice(-2), [['connect', '127.0.0.1:16384'], ['-s', '127.0.0.1:16384', 'get-state']]);
   assert.deepEqual(tested.checks.map((item: { id: string }) => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version']);
   assert.equal(tested.complete, tested.checks.every((item: { status: string }) => item.status !== 'error'));
   assert.equal(tested.complete, process.platform === 'win32');
@@ -362,7 +409,27 @@ test('final recheck covers Node, MAA, adb and the connection and updates the env
   assert.equal(saved.connection.status, 'connected'); assert.equal(saved.complete, tested.complete);
   assert.doesNotMatch(JSON.stringify(saved) + JSON.stringify(tested), /127\.0\.0\.1|maa-setup-download-|Synthetic profile/);
   const failing: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : 'offline' }) };
-  const failed = await recheckSetup({ discoveryRevision: untested.connection.discoveryRevision }, context, async () => null, failing) as Record<string, any>;
+  const failed = await recheckSetup({ candidate: chosen }, context, async () => null, failing) as Record<string, any>;
   assert.deepEqual([failed.complete, failed.connection.status], [false, 'failed']);
   assert.equal(JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8')).complete, false);
+});
+
+test('recheck reports a chosen candidate that no longer exists instead of a generic failure, and opens no connection', async t => {
+  const f = await fixture(t, { maa: true });
+  await writeFile(join(f.maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'P', Configurations: { P: { Gui: {
+    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } } }));
+  const adbPath = join(f.root, 'tools/adb.exe'); await mkdir(join(f.root, 'tools')); await writeFile(adbPath, 'synthetic adb');
+  const calls: string[][] = [];
+  let devices = 'List of devices attached\n127.0.0.1:16384\tdevice\n';
+  const adb: AdbBoundary = { run: async (_file, args) => { calls.push(args); return { exitCode: 0, stdout: args[0] === 'devices' ? devices : 'device\n' }; } };
+  const context = { home: f.home, adbPaths: [adbPath] };
+  const chosen = (await discoverSetupConnections(context, adb)).candidates[0]!.id;
+  devices = 'List of devices attached\n127.0.0.1:5555\tdevice\n';
+  const result = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
+  assert.deepEqual([result.connection.status, result.connection.reason, result.complete], ['candidate-unavailable', 'chosen-candidate-not-found', false]);
+  assert.equal(result.connection.candidates, 1);
+  assert.equal(calls.every(args => args[0] === 'devices'), true);
+  assert.ok(result.pending.includes('connection'));
+  assert.equal(JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8')).connection.status, 'candidate-unavailable');
+  await assert.rejects(recheckSetup({ discoveryRevision: 'stale', candidate: chosen } as never, context, async () => null, adb), { message: 'request-invalid' });
 });
