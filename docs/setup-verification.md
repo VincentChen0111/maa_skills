@@ -92,6 +92,8 @@ R3 审查确认 R2 修复无问题，另在本包范围内发现一项 P2：夜�
 - **准确性修正**：MuMu 文件主机的 Content-Disposition 等于地址里的 `n=`，同一个文件地址得到同一个名字；名字变化来自下载接口每次发新的 `n=`。来源文档、接口说明和规格的模拟器文件名一行已改正，行为不变。「key2 有效 48 小时」HEAD 无法证实，改记为未核实的观察。
 - 规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」官方来源一行和模拟器文件名一行已同步；接口说明的模拟器一行改为指向这张表。
 
+R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typecheck` 通过；`node --test` 跑 7 个受影响文件（setup-download、setup-download-scenarios、setup-download-vendors、setup、setup-scenarios、setup-integration、eval-network）共 99 项全部通过；`node scripts/check.ts` 为 430 项，428 pass、1 fail、1 skip，唯一失败仍是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」，这次报 `maa-start-timeout`（此前两次为 `maa-close-timeout`、一次单独运行为 `maa-process-path-unavailable`），本票未改动它引用的文件，按协调者要求只报告。随后单独运行：privacy、tracker、metadata 均为空，评分规则自检 7 条／样例 14 个通过。本次修复已超出三轮审查上限，没有第四轮独立审查；是否授权复核和合并由维护者决定。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
