@@ -48,6 +48,13 @@
 - 独立审查第 2 轮（有条件通过，P3 1 项，协调者接受；第 1 轮的问题确认已修好）之后：
   - P3「PR 被拒时 beta 预警 issue 也发不出」：先在「a refused PR fails the run every day …」里让同一次运行同时有未变的正式版（PR）和有变化的 beta（issue），断言 PR 被拒的第一天、第二天 beta 预警 issue 都已发出（只发一次）且运行仍失败；运行 12 项中 1 项失败（第一天 beta issue 数为 0），与审查员的离线复现一致。改为每条通知各自发布、失败的记下来、全部处理完再整次失败之后，12/12。
   - 同样只跑了类型检查和这一个测试文件，没有访问网络或 GitHub。
+- 三轮审查之后的修复（未经独立审查）：协调者在头 `67a3549` 上跑完整离线入口，`tests/daily-evaluation.test.ts` 5 项中 3 项失败，单独重跑结果相同（确定性失败）。本票之前没有运行这个文件。
+  - 根因：daily 交易评分器 `scripts/eval-daily.ts` 逐字节比较写入器追加的待执行记录，期望内容只有元数据、授权和改动；本票按验收第 4 条让写入器多写了 `versions`。产品写的是对的：在评测夹具里用诊断脚本读到的实际记录键为 `id,skill,host,pid,startedAt,phase,authorization,changes,versions`，`versions` 为 `{"maaVersion":null,"recordVersion":2}`（夹具里没有 MAA.exe，所以版本为 null）。错在评分器没有跟上这个新字段。
+  - 修复：评分器的期望记录加上 `versions: { maaVersion: null, recordVersion }`。`recordVersion` 取自记录本身，但必须是正整数；整行仍逐字节比较，所以其他字段、键的顺序、猜出来的版本都通不过。原有的交易安全断言（锁、阶段、授权原话、改动、备份、进程顺序）一条没改。
+  - 同时在「an authorized reminder transaction …」里加了四种篡改：猜一个版本、去掉版本标记、记录版本为 0、版本标记里多一个字段，评分都必须是 fail。
+  - 失败与通过：修复前单独运行 `tests/daily-evaluation.test.ts` 为 5 项中 3 项失败（与协调者的日志一致）；修复后 5/5。
+  - 之后逐个运行：`npm run typecheck` 通过；`daily-evaluation` 5/5、`maa-config` 60/60、`doctor` 80/80、`maa-version` 5/5、`maa-version-check` 12/12；另外读待执行记录或恢复记录的测试 `setup-integration` 5/5、`setup` 29/29、`training-config` 3/3、`training-integration` 2/2、`stage-jobs` 8/8、`stage-jobs-regressions` 11/11、`stage-demo` 1/1、`setup-scenarios` 22/22、`doctor-scenarios` 19/19；`node scripts/eval-selftest.ts`（7 条规则、14 份样例）、隐私检查和元数据检查通过。没有跑完整离线入口。
+  - 影响：评分器源码计入场景指纹，daily 场景的指纹随之改变，改动前后的模型比较要用同一份评分器重新跑基线（模型评测本来就未验证）。工单 28 在并行改评测运行器，没有改 `eval-run.ts`、`evaluation.ts`、`eval-fixture.ts`，但 28 合入时 `eval-daily.ts` 可能需要合并。
 - 只读网络（事实核对，不是工具的在线模式）：GitHub 公开接口解析 4 个提交号、查一次发布列表、列两个目录；`raw.githubusercontent.com` 读 67 个文件在两个提交上的内容并就地计算 blob，读 4 个文件做 diff；读 v6.19.0 和开发分支的任务类型；GitHub 文档一页。没有保存 MAA 文件。
 
 ## 设计默认值
