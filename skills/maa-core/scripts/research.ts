@@ -218,7 +218,16 @@ const words = {
       'partial': 'only some pages were read', 'time-assumed-utc8': 'time read as China Standard Time' } as Record<string, string>,
   },
 };
-const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? code).join(language === 'zh' ? '；' : '; ');
+/** Limitation codes of the later sources (ticket 19: Skland community, experimental Bilibili). */
+const laterLimits: Record<Language, Record<string, string>> = {
+  zh: { 'experimental-source': 'B 站支持是实验性的，随时可能失效，不要依赖', 'subtitles-not-read': '没有读到字幕，只有标题和简介',
+    'machine-subtitle': '字幕由 B 站自动生成，可能有识别错误', 'login-not-recognized': 'B 站没有把这次请求认作已登录，字幕未读；SESSDATA 可能已失效，可以自己在终端重新运行 credentials.ts input bilibili',
+    'client-signature-required': '森空岛要求官方客户端的请求签名，本工具不伪装官方客户端，所以没有读到内容', 'text-order-approximate': '正文按片段顺序拼接，段落和排版可能与原帖不同' },
+  en: { 'experimental-source': 'Bilibili support is experimental; it may stop working at any time; do not rely on it', 'subtitles-not-read': 'subtitles not read; title and description only',
+    'machine-subtitle': 'subtitles generated automatically by Bilibili; may contain recognition errors', 'login-not-recognized': 'Bilibili did not treat this request as signed in, so subtitles were not read; the SESSDATA may have expired: run credentials.ts input bilibili yourself again',
+    'client-signature-required': 'Skland requires the official client\'s request signature; this tool does not imitate the official client, so nothing was read', 'text-order-approximate': 'body joined from text fragments; paragraphs and layout may differ from the post' },
+};
+const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? laterLimits[language][code] ?? code).join(language === 'zh' ? '；' : '; ');
 
 /** Cited Markdown for one result. Tool-built fields (links, times) stay usable; fetched text stays inert. */
 export function formatResearchMarkdown(result: ResearchResult, language: Language): string {
