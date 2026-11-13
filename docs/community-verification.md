@@ -30,7 +30,7 @@
 | 3 作者、日期、来源链接、事实摘录、可信度与局限；未知如实标明 | `tests/bilibili.test.ts` 第一、二项逐字段核对视频和字幕条目（字幕带时间点和 `machine-subtitle`）；`tests/skland-community.test.ts` 第一项逐字段核对；「requests are validated …」里无昵称、无发布时间的帖子得到 `null` 和 `author-unknown`、`date-unknown`，Markdown 写「作者：未知」；森空岛只取 `publishedAtTs`，不拿创建时间冒充 | 通过 |
 | 4 从用户指定资料到可引用 Markdown 可独立演示；工具在共享调研层，不新增 skill | 两个 CLI 测试都从用户给的链接走到 Markdown 引用摘要；脚本都在 `skills/maa-core/scripts/`，没有新增 skill 目录；结果格式、缓存、闸门、Markdown 全部复用 18 的 `research.ts` | B 站（实验性）：通过（网络替身；关键词路径不提供，见上节）。森空岛：未交付：真实站点要求官方客户端签名，按 18 的不伪装规则不实现 |
 | 5 网页、字幕、文章只当数据；凭据、账号标识、私人内容不泄漏 | `tests/bilibili.test.ts`「description and subtitle text are only data …」：简介和字幕里要求运行凭据脚本、外发 SESSDATA、读别的视频，实际只请求了指定视频和它自己的字幕文件；响应给出的非 B 站字幕地址不请求；Markdown 里链接失效、指令文字只在引用块。森空岛同类测试。两边都扫描结果、Markdown 和临时目录全部文件，找不到合成凭据；B 站不存 UP 主账号 ID 和 `login_mid` | 通过 |
-| 6 登录墙、不可读、服务变化和解析失败清楚报告，不假称读全文，不依赖私有在线服务 | 森空岛签名要求：`risk-control`、原因 `signature-required`、没有条目、局限 `client-signature-required`，中英文 Markdown 写明「不伪装官方客户端，没有读到内容」。两边的不提供、不完整、网络失败各自标明且不暂停来源；B 站没有 SESSDATA 时条目带 `subtitles-not-read`，被当成访客时报告 `login-not-recognized`。缺字段（格式变化）：「a subtitle file whose lines no longer carry the expected fields …」和「a post whose text fragments no longer carry text …」——有内容却一条都认不出时记为 `incomplete`（`data-unrecognized`），不算完整读取、不进缓存；真正没有文字片段的帖子仍是如实的空结果。只访问两站的公开接口 | 通过（网络替身） |
+| 6 登录墙、不可读、服务变化和解析失败清楚报告，不假称读全文，不依赖私有在线服务 | 森空岛签名要求：`risk-control`、原因 `signature-required`、没有条目、局限 `client-signature-required`，中英文 Markdown 写明「不伪装官方客户端，没有读到内容」。两边的不提供、不完整、网络失败各自标明且不暂停来源；B 站没有 SESSDATA 时条目带 `subtitles-not-read`，被当成访客时报告 `login-not-recognized`。缺字段（格式变化）：`tests/community-content.test.ts` 逐一列举两个读取器的全部内容字段（B 站的标题、作者、发布时间、简介、分 P、登录状态、字幕列表、字幕行；森空岛的标题、作者、发布时间、正文片段），每个都核对「站点明确给出的空值 → 如实的空结果」「已知格式 → 正常读取并缓存」「缺失、改名、类型不对 → `incomplete`（`data-unrecognized`）、不缓存」，并核对用例清单与读取器声明的字段表完全一致；另有「a subtitle file whose lines no longer carry the expected fields …」和「a post whose text fragments no longer carry text …」——有内容却一条都认不出时记为 `incomplete`（`data-unrecognized`），不算完整读取、不进缓存；真正没有文字片段的帖子仍是如实的空结果。只访问两站的公开接口 | 通过（网络替身） |
 
 ## 设计默认值
 
@@ -87,6 +87,16 @@
 先失败的证据：新增或改动的测试先运行，`tests/bilibili.test.ts` 15 项中 4 项失败（校验表因 `maxPart` 拒绝 `p=12345`；第 1001 个分 P 被拒为 `request-invalid`；认不出的字幕文件报成 `fresh`；风控后没有返回旧字幕），`tests/skland-community.test.ts` 10 项中 1 项失败（认不出的正文报成 `fresh`）。修复后逐个运行一次：`npm run typecheck` 通过；`tests/bilibili.test.ts` 15 项、`tests/skland-community.test.ts` 10 项通过。改了说明文字后另跑的文件见下一段。
 
 说明文字改动后逐个运行一次：`tests/community-cli.test.ts` 3 项（含「每个提到 B 站的入口都标实验性」）、`tests/help-installation.test.ts` 6 项、`tests/account-installation.test.ts` 2 项、`tests/metadata.test.ts` 1 项、`tests/community-scenarios.test.ts` 1 项，全部通过；`node scripts/tracker.ts`、`inspectMetadata`、`node scripts/privacy.ts .` 都无错误、无发现。没有运行完整门禁，没有访问森空岛、B 站或 NGA。
+
+第二轮独立审查（有条件通过，P3 三项，协调者全部接受）后的修复：
+
+- P3-1，与第一轮同一类问题第二次出现（「内容在但认不出，却报成完整的空结果」），按复发规则改成一个判定、一个归属：`research-fetch.ts` 的 `readContents` 和 `contentShapes` 是唯一判定。两个读取器把自己读取的每个内容字段声明在一张表里（`bilibiliContent`、`sklandCommunityContent`），只经这个判定读取。具体缺陷：B 站简介缺失（例如只有 `desc_v2`）原来记成空简介、正常、缓存 24 小时；字幕列表块缺失或行的字段改名（例如 `url` 代替 `subtitle_url`）原来报成「这个视频没有字幕」。现在都记为 `incomplete`（`data-unrecognized`）、不缓存；只有字幕列表存在且为空才是 `no-subtitles`。登录状态 `login_mid` 也经同一判定：0 是访客，缺失或不是整数是认不出。测试替身里「空」的选项改为发送站点明确的 null，不再省略字段。
+- P3-2：maa-account 的森空岛步骤改为：用户已要求读这一帖时，先说明目前读不到，再运行一次 `skland-community.ts read` 并如实报告；用户还没要求读时才先说明、等用户要试再运行。这样单轮场景 `account-skland-community-stopped` 期望的一次读取与说明一致。`tests/community-scenarios.test.ts` 新增一项核对两者一致。
+- P3-3：规格「默认值及其来源」的森空岛行改为「这一入口目前只会报告读不到（保留、推迟或撤下由维护者决定，暂取保留）」，与正文一致。
+
+先失败的证据：`tests/community-content.test.ts` 在改代码前运行，14 项中 11 项失败（字段清单一项；`video.title`、`video.author`、`video.published`、`video.description`、`video.parts`、`session.signedIn`、`subtitleList.tracks`、`post.title`、`post.author`、`post.published` 的「认不出」变体都报成正常读取），只有已在第一轮修过的 `post.text`、`subtitleFile.lines` 和「已知格式」一项通过。P3-2 的新核对对提交前（HEAD）的 SKILL 文字求值为假。
+
+修复后逐个运行一次：`npm run typecheck` 通过；`tests/community-content.test.ts` 14 项、`tests/bilibili.test.ts` 15 项、`tests/skland-community.test.ts` 10 项、`tests/community-scenarios.test.ts` 2 项、`tests/community-cli.test.ts` 3 项、`tests/account-installation.test.ts` 2 项、`tests/metadata.test.ts` 1 项通过；`node scripts/tracker.ts`、`inspectMetadata`、`node scripts/privacy.ts .` 无错误、无发现。没有运行完整门禁，没有访问森空岛、B 站或 NGA。
 
 ## 未验证
 
