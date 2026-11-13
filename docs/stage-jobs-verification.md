@@ -161,3 +161,18 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 - `maa-process.test.ts` 单独跑三次：第一次 2 项失败（同一关闭用例，另有 native observer 用例报 `maa-process-command-failed`），第二次 1 项失败（同一关闭用例），第三次 15/15 通过。本分支没有改 `maa-process.ts` 和这个测试文件；当时本机有 33 个 node/PowerShell 进程在跑（其他构建并行）。协调者转述：审查员在完整运行里见过一次这个关闭超时，单独跑三次都是 15/15。
 
 未验证（本轮新增）：检索结果分类没有可离线运行的评测场景。评测的网络替身只服务固定提交的 GitHub JSON，而且只对 operator-cost 和 cultivation-gaps 两个脚本生效；要为作业站接口加替身，得改共享评测框架，而工单 28 正在改这部分。所以这类结果目前只有导出函数和 CLI 接缝的测试，模型怎样转述它们没有评测，已登记到工单 26。
+
+### R2 审查修复（2026-11-13）
+
+协调者转来独立 R2 的结论：有条件通过，P1 0、P2 0、P3 2，R1 的修复成立，两项 P3 都接受。本轮基点 `7cf1568`。
+
+- P3-1，孪生关卡规则与文档不一致：R1 的实现没有要求「一个普通一个突袭」，同 levelId、同代号、同难度组、同难度的两关会互判为本关。固定表里共用 levelId 的同难度关卡有 71 个 levelId、142 关，其中同代号、同难度组的 27 个 levelId（54 关：act1–6 bossrush 的 `_tm` 系列，act21side_03/04/05 的 `_m1`/`_m2`）受影响，其余 44 个代号不同，本来就不算本关。现在孪生关卡的条件加上了难度必须不同；用固定全表逐对核对，写同 levelId 另一关 stageId 的 142 种情形全部判为同图无法证明。一致性样例补上 `act21side_03_m1`/`_m2`（现为 48 条）。作业接口核对里关于「原有别名」的旧说法已改。
+- P3-2，MAA 地图数据的 levelId 是小写：只读核对固定 MAA 的 `resource/Arknights-Tile-Pos/overview.json`，4334 条的 levelId 全部小写，TileDef.hpp 第 43 行区分大小写比较。现在 levelId 按小写建索引、与作业的 stage_name 区分大小写比较：关卡表的混合大小写写法判为无法确定，小写写法按 MAA 的方式解析。测试改了原来断言混合大小写写法为本关的几处，并加上小写写法的用例。同时核对了其他字段：两边都有的 3164 关里，code 有 14 关、名称有 19 关不同，另有 218 个活动关卡和 102 个 CLIMB_TOWER 关卡不在固定版本的地图数据里。这些写进了作业接口核对，没有改代码，理由见该节。
+
+测试先行：先改 `tests/stage-identity.test.ts` 并扩充样例，对旧代码运行时一致性测试失败（`.tmp/29/r2-red.txt`）。另用 `.tmp/29/r2-red-probe.ts` 记下旧行为：`act21side_03_m2` 对 `_m1` 判为本关，小写 levelId 判为无法确定，混合大小写 levelId 判为本关。改后三者依次是同图无法证明、本关、无法确定。
+
+本轮实际运行（本机 Windows，Node 24）：
+- `npm run typecheck` 通过。
+- 单文件：`stage-identity` 5/5、`stage-jobs-matching` 11/11、`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`stage-demo` 1/1。
+- 在 `b550495` 上完整运行一次 `node scripts/check.ts`（`.tmp/29/r2-check.txt`）：399 项，396 通过、2 失败、1 跳过。两项失败都在本分支没有改过的 `tests/maa-process.test.ts`：「Windows launches and normally closes a temporary GUI …」报 `maa-start-timeout`，「the native Windows observer handles a nonexistent selected process …」报 `maa-process-command-failed`。
+- 该入口遇到测试失败就停下，所以另外直接运行了 tracker、privacy、metadata 的导出函数和 `scripts/eval-selftest.ts`：都没有错误，7 rules / 14 samples。
