@@ -52,11 +52,17 @@ test('comparison pins hosts, models and scenarios and requires three distinct re
   assert.equal(compareRuns([old], [{ ...next, grade: old.grade }]).status, 'pass');
   assert.equal(compareRuns([], [next]).status, 'unverified', 'a failed run cannot establish a passing baseline');
   assert.equal(compareRuns([], [1, 2, 3, 4, 5, 6, 7].map((n) => ({ ...old, id: `baseline-${n}`, scenario: `case-${n}` }))).status, 'baseline');
+  // Each scenario group installs its own skill set, so one candidate's batch holds several skill versions; a batch stays one
+  // candidate because resume refuses another payload. Comparison checks the skill version per scenario (after run and reruns).
   const oldSuite = [1, 2, 3].map((n) => ({ ...old, id: `old-${n}`, scenario: `case-${n}` }));
-  const mixedSuite = oldSuite.map((run, n) => ({ ...run, id: `new-${n}`, skillVersion: `candidate-${n}` }));
-  assert.equal(compareRuns([], mixedSuite).status, 'incomparable', 'one candidate must run the complete baseline');
-  assert.equal(compareRuns(oldSuite, mixedSuite).status, 'incomparable');
-  assert.equal(compareRuns(mixedSuite, oldSuite).status, 'incomparable');
+  const groupedSuite = oldSuite.map((run, n) => ({ ...run, id: `new-${n}`, skillVersion: `skills-of-group-${n}` }));
+  assert.equal(compareRuns([], groupedSuite).status, 'baseline', 'a first multi-group run is a baseline');
+  assert.equal(compareRuns(oldSuite, groupedSuite).status, 'pass');
+  assert.equal(compareRuns(groupedSuite, oldSuite).status, 'pass');
+  assert.equal(compareRuns([old], [next], reruns.map((run, n) => ({ ...run, grade: old.grade, skillVersion: n ? next.skillVersion : 'another-candidate' }))).status,
+    'incomparable', 'the reruns of a scenario run its after version');
+  assert.equal(compareRuns([...oldSuite, old], [...groupedSuite, { ...next, scenarioHash: 'changed-scenario' }]).status, 'incomparable',
+    'one changed scenario keeps the whole set from passing');
 });
 
 const policy: Policy = {

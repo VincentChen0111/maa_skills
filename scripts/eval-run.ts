@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createFixture, collectEvidence, renderPolicy, type MaaProcessMode } from './eval-fixture.ts';
-import { normalizeHost, grade, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
+import { normalizeHost, grade, scenarioIdentity, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
 import { claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, probeVersion, reportedUsage,
   type RunReason } from './eval-host.ts';
 import { childEnvironment, isReadProtectionPass, loginDirectoryRefusal, type ReadProtectionPass } from './eval-auth.ts';
@@ -112,11 +112,10 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     const record: RunRecord = {
       id: randomUUID(), host: options.host, hostVersion: version.available ? version.version : 'unavailable', model: options.model,
       scenario: options.reviewBrief ? 'independent-review-smoke' : custom?.id ?? options.scenario as ScenarioName,
-      scenarioHash: digest(JSON.stringify({ prompt, sources, observer: fixture.original.get('.eval-node-observer.mjs')?.toString(),
-        dailyObserver: fixture.original.get('.eval-daily-observer.mjs')?.toString(), maaBoundary: fixture.original.get('.eval-maa-process.mjs')?.toString(),
-        setupBoundary: fixture.original.get('.eval-setup-boundary.mjs')?.toString(),
-        networkLoader: fixture.original.get('.eval-network-fixture.mjs')?.toString(), networkFixtures: custom?.networkFixtures,
-        maaProcess: custom?.maaProcess, policy: { ...fixture.policy, secrets: ['<synthetic-secret>'] }, jsonInputs: custom?.jsonInputs, jsonFiles: fixture.jsonFiles, commands: custom?.commands })),
+      // The scenario as defined (unrendered: a rendered policy holds this run's own workspace path), never the product.
+      scenarioHash: scenarioIdentity({ prompt, runner: sources, harness: Object.fromEntries(['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs',
+        '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs'].map((file) => [file, fixture.original.get(file)?.toString()])),
+        definition: custom ?? { policy: { ...fixture.policy, secrets: ['<synthetic-secret>'] }, jsonFiles: fixture.jsonFiles } }),
       skillVersion: digest(skill + fixture.original.get('probe.ts')), evidenceHash: digest(JSON.stringify(evidence) + raw + stderr), grade: graded,
       ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}), reason, auth: auth.mode, ...(version.double ? { double: true } : {}), reportedModel: usage.reportedModel, usage: usage.usage,
       ...(executionWindow ? { durationMs: Date.parse(executionWindow.endedAt) - Date.parse(executionWindow.startedAt) } : {}),
