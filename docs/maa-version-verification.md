@@ -23,8 +23,8 @@
 | 4 沿用 07 的读法；记录带版本号；计划和待执行记录写版本，执行或恢复时报告差异，未核实只提醒 | `tests/maa-version.test.ts` 的记录与版本标记测试；`tests/maa-config.test.ts`「the pending record carries …」；`tests/doctor.test.ts`「recovery reports a changed MAA or record version …」（changed/same/unrecorded/格式错误四种）和「a restoration writes the current version stamp …」；`tests/stage-jobs.test.ts`「preparation reports …」「a saved stage report records …」；`tests/training-plan.test.ts`「a plan records the MAA and record versions …」 | 离线通过；基建排班由 22/23 实现时沿用 |
 | 5 任务类型集合进依赖条目，核实后采用 | 条目 `task-type-set` 的 `facts`；「the task type set entry lists every type the configuration writer identifies …」；v6.19.0 起不变的说法核对后不成立，见来源 | 离线通过；列表在 4 个提交上读取核对 |
 | 6 登记 10、16、22 的位置 | 10 的位置在 5 条条目里；16、22 在 `pending` | 离线通过 |
-| 7 正式版全部未变才开 PR，变化或缺失开 issue，不错误认证 | 「a fixed sample source tree …」（未变、变化、缺失三种和 CLI 退出码）；「an unchanged stable release opens one PR …」；「a stable release with a changed or missing entry opens an issue …」 | 离线通过（网络与 GitHub 用替身） |
-| 8 beta 变化提前预警，不进列表；重复检查不重复通知 | 「a beta with changes opens one early-warning issue …」；PR、issue、beta 三种的重复检查，以及后续版本带相同变化、遗留分支两种情况 | 离线通过 |
+| 7 正式版全部未变才开 PR，变化或缺失开 issue，不错误认证 | 「a fixed sample source tree …」（未变、变化、缺失三种和 CLI 退出码）；「an unchanged stable release opens one PR …」；「a refused PR fails the run every day until it can be opened from the existing branch; a partly written branch is completed」（仓库不允许 Actions 开 PR 时每天失败，打开设置后的下一次运行从已有分支开出 PR；分支上缺写的文件只补那一个）；「a stable release with a changed or missing entry opens an issue …」 | 离线通过（网络与 GitHub 用替身） |
+| 8 beta 变化提前预警，不进列表；重复检查不重复通知 | 「a beta with changes opens one early-warning issue …」；PR、issue、beta 三种的重复检查，以及后续版本带相同变化、已有 PR 缺标签（补标签，不开第二个）两种情况 | 离线通过 |
 | 9 核实记录接入 setup/doctor；源码已核后提醒可升级，未核实只提醒 | `tests/maa-version.test.ts`「a newer source-verified stable release …」「setup reads the record …」；`tests/doctor-checks.test.ts`「an empty verification record is stated as empty, and a newer source-verified release is the same reminder as in setup」 | 离线通过 |
 | 10 发布信息分列两类；不伪造设备验证；Action 只做核对、不带用户配置 | `releaseNotes` 测试；记录的实机已核为空；「the daily workflow only runs the version check …」核对工作流只有一个运行步骤、只用 `GITHUB_TOKEN`；「the daily CLI uses the network only with --online …」；通知正文只含版本、提交、条目和指纹，测试断言令牌不出现在输出里 | 离线通过；真实 Action 未验证 |
 
@@ -39,8 +39,12 @@
 
 - `npm ci --ignore-scripts` 成功；`npm run typecheck` 在每步之后和最终代码上通过。
 - 先失败后通过：`tests/maa-version.test.ts` 先因缺少导出失败，实现后 5/5；`tests/maa-config.test.ts` 新测试先 0/1，后 1/1；`tests/doctor.test.ts` 两个新测试先 0/6（含子测试），后 6/6；`tests/stage-jobs.test.ts` 新增的三处先 3 项失败，后 8/8；`tests/training-plan.test.ts` 新测试先 0/1，后通过。`tests/maa-version-check.test.ts` 的行为测试是一次写好后再写实现的，第一次运行已在实现之后（11 项中 9 项通过，注册表/记录一致性和工作流两项按预期失败），之后补了遗留分支和检出提交两处断言并同时实现，没有单独的失败记录。
-- 单文件（最终代码上各运行一次）：`maa-version` 5/5、`maa-version-check` 11/11、`doctor-checks` 27/27、`doctor` 80/80、`maa-config` 60/60、`stage-jobs` 8/8、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`training-plan` 8/8、`training-assistants` 6/6、`training-evaluation` 1/1、`training-integration` 2/2、`training-smoke` 1/1、`doctor-scenarios` 19/19、`setup` 29/29、`setup-scenarios` 22/22。
+- 单文件（第 1 轮审查前的代码上各运行一次；`maa-version-check` 在修复后为 12/12）：`maa-version` 5/5、`maa-version-check` 11/11、`doctor-checks` 27/27、`doctor` 80/80、`maa-config` 60/60、`stage-jobs` 8/8、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`training-plan` 8/8、`training-assistants` 6/6、`training-evaluation` 1/1、`training-integration` 2/2、`training-smoke` 1/1、`doctor-scenarios` 19/19、`setup` 29/29、`setup-scenarios` 22/22。
 - `node scripts/tracker.ts --write`、`node scripts/tracker.ts`、`node scripts/privacy.ts`、`node scripts/metadata.ts`：无错误、无发现。隐私检查第一次报了两处 `credential`（请求头里拼令牌的写法和测试里的合成令牌），改用 `Headers.set` 和尖括号占位后通过。
+- 独立审查第 1 轮（有条件通过，P2 1 项、P3 3 项，协调者全部接受）之后：
+  - P2「已有 PR 分支就算已通知」：先在 `tests/maa-version-check.test.ts` 加「a refused PR fails the run every day …」并把第一个 PR 测试里的遗留分支情况改成「已有 PR 缺标签」，运行 12 项中 2 项失败（第二天没有失败、没有给已有 PR 补标签），与审查员的离线复现一致；改为按分支查 PR（`pulls?head=<所有者>:<分支>&state=all`）、只有已有 PR 才算已通知并补标签、没有 PR 就核对两个文件的 blob 只补不同的再开 PR、开不成整次失败之后，12/12。
+  - P3：规格里 10 的版本提醒顺序补上 25 加入的一项，25 升级提醒一行写明排序；工作流的 15 分钟运行时长登记进规格正文和默认值表；来源里 `ConfigFactory.cs` 的变化改为「去掉两个转换器、没有新增」（结论不变）。
+  - 本轮按协调者要求只跑类型检查和改到的单个测试文件，没有访问网络或 GitHub。
 - 只读网络（事实核对，不是工具的在线模式）：GitHub 公开接口解析 4 个提交号、查一次发布列表、列两个目录；`raw.githubusercontent.com` 读 67 个文件在两个提交上的内容并就地计算 blob，读 4 个文件做 diff；读 v6.19.0 和开发分支的任务类型；GitHub 文档一页。没有保存 MAA 文件。
 
 ## 设计默认值
@@ -66,6 +70,6 @@
 
 ## 需要维护者处理
 
-- 在仓库设置里允许 GitHub Actions 创建 PR（Settings → Actions → General → Workflow permissions），否则每日核对开 PR 会失败。
+- 在仓库设置里允许 GitHub Actions 创建 PR（Settings → Actions → General → Workflow permissions）。不打开时，需要开 PR 的每日核对每天都会失败（分支和两个文件已经写好，只差 PR），直到打开设置；打开后的下一次运行从已有分支开出 PR。
 - 合并后可手动触发一次 `MAA version check` 观察第一次运行；自动开的 PR 需要手动触发离线检查。
 - 实机已核只能在真实设备上核对后登记（26 的发布验收）。

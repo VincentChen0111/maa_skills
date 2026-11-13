@@ -26,7 +26,7 @@ v6.21.4 到 v6.22.0 之间，登记文件里有 8 个 blob 变了。属于 v6.21
 
 | 文件 | 变化位置 | 条目依赖的部分 |
 | --- | --- | --- |
-| `src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs` | 第 64 行序列化选项里的转换器列表换了一个 | 同一行的 `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull` 在 v6.22.0 上仍在（`config-save-null-omission`） |
+| `src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs` | 第 64 行序列化选项的转换器列表去掉了两个（`FightTaskStageResetModeConverter`、`FightTaskStageResetModeInvalidToIgnoreConverter`），没有新增；本项目不读写 `StageResetMode` | 同一行的 `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull` 在 v6.22.0 上仍在（`config-save-null-omission`） |
 | `src/MaaWpfGui/Main/AsstProxy.cs` | GPU OCR 的后端选择、作战日报、商店访问失败的界面日志、肉鸽放弃探索的日志、剿灭入口提示 | 启动后自动运行的跳过逻辑（v6.21.4 第 745–770 行一段）和 `TaskType` 枚举都在未变的范围内（`startup-auto-run-skip`、`task-type-set`） |
 | `src/MaaWpfGui/Main/Bootstrapper.cs` | 新增两个 DLL 名、作战日报初始化 | `--skip-startup-auto-run` 的常量和解析未变（`startup-auto-run-skip`） |
 | `src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs` | 删一行 using、关卡提示写法、作战日报窗口、「从此处开始」改为截取队列、任务状态函数改名 | `CheckTimers`、`HandleTimerLogic`、`HandleConfigChange` 和 `HandleScheduledStart` 所在的第 1080–1230 行在未变的范围内（`timer-schedule`） |
