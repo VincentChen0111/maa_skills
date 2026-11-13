@@ -471,16 +471,34 @@ const inside = (parent: string, child: string) => {
   const path = relative(parent, child);
   return path === '' || !!path && !path.startsWith('..') && !isAbsolute(path);
 };
+/** Windows device names, with or without an extension; the extraction script refuses the same names inside an archive. */
+const deviceName = /^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³]|CONIN\$|CONOUT\$)(\..*)?$/i;
+/**
+ * The one check that a chosen target folder path names a single folder for every program. Node checks, creates and
+ * clears the folder through the extended-length (\\?\) form, which keeps every character; the extraction script and
+ * other Windows programs use the ordinary form, where a name loses a trailing dot or space and a device name or a
+ * reserved character changes what the path means. So every name on the path (UNC server and share included; a \\?\ or
+ * \\.\ prefix fails here too) must be non-empty, well-formed UTF-16, and free of those. Applied to the resolved path on
+ * every platform, before any other target check; only Windows extracts. The extraction script repeats the comparison.
+ */
+export function plainTargetPath(path: string) {
+  const rest = (/^[A-Za-z]:[\\/]/.test(path) ? path.slice(3) : path.replace(/^[\\/]+/, '')).replace(/[\\/]+$/, '');
+  return rest === '' || rest.split(/[\\/]/).every(name => name !== '' && !/[. ]$/.test(name) && !/[<>:"|?*\x00-\x1f]/.test(name)
+    && !/\p{Cs}/u.test(name) && !deviceName.test(name));
+}
 /**
  * Zip extraction script for Windows PowerShell 5.1 (.NET Framework ZipArchive). .NET decodes UTF-8-flagged entry
  * names straight to UTF-16 and writes through wide-character file APIs, so the ANSI code page never touches a name;
  * Windows' tar.exe converts names to the process code page and skips any it cannot hold (docs/setup-sources.md).
  * The text is constant: the archive and target paths arrive only in environment variables. It uses .NET calls and no
- * cmdlets, so module loading cannot fail. Every entry name is checked on the ordinary full path before anything is
- * written; writes use the extended-length (\\?\) form of the same path, so paths over 260 characters work as they did
- * with tar.exe. Each folder is created one level at a time and must be a plain folder (never a reparse point); files
+ * cmdlets, so module loading cannot fail. The target must read the same after Windows normalises it (ordinal, a trailing
+ * separator aside), so the folder Node checked is the folder written. The entry list is read with a method call, not
+ * the `Entries` property: PowerShell's foreach turns a property getter's exception into an empty loop. Every entry name
+ * is checked on the ordinary full path before anything is written; writes use the extended-length (\\?\) form of the
+ * same path, so paths over 260 characters work as they did with tar.exe. Each folder is created one level at a time and must be a plain folder (never a reparse point); files
  * are created, never overwritten. Exit codes: 0 extracted; 2 an entry name or a folder on its path was refused;
- * 3 the target is not a plain drive or UNC folder path; anything else failed.
+ * 3 the target is not a plain drive or UNC folder path, or Windows reads it as another path; anything else failed,
+ * including an entry list that cannot be read and an archive with no entries.
  */
 const extractScript = `$ErrorActionPreference = 'Stop'
 try {
@@ -489,6 +507,7 @@ try {
   $separator = [string][char]92
   $root = [IO.Path]::GetFullPath($env:MAA_SKILLS_EXTRACT_TARGET).TrimEnd([char]92)
   $extended = $separator + $separator + '?' + $separator
+  if (-not [string]::Equals($root, $env:MAA_SKILLS_EXTRACT_TARGET.TrimEnd([char]92), [StringComparison]::Ordinal)) { exit 3 }
   if ($root.StartsWith($extended) -or $root.StartsWith($separator + $separator + '.' + $separator)) { exit 3 }
   $long = if ($root.StartsWith($separator + $separator)) { $extended + 'UNC' + $root.Substring(1) } else { $extended + $root }
   if (-not [IO.Directory]::Exists($long)) { exit 3 }
@@ -501,7 +520,8 @@ try {
   $plan = [Collections.Generic.List[object]]::new()
   $zip = [IO.Compression.ZipFile]::Open($env:MAA_SKILLS_EXTRACT_ARCHIVE, [IO.Compression.ZipArchiveMode]::Read, [Text.UTF8Encoding]::new($false, $true))
   try {
-    foreach ($entry in $zip.Entries) {
+    $entries = $zip.get_Entries()
+    foreach ($entry in $entries) {
       $name = $entry.FullName
       $folder = $name.EndsWith('/') -or $name.EndsWith($separator)
       if ($folder) { $name = $name.Substring(0, $name.Length - 1) }
@@ -521,6 +541,7 @@ try {
       if ($folder) { [void]$folders.Add($path) } else { [void]$files.Add($path) }
       $plan.Add([object[]]@($entry, $segments, $folder))
     }
+    if ($plan.Count -eq 0) { exit 1 }
     $made = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $plain = [IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint
     foreach ($item in $plan) {
@@ -568,6 +589,7 @@ export async function installDownload(input: unknown, context: DownloadContext =
   }
   if (typeof body.target !== 'string') return { status: 'rejected', reason: 'target-required' };
   const target = resolve(body.target);
+  if (!plainTargetPath(target)) return { status: 'rejected', reason: 'target-path-invalid' };
   const elevated = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432, process.env.SystemRoot].filter((item): item is string => !!item);
   if (parse(target).root === target || elevated.some(item => inside(resolve(item), target))) {
     return { status: 'rejected', reason: 'target-requires-elevation' };

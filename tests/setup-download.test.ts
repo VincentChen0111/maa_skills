@@ -375,6 +375,26 @@ test('an archive that tries to escape its folder or fails to extract leaves the 
   assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => item.install), ['failed']);
 });
 
+test('a chosen folder path that Windows would read as another folder is refused, and the folder it would mean stays as it was', async t => {
+  // Node checks and creates the folder through the extended-length form, which keeps a trailing dot or space; Windows
+  // drops them, so `MAA ` or `games.\MAA` would be checked as one folder and written as the user's existing `MAA`.
+  const f = await fixture(t);
+  const net = network(maaRelease('v9.1.0', storedZip([{ name: 'MAA.exe', data: 'synthetic executable' }])).routes); const context = { home: f.home, arch: 'x64', fetch: net.fetch };
+  const plan = await planSetupDownload({ program: 'maa' }, context) as Record<string, any>;
+  await downloadSetupProgram({ program: 'maa', planId: plan.planId, fingerprint: plan.fingerprint, reference: 'Download it' }, context);
+  const chosen = join(f.root, 'chosen');
+  await mkdir(join(chosen, 'games', 'MAA'), { recursive: true }); await writeFile(join(chosen, 'games', 'MAA', 'keep.txt'), 'existing');
+  assert.equal((await installSetupDownload({ planId: plan.planId, target: join(chosen, 'games', 'MAA') }, { home: f.home })).reason, 'target-not-empty');
+  for (const target of ['games\\MAA ', 'games\\MAA.', 'games\\MAA. .', 'games.\\MAA', 'games \\MAA', 'games..\\MAA', 'games\\MAA\\NUL', 'games\\MAA\\com1.txt',
+    'games\\MAA:stream', 'games\\M<A>', 'games\\MA\tA', `games\\MA${'\ud800'}A`]) {
+    const result = await installSetupDownload({ planId: plan.planId, target: join(chosen, target) }, { home: f.home });
+    assert.deepEqual([result.status, result.reason], ['rejected', 'target-path-invalid'], JSON.stringify(target));
+  }
+  assert.deepEqual(await files(chosen), ['games', 'games/MAA', 'games/MAA/keep.txt'], 'no folder created and nothing written');
+  assert.equal(await readFile(join(chosen, 'games', 'MAA', 'keep.txt'), 'utf8'), 'existing');
+  assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => item.install), [null], 'a refused target is not an install attempt');
+});
+
 /** The real Windows extraction boundary on a synthetic zip: `parent` holds only `target`, so anything else in it escaped. */
 async function extraction(t: { after: (fn: () => Promise<unknown>) => void }, folder = 'target') {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-extract-')));
@@ -437,6 +457,36 @@ test('the Windows extraction boundary never overwrites an existing file and neve
   await symlink(outside, join(y.target, 'link'), 'junction');
   assert.equal((await y.extract([{ name: 'link/sub/escaped.txt', data: 'escaped' }])).exitCode, 2, 'refused at the reparse point');
   assert.deepEqual(await files(outside), [], 'nothing created through the junction');
+});
+
+test('the Windows extraction boundary refuses a target that Windows reads as another folder', { skip: process.platform !== 'win32' }, async t => {
+  // Both folders exist: the literal one Node created through the extended-length form, and the user's own one that the
+  // ordinary path names once Windows drops a trailing dot or space.
+  const cases: [string, string, string][] = [['trailing space', 'MAA ', 'MAA'], ['trailing dot', 'MAA.', 'MAA'], ['folder on the way ending in a dot', 'games.\\MAA', 'games\\MAA']];
+  for (const [label, folder, own] of cases) {
+    await t.test(label, async t => {
+      const x = await extraction(t, folder);
+      await mkdir(join(x.parent, own), { recursive: true }); await writeFile(join(x.parent, own, 'keep.txt'), 'existing');
+      assert.equal((await x.extract([{ name: 'MAA.exe', data: 'synthetic executable' }])).exitCode, 3, 'refused as a target path that is not plain');
+      assert.deepEqual(await files(join(x.parent, own)), ['keep.txt'], 'the user\'s folder is unchanged');
+      assert.deepEqual(await files(x.target), [], 'nothing written into the literal folder either');
+    });
+  }
+});
+
+test('the Windows extraction boundary fails, writing nothing, when the archive\'s entry list cannot be read or is empty', { skip: process.platform !== 'win32' }, async t => {
+  const cases: [string, Parameters<typeof storedZip>[0]][] = [
+    ['entry name with a character .NET refuses in a path', [{ name: 'MAA.exe', data: 'synthetic executable' }, { name: 'a|b', data: 'other' }]],
+    ['GBK name without the UTF-8 flag', [{ name: 'MAA.exe', data: 'synthetic executable', utf8: false }, { name: Buffer.from([0x44, 0xd2, 0xc0, 0x2e, 0x62, 0x61, 0x74]), data: 'rem', utf8: false }]],
+    ['archive with no entries', []],
+  ];
+  for (const [label, entries] of cases) {
+    await t.test(label, async t => {
+      const x = await extraction(t);
+      assert.notEqual((await x.extract(entries)).exitCode, 0);
+      assert.deepEqual(await files(x.parent), ['target'], 'nothing written, inside or outside the target');
+    });
+  }
 });
 
 test('a downloaded file changed on disk is reported invalid and is never extracted', async t => {
