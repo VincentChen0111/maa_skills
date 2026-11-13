@@ -42,7 +42,7 @@
 | adb | Google SDK 仓库索引 `repository2-1.xml` 中唯一稳定频道（channel-0）的 platform-tools 及其 Windows 归档 | `dl.google.com/android/repository`；大小与索引里的 SHA-1；下载前需用户本人接受 [Android SDK 许可协议](https://developer.android.com/studio/terms) |
 | 模拟器 | MAA 模拟器页「完美支持」中的厂商：`mumu`、`ldplayer`、`bluestacks-cn`、`bluestacks`、`nox`、`memu`；版本是用户在厂商官方页面读到的值，记为 `official-page-stated` | 只接受该厂商官方域名（MuMu 仅 `mumu.163.com`）及其子域名的 https 地址，每次跳转同样检查；大小来自 HEAD，没有则未知；厂商不公布校验值，`checksumVerified: false` |
 
-方案不写文件，`planId` 每次随机。`download` 先拒绝缺少确认原话（`confirmation-required`）、已用过的方案（`plan-already-used`）、发布已变化或指纹不符（`plan-changed`）、adb 未接受协议（`terms-acceptance-required`），这些情况都不请求文件；再在私有目录 `downloads/records/<planId>.json` 独占登记后才请求文件。跳转最多 5 次，地址不是 https 官方主机即 `unofficial-source`；60 秒没有新数据或连接中断为 `download-interrupted`；大小不符 `size-mismatch`，校验不符 `checksum-mismatch`；大小未知时最多 4 GiB。失败删除临时文件，记录为 `failed`。进程中途退出留下的 `downloading` 记录由 `downloads` 报为 `interrupted`。
+方案不写文件，`planId` 每次随机。`download` 先拒绝缺少确认原话（`confirmation-required`）、已用过的方案（`plan-already-used`）、发布已变化或指纹不符（`plan-changed`）、adb 未接受协议（`terms-acceptance-required`），这些情况都不请求文件；再在私有目录 `downloads/records/<planId>.json` 独占登记后才请求文件。跳转最多 5 次，地址不是 https 官方主机即 `unofficial-source`；60 秒没有新数据或连接中断为 `download-interrupted`；大小不符 `size-mismatch`，校验不符 `checksum-mismatch`；大小未知时最多 4 GiB。失败删除临时文件，记录为 `failed`。进程中途退出留下的 `downloading` 记录由 `downloads` 报为 `interrupted`，记录保留，临时文件在下一次下载开始前回收；格式不对或文件名越界的记录一律不用。
 
 下载文件放在私有目录 `downloads/`，记录保存版本、来源、大小、sha256 和确认原话；输出不含本机路径和确认原话。`install` 的目标必须是空文件夹或不存在，不能是盘符根目录、Program Files 或 Windows 目录下，也不能与私有目录互相包含。系统 `tar.exe`（bsdtar）默认拒绝绝对路径和含 `..` 的条目；解压失败或缺少预期程序时清空该文件夹，记录 `failed`。下载与解压都不写设置或 MAA 配置：MAA 目录经偏好脚本保存，adb 路径经 `apply` 写入。
 

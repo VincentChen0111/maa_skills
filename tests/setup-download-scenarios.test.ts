@@ -72,7 +72,7 @@ test('installed CLI downloads only a confirmed plan through the network double a
     const base = { program: 'maa', planId: plan.value.planId, fingerprint: plan.value.fingerprint };
     const unconfirmed = cli(fixture, host, 'setup.ts', 'download', base);
     assert.deepEqual([unconfirmed.code, unconfirmed.value.reason], [1, 'confirmation-required']);
-    const injected = cli(fixture, host, 'setup.ts', 'download', { ...base, reference: 'yes', target: 'C:\\synthetic' });
+    const injected = cli(fixture, host, 'setup.ts', 'download', { ...base, reference: 'yes', target: join(fixture.workspace, 'synthetic') });
     assert.deepEqual([injected.code, injected.value.reason], [1, 'request-invalid']);
     const events = async () => (await readFile(join(fixture.workspace, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
     assert.equal((await events()).filter(event => event.kind === 'download').length, 0);

@@ -224,6 +224,8 @@ test('an interrupted download is not marked downloaded, and a resume re-checks s
   const fresh = await planSetupDownload({ program: 'maa' }, context) as Record<string, any>;
   assert.equal(fresh.status, 'planned', 'nothing verified exists, so a new plan is shown for a new confirmation');
   assert.equal((await downloadSetupProgram({ ...request, planId: fresh.planId, fingerprint: fresh.fingerprint }, context)).status, 'downloaded');
+  assert.equal((await files(join(f.privateDirectory, 'downloads'))).includes(`.${crashed}.partial`), false, 'the partial file of a dead download is reclaimed');
+  assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => item.status).sort(), ['downloaded', 'failed', 'interrupted']);
 });
 
 test('adb download needs the user\'s own acceptance of the Android SDK license and checks the official SHA-1', async t => {
@@ -263,6 +265,7 @@ test('emulator plans accept only the vendor\'s official domain and report an unk
   const done = await downloadSetupProgram({ program: 'emulator', vendor: 'ldplayer', url: link, version: '9.1.40', planId: plan.planId, fingerprint: plan.fingerprint,
     reference: 'Download the LDPlayer installer' }, context);
   assert.equal(done.status, 'downloaded'); assert.equal(done.checksumVerified, false);
+  assert.deepEqual((done.next as { id: string }[]).map(step => step.id), ['run-emulator-installer', 'emulator-first-run', 'game-client', 'connect-adb', 'recheck']);
   assert.equal((await installSetupDownload({ planId: plan.planId }, { home: f.home })).status, 'user-steps');
 });
 
@@ -320,6 +323,19 @@ test('a downloaded file changed on disk is reported invalid and is never extract
   const result = await installSetupDownload({ planId: plan.planId, target: join(f.root, 'MAA') }, { home: f.home, archive: { extract: async () => { extracted++; return { exitCode: 0 }; } } });
   assert.equal(result.reason, 'download-not-verified'); assert.equal(extracted, 0);
   assert.equal((await planSetupDownload({ program: 'maa' }, context) as Record<string, any>).status, 'planned');
+});
+
+test('a record whose file name points outside the downloads folder is ignored and never extracted', async t => {
+  const f = await fixture(t); const outside = Buffer.from('file outside the downloads folder');
+  await writeFile(join(f.root, 'outside.zip'), outside);
+  const planId = randomUUID(); await mkdir(join(f.privateDirectory, 'downloads/records'), { recursive: true });
+  await writeFile(join(f.privateDirectory, 'downloads/records', `${planId}.json`), JSON.stringify({ schemaVersion: 1, planId, program: 'maa', vendor: null,
+    fileName: '../../outside.zip', version: '9.1.0', source: 'https://github.com/synthetic', size: outside.length, checksum: null,
+    confirmation: { reference: 'synthetic', termsAccepted: false }, status: 'downloaded', pid: process.pid, startedAt: new Date().toISOString(), bytes: outside.length, sha256: sha256(outside) }));
+  assert.deepEqual((await setupDownloadStatus({ home: f.home })).items, []);
+  let extracted = 0;
+  const result = await installSetupDownload({ planId, target: join(f.root, 'MAA') }, { home: f.home, archive: { extract: async () => { extracted++; return { exitCode: 0 }; } } });
+  assert.deepEqual([result.status, result.reason, extracted], ['rejected', 'download-unknown', 0]);
 });
 
 test('final recheck covers Node, MAA, adb and the connection and updates the environment record only when tested', async t => {

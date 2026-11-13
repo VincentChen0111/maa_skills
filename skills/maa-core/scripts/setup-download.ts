@@ -213,7 +213,7 @@ const stepText: Record<string, string> = {
   'accept-terms': 'Read the Android SDK License Agreement and accept it yourself before this download; the skill never accepts terms for you.',
   download: 'Download this one file from the official source after you confirm this plan.',
   verify: 'Check the downloaded size and the official checksum when one is published; a mismatch keeps nothing.',
-  'extract-maa': 'Extract the archive into an empty folder you choose, outside folders that need administrator rights such as C:\\ or Program Files.',
+  'extract-maa': 'Extract the archive into an empty folder you choose, outside folders that need administrator rights, such as a drive root or Program Files.',
   'maa-dependencies': 'Run DependencySetup_依赖库安装.bat in the MAA folder as administrator to install the Visual C++ runtime.',
   'maa-first-run': 'Start MAA.exe and finish its first-run setup in the MAA window, selecting the CN Official or Bilibili client.',
   'save-maa-directory': 'Save the MAA folder through the preferences script; settings are not written by the download.',
@@ -234,6 +234,10 @@ const programSteps: Record<Program, [string, Step['executor']][]> = {
 };
 export const stepsFor = (program: Program): Step[] => programSteps[program].map(([id, executor]) => ({ id, executor, description: stepText[id]! }));
 const remainingSteps = (program: Program, after: string) => { const steps = stepsFor(program); return steps.slice(steps.findIndex(step => step.id === after) + 1); };
+/** Steps still open once a download is verified, or once its archive is extracted. */
+function nextSteps(program: Program, state: 'downloaded' | 'extracted') {
+  return remainingSteps(program, state === 'extracted' ? (program === 'maa' ? 'extract-maa' : 'extract-adb') : program === 'emulator' ? 'download' : 'verify');
+}
 
 function planView(release: Release, planId: string) {
   return { planId, fingerprint: fingerprint(planId, release), program: release.program, vendor: release.vendor, fileName: release.fileName, version: release.version,
@@ -256,10 +260,15 @@ async function locations(context: DownloadContext) {
   const downloads = join(settings.privateDirectory, 'downloads');
   return { settings, downloads, records: join(downloads, 'records') };
 }
-async function readRecord(file: string): Promise<DownloadRecord | undefined> {
-  try { return JSON.parse(await readFile(file, 'utf8')) as DownloadRecord; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+/** Only well-formed records are used; a file name can never point outside the downloads folder. */
+async function readRecord(file: string, planId: string): Promise<DownloadRecord | undefined> {
+  let value: DownloadRecord;
+  try { value = JSON.parse(await readFile(file, 'utf8')) as DownloadRecord; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return undefined; throw error; }
+  return value && typeof value === 'object' && value.schemaVersion === 1 && value.planId === planId && ['maa', 'node', 'adb', 'emulator'].includes(value.program)
+    && typeof value.fileName === 'string' && /^[A-Za-z0-9][A-Za-z0-9._()+-]{0,127}$/.test(value.fileName) ? value : undefined;
 }
+async function exists(file: string) { try { await stat(file); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
 async function saveRecord(records: string, record: DownloadRecord) {
   const temporary = join(records, `.${record.planId}.${randomUUID()}.tmp`);
   await writeFile(temporary, JSON.stringify(record, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
@@ -287,8 +296,8 @@ async function allRecords(records: string) {
   try { names = await readdir(records); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
   const result: DownloadRecord[] = [];
   for (const name of names.filter(item => /^[0-9a-f-]{36}\.json$/.test(item)).sort()) {
-    const record = await readRecord(join(records, name));
-    if (record?.schemaVersion === 1 && record.planId === name.slice(0, -5)) result.push(record);
+    const record = await readRecord(join(records, name), name.slice(0, -5));
+    if (record) result.push(record);
   }
   return result;
 }
@@ -304,7 +313,7 @@ export async function planDownload(input: unknown, context: DownloadContext = {}
     if (record.program === release.program && record.fileName === release.fileName && record.version === release.version && record.source === release.url
       && await verifiedFile(downloads, record)) {
       return { status: 'already-downloaded', planId: record.planId, program: record.program, fileName: record.fileName, version: record.version,
-        install: record.install?.status ?? null, next: record.install?.status === 'extracted' ? remainingSteps(release.program, release.program === 'maa' ? 'extract-maa' : 'extract-adb') : remainingSteps(release.program, 'verify') };
+        install: record.install?.status ?? null, next: nextSteps(release.program, record.install?.status === 'extracted' ? 'extracted' : 'downloaded') };
     }
   }
   return { status: 'planned', ...planView(release, randomUUID()), confirmation: 'required-for-this-plan-only' };
@@ -320,11 +329,13 @@ export async function executeDownload(input: unknown, context: DownloadContext =
   if (typeof body.reference !== 'string' || !body.reference.trim() || body.reference.length > 2000) return { status: 'rejected', reason: 'confirmation-required' };
   const planId = body.planId as string;
   const { downloads, records } = await locations(context);
-  if (await readRecord(join(records, `${planId}.json`))) return { status: 'rejected', reason: 'plan-already-used' };
+  if (await exists(join(records, `${planId}.json`))) return { status: 'rejected', reason: 'plan-already-used' };
   const release = await resolve_(body, context);
   if (fingerprint(planId, release) !== body.fingerprint) return { status: 'rejected', reason: 'plan-changed' };
   if (release.terms && body.termsAccepted !== true) return { status: 'rejected', reason: 'terms-acceptance-required' };
   await mkdir(records, { recursive: true });
+  // A download whose process is gone can never finish; its partial file is only reclaimed space. Its record stays as evidence.
+  for (const stale of await allRecords(records)) if (stale.status === 'downloading' && !alive(stale.pid)) await rm(join(downloads, `.${stale.planId}.partial`), { force: true });
   const record: DownloadRecord = { schemaVersion: 1, planId, program: release.program, vendor: release.vendor, fileName: release.fileName, version: release.version,
     versionSource: release.versionSource, source: release.url, officialPage: release.officialPage, size: release.size, checksum: release.checksum, confirmation: { reference: body.reference.trim(), termsAccepted: body.termsAccepted === true },
     status: 'downloading', pid: process.pid, startedAt: new Date().toISOString() };
@@ -337,7 +348,7 @@ export async function executeDownload(input: unknown, context: DownloadContext =
     await rename(partial, join(downloads, release.fileName));
     await saveRecord(records, { ...record, status: 'downloaded', finishedAt: new Date().toISOString(), bytes: result.bytes, sha256: result.sha256 });
     return { status: 'downloaded', planId, program: release.program, fileName: release.fileName, version: release.version, size: result.bytes,
-      checksumVerified: release.checksum !== null, next: remainingSteps(release.program, 'verify') };
+      checksumVerified: release.checksum !== null, next: nextSteps(release.program, 'downloaded') };
   } catch (error) {
     await rm(partial, { force: true }).catch(() => undefined);
     const reason = error instanceof DownloadError ? error.message : 'download-failed';
@@ -421,15 +432,14 @@ export async function installDownload(input: unknown, context: DownloadContext =
   if (Object.keys(body).some(key => !['planId', 'target'].includes(key)) || typeof body.planId !== 'string' || !planPattern.test(body.planId)
     || body.target !== undefined && (typeof body.target !== 'string' || !isAbsolute(body.target) || body.target.length > 32767)) fail('request-invalid');
   const { settings, downloads, records } = await locations(context);
-  const record = await readRecord(join(records, `${body.planId}.json`));
-  if (!record || record.schemaVersion !== 1) return { status: 'rejected', reason: 'download-unknown' };
+  const record = await readRecord(join(records, `${body.planId}.json`), body.planId as string);
+  if (!record) return { status: 'rejected', reason: 'download-unknown' };
   if (!await verifiedFile(downloads, record)) return { status: 'rejected', reason: 'download-not-verified' };
   if (record.program === 'node' || record.program === 'emulator') {
-    return { status: 'user-steps', program: record.program, fileName: record.fileName, steps: remainingSteps(record.program, record.program === 'node' ? 'verify' : 'download') };
+    return { status: 'user-steps', program: record.program, fileName: record.fileName, steps: nextSteps(record.program, 'downloaded') };
   }
-  const after = record.program === 'maa' ? 'extract-maa' : 'extract-adb';
   if (record.install?.status === 'extracted' && record.install.target && await present(record.install.target, record.program)) {
-    return { status: 'already-extracted', program: record.program, steps: remainingSteps(record.program, after) };
+    return { status: 'already-extracted', program: record.program, steps: nextSteps(record.program, 'extracted') };
   }
   if (typeof body.target !== 'string') return { status: 'rejected', reason: 'target-required' };
   const target = resolve(body.target);
@@ -459,5 +469,5 @@ export async function installDownload(input: unknown, context: DownloadContext =
     return { status: 'failed', reason: 'extract-failed', program: record.program };
   }
   await saveRecord(records, { ...record, install: { status: 'extracted', target, at } });
-  return { status: 'extracted', program: record.program, steps: remainingSteps(record.program, after) };
+  return { status: 'extracted', program: record.program, steps: nextSteps(record.program, 'extracted') };
 }
