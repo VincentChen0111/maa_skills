@@ -105,6 +105,27 @@
 - 检查和基础文件只读私有目录里的文件。
 - 新鲜度的判定条件见上节。
 
+## 验收条件与证据
+
+测试文件：P = `tests/base-plan.test.ts`，R = `tests/base-report.test.ts`，S = `tests/base-report-scenarios.test.ts`；引号里是测试名的开头。
+
+| 验收条件 | 证据 |
+| --- | --- |
+| 1 从布局、持有干员和有效技能生成，不带特定用户的布局和人员 | P「generation writes a plan file」「unassigned rooms are filled」「a different layout and roster」；布局和目标由用户说（R「without stated goals」）；样例全是合成数据 |
+| 2 容量、计划数、同计划不重复、键名大小写、生产线；未持有警告 | P「the six base rules」「names are checked」 |
+| 3 数值来自固定版本和核实证据，新增限制登记两张来源表 | 本页 MAA 和游戏数据两节；规格「共享工具」正文和两张表的 22 行 |
+| 4 收益依据、条件、未建模，已核实与推断分开，可执行步骤与成本 | R「a draft writes the plan」（正文各节） |
+| 5 复用 20 的报告与审查；跳过标「未审查」；审查通过仍需批准 | R「review, correction and approval」「a failing gate is named」「the CLI drafts」；一致性测试 R「conformance」 |
+| 6 共享 CLI 和 Markdown，产物在私有目录，account 不写 MAA 配置 | P「the CLI checks a plan file」；R「the CLI drafts」；P 和 S 断言 MAA 目录没有变化 |
+| 7 外部规则记录提交与许可，数据用时获取，样例合成 | 本页「参考项目」；固定表运行时读取，测试只替代网络 |
+| 8 15 项验收门：通过、不通过或未核实并附证据；不通过就不可应用并写明哪一项；未核实单独列出 | P「each of the 15 gates」「a gate that cannot be verified」；R「a failing gate is named」 |
+| 9 每个计划写 `period`，`hh:mm`，跨天两段；重叠时 MAA 的选择写进记录 | P「generation writes」「periods use hh:mm」；本页 MAA 事实一节 |
+| 10 名字用本机 MAA 名表校验，和未持有分开；用哪张表和字段写进记录 | P「names are checked」「a display name shared」；本页 MAA 事实一节 |
+| 11 数据新鲜度三态，判定条件写进记录，旧结果不当证明 | P「freshness is fresh」；R「freshness is fresh」；本页「数据新鲜度」 |
+| 12 只写私有目录，路径越界拒绝，原子替换，保留不认识的字段 | P「the plan file path is confined」 |
+| 验证方式：每项验收门一份通过、一份不通过的样例 | P「each of the 15 gates」（第 13 项的不通过样例在同一测试末尾） |
+| 评测：新功能的场景 | `eval/maa-account/base-report-scenarios.ts` 三个场景、`eval/base-plan-observer.ts`；S 离线运行并评分。没有改 `scripts/eval-*.ts` 和 `scripts/evaluation.ts`（工单 28） |
+
 ## 实际运行的检查（本机，2026-11-13）
 
 - `npm ci --ignore-scripts`：通过。
