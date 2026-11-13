@@ -57,6 +57,17 @@
   - 影响：评分器源码计入场景指纹，daily 场景的指纹随之改变，改动前后的模型比较要用同一份评分器重新跑基线（模型评测本来就未验证）。工单 28 在并行改评测运行器，没有改 `eval-run.ts`、`evaluation.ts`、`eval-fixture.ts`，但 28 合入时 `eval-daily.ts` 可能需要合并。
 - 只读网络（事实核对，不是工具的在线模式）：GitHub 公开接口解析 4 个提交号、查一次发布列表、列两个目录；`raw.githubusercontent.com` 读 67 个文件在两个提交上的内容并就地计算 blob，读 4 个文件做 diff；读 v6.19.0 和开发分支的任务类型；GitHub 文档一页。没有保存 MAA 文件。
 
+## 合并 10 最终版（2026-11-14）
+
+把 10 的最终头 `89185eb` 合进本分支（它带来 main 上的 12、16、17、20、29 和 10 第 4 轮的 `blockingChecks`）。冲突按两边都保留解决；下面只记解决冲突之外的改动。
+
+- 检查结果的用途：分支里所有按检查结果定退出码或挡住与否的地方都经 `blockingChecks`（doctor、setup、`credentials.ts check`、关卡重试核对、doctor 评测场景的期望退出码）；搜索 `skills/`、`scripts/`、`eval/` 后，直接比较 `status === 'error'` 的只剩 `blockingChecks` 本身。25 没有新增检查编号，`version` 的状态仍只有正常和提醒（升级提醒是提醒），所以四种用途的归类不变；规格「10、16 检查结果按用途」一行和「检查与修法」正文补了这句说明。
+- 16 的运行跟踪替身：替身的 MAA 目录里有 MAA.exe，而替身进程没有 `version`，准备批次时写入器的版本标记会退回真实的 MAA.exe 读取器，在 Windows 上启动 PowerShell。替身进程补上 `version`（与检查用的读取器同为 6.21.4）；`tests/stage-run.test.ts` 新加「the prepared batch stamps the MAA version through the fixture boundary …」，补之前失败（读到 null，约 0.4 秒），补之后通过。
+- 依赖注册表：16、17、29 已交付，`tests/maa-version-check.test.ts` 因此失败（17 的来源记录引用的 `AbstractTask.h` 等 10 个文件没有登记，16 还在待登记里）。按本票自己的规则把 16 改为条目 `stage-run-evidence`，新登记 17 的 `copilot-list-stops-on-failure`，29 的位置并入 `copilot-jobs`；核对方法和逐文件结论见[来源记录](maa-version-sources.md)「合并 10 最终版时登记的条目」。注册表现为 17 条条目、75 个文件，待登记剩 22、27；生成的核实记录不变。规格「25 未交付工单」一行同步改了。
+- 只读网络：`raw.githubusercontent.com` 读 34 个文件（29 个在 v6.21.4 和 v6.22.0 两个提交上都读，5 个只读 v6.21.4，用来对照已登记的 v6.22.0 指纹），放在系统临时目录里算 blob、看 diff 和解析 JSON，算完删除，没有放进仓库。
+
+逐个运行的结果（都在合并后的工作区里）：`npm run typecheck` 通过；`check-purposes` 5/5、`maa-version` 5/5、`maa-version-check` 12/12、`doctor` 80/80、`doctor-checks` 27/27、`doctor-scenarios` 19/19、`setup` 29/29、`setup-scenarios` 22/22、`stage-jobs` 8/8、`stage-jobs-matching` 11/11、`stage-jobs-regressions` 11/11、`stage-run` 15/15、`stage-run-rerun-gate` 30/30、`stage-run-alternates` 11/11、`stage-run-flow` 4/4、`stage-run-scenarios` 1/1、`credentials` 6/6、`help-installation` 6/6、`metadata` 2/2、`maa-config` 60/60；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。合并提交本身（调整之前）`maa-version-check` 有 1 项失败，就是上面的注册表一项。没有跑完整离线入口。
+
 ## 设计默认值
 
 带限制的默认值都登记在规格「默认值及其来源」以「25 」开头的各行。只记在这里的实现选择：

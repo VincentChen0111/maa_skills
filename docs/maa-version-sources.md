@@ -31,7 +31,7 @@ v6.21.4 到 v6.22.0 之间，登记文件里有 8 个 blob 变了。属于 v6.21
 | `src/MaaWpfGui/Main/Bootstrapper.cs` | 新增两个 DLL 名、作战日报初始化 | `--skip-startup-auto-run` 的常量和解析未变（`startup-auto-run-skip`） |
 | `src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs` | 删一行 using、关卡提示写法、作战日报窗口、「从此处开始」改为截取队列、任务状态函数改名 | `CheckTimers`、`HandleTimerLogic`、`HandleConfigChange` 和 `HandleScheduledStart` 所在的第 1080–1230 行在未变的范围内（`timer-schedule`） |
 
-其余 4 个变化的文件（`integration.md`、`OperProgressProcessTask.cpp`、`OperProgressTaskUserControlModel.cs`、`tasks.json`）只影响 v6.21.4 是否已核，不改 v6.22.0 的结论；`integration.md` 目前只有 27 的待登记位置用到。
+其余 4 个变化的文件（`integration.md`、`OperProgressProcessTask.cpp`、`OperProgressTaskUserControlModel.cs`、`tasks.json`）只影响 v6.21.4 是否已核，不改 v6.22.0 的结论；`integration.md` 当时只有 27 的待登记位置用到（2026-11-14 起 `copilot-jobs` 也用到，见「合并 10 最终版时登记的条目」）。
 
 [daily 验证](daily-verification.md)里 `Bootstrapper.cs` 的链接少了 `Main/` 这一级目录，在两个版本上都返回 404；固定提交上它实际在 `src/MaaWpfGui/Main/Bootstrapper.cs`。条目用实际路径；05 的历史记录没有改。
 
@@ -46,9 +46,32 @@ v6.21.4、v6.22.0 和当时的开发分支三处列表完全相同。v6.19.0 不
 未交付工单的 MAA 依赖记在注册表的 `pending` 里，各自交付时改为正式条目（`tests/maa-version-check.test.ts` 在工单标为已完成而 `pending` 里还有它时失败）：
 
 - 27：`FightTask.cs` 的碎石和临期药字段及 `OnDeserialized` 对 `UseStone` 的重置、`FightTaskUserControlModel.cs` 的换算、MaaCore `FightTask.cpp` 对 `medicine_expire_days`/`stone` 的处理和 9999 上限、`MedicineCounterTaskPlugin.cpp`、`FightTaskUserControl.xaml` 的天数范围、集成文档。
-- 16：回调协议里 `StageDrops` 的关卡字段和 `UseMedicine` 的 `details.count`、中文界面文案 `zh-cn.xaml` 里的任务出错/完成任务等文案键和 `gui.log` 写法、`asst.bak.log` 轮换、自动战斗的用药开关。v6.22.0 的 `AsstProxy.cs` 新增了一处：商店访问好友失败时任务链仍报完成，界面另写一行「任务出错」加访问好友的文案；16 实现 `gui.log` 判断时要核对这一点。
 - 22：排班协议的 `period` 和计划重叠时的选择、干员名表 `resource/battle_data.json`。
 - 之后生成计划的工单（22 的排班、23 的应用）用 `maa-version.ts` 的 `readVersionStamp`/`compareVersionStamp` 写入和比较版本，与配置写入、作业准备、专精排程相同。
+
+16 原来也在这里（回调协议里 `StageDrops` 和 `UseMedicine` 的字段、`zh-cn.xaml` 的文案键和 `gui.log` 写法、`asst.bak.log` 轮换、自动战斗的用药开关），2026-11-14 合并 10 最终版时 16 已交付，改为下一节的条目。
+
+## 合并 10 最终版时登记的条目（2026-11-14）
+
+10 的最终版带来了已交付的 16、17、29。它们的来源记录在 v6.21.4（`52d0b2a`）上核对，引用了 10 个还没登记的 MAA 文件，16 也还在待登记里。这次登记三处，事实核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob；v6.21.4 的 blob 与 16 来源记录的表一致，29 记录的几个 SHA-256 也一致。
+
+- `stage-run-evidence`（16）：16 来源记录表里的 21 个文件。
+- `copilot-list-stops-on-failure`（17）：17 来源记录引用的 5 个文件，加上「`Copilot@EndOfAction` 之后只接三星两种结果」所在的 `tasks.json`。
+- `copilot-jobs`（15）加上 29：29 引用的 `AsstBattleDef.h`、`TileDef.hpp`、`TilePack.h`、`TilePack.cpp`、`overview.json`、`zh-cn.xaml` 和集成文档 `integration.md`（集成文档同时仍在 27 的待登记里）。29 引用的其他文件已在这一条里，两个版本上 blob 相同。
+
+两个版本之间 blob 变了的文件逐段对比了变化位置，三条依赖的部分都没有变，所以三条的 `sourceVerified` 都是 v6.21.4 和 v6.22.0，指纹取 v6.22.0 的 blob。生成的核实记录不变（仍是源码已核 v6.22.0，记录版本 2）。
+
+| 文件 | 变化位置 | 条目依赖的部分 |
+| --- | --- | --- |
+| `zh-cn.xaml` | 第 417 行后加一行，第 1268–1304、1743、2005、2121、2471 行附近的文案 | 16 引用的第 700、709、973、975、1015、1048、1996 行和 29 引用的第 1018–1021 行都不在变化范围里，键和文字相同，只是行号后移 |
+| `AsstProxy.cs` | 见上文；与 16 有关的是商店访问好友失败时另写一行「任务出错: 」加访问好友的文案 | 16 引用的第 1436–1464、1484、1537、1672–1675、2162–2165 行都不在变化范围里。新增的那一行只在商店任务链里写；16 判断 `gui.log` 错误时只看本批次结束前、下一条任务链开始之前的行，商店任务链要另起一条，它在批次中途出现会按被接管处理；万一被算进来也只会把结果记成未知，不会重放 |
+| `TaskQueueViewModel.cs` | 见上文 | 16 引用的第 954、1168–1193、1234–1248、1604–1630 行不在变化范围里；17 依赖的「定时到点后经 `LinkStart` 只运行当前配置的任务队列」在 v6.22.0 仍是 `LinkStartWithTasks(ConfigFactory.CurrentConfig.TaskQueue.ToArray())`，任务类型表 `TaskTypeList` 两个版本相同，没有自动战斗 |
+| `Bootstrapper.cs` | 见上文 | 16 引用的第 77–81、604–612、625 行（日志路径、`gui.log` 挪走的 4 MiB 门槛、行格式）不在变化范围里 |
+| `ConfigFactory.cs` | 见上文 | 16 引用的第 43、52、56、310–312、324–336 行（`config/gui.new.json`、200 毫秒去抖写盘）不在变化范围里 |
+| `tasks.json` | 见上文 | 解析两个版本：`Copilot@EndOfAction` 的下一步仍只有 `Copilot@StageDrops-Stars-3` 和 `Copilot@StageDrops-Stars-Adverse`，`Copilot@FightMissionFailed` 仍接到 `Copilot@EndOfAction`，`Copilot@WaitUntilEndOfAction` 仍是 50 次后转 `Copilot@EndOfAction` |
+| `TilePack.h`、`TilePack.cpp` | 成员 `has_multi_stages` 改名为 `has_multi_phases`，对应日志文字和一处日志写法 | 29 引用的 `TilePack.h` 第 70–78 行（返回数据顺序里的第一个命中）和 `TilePack.cpp` 第 31–34 行（levelId 取自地图数据）不在变化范围里 |
+| `integration.md` | 第 1750 行一处 | 29 引用的第 1272–1289 行（`support_unit_usage`）不在变化范围里 |
+| `overview.json` | 地图数据从 4334 条增加到 4358 条 | 两个版本里 levelId 和 stageId 全部小写，29「levelId 按小写建索引、区分大小写比较」的依据不变 |
 
 ## 发布与 Action 相关的外部事实
 

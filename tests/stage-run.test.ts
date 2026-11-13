@@ -16,6 +16,12 @@ async function tracked(t: test.TestContext) {
 const run = (batch: PreparedBatch, outcome: Parameters<typeof attempt>[3]) => [...copilotStart(0, { files: batch.files }), ...attempt(10, 0, batch.files[0]!, outcome)];
 const results = (summary: Awaited<ReturnType<typeof observeStageRun>>) => summary.stages.map(stage => [stage.code, stage.result, stage.attempts.map(item => item.result)]);
 
+test('the prepared batch stamps the MAA version through the fixture boundary, never a real MAA.exe reader', async t => {
+  const batch = await preparedBatch(); t.after(() => batch.dispose());
+  const pending = (await readFile(join(batch.privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(pending.at(-1).versions.maaVersion, '6.21.4');
+});
+
 test('normal: links batch, stages and run; three 3-star attempts finish as completed and success', async t => {
   const { batch, runId, observe } = await tracked(t);
   const waiting = await observe();

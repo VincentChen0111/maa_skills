@@ -78,7 +78,8 @@ ${syntheticAdb.address}	${state}
 /**
  * `home` is the settings home (its config.json names the MAA and private directories). The MAA directory is a healthy
  * CN installation: MAA.exe, a CN client and a configured adb that lists the device online. `boundaries` replaces only
- * the system boundaries the shared checks touch: MAA.exe metadata and adb.
+ * the system boundaries the shared checks touch: MAA.exe metadata and adb; `maa.version` is the same MAA.exe metadata
+ * boundary for the configuration writer's version stamp.
  */
 export type PreparedBatch = { root: string; home: string; maaDirectory: string; privateDirectory: string; operation: string; reportHash: string; files: string[];
   state: MaaState; maa: MaaProcess; boundaries: CheckBoundaries; core(lines: string[]): Promise<void>; gui(lines: string[]): Promise<void>; dispose(): Promise<void> };
@@ -100,8 +101,9 @@ export async function preparedBatch(syn1Loops = 2): Promise<PreparedBatch> {
     const request = { ...runRequest, stages: runRequest.stages.map(stage => stage.stageId === 'synthetic_01' ? { ...stage, loops: syn1Loops } : stage) };
     const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, request, runJobs());
     const state: MaaState = { running: false, treeExited: true, idle: true, ready: false };
+    // `version` is the MAA.exe metadata boundary for the writer's version stamp, the same version the shared checks read.
     const maa: MaaProcess = { inspect: async () => ({ ...state }), close: async () => { Object.assign(state, { running: false, treeExited: true, ready: false }); },
-      start: async () => { Object.assign(state, { running: true, treeExited: false, ready: true }); } };
+      start: async () => { Object.assign(state, { running: true, treeExited: false, ready: true }); }, version: async () => '6.21.4' };
     const approval = { reportHash: report.hash, reference: '合成用户批准 SYN-1 两次、SYN-2 一次，备选各一份', map: 'synthetic_map',
       selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: syn1Loops }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }] };
     const result = await prepareStageJobs({ report, approval, snapshot, maaDirectory, privateDirectory, profile: 0, host: 'codex', closedConfirmed: true,
