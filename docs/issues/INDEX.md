@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、09、11、13、14、15、18、20、21、22、24。当前可开始：08、10、12、16、19、23、27、28、29、30。
+当前已完成：01、02、03、04、05、06、07、09、11、13、14、15、18、20、21、22、23、24。当前可开始：08、10、12、16、19、27、28、29、30。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -34,7 +34,7 @@
 | 20 | [带独立审查的培养建议](20-reviewed-cultivation-report.md) | [#22](https://github.com/VincentChen0111/maa_skills/issues/22) | 14、18 | 已完成 |
 | 21 | [基建技能查询](21-base-skill-query.md) | [#23](https://github.com/VincentChen0111/maa_skills/issues/23) | 11 | 已完成 |
 | 22 | [基建建议与排班生成](22-base-report-and-plan.md) | [#24](https://github.com/VincentChen0111/maa_skills/issues/24) | 20、21 | 已完成 |
-| 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 进行中 |
+| 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 已完成 |
 | 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 已完成 |
 | 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 未开始 |
 | 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24、27、28 | 未开始 |
