@@ -150,7 +150,7 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     await save(context.file, plan);
     const result = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
       host: request.host as 'codex' | 'claude', closedConfirmed: request.closedConfirmed as boolean | undefined,
-      expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision, authorization: trainingAuthorization(plan, request, grant), changes: prepared.changes }, maa);
+      expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision, authorization: { ...trainingAuthorization(plan, request, grant) }, changes: prepared.changes }, maa);
     plan.action.operation = result.operation;
     if (result.status === 'complete') {
       if (action.kind === 'start') plan.materialReady = false;
@@ -193,7 +193,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
         cleanup = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
           host: request.host as 'codex' | 'claude', closedConfirmed: request.closedConfirmed as boolean | undefined,
           expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision,
-          authorization: trainingAuthorization(plan, request, grant), changes: prepared.changes }, maa);
+          authorization: { ...trainingAuthorization(plan, request, grant) }, changes: prepared.changes }, maa);
       }
       if (cleanup?.status !== 'complete') { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
     }

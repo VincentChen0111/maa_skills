@@ -173,7 +173,14 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 
 ### 实际运行
 
-（见本节末尾「运行结果」。）
+2026-11-14 在本分支工作区逐个运行（按机器负载约定没有运行完整离线入口 `node scripts/check.ts`，也没有运行 `tests/maa-process.test.ts`，本票没有改它覆盖的文件）：
+
+- `npm run typecheck`：通过。
+- 单个测试文件，全部通过：`consumption-grant` 16 项、`maa-config` 90 项、`doctor` 85 项、`setup-integration` 5 项、`training-integration` 13 项、`training-plan` 8 项、`training-config` 3 项、`evaluation` 9 项、`eval-run` 3 项、`eval-fixture` 7 项、`eval-comparability` 7 项、`eval-batch` 10 项、`daily-evaluation` 5 项、`cross-skill-scenarios` 7 项、`doctor-scenarios` 9 项、`docs-consistency` 3 项、`stage-jobs` 6 项、`stage-jobs-regressions` 11 项、`setup` 28 项、`privacy` 4 项、`metadata` 1 项、`tracker` 1 项。
+- `node scripts/eval-selftest.ts`：`{"ok":true,"rules":7,"samples":25}`。`node scripts/eval-preflight.ts`：退出 0，两个宿主替身的预检运行都是 pass（替身记录，不算模型基线）。`node scripts/privacy.ts`：无发现。`node scripts/tracker.ts`：无错误。`node scripts/training-smoke.ts skills/maa-core`：通过。
+- 专精写入附带临期药批准（`60abad1`）同样先红：新用例在上一提交上失败（缺少附带原话时没有拒绝），本提交通过。
+
+脚本测试两个方向的覆盖：放行在 `tests/maa-config.test.ts` 的「approved stone is written together with its save switch…」「a stone quantity counts every single timer run…」（6 颗的预算通过）「approved expiring medicine stays on a daily-repeating timer…」「medicine, stone and expiring medicine can be approved together…」「closing stone or expiring medicine needs only an ordinary current request…」，以及 `tests/training-integration.test.ts` 的专精与作业计划用例；拒绝在同一文件的「stone and expiring medicine are refused before process access, a lock or a write…」（13 种，每种都断言进程未被访问、没有锁和待执行记录、配置字节不变）、「invalid grants and forbidden fields…」（带齐三种授权时抽卡、特殊礼包、登录仍拒绝）、「enabling a timer cannot activate existing forbidden or unapproved consumption settings」（借已有值启用）。
 
 ### 未验证
 
