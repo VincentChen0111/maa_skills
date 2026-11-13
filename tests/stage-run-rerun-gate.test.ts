@@ -351,3 +351,89 @@ test('a progress statement is refused while a later run of the batch is still tr
   await assert.rejects(recordStageProgress({ privateDirectory: first.paths.privateDirectory, runId: first.runId, reference: '用户：又打完一次', stages: [{ stageId: 'synthetic_01', completedRuns: 2 }] }),
     /run-unresolved/);
 });
+
+/**
+ * Ticket 17 review round 2 (P2, same class as round 1's P1): runs done per stage never go down. A new statement is the
+ * total so far, so it may not be lower than the runs already recorded (the previous statement plus the 3-stars MAA proved
+ * since); only 3-stars in records started after it are added. Dimension: a second statement lower, equal or higher than
+ * the current count, given before or after an intervening proven 3-star. Every consumer: the progress gate, the summary
+ * (both records), the retryOf tick limit and the switch's remaining runs. SYN-1 is approved 3 times; the first statement is 1.
+ */
+type Timing = 'before' | 'after';
+const secondCases: { timing: Timing; level: string; second: number; accepted: boolean; done: number }[] = [
+  { timing: 'before', level: 'lower', second: 0, accepted: false, done: 1 },
+  { timing: 'before', level: 'equal', second: 1, accepted: true, done: 1 },
+  { timing: 'before', level: 'higher', second: 2, accepted: true, done: 2 },
+  { timing: 'after', level: 'lower', second: 1, accepted: false, done: 2 },
+  { timing: 'after', level: 'equal', second: 2, accepted: true, done: 2 },
+  { timing: 'after', level: 'higher', second: 3, accepted: true, done: 3 },
+];
+async function secondStatement(t: test.TestContext, timing: Timing, second: number) {
+  const batch = await preparedBatch(3); t.after(() => batch.dispose());
+  Object.assign(batch.state, { running: true, treeExited: false, idle: true, ready: true });
+  const paths = { maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory }, files = batch.files, t0 = fromNow(-900), t1 = fromNow(-600);
+  const configFile = join(batch.maaDirectory, 'config/gui.new.json');
+  /** Ticks exactly the last `count` SYN-1 entries (indexes 0-2); SYN-2 stays ticked. */
+  const tick = async (count: number) => {
+    const config = JSON.parse(await readFile(configFile, 'utf8'));
+    config.Configurations['Synthetic profile'].Copilot.TaskList.forEach((item: { IsChecked: boolean }, index: number) => { if (index < 3) item.IsChecked = index >= 3 - count; });
+    await writeFile(configFile, JSON.stringify(config));
+  };
+  const first: Context = { batch, paths, runId: (await startStageRun({ ...paths, operation: batch.operation, reference: '开始' })).runId };
+  await batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
+  await observe(first); await verify(first);
+  await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: first.runId, reference: '用户：第一次说明，打完 1 次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  let last = first;
+  if (timing === 'after') {
+    await decideStageRun({ ...paths, runId: first.runId, decision: 'retry-within-approval', reason: '用户说明完成一次' });
+    await tick(2);
+    last = { ...first, runId: (await startStageRun({ ...paths, operation: batch.operation, reference: '重新点开始', retryOf: first.runId })).runId };
+    await batch.core(retag([...copilotStart(t1, { files: files.slice(1) }), ...attempt(t1 + 10, 1, files[1]!, 'three-star'),
+      ...attempt(t1 + 60, 2, files[2]!, 'open', [connection(t1 + 70, 'Disconnect')]), ...chainEnd(t1 + 71, 'TaskChainError')], 2));
+    await observe(last); assert.equal((await verify(last)).next, 'ask-progress');
+  }
+  const outcome = await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: last.runId, reference: `用户：第二次说明，打完 ${second} 次`,
+    stages: [{ stageId: 'synthetic_01', completedRuns: second }] }).then(() => 'accepted', (error: Error) => error.message);
+  return { batch, paths, first, last, outcome, tick, files };
+}
+test('runs done never go down: a second statement lower, equal or higher, before or after a proven 3-star, for every consumer (ticket 17 review 2)', async t => {
+  for (const item of secondCases) {
+    const name = `${item.timing} a proven 3-star, ${item.level} (${item.second})`, stated = item.accepted ? item.second : 1;
+    await t.test(`${name}: progress gate, summary and retry tick limit`, async sub => {
+      const s = await secondStatement(sub, item.timing, item.second);
+      assert.equal(s.outcome, item.accepted ? 'accepted' : 'progress-contradicts-evidence');
+      for (const record of [s.first, s.last]) {
+        const summary = await observe(record);
+        assert.deepEqual([summary.runsDone[0]!.done, summary.runsDone[0]!.statement?.runs], [item.done, stated], `summary of ${record === s.first ? 'the first' : 'the last'} record`);
+      }
+      const retryOf = s.last.runId;
+      const decided = decideStageRun({ ...s.paths, runId: retryOf, decision: 'retry-within-approval', reason: '已核对' });
+      if (item.timing === 'after' && !item.accepted) { await assert.rejects(decided, /decision-not-allowed/, 'the retry run is still unresolved'); return; }
+      await decided;
+      const limit = 3 - item.done;
+      await s.tick(limit + 1);
+      await assert.rejects(startStageRun({ ...s.paths, operation: s.batch.operation, reference: '多勾了一项', retryOf }), /finished-items-ticked/, `limit ${limit}`);
+      await s.tick(limit);
+      assert.equal((await startStageRun({ ...s.paths, operation: s.batch.operation, reference: '勾选正好', retryOf })).retryOf, retryOf);
+    });
+    await t.test(`${name}: switch remaining runs`, async sub => {
+      const s = await secondStatement(sub, item.timing, item.second);
+      let source = s.last, expected = 3 - item.done;
+      if (item.timing === 'before') {
+        await decideStageRun({ ...s.paths, runId: s.first.runId, decision: 'retry-within-approval', reason: '已核对' });
+        const count = 3 - item.done, t2 = fromNow(-300);
+        await s.tick(count);
+        source = { ...s.first, runId: (await startStageRun({ ...s.paths, operation: s.batch.operation, reference: '重新点开始', retryOf: s.first.runId })).runId };
+        const lines = count >= 2 ? [...attempt(t2 + 10, 1, s.files[1]!, 'three-star'), ...attempt(t2 + 60, 2, s.files[2]!, 'failed')] : attempt(t2 + 10, 2, s.files[2]!, 'failed');
+        await s.batch.core(retag([...copilotStart(t2, { files: s.files.slice(3 - count) }), ...lines, ...chainEnd(t2 + 100, 'TaskChainError')], 2));
+        await observe(source);
+        expected = 3 - item.done - (count >= 2 ? 1 : 0);
+      } else await verify(source);
+      const decided = decideStageRun({ ...s.paths, runId: source.runId, decision: 'switch-alternate', reason: '换备选' });
+      if (!item.accepted && item.timing === 'after' || expected < 1) { await assert.rejects(decided, /decision-not-allowed/, `nothing to switch (${expected} left)`); return; }
+      await decided;
+      const switched = await switchStageRun({ ...await switchRequest(source), runId: source.runId }, s.batch.maa);
+      assert.deepEqual(switched.runs[0], { stageId: 'synthetic_01', job: 2, runs: expected });
+    });
+  }
+});

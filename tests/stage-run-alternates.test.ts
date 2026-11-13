@@ -247,3 +247,33 @@ test('runs done add a statement and the 3-star runs proven after it: the alterna
   assert.deepEqual(switched.runs, [{ stageId: 'synthetic_01', job: 2, runs: 1 }, { stageId: 'synthetic_02', job: 4, runs: 1 }], '1 stated + 1 proven after it = 2 of 3 done');
   assert.deepEqual(await listed(c), [[2, 0], [4, 1]]);
 });
+
+/**
+ * Review round 2 (P2): a second statement is the total so far. SYN-1 is approved 3 times: run 1 ends unknown in battle
+ * and the user states 1; the retry clears SYN-1 once (proven) and then ends unknown in battle again. Runs done are now 2,
+ * so a second statement of 1 (only the latest battle) is refused, and the summary shows what is already recorded.
+ */
+test('a second statement below the runs already recorded is refused; the summary shows the count and the statement it rests on', async t => {
+  const c = await tracked(t, 3), files = c.batch.files, t0 = fromNow(-900), t1 = fromNow(-300);
+  await c.batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
+  await observe(c); await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa);
+  await recordStageProgress({ ...c.paths, runId: c.runId, reference: '合成用户：断连那一把打完了', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户说明完成一次' });
+  const file = join(c.batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
+  config.Configurations['Synthetic profile'].Copilot.TaskList[0].IsChecked = false;
+  await writeFile(file, JSON.stringify(config));
+  const retry = await startStageRun({ ...c.paths, operation: c.batch.operation, reference: '重新点开始', retryOf: c.runId });
+  await c.batch.core(retag([...copilotStart(t1, { files: files.slice(1) }), ...attempt(t1 + 10, 1, files[1]!, 'three-star'),
+    ...attempt(t1 + 60, 2, files[2]!, 'open', [connection(t1 + 70, 'Disconnect')]), ...chainEnd(t1 + 71, 'TaskChainError')], 2));
+  await observe(c, retry.runId);
+  const asked = await verifyStageRun({ ...c.paths, runId: retry.runId }, c.batch.maa);
+  assert.equal(asked.next, 'ask-progress');
+  assert.deepEqual(asked.runsDone[0], { stageId: 'synthetic_01', done: 2, statement: { runs: 1, quote: '合成用户：断连那一把打完了' }, provenSince: 1 }, 'the earlier statement is visible from the retry run');
+  await assert.rejects(recordStageProgress({ ...c.paths, runId: retry.runId, reference: '合成用户：断连那次打完了，1 次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] }),
+    /progress-contradicts-evidence/);
+  const stated = await recordStageProgress({ ...c.paths, runId: retry.runId, reference: '合成用户：一共打完 2 次，断连那次没打完', stages: [{ stageId: 'synthetic_01', completedRuns: 2 }] });
+  assert.deepEqual(stated.runsDone[0], { stageId: 'synthetic_01', done: 2, statement: { runs: 2, quote: '合成用户：一共打完 2 次，断连那次没打完' }, provenSince: 0 });
+  await decideStageRun({ ...c.paths, runId: retry.runId, decision: 'switch-alternate', reason: '断连已核对，换备选' });
+  const switched = await switchStageRun(await switchRequest(c, retry.runId), c.batch.maa);
+  assert.deepEqual(switched.runs[0], { stageId: 'synthetic_01', job: 2, runs: 1 });
+});

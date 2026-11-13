@@ -453,29 +453,33 @@ const latestChainOwner = (batch: BatchView) => {
   return last ? batch.records.find(record => record.state.chain && sameChain(record.state.chain, last)) : undefined;
 };
 /**
- * The one count of runs per stage. `proven` (callback-proven settled runs, failures included) is only the floor a progress
- * statement may not undercut. `done` is what every re-run consumer subtracts from the approved runs (the retry start's
- * ticked entries, the alternate switch's runs): the latest statement covers the batch up to when it was made, so the
- * 3-star runs proven in runs started after it are added; it is never fewer than the batch's proven 3-star runs. A failed
- * or non-3-star run is not done: a switch's alternate makes it up, and a record with one is never retried.
+ * The one count of runs per stage, and its only owner. `done` is what every re-run consumer subtracts from the approved
+ * runs (the retry start's ticked entries, the alternate switch's runs) and what a summary shows: a user statement is the
+ * total done in the batch so far, so the latest one counts, plus the 3-star runs proven in records started after it (a
+ * statement is taken only while no record is tracking, so every earlier record is in it); it is never fewer than the
+ * batch's proven 3-star runs. `floor` is the least a new statement may say: the callback-proven settled runs (failures
+ * included) and the current `done`, so a later statement never lowers it. A failed or non-3-star run is not done: a
+ * switch's alternate makes it up, and a record with one is never retried.
  */
 const stageRuns = (batch: BatchView) => {
-  const proven = new Map<string, number>(), stated = new Map<string, { at: string; runs: number }>();
+  const proven = new Map<string, number>(), stated = new Map<string, { at: string; runs: number; quote: string }>();
   const succeeded = batch.records.map(record => {
     const assessment = assessRun(record);
     for (const stageId of assessment.settled) proven.set(stageId, (proven.get(stageId) ?? 0) + 1);
     for (const statement of record.state.progress) for (const stage of statement.stages) {
-      if ((stated.get(stage.stageId)?.at ?? '') <= statement.at) stated.set(stage.stageId, { at: statement.at, runs: stage.completedRuns });
+      if ((stated.get(stage.stageId)?.at ?? '') <= statement.at) stated.set(stage.stageId, { at: statement.at, runs: stage.completedRuns, quote: statement.quote });
     }
     return { createdAt: record.createdAt, stages: assessment.succeeded };
   });
   const successes = (stageId: string, after?: string) => succeeded.filter(record => after === undefined || record.createdAt > after)
     .reduce((total, record) => total + record.stages.filter(id => id === stageId).length, 0);
-  return { proven: (stageId: string) => proven.get(stageId) ?? 0,
-    done: (stageId: string) => {
-      const statement = stated.get(stageId);
-      return Math.max(successes(stageId), statement ? statement.runs + successes(stageId, statement.at) : 0);
-    } };
+  const count = (stageId: string) => {
+    const statement = stated.get(stageId), since = successes(stageId, statement?.at);
+    return { stageId, done: Math.max(successes(stageId), statement ? statement.runs + since : 0),
+      statement: statement ? { runs: statement.runs, quote: statement.quote } : null, provenSince: since };
+  };
+  return { count, done: (stageId: string) => count(stageId).done,
+    floor: (stageId: string) => Math.max(proven.get(stageId) ?? 0, count(stageId).done) };
 };
 
 /**
@@ -517,14 +521,13 @@ export function switchTarget(view: RunView, batch: BatchView): SwitchTarget | { 
  * - retry or alternate: the record's own evidence allows it, nothing in the batch is unresolved (untracked or
  *   unattributed chains, log gaps, records that are still tracking, hard blocks, battles with unknown outcome and no user
  *   statement), and the record owns the batch's latest chain;
- * - a progress statement never undercuts what callbacks prove, and is taken only while no run of the batch is tracking
- *   (it then covers every run started before it; see `stageRuns`);
+ * - a progress statement is the total so far: never fewer than what callbacks prove nor than the runs already recorded
+ *   (`stageRuns` floor), and taken only while no run of the batch is tracking (it then covers every run started before it);
  * - the first start of a batch: nothing since the preparation submitted or loaded the batch's approved job files, and
  *   the logs reach back to the preparation;
  * - start without `retryOf`: no record is tracking and no Copilot chain, callback or gap is in the batch's logs;
  * - start with `retryOf`: the recorded retry decision still passes, no chain started since (one chain per decision), and
- *   the GUI list has no more ticked entries per stage than approved minus `done` (the latest statement plus the 3-star
- *   runs proven after it, never fewer than the batch's proven 3-star runs);
+ *   the GUI list has no more ticked entries per stage than approved minus `done` (see `stageRuns`);
  * - alternate (ticket 17): additionally, the stage whose last attempt did not succeed has a next approved candidate and
  *   runs left, and no switch from this batch was requested yet unless the writer refused it before writing (one switch
  *   per batch; any other switch state means MAA's list was or may have been replaced, so only stopping remains);
@@ -547,8 +550,8 @@ export function rerunGate(batch: BatchView, request: RerunRequest): GateResult {
     if (request.kind === 'progress') {
       if (!assessment.ended) return deny('run-tracking');
       if (batch.records.some(record => !assessRun(record).ended)) return deny('run-unresolved');
-      const { proven } = stageRuns(batch);
-      return request.stages.some(stage => stage.completedRuns < proven(stage.stageId)) ? deny('progress-contradicts-evidence') : allow('progress');
+      const { floor } = stageRuns(batch);
+      return request.stages.some(stage => stage.completedRuns < floor(stage.stageId)) ? deny('progress-contradicts-evidence') : allow('progress');
     }
     const verdict = judge(assessment, request.decision);
     if (!verdict.allowed || request.decision === 'stop-and-tell-user') return verdict;
@@ -604,6 +607,8 @@ export function deriveRun(view: RunView, batch: BatchView | null) {
     : allowedDecisions.some(decision => decision !== 'stop-and-tell-user') && !view.decisions.some(item => !latestInput || item.at >= latestInput) ? 'decide' : 'report';
   return { execution: assessment.execution, executionReason: assessment.reason, stages: assessment.stageResults, medicine: assessment.medicine, allowedDecisions, next,
     alternates: stageCandidates(view), switch: own,
+    /** Per stage, across the batch: the runs already recorded as done and the statement they rest on, plus 3-stars proven since. */
+    runsDone: view.stages.map(stage => stageRuns(context).count(stage.stageId)),
     unresolvedAttempts: assessment.unresolved, progress: state.progress, rerunHold: otherHold,
     gui: { verdict: assessment.verdict, errors: assessment.guiErrors.map(marker => marker.marker) },
     evidence: { complete: !state.gaps.length && !state.takeover, gaps: state.gaps.map(gap => ({ log: gap.log, reason: gap.reason })), rotated: state.rotated },
