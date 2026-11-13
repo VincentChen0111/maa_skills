@@ -334,4 +334,8 @@ test('the same synthetic account through MAA and Skland is readable by the same 
   const after = await allFiles(f.privateDirectory);
   for (const [path, bytes] of before) if (!path.includes('scenario-')) assert.deepEqual(after.get(path), bytes, 'compare writes nothing');
   assert.equal(JSON.parse(await readFile(result.traceFile, 'utf8')).length, 0, 'compare makes no network request');
+  await rm(join(f.privateDirectory, 'account-snapshot-skland.json'));
+  const missing = runCli(f, 'compare', {});
+  assert.equal(missing.code, 1);
+  assert.deepEqual(JSON.parse(missing.stderr), { ok: false, saved: false, error: 'snapshot-missing', missing: ['skland'] });
 });

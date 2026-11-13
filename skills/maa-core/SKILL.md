@@ -17,6 +17,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |
 | `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
+| `scripts/skland-account.ts` | 用用户已保存的森空岛 token 只读读取账号数据，保存森空岛快照，对比 MAA 与森空岛两份快照 | [森空岛接口](../maa-account/references/skland.md) |
 | `scripts/operator-cost.ts` | 按快照和明确目标只读查询单干员逐级培养成本 | [成本接口](../maa-account/references/cost.md) |
 | `scripts/cultivation-gaps.ts` | 多目标共用库存，比较加工、材料券及券换投入后加工的缺口，只给建议 | [缺口接口](../maa-account/references/gaps.md) |
 | `scripts/base-query.ts` | 只读查询已持有干员基建技能、解锁条件和交叉核对差异 | [基建查询接口](references/base-query.md) |

@@ -426,11 +426,19 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const settings = await readSettings();
     const { language } = startup(settings, input.currentLanguage ?? 'zh-CN');
     if (action === 'compare') {
-      const load = async (path: string) => JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown;
-      const comparison = compareAccountSnapshots(await load(resolve(input.maaFile ?? join(settings.privateDirectory, snapshotFiles.maa))),
-        await load(resolve(input.sklandFile ?? join(settings.privateDirectory, snapshotFiles.skland))));
-      const summary = formatComparison(comparison, language);
-      if (input.format === 'markdown') process.stdout.write(summary); else console.log(JSON.stringify({ ok: true, comparison, summary }));
+      const load = async (source: 'maa' | 'skland', path: string) => {
+        try { return JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: source }; throw error; }
+      };
+      const sides = [await load('maa', resolve(input.maaFile ?? join(settings.privateDirectory, snapshotFiles.maa))),
+        await load('skland', resolve(input.sklandFile ?? join(settings.privateDirectory, snapshotFiles.skland)))];
+      const missing = sides.flatMap(side => isObject(side) && typeof side.missing === 'string' ? [side.missing] : []);
+      if (missing.length) fail({ error: 'snapshot-missing', missing });
+      else {
+        const comparison = compareAccountSnapshots(sides[0], sides[1]);
+        const summary = formatComparison(comparison, language);
+        if (input.format === 'markdown') process.stdout.write(summary); else console.log(JSON.stringify({ ok: true, comparison, summary }));
+      }
     } else {
       const result = await readSklandAccount({ privateDirectory: settings.privateDirectory });
       if (result.status !== 'ok') fail({ error: result.status, credential: result.credential, repair: repairs[result.status], summary: formatSklandFailure(result.status, language) });
