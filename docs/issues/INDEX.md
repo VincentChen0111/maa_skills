@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、11、13、14、15、21、24。当前可开始：08、09、16、27、28、29、30。
+当前已完成：01、02、03、04、05、06、07、09、11、13、14、15、21、24。当前可开始：08、10、12、16、18、19、27、28、29、30。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -20,7 +20,7 @@
 | 06 | [doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md) | [#8](https://github.com/VincentChen0111/maa_skills/issues/8) | 05 | 已完成 |
 | 07 | [setup 接入现有环境](07-setup-existing-environment.md) | [#9](https://github.com/VincentChen0111/maa_skills/issues/9) | 06 | 已完成 |
 | 08 | [setup 下载并补齐环境](08-setup-program-downloads.md) | [#10](https://github.com/VincentChen0111/maa_skills/issues/10) | 07 | 未开始 |
-| 09 | [用户手动设置凭据](09-manual-credentials.md) | [#11](https://github.com/VincentChen0111/maa_skills/issues/11) | 07 | 进行中 |
+| 09 | [用户手动设置凭据](09-manual-credentials.md) | [#11](https://github.com/VincentChen0111/maa_skills/issues/11) | 07 | 已完成 |
 | 10 | [doctor 完整检查与转介](10-doctor-checks-referral.md) | [#12](https://github.com/VincentChen0111/maa_skills/issues/12) | 09 | 未开始 |
 | 11 | [MAA 识别结果转账号快照](11-maa-account-snapshot.md) | [#13](https://github.com/VincentChen0111/maa_skills/issues/13) | 04 | 已完成 |
 | 12 | [森空岛账号快照](12-skland-account-snapshot.md) | [#14](https://github.com/VincentChen0111/maa_skills/issues/14) | 09、11 | 未开始 |
