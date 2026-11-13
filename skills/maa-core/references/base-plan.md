@@ -53,4 +53,4 @@
 
 ## 导出函数
 
-`generateBasePlan`、`checkPlanText`、`exportMaaPlan`、`parsePlanSpec`、`writePlanFile`、`readPrivateFile`、`planFreshness`、`snapshotFingerprint`、`formatPlanMarkdown` 是同一实现的接缝；maa-daily（工单 23）应用前用 `checkPlanText` 和 `planFreshness` 重新检查。
+`generateBasePlan`、`checkPlanText`、`exportMaaPlan`、`parsePlanSpec`、`writePlanFile`、`readPrivateFile`、`planFreshness`、`snapshotFingerprint`、`formatPlanMarkdown` 是同一实现的接缝；maa-daily 应用前经 `base-report.ts` 的 `baseApplyRecheck` 用同一个 `checkPlanText` 和 `planFreshness` 重新检查，见 [基建排班应用](../../maa-daily/references/base-apply.md)。
