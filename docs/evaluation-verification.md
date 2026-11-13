@@ -58,3 +58,14 @@
 工单 28 实现时定的设计默认值登记在规格「默认值及其来源」：批内认证失败与网络不通同样中止整批、默认登录目录位置与拒绝规则、读保护检查的命令模式 `node *`、替身记录不进比较、默认模型 id、单配置事务与生成文件的评分约定。另有两条只影响评测运行器、不改变产品限制的实现选择：读保护检查和每次续跑都重新做认证预检；Codex 每次调用都显式选 `cli_auth_credentials_store="file"` 与 MXC 沙箱，让登录留在专用目录、拒绝读取的配置能被沙箱执行。
 
 ## 本次运行的命令
+
+在提交 `9efdf75` 上（Windows，Node 24）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node scripts/check.ts`（完整离线入口） | 通过：422 个测试中 421 通过、0 失败、1 跳过（原有的非 Windows 专用用例）；评分规则自检 7 条规则 14 份记录通过；环境预检通过（替身记录，`double: true`、`baseline: false`）；tracker、隐私、元数据无错误 |
+| `node --test tests/eval-host-double.test.ts tests/eval-auth.test.ts tests/eval-batch.test.ts tests/docs-consistency.test.ts tests/cross-skill-scenarios.test.ts tests/doctor-scenarios.test.ts tests/setup-scenarios.test.ts tests/stage-scenarios.test.ts` | 单独运行均通过 |
+| 文档一致性测试的变异核对 | 临时把一处示例 JSON 的键、一处动作名和一处 `stages` 输入改错，测试按文件和行报出三处不一致；改回后通过 |
+
+CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。
