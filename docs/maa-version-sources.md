@@ -46,7 +46,7 @@ v6.21.4、v6.22.0 和当时的开发分支三处列表完全相同。v6.19.0 不
 未交付工单的 MAA 依赖记在注册表的 `pending` 里，各自交付时改为正式条目（`tests/maa-version-check.test.ts` 在工单标为已完成而 `pending` 里还有它时失败）：
 
 - 27：`FightTask.cs` 的碎石和临期药字段及 `OnDeserialized` 对 `UseStone` 的重置、`FightTaskUserControlModel.cs` 的换算、MaaCore `FightTask.cpp` 对 `medicine_expire_days`/`stone` 的处理和 9999 上限、`MedicineCounterTaskPlugin.cpp`、`FightTaskUserControl.xaml` 的天数范围、集成文档。
-- 之后生成计划的工单（22 的排班、23 的应用）用 `maa-version.ts` 的 `readVersionStamp`/`compareVersionStamp` 写入和比较版本，与配置写入、作业准备、专精排程相同。22、23 交付后的实际情况见[验证记录](maa-version-verification.md)「合并 22、23」。
+- 之后生成计划的工单（22 的排班、23 的应用）用 `maa-version.ts` 的 `readVersionStamp`/`compareVersionStamp` 写入和比较版本，与配置写入、作业准备、专精排程相同。22、23 交付后的实际情况见[验证记录](maa-version-verification.md)「合并 22、23」；22 的报告写版本、23 应用时报告差异在 2026-11-14 补上，见同一记录「补上基建报告的版本标记」。
 
 16 原来也在这里（回调协议里 `StageDrops` 和 `UseMedicine` 的字段、`zh-cn.xaml` 的文案键和 `gui.log` 写法、`asst.bak.log` 轮换、自动战斗的用药开关），2026-11-14 合并 10 最终版时 16 已交付，改为下一节的条目。22 原来也在这里（排班协议的 `period` 和计划重叠时的选择、干员名表 `resource/battle_data.json`），2026-11-14 合并 22、23 时 22 已交付，改为「合并 22、23 时登记的条目」一节的条目。现在待登记只剩 27。
 
@@ -74,7 +74,7 @@ v6.21.4、v6.22.0 和当时的开发分支三处列表完全相同。v6.19.0 不
 
 ## 合并 22、23 时登记的条目（2026-11-14）
 
-main 带来了已交付的 22（基建建议与排班生成）和 23（执行已批准的基建排班）。它们的 MAA 事实记在 [22 的验证记录](base-plan-verification.md)和 [23 的验证记录](base-apply-verification.md)的「MAA 事实」表里，都在 v6.21.4（`52d0b2a`）上核对，链接到固定提交。这两页不是 `*-sources.md`，注册表覆盖测试不扫描它们，所以这次逐行对照两张表登记；另用覆盖测试的同一个匹配式扫了 `docs/` 下全部页面，除上文说明过的 `Bootstrapper.cs` 旧链接外，没有既未登记、也不在待登记里的位置。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取 17 个文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob；两张表里 16 个文件的 v6.21.4 blob 逐一一致。
+main 带来了已交付的 22（基建建议与排班生成）和 23（执行已批准的基建排班）。它们的 MAA 事实记在 [22 的验证记录](base-plan-verification.md)和 [23 的验证记录](base-apply-verification.md)的「MAA 事实」表里，都在 v6.21.4（`52d0b2a`）上核对，链接到固定提交。这两页不是 `*-sources.md`，注册表覆盖测试当时不扫描它们（2026-11-14 起扫描 `docs/` 下全部页面，见[验证记录](maa-version-verification.md)「补上基建报告的版本标记」），所以这次逐行对照两张表登记；另用覆盖测试的同一个匹配式扫了 `docs/` 下全部页面，除上文说明过的 `Bootstrapper.cs` 旧链接外，没有既未登记、也不在待登记里的位置。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取 17 个文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob；两张表里 16 个文件的 v6.21.4 blob 逐一一致。
 
 - `base-plan-schedule`（22）：22 表里的 8 个文件，排班协议 `base-scheduling-schema.md`、MaaCore 的 `InfrastTask.cpp`、`InfrastProductionTask.cpp`、`InfrastAbstractTask.cpp`、`BattleDataConfig.cpp`、名表 `resource/battle_data.json`、图形界面的 `CustomInfrastConfig.cs` 和 `InfrastTaskUserControlModel.cs`。待登记里 22 的两个位置都在这一条里。skill 是 maa-core（排班工具）和 maa-account（基建报告）。
 - `base-plan-apply`（23）：23 表里的 10 个文件，`InfrastTask.cs`、`JsonPredictAttribute.cs`、`JsonPredictSerializationModifier.cs`、`ConfigFactory.cs`、`TolerantEnumConverter.cs`、`InfrastTaskUserControlModel.cs`、`AsstInfrastTask.cs`、`InfrastRoomType.cs`、`AsstInfrastDef.h`、`InfrastTask.cpp`，再加 23 没有引用的 `src/MaaWpfGui/Configuration/Converter/TolerantEnumConverterFactory.cs`。23 读周计划 `WeeklySchedule`（`Dictionary<DayOfWeek, bool>`）时名字和数字的键都认，键在配置里怎么写由这个转换器决定：v6.21.4 上它第 29 行对所有枚举类型生效（`typeToConvert.IsEnum`），`TolerantEnumConverter.cs` 第 80–83 行把字典键写成枚举名字，第 74–77 行和第 85–93 行读键时经 `Enum.TryParse`（不分大小写，名字或数字）解析，只接受定义过的值。所以 23 记为推断的「按 `DayOfWeek` 名字保存」在源码上成立；仍没有拿真实 MAA 写出的配置核对。skill 是 maa-core 和 maa-daily。

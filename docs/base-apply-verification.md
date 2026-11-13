@@ -4,7 +4,7 @@
 
 ## MAA 事实（固定 v6.21.4，提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`）
 
-指纹是该文件在这个提交里的 Git blob SHA。这一节的条目要登记进 [25](issues/25-maa-version-verification.md) 的依赖清单（25 在别的分支，合并时由协调者补上）。
+指纹是该文件在这个提交里的 Git blob SHA。这一节的条目要登记进 [25](issues/25-maa-version-verification.md) 的依赖清单；2026-11-14 合并时已由 25 登记为条目 `base-plan-apply`（`timer-schedule` 的工单加上 23），见 [25 的验证记录](maa-version-verification.md)「合并 22、23」。
 
 | 采用的事实 | 文件与行 | blob |
 | --- | --- | --- |
@@ -52,6 +52,7 @@
 - 新增 `skills/maa-core/scripts/base-config.ts`（改动推导、副本）和 `skills/maa-core/scripts/base-apply.ts`（`check`、`apply` 命令）。
 - 2026-11-14 `maa-config.ts` 又改了四处，只对带 `basePlan` 的请求生效：改动列表可以为空（推导出的也为空、副本不在时）；这时不写 `gui.new.json`；副本已在时拒绝空事务（`plan-already-applied`）；空改动列表不再被当成「只改连接」（原来 `every` 对空列表为真，会记成 maa-setup）。
 - 2026-11-14 `eval/network-fixture.mjs`：评测网络夹具另外替代 22 的 `base-plan.ts generate`、`check`、`candidates` 和 `base-report.ts draft`、`freshness`（不给 `tablesFile` 时读固定公开表的入口），保留 13、14、20 的入口。原来 22 的 `tests/base-report-scenarios.test.ts` 在评测夹具里起草报告时读的是公开 GitHub 上的固定表。规格「成本与缺口评测网络夹具」两行和 [评测说明](evaluation.md) 已补充。
+- 2026-11-14 工单 25 补上版本差异（[25 的验证记录](maa-version-verification.md)「补上基建报告的版本标记」）：22 的报告保存时写下 MAA 版本和核实记录版本（`versions`），`check` 和 `apply` 的结果多一个 `versions`，比较批准的报告里记下的版本和现在读到的，状态与作业准备、专精相同（same、changed、unknown、unrecorded），引用找不到报告时为 null；它不是拒绝原因。`check` 经 MAA.exe 元数据读取（可替换的 `versionReader`），`apply` 经 MAA 进程边界的 `version()` 读取，命令行的 `apply` 现在把 `version()` 传给进程边界，和作业准备、配置写入的命令行一致。`maa-config.ts` 的 `versionStampOf` 接受没设的 MAA 目录（版本记为 null）。测试：A「check and apply report the version difference」。
 
 ## 验收条件与证据
 
@@ -141,4 +142,5 @@
 - 2026-11-14 改了 agent 读的文字：`skills/maa-daily/SKILL.md`、`skills/maa-daily/references/base-apply.md`、`skills/maa-help/SKILL.md`，新增两个 daily 场景。真模型前后评测和新场景都没有运行（原因同第一条），交工单 26。
 - `WeeklySchedule` 在真实配置里按 `DayOfWeek` 名字保存是按 v6.21.4 源码里的字典类型推断的（System.Text.Json 对枚举字典键的默认写法），没有拿真实 MAA 写出的配置核对；数字键也认。
 - `maa-help` 里「准备指定关卡作业或专精排程」一行仍写「后续能力」；15、24 已完成，这一行不属于 22、23，本次没有改。
+- 2026-11-14 工单 25 给 `skills/maa-daily/references/base-apply.md` 加了第 8 步（报告 `versions`）；真模型前后评测没有运行（原因同第一条），交工单 26。
 - 本票不处理 22 遗留的两项（23:59 那一分钟的改法文字、报告里的运行次数），见 GitHub Issue #56。
