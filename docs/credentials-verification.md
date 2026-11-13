@@ -51,7 +51,7 @@
 | MAA-PRTS 用 DPAPI 按本机当前用户保存 token | [MAA-PRTS README](https://github.com/OriginiumLab/MAA-PRTS) | 已读 README；未读源码 |
 | 森空岛鉴权链与刷新的思路 | nonebot-plugin-skland 固定提交的 `api/login.py`、`api/request.py` | 已读；未实际调用 |
 | B 站读取常用名为 SESSDATA 的 Cookie | [bilibili-API-collect 讨论 #1013](https://github.com/SocialSisterYi/bilibili-API-collect/discussions/1013) 等第三方资料 | 未经本仓库实测；工单 19 核对 |
-| NGA 登录所需 Cookie 名称 | 未找到可核实的公开说明 | 未验证；因此收整条 Cookie 请求头，工单 18 核对实际需要后调整 |
+| NGA 登录所需 Cookie 名称 | 未找到可核实的公开说明 | 未验证；因此收整条 Cookie 请求头，工单 18 核对实际需要后调整。18 补充（2026-11-13）：公开工具只用 `ngaPassportUid`、`ngaPassportCid`，真实站点需要哪些项仍未验证，输入格式不变，读取器原样发送整条请求头，见 [NGA 来源核对](nga-sources.md) |
 
 ## 测试与运行记录
 
