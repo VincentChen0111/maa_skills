@@ -120,22 +120,75 @@ test('Markdown keeps citation fields, marks unknowns honestly and renders post t
   }
 });
 
-test('Markdown leaves no autolink in fetched text: bare www domains, e-mail addresses and any scheme are defanged', () => {
-  const linky = result({ sourceLabel: 'NGA www.label.example' });
-  Object.assign(linky.items[0]!, { title: 'www.title-link.example', author: 'author@mail.example',
-    excerpt: '看 WWW.Upper.example 或 someone+tag@example.com，mailto:someone@example.com，ftp://files.example/x，xmpp:bot@chat.example' });
-  linky.pages[0]!.target = 'www.target.example';
-  for (const language of ['zh', 'en'] as const) {
-    const markdown = formatResearchMarkdown(linky, language);
-    const fetched = markdown.split('\n').filter((line) => !/^- (来源|Source)[：:]/.test(line));
-    for (const line of fetched) {
-      assert.doesNotMatch(line, /\bwww\.[a-z0-9]/i, line);
-      assert.doesNotMatch(line, /[A-Za-z0-9._+-]@[A-Za-z0-9_-]+\./, line);
-      assert.doesNotMatch(line, /[a-z][a-z0-9+.-]*:\/\//i, line);
-    }
-    assert.match(markdown, /title-link/, 'the text itself is kept, only made inert');
-    assert.match(markdown, /https:\/\/bbs\.nga\.cn\/read\.php\?tid=7&page=1/, 'the tool-built source link stays usable');
+// Conformance for the single owner of Markdown inertness: every link or autolink trigger that GFM knows,
+// after every kind of preceding character, in every text field that reaches the Markdown.
+const linkTriggers: Record<string, string> = {
+  'www': 'www.evil.example/x', 'www-upper': 'WWW.Evil.example', 'http': 'http://evil.example/x', 'https': 'https://evil.example/x',
+  'ftp': 'ftp://evil.example/x', 'other-scheme': 'javascript://evil.example', 'email': 'someone+tag@evil.example',
+  'mailto': 'mailto:someone@evil.example', 'xmpp': 'xmpp:bot@evil.example/res', 'angle-url': '<https://evil.example>',
+  'angle-mail': '<someone@evil.example>', 'link': '[click](https://evil.example)', 'image': '![img](https://evil.example/i.png)',
+  'reference': '[click][ref]\n[ref]: https://evil.example', 'html': '<a href="https://evil.example">x</a>',
+  'entity-scheme': '&#104;ttps://evil.example', 'entity-www': '&#119;ww.evil.example', 'entity-named': '&lt;b&gt;x&lt;/b&gt;',
+};
+const precedingCharacters: Record<string, string> = { start: '', space: ' ', underscore: '_', star: '*', tilde: '~', paren: '(', cjk: '看', letter: 'a', digit: '7' };
+const textFields: Record<string, (value: ResearchResult, text: string) => void> = {
+  'source name': (value, text) => { value.sourceLabel = text; },
+  'page label': (value, text) => { value.pages[0]!.target = text; },
+  'page read time': (value, text) => { value.pages[0]!.readAt = text; },
+  'stopped until': (value, text) => { value.stoppedUntil = text; },
+  'generated at': (value, text) => { value.generatedAt = text; },
+  'result reliability': (value, text) => { value.reliability.level = text; },
+  'result limitation': (value, text) => { value.limitations = [text]; },
+  'title': (value, text) => { value.items[0]!.title = text; },
+  'author': (value, text) => { value.items[0]!.author = text; },
+  'location': (value, text) => { value.items[0]!.location = { label: 'floor', value: text }; },
+  'published': (value, text) => { value.items[0]!.publishedAt = text; },
+  'item read time': (value, text) => { value.items[0]!.readAt = text; },
+  'item reliability': (value, text) => { value.items[0]!.reliability = text; },
+  'item limitation': (value, text) => { value.items[0]!.limitations = [text]; },
+  'excerpt': (value, text) => { value.items[0]!.excerpt = text; },
+};
+const sourceLink = 'https://bbs.nga.cn/read.php?tid=7&page=1';
+/** Live triggers left in rendered Markdown once the tool's own source link is set aside. Backslash escapes are honoured. */
+function liveTriggers(markdown: string): string[] {
+  const found: string[] = [];
+  const text = markdown.split(sourceLink).join(' ');
+  if (/www\./i.test(text)) found.push('www.');
+  if (text.includes('://')) found.push('://');
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === '\\') { index += 1; continue; }
+    if ('[]<&'.includes(char)) found.push(char);
+    if (char === '@' && !(text.slice(index - 2, index) === '\\[' && text.slice(index + 1, index + 3) === '\\]')) found.push('@');
   }
+  return found;
+}
+
+test('conformance: no link or autolink can form from any fetched text field, whatever precedes it; the source link stays clickable', () => {
+  const failures: string[] = [];
+  for (const [field, assign] of Object.entries(textFields)) for (const [trigger, sample] of Object.entries(linkTriggers)) {
+    for (const [before, prefix] of Object.entries(precedingCharacters)) {
+      const value = result();
+      assign(value, `${prefix}${sample}`);
+      for (const language of ['zh', 'en'] as const) {
+        const markdown = formatResearchMarkdown(value, language);
+        const live = liveTriggers(markdown);
+        if (live.length) failures.push(`${field} / ${trigger} / ${before} / ${language}: ${[...new Set(live)].join(' ')}`);
+        const head = `- ${language === 'zh' ? '来源：' : 'Source: '}${sourceLink}`;
+        const line = markdown.split('\n').find((candidate) => candidate.startsWith(head));
+        if (!line || !/^( |$)/.test(line.slice(head.length))) failures.push(`${field} / ${trigger} / ${before} / ${language}: source link altered`);
+      }
+    }
+  }
+  const tally = (part: number) => {
+    const counts = new Map<string, number>();
+    for (const entry of failures) { const key = entry.split(' / ')[part]!; counts.set(key, (counts.get(key) ?? 0) + 1); }
+    return [...counts].map(([key, count]) => `${key} ${count}`).join(', ');
+  };
+  assert.deepEqual(failures.slice(0, 20), [], `${failures.length} failing combinations; by field: ${tally(0)}; by trigger: ${tally(1)}; by preceding: ${tally(2)}`);
+  const evil = result();
+  evil.items[0]!.url = 'javascript://evil.example/x?(a)';
+  assert.deepEqual(liveTriggers(formatResearchMarkdown(evil, 'en')), [], 'a link that is not a plain https address is defanged too');
 });
 
 test('Markdown states blocking outcomes and stale cache plainly', () => {
