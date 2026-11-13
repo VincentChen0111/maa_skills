@@ -63,9 +63,9 @@ const grant = (sha256: string) => ({ sha256, binding: { profile: 0, task: 1 }, d
 const derivedChanges = (h: ApplyHome, sha: string) => ([['Mode', 'Custom'], ['Filename', join(h.home, 'base-applied', `${sha}.json`)], ['PlanSelect', -1], ['CustomFileType', 'user_defined']] as const)
   .map(([key, value]) => ({ path: ['Configurations', 0, 'TaskQueue', 1, key], value }));
 /** The common writer called directly, as only base-apply does, with an approved-report authorization the case adjusts. */
-const writeDirect = async (h: ApplyHome, authorization: Record<string, unknown>, changes: unknown[], maa: MaaProcess) =>
+const writeDirect = async (h: ApplyHome, fields: Record<string, unknown>, changes: unknown[], maa: MaaProcess) =>
   executeConfigWrite({ maaDirectory: h.maa, privateDirectory: h.home, host: 'claude', closedConfirmed: true, expectedRevision: (await inspectConfiguration(h.maa)).revision,
-    authorization: { source: 'approved-report', reference: h.reference, ...authorization } as never, changes: changes as never }, maa);
+    authorization: { source: 'approved-report', reference: h.reference, ...fields } as never, changes: changes as never }, maa);
 
 test('report → approval → check → safe write → read-back: only the custom infrast fields change and MAA reads the approved bytes', async (t) => {
   const h = await home(t, { baseFile: { metadata: { note: 'synthetic' }, 'x-unknown-field': { keep: true } } });
