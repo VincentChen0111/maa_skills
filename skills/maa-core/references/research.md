@@ -120,6 +120,6 @@ import { platformTransport } from '../../maa-core/scripts/research-transport.ts'
 ```
 
 - `searchNga(request, { privateDirectory, transport?, protector?, clock? })`、`readNgaThread(…)`：返回上面的 `ResearchResult`；请求不合法时抛 `request-invalid`，不读不发。`transport`、`protector`、`clock` 只供测试替换网络、加密边界和时间。
-- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。工具构造的链接和时间保持可用；帖子文字放在引用块里，去掉隐藏/方向控制字符，转义 Markdown 与 HTML；抓取文字里的链接、裸 `www.` 域名和邮箱地址都改写成不会自动成链的形式（`hxxps[:]//`、`ftp[:]//`、`www[.]`、`[@]`），标题、作者名同样处理。
+- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。帖子文字放在引用块里。只有模板文字和工具构造的普通 https 来源链接（`url`）原样输出并可点；`url` 不是普通 https 地址时也按下面的方式处理。其他所有值（来源名、页标签、标题、作者名、楼层、时间、可信度和局限代码、摘录）都经同一个函数处理：去掉隐藏/方向控制字符，转义 Markdown、HTML 和字符引用（`&`），并且不论前面是什么字符，把任意协议的 `://`、每个 `www.` 和每个 `@` 都改写（`hxxps[:]//`、`ftp[:]//`、`www[.]`、`[@]`），所以不会形成链接、图片、HTML 或自动链接。`tests/research.test.ts` 的一致性测试逐一列举这些触发形式、前置字符和字段。
 - 新来源（工单 19）复用：`researchDirectory(privateDirectory, '<来源>')` 定位目录；`cacheKey` / `getCached` / `putCached` 做缓存；每个网络请求包在 `withResearchGate(directory, limits, clock, perform)` 里，`perform` 返回 `{ value, stop?: 'risk-control' }` 即可记下停止；用 `summarizePages` 汇总状态，按上面的字段产出 `ResearchResult`（实验性来源设 `experimental: true`）；传输用 `platformTransport()`，不要在失败后换另一种传输。新增来源的限制要在规格两张来源表登记。
 - 建议报告（工单 20）引用 `items[]` 时保留 `author`（或「匿名/未知」）、`publishedAt`（或「未知」）、`url` 加 `location`、`reliability` 和 `limitations`；`excerpt` 是事实摘录，报告里的推断要与它分开写。
