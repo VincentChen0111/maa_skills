@@ -57,10 +57,22 @@
 ### 未验证
 
 - 真模型行为评测：五个新场景以及因 SKILL 文字变化受影响的 07 五个 setup 场景、help 场景都没有运行。28 的可运行入口和登录预检尚未交付、维护者也还没有在专用登录目录登录；前后对照和分数不降由 [26](issues/26-v0-1-0-release-validation.md) 执行。`network-fixture.mjs` 的变化同时改变 13、14 成本／缺口场景的指纹，需以新运行器重测前基线。
-- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe`、platform-tools zip 为 `platform-tools/adb.exe`、GitHub 资产跳转主机、MuMu／蓝叠／夜神／逍遥的真实安装包主机均未用真实文件核实。
+- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe` 只由 MAA 的 ci.yml 推断（见 [setup 来源](setup-sources.md)「R1 补充」）；platform-tools zip 为 `platform-tools/adb.exe`、蓝叠／夜神／逍遥的真实安装包主机未核实。GitHub 资产跳转到 `release-assets.githubusercontent.com` 由 R1 审查员只读核实；MuMu 下载接口跳转到 `a11.gdl.netease.com` 由本作者只读核对（没有下载安装包）。
 - 真实安装：没有运行任何安装程序，没有在本机安装 MAA、模拟器、adb 或 Node，也没有接触维护者的 MAA、模拟器或 adb。
 - Node 主版本不是 24 时的 CLI 放行只经代码阅读确认；本机只有 Node 24，没有用其他 Node 版本实际运行。
 - Linux CI 上两个 Windows 解压测试和 CLI 下载测试会跳过；Windows CI 尚未在本分支运行。
+
+### R1 修复（2026-11-13，协调者已接受全部三项）
+
+| 意见 | 修复 | 测试先行与证据 |
+| --- | --- | --- |
+| P2-1 MuMu 永远无法下载：只放行 `mumu.163.com`，但官网按钮经下载接口 `mumu.nie.netease.com` 跳转到 `a11.gdl.netease.com` | 厂商条目新增 `hosts`（确切主机，不含子域名）；MuMu 只加这两个主机，`adl.netease.com` 和 netease.com 其他主机仍拒绝。plan、HEAD 与下载的逐跳检查都用同一组主机。SKILL 改为让用户从浏览器下载列表取按钮实际触发的地址；规格两张表、接口说明和来源文档同步 | 新测试「MuMu downloads follow its official download API…」先失败（`unofficial-source`），修后通过：接口 302 到文件主机可规划和下载；文件地址本身可规划；跳到 `cdn.netease.com` 被拒且不访问；`adl.netease.com`、`x.a11.gdl.netease.com`、仿冒后缀被拒；雷电厂商不能借 MuMu 的主机 |
+| P2-2 连接保存后 recheck 必然报未完成：SKILL 让 recheck 用第 4 步的 `discoveryRevision`，而它覆盖整份配置，第 5 步 `apply` 和 MAA 启动后必然失效 | `recheckSetup` 不再接受 `discoveryRevision`（CLI 和导出函数都报 `request-invalid`），只收 `candidate`；每次重新发现，按只由 adb 路径和地址算出的候选 id 找到同一候选再测试，找不到报 `candidate-unavailable`／`chosen-candidate-not-found`，没传候选不发起连接。SKILL 第 6 步、接口说明、规格同步 | 两个新单元测试先失败（实际 `selection-required`），修后通过：发现后按 apply 的方式改写连接字段并加入 MAA 写入的字段、旧指纹已变，recheck 仍 connected 且（Windows 上）complete；候选消失时报 `candidate-unavailable` 且只运行 `adb devices`。另在已安装 CLI 上用真实 writer 走 prepare→discover→test→apply→recheck：带旧指纹被拒，只带候选得 connected、complete、pending 为空，环境记录同为 complete；这条 CLI 测试是修后写的，临时换回修前的 `setup.ts` 运行确认它失败（实际 `[1, undefined]`），再恢复。审查员复现脚本按新接口改写的副本输出 connected／complete:true |
+| P3 未登记的上限：解压 600 秒、确认原话 2000 字符、模拟器地址 2048 字符、HEAD 30 秒 | 四项和既有上限一起改为具名常量，登记进规格两张表的 08 行并写进「检查与修法」08 一条；解压超时单独报 `extract-timeout`（记录 install.reason），清空目标文件夹；接口说明 install 一行写明 | 新测试「an extraction that hits the time limit…」先失败（实际 `extract-failed`），修后通过：替身先写入部分文件再报超时，结果为 `extract-timeout`，目标文件夹不存在，状态为解压失败 |
+
+R1 修后实际运行：`npm run typecheck` 通过；`node --test tests/setup-download.test.ts tests/setup-download-scenarios.test.ts tests/setup.test.ts tests/setup-scenarios.test.ts tests/setup-integration.test.ts tests/eval-network.test.ts` 共 88 项全部通过；首轮变异表与三处后续修复的变异在修后代码上重跑，结论不变（确认原话变异因改为具名常量更新了匹配文本后重跑，被发现）。完整离线入口结果见交付报告。
+
+## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
 
