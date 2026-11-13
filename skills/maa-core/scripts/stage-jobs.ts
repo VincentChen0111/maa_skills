@@ -84,6 +84,8 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
         else if (Number(observed) < Number(expected)) { checks.push('blocked'); reasons.push(`insufficient-${field}`); }
       };
       if (!actual) { checks.push('unknown'); reasons.push('ownership-unobserved-or-ambiguous'); }
+      // MAA v6.21.4 treats a missing requirements object as "no requirement"; no grounded default exists, so it stays 待核.
+      if (oper.requirements === undefined || oper.requirements === null || !Object.keys(original).length) { checks.push('unknown'); reasons.push('requirements-unstated'); }
       check('elite', required.elite === undefined || required.elite === -1 ? 0 : required.elite, actual?.elite);
       // Level thresholds apply at the required elite stage, not after a higher promotion.
       if (!(Number.isSafeInteger(required.elite) && required.elite >= 0 && Number.isSafeInteger(actual?.elite) && actual!.elite > required.elite)) check('level', required.level, actual?.level);
@@ -244,7 +246,7 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
         lines.push(`  - 原文指纹：${candidate.hash}；执行指纹：${candidate.execution?.hash ?? '待核'}；执行分配：${escape(JSON.stringify(candidate.assignment))}`);
-        for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) lines.push(`  - ${escape(row.name)}（${escape(row.group)}，S${escape(row.skill)}）：${row.status}；要求 ${escape(JSON.stringify(row.required))}${digest(row.required) !== digest(row.effectiveRequired) ? `；规范化 ${escape(JSON.stringify(row.effectiveRequired))}` : ''}；当前精英 ${row.actual?.elite ?? '未知'} / 等级 ${row.actual?.level ?? '未知'}；${row.reasons.join(', ')}`);
+        for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) lines.push(`  - ${escape(row.name)}（${escape(row.group)}，S${escape(row.skill)}）：${row.status}；要求 ${escape(JSON.stringify(row.required))}${digest(row.required) !== digest(row.effectiveRequired) ? `；规范化 ${escape(JSON.stringify(row.effectiveRequired))}` : ''}${row.reasons.includes('requirements-unstated') ? '；要求未写明，待核' : ''}；当前精英 ${row.actual?.elite ?? '未知'} / 等级 ${row.actual?.level ?? '未知'}；${row.reasons.join(', ')}`);
       }
     }
   }

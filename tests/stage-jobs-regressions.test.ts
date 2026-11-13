@@ -209,13 +209,13 @@ test('prepare persists native-compatible S1 elite zero and binds it separately f
 test('derived groups preserve the globally unique allocation and the exact chosen alternative requirements', () => {
   const input = { ...stageJob(7), content: { ...stageJob(7).content, opers: [], groups: [
     { name: '二选一', opers: [{ name: '合成甲' }, { name: '合成乙', requirements: { potentiality: 6 } }, { name: '合成乙', requirements: { potentiality: 1 } }] },
-    { name: '仅甲', opers: [{ name: '合成甲' }] },
+    { name: '仅甲', opers: [{ name: '合成甲', requirements: { elite: 0 } }] },
   ], actions: [{ type: 'Deploy', name: '二选一', location: [1, 1], direction: 'Right' }] } };
   const candidate = matchStageJobs(accountSnapshot, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
   assert.equal(candidate.status, 'ready');
   assert.deepEqual(candidate.assignment, { '仅甲': '合成甲', '二选一': '合成乙' });
   assert.deepEqual(candidate.execution!.content.groups.map((group: any) => group.opers), [
-    [{ name: '合成乙', requirements: { potentiality: 1 } }], [{ name: '合成甲' }],
+    [{ name: '合成乙', requirements: { potentiality: 1 } }], [{ name: '合成甲', requirements: { elite: 0 } }],
   ]);
   assert.deepEqual(candidate.execution!.content.actions, input.content.actions);
 });
