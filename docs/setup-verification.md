@@ -223,6 +223,21 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 未验证：新提交上的 Windows CI；Windows 10 是否把最后一级名为 `NUL` 的目标路径读成设备（本机为 Windows 11；Node 一层不论哪种都拒绝，脚本一层规范化后改变即退出 3）；`setup.md` 改了 skill 文字，行为评测未运行（待 26）。
 
+### 合并 19、25 之后（2026-11-14）
+
+合并提交 `6977e8f` 把 origin/main（19 森空岛社区与 B 站 `9ac370c`、25 MAA 版本核对 `bd3b3e6`）并入本分支。十个文件冲突，都按两边保留：INDEX 取本分支后用 `node scripts/tracker.ts --write` 重新生成；README、`docs/hosts.md`、maa-help 用 main 的新文字（森空岛社区帖子、B 站视频读取），只把 setup 那句换成本分支的「先展示官方下载方案，用户确认后才下载」；`setup-sources.md` 冲突的那一行用 main 的（核实记录改由 25 的依赖条目生成），其后本分支的 08 各节保留；规格「检查与修法」正文、「规则来源」09 行、「默认值及其来源」10、16 一行各合入两边新增的句子，本分支的 10 行改动和 08、10 复检行保留；maa-setup 第 6 步用本分支的 recheck 文字，加上 25 的 `maa-upgrade-available` 一句，第 7 步用 main 的；`eval/network-fixture.mjs`、`doctor-checks.ts`、`setup.ts` 只是导入冲突，两边的导入都保留。
+
+合并后的适配（本节所在提交）：
+
+- 25 的覆盖测试 `maa-version-check` 合并后有一项失败：本页列出的解压拒绝用例里，合成条目名「resource/NUL.txt」被当成 MAA 文件引用。它是解压测试的 Windows 设备名用例，不是 MAA 文件；加进测试的例外表并写明原因。
+- 08 依赖的 MAA 源文件（打包发行包的 `ci.yml`、安装文档、Windows 模拟器文档）原来只链接到网站或开发分支，覆盖测试扫不到。按 25 的规则登记为条目 `setup-release-package`，在 v6.21.4 和 v6.22.0 两个固定提交上只读核对，结论和逐文件说明见 [MAA 版本跟踪的来源](maa-version-sources.md)「合并到 08 时登记的条目」；规格「25 未交付工单的 MAA 位置」一行记上这次登记。随包核实记录不变。
+- `tests/setup-download.test.ts` 按 25 的约定导入版本读取守卫，复检用的 MAA 进程替身加上 `version`。只加守卫、不加替身时这个文件也是 47/47，说明它原本没有走到真实的版本读取；替身是预防。
+- 规格「10、16」一行 25 写的「四种用途的归类都不变」指那一行的四种用途；08 的 `setup-recheck` 同样把 `version` 归为不挡，所以那句没改。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：合并后 `npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、setup-scenarios 22/22、check-purposes 7/7、maa-version-check 12/13（上面的误报）、maa-version 5/5、eval-network 3/3、offline-network 2/2、help-installation 6/6、metadata 2/2、doctor 80/80、doctor-checks 27/27。适配后 typecheck 通过，setup-download 47/47、maa-version-check 13/13、maa-version 5/5、help-installation 6/6、metadata 2/2；`node scripts/maa-version-check.ts record` 输出与随包记录相同；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载。只读网络：`raw.githubusercontent.com` 读三个文件在两个提交上的内容，GitHub contents 接口查三次 blob，文件放在系统临时目录，没有放进仓库。
+
+未验证：新提交上的 Windows CI；真实发行包的结构（仍没有下载任何发行包）；合并后 skill 文字的行为评测（待 26）。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

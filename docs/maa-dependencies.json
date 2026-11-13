@@ -335,6 +335,20 @@
       ],
       "sourceVerified": ["6.22.0"],
       "deviceVerified": []
+    },
+    {
+      "id": "setup-release-package",
+      "behaviour": "Windows 发行包：资产名 MAA-<标签>-win-<架构>.zip，由 install 目录的内容打包，所以 MAA.exe 和 DependencySetup_依赖库安装.bat 在压缩包顶层；安装文档的步骤（完整解压、不放在需要 UAC 的路径、以管理员运行依赖安装脚本装 VCRedist x64、再启动 MAA.exe）；Windows 模拟器文档「完美支持」的六个模拟器及其官网",
+      "skills": ["maa-core", "maa-setup"],
+      "tickets": ["08"],
+      "evidence": ["docs/setup-sources.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "blob": "400675ee6efa1b2e81d59a0687ecafee5482bd80" },
+        { "path": "docs/zh-cn/manual/install.md", "blob": "8827d31ecc59094e2337a35705bc761ec6ea3b3b" },
+        { "path": "docs/zh-cn/manual/device/windows.md", "blob": "c19239a88fa43afe9bb0190d4045965b780fc9b5" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
     }
   ],
   "pending": [

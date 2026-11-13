@@ -10,6 +10,8 @@ import { systemArchive, type Fetcher } from '../skills/maa-core/scripts/setup-do
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { runChecks } from '../skills/maa-core/scripts/doctor.ts';
 import { storedZip } from './fixtures/zip.ts';
+// Ticket 25: MAA.exe's version is a system boundary; this file fails if a recheck or a MAA process double reaches the real reader.
+import './fixtures/maa-version-guard.ts';
 
 const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const sha1 = (value: Buffer | string) => createHash('sha1').update(value).digest('hex');
@@ -630,7 +632,8 @@ async function writeLockFixture(t: { after: (fn: () => Promise<unknown>) => void
   const chosen = (await discoverSetupConnections(context, adb)).candidates[0]!.id;
   // MAA process boundary: read-only inspection; the recheck never closes or starts MAA.
   const maa: MaaProcess = { inspect: async () => ({ running: false, treeExited: true, idle: true, ready: false }),
-    close: async () => { throw new Error('unexpected close'); }, start: async () => { throw new Error('unexpected start'); } };
+    close: async () => { throw new Error('unexpected close'); }, start: async () => { throw new Error('unexpected start'); },
+    version: async () => null };
   return { ...f, adb, context, chosen, maa };
 }
 const lockFile = (pid: number) => JSON.stringify({ id: randomUUID(), skill: 'maa-setup', host: 'claude', pid, startedAt: new Date().toISOString(), phase: 'restart' });
