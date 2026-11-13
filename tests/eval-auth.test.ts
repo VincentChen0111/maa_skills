@@ -118,9 +118,17 @@ test('the read-protection check needs every required attempt denied, keeps the v
     ['codex command denied', 'codex', { steps: [{ shellRead: '{{sentinel}}', deny: true }] }, undefined],
     ['codex command reads it', 'codex', { steps: [{ shellRead: '{{sentinel}}' }] }, 'read-protection-failed'],
     ['codex quota', 'codex', { steps: [], failure: 'quota' }, 'quota-exhausted'],
+    // A denial of some other command proves nothing about the allowed one: only the given node form counts as the attempt.
+    ['claude substitutes a command outside the allowlist', 'claude', { steps: [{ fileRead: '{{sentinel}}', deny: true }, { shell: ['cat-not-allowlisted', '{{sentinel}}'] }] }, 'read-protection-failed'],
+    ['codex substitutes another command', 'codex', { steps: [{ shell: ['cat-not-allowlisted', '{{sentinel}}'] }] }, 'read-protection-failed'],
+    // Any other tool touching the sentinel means the host has a reader the check does not cover.
+    ['claude uses another tool on it', 'claude', { steps: [{ fileRead: '{{sentinel}}', deny: true }, { shellRead: '{{sentinel}}', deny: true }, { otherTool: '{{sentinel}}' }] }, 'read-protection-failed'],
+    ['codex reports a non-command item on it', 'codex', { steps: [{ shellRead: '{{sentinel}}', deny: true }, { otherTool: '{{sentinel}}' }] }, 'read-protection-failed'],
   ];
   for (const [name, host, value, category] of cases) {
     const directory = await login();
+    // A sentinel left by an interrupted earlier check is removed by name before the new one is written.
+    await writeFile(join(directory, 'maa-eval-sentinel-00000000-0000-4000-8000-000000000000.txt'), 'stale synthetic sentinel');
     const artifacts = join(root, `artifacts-${counter++}`); await mkdir(artifacts);
     const result = await readProtectionCheck({ host, model: 'm', executable: process.execPath, executableArgs: [double, await script({ host, ...value })], loginDirectory: directory, artifactDirectory: artifacts });
     assert.equal(result.status, category ? 'fail' : 'pass', name);

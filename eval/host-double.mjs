@@ -61,7 +61,7 @@ const fill = (value) => {
 };
 // A request that offers no tools gets no tool calls; sentinel steps only apply when the prompt names a sentinel.
 const toolless = host === 'claude' && optionValue('--tools') === '';
-const usesSentinel = (step) => [step.fileRead, step.shellRead, ...(step.shell ?? [])].includes('{{sentinel}}');
+const usesSentinel = (step) => [step.fileRead, step.shellRead, step.otherTool, ...(step.shell ?? [])].includes('{{sentinel}}');
 // Per-prompt failures let one batch fail on a chosen scenario: [{ "match": "<prompt text>", "failure": "quota" }].
 script.failure ??= (script.failures ?? []).find((item) => prompt.includes(item.match))?.failure;
 for (const step of toolless ? [] : script.steps ?? []) {
@@ -78,6 +78,9 @@ for (const step of toolless ? [] : script.steps ?? []) {
     let output = 'Permission denied'; let exitCode = 1;
     if (!step.deny) { try { output = readFileSync(path, 'utf8'); exitCode = 0; } catch { output = 'File does not exist.'; } }
     calls.push({ kind: 'read', path, exitCode, output });
+  } else if (step.otherTool) {
+    // A tool other than the file tool or a command (Claude: an unlisted tool; Codex: an undocumented item type) touching a path.
+    calls.push({ kind: 'other', path: resolvePath(step.otherTool), exitCode: 1, output: 'Denied' });
   }
 }
 const usage = script.usage === undefined ? { input_tokens: 120, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } : script.usage;
@@ -95,7 +98,8 @@ if (host === 'claude') {
     claude_code_version: 'host-double', output_style: 'default', agents: ['claude', 'Explore', 'general-purpose', 'Plan'], skills: [], plugins: [], ...(script.init ?? {}) });
   calls.forEach((call, index) => {
     const id = `double-${index}`;
-    print({ type: 'assistant', message: { model, content: [call.kind === 'read' ? { type: 'tool_use', id, name: 'Read', input: { file_path: call.path } } : { type: 'tool_use', id, name: 'Bash', input: { command: call.text } }] } });
+    const use = call.kind === 'read' ? { name: 'Read', input: { file_path: call.path } } : call.kind === 'other' ? { name: 'Glob', input: { pattern: call.path } } : { name: 'Bash', input: { command: call.text } };
+    print({ type: 'assistant', message: { model, content: [{ type: 'tool_use', id, ...use }] } });
     print({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: call.output, is_error: call.exitCode !== 0 }] } });
   });
   if (script.failure && failureText[script.failure]) {
@@ -112,8 +116,8 @@ if (host === 'claude') {
 } else {
   print({ type: 'thread.started', thread_id: 'host-double' });
   print({ type: 'turn.started' });
-  calls.filter((call) => call.kind === 'shell').forEach((call, index) => print({ type: 'item.completed', item: { id: `item_${index}`, type: 'command_execution',
-    command: call.text, aggregated_output: call.output, exit_code: call.exitCode, status: call.exitCode === 0 ? 'completed' : 'failed' } }));
+  calls.forEach((call, index) => print({ type: 'item.completed', item: call.kind === 'other' ? { id: `item_${index}`, type: 'file_read', path: call.path, status: 'failed' }
+    : { id: `item_${index}`, type: 'command_execution', command: call.text, aggregated_output: call.output, exit_code: call.exitCode, status: call.exitCode === 0 ? 'completed' : 'failed' } }));
   if (script.failure && codexFailure[script.failure]) {
     print({ type: 'error', message: codexFailure[script.failure] });
     print({ type: 'turn.failed', error: { message: codexFailure[script.failure] } });
