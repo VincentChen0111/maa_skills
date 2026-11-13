@@ -241,13 +241,14 @@ const laterLimits: Record<Language, Record<string, string>> = {
 };
 /**
  * A saved credential that could not be opened on this machine although it may still be valid (ticket 19). Its repair is
- * to retry later or to use Windows, not to enter it again, so the text says that instead of the re-entry wording.
+ * to retry later or to use Windows, not to enter it again, so the text says that instead of the re-entry wording. It says
+ * the credential was not used rather than that nothing was sent: Bilibili still sends its credential-free video request.
  */
 const unopenedCredential: Record<Language, Record<string, string>> = {
-  zh: { 'protection-failed': '解开已保存的凭据时出错（Windows 加密没有完成），本次没有发请求，凭据状态不变；请稍后再试',
-    'windows-required': '凭据只能在 Windows 上由保存它的用户解开，本次没有发请求，凭据状态不变；请在保存凭据的 Windows 用户下使用' },
-  en: { 'protection-failed': 'opening the saved credential failed (Windows encryption did not complete); nothing was sent and its state is unchanged. Try again later',
-    'windows-required': 'the credential can only be opened on Windows by the user who saved it; nothing was sent and its state is unchanged. Use it as that Windows user' },
+  zh: { 'protection-failed': '解开已保存的凭据时出错（Windows 加密没有完成），没有用到这份凭据，需要它的内容没有读取，凭据状态不变；请稍后再试',
+    'windows-required': '凭据只能在 Windows 上由保存它的用户解开，没有用到这份凭据，需要它的内容没有读取，凭据状态不变；请在保存凭据的 Windows 用户下使用' },
+  en: { 'protection-failed': 'opening the saved credential failed (Windows encryption did not complete); the credential was not used, content that needs it was not read, and its state is unchanged. Try again later',
+    'windows-required': 'the credential can only be opened on Windows by the user who saved it; the credential was not used, content that needs it was not read, and its state is unchanged. Use it as that Windows user' },
 };
 /** The saved credential a source reads with: the Skland community reader uses the user's Skland account credential. */
 const credentialOf = (source: string) => source === 'skland-community' ? 'skland' : source;

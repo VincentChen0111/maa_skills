@@ -136,6 +136,11 @@ test('a SESSDATA that cannot be opened on this machine is not called unreadable:
     const markdown = { zh: formatResearchMarkdown(result, 'zh'), en: formatResearchMarkdown(result, 'en') };
     for (const text of Object.values(markdown)) assert.doesNotMatch(text, /credentials\.ts input|重新|again in your own terminal/, failure);
     assert.match(markdown.zh, zh);
+    // The credential-free video request did go out, so the status says the credential was not used, never that nothing was sent.
+    assert.equal(result.requests, 1);
+    assert.match(markdown.zh, /本次网络请求：1/); assert.match(markdown.en, /Network requests this run: 1/);
+    for (const text of Object.values(markdown)) assert.doesNotMatch(text, /没有发请求|nothing was sent/, `${failure}: the status agrees with the request count`);
+    assert.match(markdown.zh, /没有用到这份凭据/); assert.match(markdown.en, /the credential was not used/);
   }
 });
 

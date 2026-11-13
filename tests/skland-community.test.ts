@@ -249,6 +249,9 @@ test('a credential that cannot be opened on this machine says what its repair sa
     const markdown = { zh: formatResearchMarkdown(outcome, 'zh'), en: formatResearchMarkdown(outcome, 'en') };
     for (const text of Object.values(markdown)) assert.doesNotMatch(text, /credentials\.ts input|重新|re-?enter|again in your own terminal/i, `${failure}: no re-entry when the repair is ${repair}`);
     assert.match(markdown.zh, zh); assert.match(markdown.en, en);
+    // The same words as Bilibili, whose credential-free request does go out: the credential was not used.
+    assert.match(markdown.zh, /没有用到这份凭据/); assert.match(markdown.en, /the credential was not used/);
+    assert.match(markdown.zh, /本次网络请求：0/);
   }
 });
 
