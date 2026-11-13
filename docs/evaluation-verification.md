@@ -73,7 +73,16 @@
 | P3 Ctrl+C 留下哨兵 | 写新哨兵之前按文件名删掉旧的 `maa-eval-sentinel-*.txt`（不读内容）并确认不剩；检查中 Ctrl+C 记为 `interrupted`、删掉哨兵再停；第一个场景前批次再确认登录目录里没有哨兵 | `tests/eval-auth.test.ts` 的遗留哨兵用例 |
 | P3 两条拒绝规则没有登记 | 规格两张表登记 `unsupported-character`（TOML 字面字符串装不下单引号，换行和 NUL 改变配置）与 `settings-unreadable`（找不到私有目录就无法确认不重叠）；[行为评测](evaluation.md)写明怎样换位置 | 文档一致性测试通过 |
 
-本轮工单正文（`docs/issues/`）没有改动。
+本轮工单正文（`docs/issues/`）没有改动。上表 P2 登录目录一项和 P3 指纹一项的做法在第二轮被替换，见下节。
+
+## 第二轮审查修复
+
+协调者重新评估后接受两项（P2 一项、P3 一项），驳回一项（第二次 Ctrl+C 留下哨兵：只在 macOS/Linux 上出现，真模型只在维护者的 Windows 机器上运行，按协调者的决定不改）。两项都先写会失败的测试。按维护者 2026-11-13 的负载规则，本轮只跑类型检查和改到的单个测试文件，一次一个；完整离线入口由协调者每个包跑一次。
+
+| 项 | 修法 | 先红后绿的证据 |
+| --- | --- | --- |
+| P2 场景摘要含产品脚本，只改产品的发布永远无法比较 | `scenarioHashSources` 去掉 `skills/maa-core/scripts/preferences.ts`；运行器指纹仍列出它。导入闭包测试改为：运行器模块必须在场景摘要里，`skills/` 下的模块必须不在，并且装入 skill 后出现在计入 skill 版本的文件里 | 新测试把 `scripts`、`eval`、`skills`、`tests/fixtures` 复制到临时目录，只给副本的 `preferences.ts` 加一行注释，两边各跑同一场景。修复前：场景摘要不同（测试报 `a product script is not part of the scenario`），闭包测试报 `preferences.ts stays out of the scenario hash`；修复后：摘要相同、skill 版本不同、`compareRuns` 为 `pass` |
+| P3 路径后紧跟中文、句号等字符时整个路径落盘（与第一轮 P2 同类，按复发规则处理） | 新模块 `scripts/eval-redact.ts` 是唯一的所有者：私有路径的清单和匹配规则都在这里，每份产物都经 `artifactWriter` 写出（`runScenario` 六个文件、读保护检查两个文件、批次清单；续跑按脱敏后的指纹比较）。去掉末尾边界；分隔符串改成按首字符唯一切分的记号，保证匹配是线性的；另认 JSON `\u` 转义、百分号编码、`\\?\` 前缀、大小写混合、realpath，以及任何评测临时目录的生成名（版本探测和读保护检查的临时目录也不会落盘）。原来 `eval-host.ts` 里的 `pathRedactor` 删掉 | `tests/eval-redact.test.ts` 三项：各种写法和相邻字符的单元用例；一致性用例让替身在版本、回复和标准错误里说出登录目录、home、仓库、自己的工作区和临时目录、哨兵，两个宿主各跑一批，逐一列出全部九份产物，每份都不得含唯一标记、并且都含 `<login-dir>`（证明路径确实到了这份产物、又被替换掉）；源码检查三个产出模块只经 `artifactWriter` 写产物（除哨兵和锁）。修复前（把新测试和新替身放进上一提交的导出副本里跑）：三项都失败，一致性用例报 `claude manifest.json names loginmarker…`；修复后三项通过，耗时约 1.3 秒 |
 
 ## 本次运行的命令
 
@@ -95,5 +104,18 @@
 | `check.ts` 因测试阶段失败没有接着跑的几步，用同样的临时 home 环境单独运行 | tracker、隐私、元数据无错误；评分规则自检 7 条规则 14 份记录通过；环境预检通过（替身记录，`double: true`、`baseline: false`） |
 | `node --test tests/eval-batch.test.ts tests/eval-host-double.test.ts tests/eval-auth.test.ts tests/eval-run.test.ts tests/eval-network.test.ts tests/setup-scenarios.test.ts tests/evaluation.test.ts tests/docs-consistency.test.ts tests/cross-skill-scenarios.test.ts` | 单独运行均通过 |
 | 审查员的五个离线复现脚本 | 结果见上节各项 |
+
+第二轮审查修复（提交 `4bee680`、`6a28b1e`，Windows，Node 24），按负载规则只跑这些，一次一个：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-redact.test.ts` | 3 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| `node --test tests/eval-auth.test.ts` | 5 项通过 |
+| `node --test tests/eval-run.test.ts` | 3 项通过 |
+| 隐私、元数据检查（只调用检查函数） | 无错误 |
+| 完整离线入口 | 本轮没有跑，由协调者跑 |
 
 CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。

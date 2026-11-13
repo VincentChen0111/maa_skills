@@ -21,6 +21,8 @@ node scripts/eval-batch.ts preflight
 
 宿主 CLI 的位置用 `--executable`，或环境变量 `MAA_EVAL_CLAUDE_EXECUTABLE`、`MAA_EVAL_CODEX_EXECUTABLE` 指定；都没有时用 PATH 里的 `claude`、`codex`。文档和记录里只写占位符，不写维护者机器上的实际路径。
 
+评测写到磁盘的每一份产物——每次运行的 `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`、`invocation.json`、`scenario.json`，读保护检查的两个文件，批次清单——都只经 `scripts/eval-redact.ts` 的 `artifactWriter` 写出。哪些路径不能落盘也只由这个模块决定：登录目录和哨兵、本次的工作区和临时目录、任何评测临时目录（按生成名）、仓库、宿主可执行文件、用户主目录，各换成固定占位符（`<login-dir>`、`<workspace>`、`<fixture>`、`<repo>`、`<host-executable>`、`<home>`）。路径按片段匹配，不分大小写；片段之间可以是任意多的斜杠、反斜杠（多层 JSON 转义）、JSON 的 `\u` 转义或百分号编码；盘符也认 `/c/…`、`//c/…` 写法，`\\?\` 前缀和 `file:` URL 照样替换，非 ASCII 字符也认百分号编码和 `\u` 转义，目录经联接或短文件名解析后的写法一并替换。路径后面紧跟什么都替换（中文、句号、连字符、数字、引号）；名字更长的同级目录只剩后缀，不暴露任何路径。一致性测试 `tests/eval-redact.test.ts` 让宿主替身在版本、回复和标准错误里用这些写法说出各个路径，逐一列出一批写出的全部产物并搜索唯一标记；新增产物必须加进这份清单并经同一个出口写出。
+
 原来的单次入口用法不变：`node scripts/eval-run.ts <host> <model> <approved-write|unapproved-write|forbidden-setting|自定义.json> [<CLI 可执行文件>] [<待测 skill 目录>]`。内置三个演示场景只验证驱动，不是产品 skill 的发布基线。现在每次单次运行都是只含一个场景的批次，同样先过认证预检和读保护检查；要用 API key 时加 `--auth api-key`。
 
 ## 两道预检
@@ -174,7 +176,7 @@ daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测]
 
 ## 固定版本与回归判断
 
-每次保留宿主/CLI 版本、固定模型、场景与评分器摘要、skill 内容版本、证据摘要、宿主报告的模型 id 和 token 用量（没有报告时为 `unknown`）。场景摘要包括评分器、文件观察器和运行器源码，确保采集语义变化也改变指纹。`compareRuns(before, after, reruns)` 比较保存的 `run.json` 数组：宿主、模型、CLI 版本、场景集合或摘要不一致时拒绝比较；含替身记录的集合也拒绝。缺失和失败记录不得当作通过。
+每次保留宿主/CLI 版本、固定模型、场景与评分器摘要、skill 内容版本、证据摘要、宿主报告的模型 id 和 token 用量（没有报告时为 `unknown`）。场景摘要包括评分器、文件观察器和运行器源码（`scripts/eval-run.ts` 的 `scenarioHashSources`），确保采集语义变化也改变指纹；产品文件（`skills/` 下的任何文件，包括运行器借用的设置读取脚本）不进场景摘要，它们属于装入的 skill，由 skill 内容版本和载荷指纹记录，所以只改产品的发布仍按同一场景比较。运行器指纹（续跑核对用）另外列出这些产品文件。`compareRuns(before, after, reruns)` 比较保存的 `run.json` 数组：宿主、模型、CLI 版本、场景集合或摘要不一致时拒绝比较；含替身记录的集合也拒绝。缺失和失败记录不得当作通过。
 
 运行器源码计入场景指纹，所以工单 28 交付后的记录和旧记录不可比；Claude 一侧带 `--bare` 的旧记录和不带 `--bare` 的新记录同样不可比，这个差别只出现在新旧运行器之间。旧记录原样保留，不改写，不当作新规则下的结果。2026-11-11 增加 `$exists` 与生成时间规则后的记录与更早的语义也不可比。
 
