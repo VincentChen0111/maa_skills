@@ -18,6 +18,8 @@ const expected: Record<string, { status: string; reasons: string[] }> = {
   'daily-base-apply-failing-gate': { status: 'refused', reasons: ['base-plan-not-applicable'] },
   'daily-base-apply-path-outside': { status: 'refused', reasons: ['plan-path-outside-private'] },
   'daily-base-apply-unverified-accepted': { status: 'ready', reasons: [] },
+  'daily-base-apply-copy-edited': { status: 'refused', reasons: ['base-plan-copy-changed'] },
+  'daily-base-apply-weekly-schedule': { status: 'needs-decision', reasons: [] },
 };
 const skills = { skillDirectory: fileURLToPath(new URL('../skills/maa-daily', import.meta.url)), companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) } };
 const decision = { acceptUnverified: ['gate-7', 'gate-8'], userWords: '第 7、8 项未核实我接受，仍然应用' };
@@ -51,6 +53,11 @@ test('base apply scenarios run the installed CLIs offline: every refusal is name
     if (scenario.id === 'daily-base-apply-failing-gate') assert.equal(output.check.gates.find((gate: { gate: number }) => gate.gate === 4).verdict, 'fail');
     if (scenario.id === 'daily-base-apply-invalid-plan') assert.ok(output.check.errors.some((error: string) => error.startsWith('name-unknown')));
     if (accepted) assert.deepEqual(output.configuration.changes, ['Mode', 'Filename', 'PlanSelect', 'CustomFileType']);
+    if (scenario.id === 'daily-base-apply-copy-edited') assert.equal(output.configuration.copy, 'changed');
+    if (scenario.id === 'daily-base-apply-weekly-schedule') {
+      assert.deepEqual(output.unverified.map((entry: { id: string }) => entry.id), ['maa-weekly-schedule']);
+      assert.ok(/周日/.test(output.unverified[0].evidence.join('')) && /周六/.test(output.unverified[0].evidence.join('')));
+    }
     const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [preferences.stdout, summary.stdout, check.stdout] });
     assert.deepEqual(evidence.changes, [], `${scenario.id}: the check writes nothing (no config, lock, copy or record)`);
     const policy = { ...scenario.policy, secrets: fixture.policy.secrets };

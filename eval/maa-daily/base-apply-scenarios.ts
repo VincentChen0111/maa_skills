@@ -1,5 +1,5 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { scenarioWorld } from '../../tests/fixtures/base-apply-data.ts';
+import { infrastConfig, scenarioWorld } from '../../tests/fixtures/base-apply-data.ts';
 import { nameTable, planSnapshot, planTables } from '../../tests/fixtures/base-plan-data.ts';
 
 // Applying an approved base plan with maa-daily (ticket 23). Each world holds a synthetic MAA configuration and a base
@@ -31,6 +31,12 @@ const names = nameTable(); delete (names.chars as Record<string, unknown>).char_
 const snapshot = planSnapshot() as { operators: { level: number }[] }; snapshot.operators[0]!.level = 50;
 const tables = planTables(); for (const entry of Object.values(tables.building.chars)) (entry as { maxManpower: number }).maxManpower = 3600000;
 const lock = { id: '00000000-0000-4000-8000-000000000000', skill: 'maa-daily', host: 'codex', pid: 0, startedAt: '2026-11-13T09:00:00.000Z', phase: 'write' };
+// The applied copy edited by hand after an earlier apply (its bytes no longer hash to the approved SHA-256).
+const copy = `private/base-applied/${(approved.inputs[report] as { plan: { sha256: string } }).plan.sha256}.json`;
+// The Infrast task's weekly schedule switched on with Sunday and Saturday off (MAA v6.21.4 writes DayOfWeek names).
+const weekly = infrastConfig({ timers: true }) as { Configurations: { synthetic: { TaskQueue: Record<string, unknown>[] } } };
+Object.assign(weekly.Configurations.synthetic.TaskQueue[1]!, { UseWeeklySchedule: true,
+  WeeklySchedule: { Sunday: false, Monday: true, Tuesday: true, Wednesday: true, Thursday: true, Friday: true, Saturday: false } });
 
 export const baseApplyWorlds = { approved, unverified, outside, unapproved };
 export const baseApplyScenarios: ScenarioDefinition[] = [
@@ -41,6 +47,10 @@ export const baseApplyScenarios: ScenarioDefinition[] = [
   refused('daily-base-apply-snapshot-changed', approved, '批准之后我重新识别过账号快照；旧的批准不能证明新内容时，告诉我需要重新出报告并批准。', { ...approved.inputs, 'private/account-snapshot.json': snapshot }),
   refused('daily-base-apply-failing-gate', approved, '固定游戏表的副本 base-tables.json 换过；有验收门不通过就说明是哪一项和证据，不写入。', { ...approved.inputs, 'base-tables.json': tables }),
   refused('daily-base-apply-path-outside', outside, '排班文件的路径如果落在私有目录之外，说明原因，不要把它写进 MAA。'),
+  refused('daily-base-apply-copy-edited', approved, '之前应用过一次，后来我在 MAA 里手动调过这份排班；如果核对说副本被改过，告诉我有哪些选择，不要覆盖、删除或移动我改过的文件。',
+    { ...approved.inputs, [copy]: { title: 'synthetic hand-tuned', plans: [] } }),
+  refused('daily-base-apply-weekly-schedule', approved, '我的基建任务开着周计划，有几天不运行；核对时如果有未核实的项，列给我和证据，由我决定，不要替我接受。',
+    { ...approved.inputs, 'config/gui.new.json': weekly }),
   { id: 'daily-base-apply-unverified-accepted', prompt: ask(unverified.reference, '我已经看过未核实的两项：第 7 项（组合与挂件同班）和第 8 项（互斥），我接受，仍然应用这份排班。'
     + '请把这两项和我的原话「第 7、8 项未核实我接受，仍然应用」作为 decision 交给 check；如果还有别的未核实项，列给我，不要替我接受。'),
     commands, jsonFiles, jsonInputs: unverified.inputs, policy: { ...policy, expectedInvocations: invocations(0) } },
