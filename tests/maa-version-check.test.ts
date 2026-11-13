@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkSources, directorySource, generateRecord, readRegistry, releaseNotes, runDailyCheck, validateRegistry, type Registry, type RecordFile } from '../scripts/maa-version-check.ts';
+import { addSourceVerified, checkSources, directorySource, generateRecord, readRegistry, releaseNotes, runDailyCheck, validateRegistry, type Registry, type RecordFile } from '../scripts/maa-version-check.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 
 const script = fileURLToPath(new URL('../scripts/maa-version-check.ts', import.meta.url));
@@ -72,7 +72,9 @@ test('the verification record lists only versions every entry has verified, and 
 });
 
 type World = { releases: Record<string, unknown>[]; commits: Record<string, string>; files: Record<string, Record<string, string | null>>; issues: { number: number; body: string }[];
-  labelExists?: boolean; failReleases?: boolean; branches?: string[] };
+  labelExists?: boolean; failReleases?: boolean; branches?: string[];
+  // Pull requests are listed by the issues API only once labelled; `pullsDenied` models the repository setting that stops Actions opening PRs.
+  pulls?: { number: number; head: string; labels: string[]; body: string }[]; pullsDenied?: boolean; branchFiles?: Record<string, Record<string, string>> };
 type Call = { method: string; url: string; body?: Record<string, unknown>; auth: boolean };
 function github(world: World) {
   const calls: Call[] = []; let next = 40;
@@ -101,10 +103,32 @@ function github(world: World) {
     if (method === 'GET' && path === 'git/ref/heads/main') return Response.json({ object: { sha: 'a'.repeat(40) } });
     if (method === 'GET' && path.startsWith('git/ref/heads/maa-version-check/')) return (world.branches ?? []).includes(path.slice('git/ref/heads/'.length)) ? Response.json({}) : new Response('{}', { status: 404 });
     if (method === 'POST' && path === 'git/refs') { (world.branches ??= []).push(String(calls.at(-1)!.body!.ref).slice('refs/heads/'.length)); return Response.json({}, { status: 201 }); }
-    if (method === 'GET' && path.startsWith('contents/')) return Response.json({ sha: 'b'.repeat(40) });
-    if (method === 'PUT' && path.startsWith('contents/')) return Response.json({}, { status: 200 });
-    if (method === 'POST' && path === 'pulls') { const number = next++; world.issues.push({ number, body: String((calls.at(-1)!.body as { body: string }).body) }); return Response.json({ number, html_url: `https://github.com/${repository}/pull/${number}` }, { status: 201 }); }
-    if (method === 'POST' && /^issues\/\d+\/labels$/.test(path)) return Response.json([]);
+    if (method === 'GET' && path.startsWith('contents/')) {
+      const [file, query] = path.slice('contents/'.length).split('?ref=');
+      return Response.json({ sha: world.branchFiles?.[decodeURIComponent(query!)]?.[file!] ?? 'b'.repeat(40) });
+    }
+    if (method === 'PUT' && path.startsWith('contents/')) {
+      const body = calls.at(-1)!.body!, file = path.slice('contents/'.length), branch = String(body.branch);
+      assert.equal(body.sha, world.branchFiles?.[branch]?.[file] ?? 'b'.repeat(40), 'an update names the file version it replaces');
+      ((world.branchFiles ??= {})[branch] ??= {})[file] = blob(Buffer.from(String(body.content), 'base64').toString('utf8'));
+      return Response.json({}, { status: 200 });
+    }
+    if (method === 'GET' && path.startsWith('pulls?head=')) {
+      const head = decodeURIComponent(path.slice('pulls?head='.length).split('&')[0]!);
+      assert.match(path, /&state=all/);
+      return Response.json((world.pulls ?? []).filter(pull => pull.head === head).map(pull => ({ number: pull.number, html_url: `https://github.com/${repository}/pull/${pull.number}`, labels: pull.labels.map(name => ({ name })) })));
+    }
+    if (method === 'POST' && path === 'pulls') {
+      if (world.pullsDenied) return Response.json({ message: 'GitHub Actions is not permitted to create or approve pull requests.' }, { status: 403 });
+      const number = next++, body = calls.at(-1)!.body!;
+      (world.pulls ??= []).push({ number, head: `${repository.split('/')[0]}:${body.head}`, labels: [], body: String(body.body) });
+      return Response.json({ number, html_url: `https://github.com/${repository}/pull/${number}` }, { status: 201 });
+    }
+    if (method === 'POST' && /^issues\/\d+\/labels$/.test(path)) {
+      const pull = world.pulls?.find(item => item.number === Number(path.split('/')[1]));
+      if (pull && !pull.labels.includes('maa-version-check')) { pull.labels.push('maa-version-check'); world.issues.push({ number: pull.number, body: pull.body }); }
+      return Response.json([]);
+    }
     throw new Error(`unexpected request ${method} ${url}`);
   }) as typeof fetch;
   return { fetcher, calls };
@@ -136,15 +160,43 @@ test('an unchanged stable release opens one PR adding it to the source-verified 
   const repeated = await runDailyCheck({ registry: registry(), record: record(), fetcher, token, publish: true, repository });
   assert.deepEqual(repeated.actions.map(action => action.state), ['already-notified']);
   assert.equal(calls.slice(before).some(call => call.method !== 'GET'), false, 'no duplicate PR, branch or label');
-  // A branch left behind by a run whose labelling failed also stops a second PR; the branch starts at the checked-out commit.
-  const unlabelled = github({ ...world(base), branches: ['maa-version-check/v6.22.0'] });
+  // A PR whose labelling failed is found through its branch, labelled, and not opened twice; the branch starts at the checked-out commit.
+  const unlabelled = github({ ...world(base), branches: ['maa-version-check/v6.22.0'],
+    pulls: [{ number: 9, head: 'synthetic-owner:maa-version-check/v6.22.0', labels: [], body: 'earlier PR' }] });
   const left = await runDailyCheck({ registry: registry(), record: record(), fetcher: unlabelled.fetcher, token, publish: true, repository });
   assert.deepEqual(left.actions.map(action => action.state), ['already-notified']);
   assert.equal(unlabelled.calls.some(call => call.url.endsWith('/pulls') || call.url.endsWith('/git/refs') || call.method === 'PUT'), false);
+  assert.ok(unlabelled.calls.some(call => call.method === 'POST' && call.url.endsWith('/issues/9/labels')), 'the missing label is added to the existing PR');
   const based = github(world(base));
   await runDailyCheck({ registry: registry(), record: record(), fetcher: based.fetcher, token, publish: true, repository, baseCommit: '9'.repeat(40) });
   assert.equal(based.calls.find(call => call.url.endsWith('/git/refs'))!.body!.sha, '9'.repeat(40));
   assert.equal(based.calls.some(call => call.url.endsWith('/git/ref/heads/main')), false);
+});
+
+test('a refused PR fails the run every day until it can be opened from the existing branch; a partly written branch is completed', async () => {
+  const state = world(base, { pullsDenied: true }), { fetcher, calls } = github(state);
+  const run = () => runDailyCheck({ registry: registry(), record: record(), fetcher, token, publish: true, repository });
+  await assert.rejects(run, /github-request-failed/, 'day 1: the branch and both files are written, then the PR is refused');
+  assert.deepEqual([calls.filter(call => call.url.endsWith('/git/refs')).length, calls.filter(call => call.method === 'PUT').length], [1, 2]);
+  let mark = calls.length;
+  await assert.rejects(run, /github-request-failed/, 'day 2: still no PR, so the run still fails instead of counting the branch as notified');
+  assert.deepEqual(calls.slice(mark).filter(call => call.method !== 'GET').map(call => call.url.split(repository + '/')[1]), ['pulls'], 'no second branch, the files already match');
+  state.pullsDenied = false; mark = calls.length;
+  const opened = await run();
+  assert.deepEqual(opened.actions.map(action => [action.kind, action.state]), [['pull-request', 'created']]);
+  assert.deepEqual(calls.slice(mark).filter(call => call.method !== 'GET').map(call => call.url.split(repository + '/')[1]), ['pulls', `issues/${state.pulls![0]!.number}/labels`]);
+  assert.equal(calls.slice(mark).find(call => call.url.endsWith('/pulls'))!.body!.head, 'maa-version-check/v6.22.0');
+  mark = calls.length;
+  assert.deepEqual((await run()).actions.map(action => action.state), ['already-notified']);
+  assert.equal(calls.slice(mark).some(call => call.method !== 'GET'), false);
+  // A branch whose second file was never written (a failed update) gets only that file before the PR is opened.
+  const registryText = JSON.stringify(addSourceVerified(registry(), '6.22.0'), null, 2) + '\n';
+  const partial = github(world(base, { labelExists: true, branches: ['maa-version-check/v6.22.0'],
+    branchFiles: { 'maa-version-check/v6.22.0': { 'docs/maa-dependencies.json': blob(registryText) } } }));
+  const completed = await runDailyCheck({ registry: registry(), record: record(), fetcher: partial.fetcher, token, publish: true, repository });
+  assert.deepEqual(completed.actions.map(action => action.state), ['created']);
+  assert.deepEqual(partial.calls.filter(call => call.method === 'PUT').map(call => call.url.split('/contents/')[1]), ['skills/maa-core/references/verified-versions.json']);
+  assert.equal(partial.calls.some(call => call.url.endsWith('/git/refs')), false);
 });
 
 test('a stable release with a changed or missing entry opens an issue naming entries and skills, and certifies nothing', async () => {

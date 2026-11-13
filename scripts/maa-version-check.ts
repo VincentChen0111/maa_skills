@@ -331,22 +331,36 @@ export async function runDailyCheck(options: DailyOptions): Promise<DailyReport>
           action.url = String(created.html_url);
         } else {
           const branch = `${notificationLabel}/v${candidate.version}`;
-          // A branch left by an earlier run whose labelling failed also counts as notified: never a second PR.
           const existingBranch = await github.request('GET', `https://api.github.com/repos/${repository}/git/ref/heads/${branch}`);
-          if (existingBranch.status === 200) { action.state = 'already-notified'; actions.push(action); continue; }
-          if (existingBranch.status !== 404) throw new Error('github-request-failed');
+          if (existingBranch.status === 200) {
+            // Only an existing PR (open or closed) counts as notified. A branch without one is left by a run whose PR was refused
+            // (for example while Actions may not open PRs) or whose file update failed: it is completed and the PR opened again,
+            // and any failure fails the run, so it retries daily until the PR exists.
+            const owner = repository.split('/')[0]!;
+            const pulls = await github.json('GET', `https://api.github.com/repos/${repository}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=all&per_page=100`);
+            if (!Array.isArray(pulls)) throw new Error('github-request-failed');
+            const pull = pulls.find((item): item is Record<string, unknown> => isObject(item) && Number.isSafeInteger(item.number));
+            if (pull) {
+              const labelled = Array.isArray(pull.labels) && pull.labels.some(label => isObject(label) && label.name === notificationLabel);
+              if (!labelled) await github.json('POST', `https://api.github.com/repos/${repository}/issues/${pull.number}/labels`, { labels: [notificationLabel] });
+              action.state = 'already-notified'; action.url = String(pull.html_url); actions.push(action); continue;
+            }
+          } else if (existingBranch.status === 404) {
+            let base = options.baseCommit;
+            if (base === undefined) {
+              const main = await github.json('GET', `https://api.github.com/repos/${repository}/git/ref/heads/main`) as { object?: { sha?: unknown } };
+              base = typeof main?.object?.sha === 'string' ? main.object.sha : '';
+            }
+            if (!sha1.test(base)) throw new Error('github-request-failed');
+            await github.json('POST', `https://api.github.com/repos/${repository}/git/refs`, { ref: `refs/heads/${branch}`, sha: base });
+          } else throw new Error('github-request-failed');
           const nextRegistry = addSourceVerified(registry, candidate.version!);
           const files = [[registryPath, JSON.stringify(nextRegistry, null, 2) + '\n'], [recordPath, JSON.stringify(generateRecord(nextRegistry, record), null, 2) + '\n']] as const;
-          let base = options.baseCommit;
-          if (base === undefined) {
-            const main = await github.json('GET', `https://api.github.com/repos/${repository}/git/ref/heads/main`) as { object?: { sha?: unknown } };
-            base = typeof main?.object?.sha === 'string' ? main.object.sha : '';
-          }
-          if (!sha1.test(base)) throw new Error('github-request-failed');
-          await github.json('POST', `https://api.github.com/repos/${repository}/git/refs`, { ref: `refs/heads/${branch}`, sha: base });
+          // Each file on the branch must equal what this run commits; only a differing file is written.
           for (const [path, content] of files) {
             const current = await github.json('GET', `https://api.github.com/repos/${repository}/contents/${path}?ref=${encodeURIComponent(branch)}`) as { sha?: unknown };
             if (typeof current?.sha !== 'string') throw new Error('github-request-failed');
+            if (current.sha === gitBlobSha(Buffer.from(content))) continue;
             await github.json('PUT', `https://api.github.com/repos/${repository}/contents/${path}`,
               { message: `chore(maa-version): mark MAA ${candidate.version} source-verified`, content: Buffer.from(content).toString('base64'), sha: current.sha, branch });
           }
