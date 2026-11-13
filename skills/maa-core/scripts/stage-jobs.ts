@@ -8,7 +8,8 @@ import { readPublicJson } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 
 type ObjectValue = Record<string, any>;
-type Status = 'ready' | 'blocked' | 'unknown';
+// 'support' (需借助战): every slot but one is verified and the one left has no owned member; MAA may borrow it.
+type Status = 'ready' | 'support' | 'blocked' | 'unknown';
 export type StageRequest = { stages: { stageId: string; code: string; difficulty: 'normal' | 'raid'; loops: number }[];
   completions?: Record<string, 'PASS' | 'COMPLETE'>; completionEvidence?: string; maaVersion: string;
   documentChecks?: { jobId: number; contentHash: string; satisfied: boolean; reference: string }[] };
@@ -21,14 +22,14 @@ export type CandidateRating = { flag: 'ok' | 'low' | 'not-enough' | 'unknown'; l
 type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean; ids: number[] };
 type SearchOutcome = 'offline' | 'empty' | 'found' | 'fallback-suspected' | 'insufficient' | 'other-stages';
 export type StageReport = ReturnType<typeof matchStageJobs>;
-export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number }[] };
+export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number; supportJobs?: number[] }[] };
 const object = (value: unknown): ObjectValue => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object-required');
   return value as ObjectValue;
 };
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string => { if (typeof value !== 'string' || !value.trim() || value.length > 2048) throw new Error('text-required'); return value; };
-const status = (states: Status[]): Status => states.includes('blocked') ? 'blocked' : states.includes('unknown') ? 'unknown' : 'ready';
+const status = (states: Status[]): Status => states.includes('blocked') ? 'blocked' : states.includes('unknown') ? 'unknown' : states.includes('support') ? 'support' : 'ready';
 function version(value: unknown, optionalPatch = false) {
   if (typeof value !== 'string' || value.length > 2048) return null;
   const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
@@ -94,7 +95,10 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
   const groups: { name: string; rows: typeof rows }[] = [];
   if (!Array.isArray(content.opers ?? []) || !Array.isArray(content.groups ?? [])) throw new Error('job-operators-invalid');
   const entries = [...(content.opers ?? []).map((oper: unknown, index: number) => ({ name: `operator-${index}`, opers: [oper] })), ...(content.groups ?? [])];
-  const names = new Set<string>();
+  const names = new Set<string>(), notOwned = new Set<(typeof rows)[number]>();
+  // Absence proves "not owned" only when the snapshot carries a usable ownership list.
+  const ownershipListed = Array.isArray(snapshot.operators) && ['complete', 'partial'].includes(snapshot.coverage?.operators?.status)
+    && !(Array.isArray(snapshot.coverage?.operators?.issues) && snapshot.coverage.operators.issues.includes('empty-recognition'));
   for (const entry of entries) {
     const group = object(entry); const name = text(group.name);
     if (names.has(name) || !Array.isArray(group.opers) || !group.opers.length) throw new Error('job-group-invalid'); names.add(name);
@@ -124,39 +128,51 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
       if (oper.role !== undefined) { checks.push('unknown'); reasons.push('role-unverified'); }
       for (const key of Object.keys(required)) if (!['elite', 'level', 'potential', 'potentiality', 'skill_level', 'module', 'module_level'].includes(key)) { checks.push('unknown'); reasons.push(`unknown-requirement:${key}`); }
       const row = { group: name, name: operName, skill: oper.skill ?? 0, required: structuredClone(original), effectiveRequired: required, actual, status: status(checks), reasons };
-      rows.push(row); return row;
+      rows.push(row); if (ownershipListed && !matches.length) notOwned.add(row); return row;
     });
     groups.push({ name, rows: groupRows });
   }
   // Bipartite matching prevents reusing one owned operator in several required slots.
-  const assign = (allowUnknown: boolean): Record<string, string> | null => {
+  const assign = (allowUnknown: boolean, slots = groups): Record<string, string> | null => {
     const owners = new Map<string, number>();
     const visit = (index: number, visited: Set<string>): boolean => {
-      for (const row of groups[index]!.rows) {
+      for (const row of slots[index]!.rows) {
         if (row.status === 'blocked' || !allowUnknown && row.status !== 'ready' || visited.has(row.name)) continue;
         visited.add(row.name); const previous = owners.get(row.name);
         if (previous === undefined || visit(previous, visited)) { owners.set(row.name, index); return true; }
       }
       return false;
     };
-    if (!groups.every((_, index) => visit(index, new Set()))) return null;
-    return Object.fromEntries([...owners].map(([name, index]) => [groups[index]!.name, name]));
+    if (!slots.every((_, index) => visit(index, new Set()))) return null;
+    return Object.fromEntries([...owners].map(([name, index]) => [slots[index]!.name, name]));
   };
   const assignment = assign(false);
+  // MAA v6.21.4 borrows a support unit only when exactly one slot is missing. Here that slot must have no owned member
+  // and written, readable requirements to tell the user; every other slot must still be verified ready.
+  const missing = assignment ? [] : groups.filter(group => group.rows.every(row => notOwned.has(row)));
+  const borrowable = (row: (typeof rows)[number]) => !row.reasons.some(reason => reason === 'requirements-unstated' || reason.startsWith('invalid-') || reason.startsWith('unknown-requirement:'));
+  const supportSlot = missing.length === 1 && missing[0]!.rows.every(borrowable) ? missing[0]! : null;
+  const supportAssignment = supportSlot ? assign(false, groups.filter(group => group !== supportSlot)) : null;
+  const chosen = assignment ?? supportAssignment;
   let execution: ObjectValue | null = null;
-  if (assignment) {
+  if (chosen) {
     execution = structuredClone(content);
-    const selected = groups.map((group, index) => {
-      const rowIndex = group.rows.findIndex(row => row.name === assignment[group.name] && row.status === 'ready');
-      const oper = structuredClone(object(entries[index].opers[rowIndex]));
-      if (digest(group.rows[rowIndex]!.required) !== digest(group.rows[rowIndex]!.effectiveRequired)) oper.requirements = structuredClone(group.rows[rowIndex]!.effectiveRequired);
+    const normalized = (index: number, rowIndex: number) => {
+      const oper = structuredClone(object(entries[index].opers[rowIndex])), row = groups[index]!.rows[rowIndex]!;
+      if (digest(row.required) !== digest(row.effectiveRequired)) oper.requirements = structuredClone(row.effectiveRequired);
       return oper;
-    });
+    };
+    // Verified slots keep only their assigned member; the borrowed slot keeps all of its (unowned) members.
+    const selected = groups.map((group, index) => group === supportSlot && !assignment ? group.rows.map((_, rowIndex) => normalized(index, rowIndex))
+      : [normalized(index, group.rows.findIndex(row => row.name === chosen[group.name] && row.status === 'ready'))]);
     const fixedCount = (content.opers ?? []).length;
-    if (content.opers !== undefined) execution.opers = selected.slice(0, fixedCount);
-    if (content.groups !== undefined) execution.groups = content.groups.map((group: ObjectValue, index: number) => ({ ...structuredClone(group), opers: [selected[fixedCount + index]] }));
+    if (content.opers !== undefined) execution.opers = selected.slice(0, fixedCount).map(opers => opers[0]);
+    if (content.groups !== undefined) execution.groups = content.groups.map((group: ObjectValue, index: number) => ({ ...structuredClone(group), opers: selected[fixedCount + index] }));
   }
-  return { requirements: rows, assignment: assignment ?? {}, execution, status: assignment ? 'ready' as Status : assign(true) ? 'unknown' as Status : 'blocked' as Status };
+  const support = !assignment && supportAssignment && supportSlot ? { slot: supportSlot.name, members: supportSlot.rows.map(row => ({ name: row.name, skill: row.skill,
+    required: structuredClone(row.required), effectiveRequired: structuredClone(row.effectiveRequired) })) } : null;
+  return { requirements: rows, assignment: chosen ?? {}, execution, support,
+    status: assignment ? 'ready' as Status : support ? 'support' as Status : assign(true) ? 'unknown' as Status : 'blocked' as Status };
 }
 
 // Copilot schema v6.21.4: an action name is an operator or group name; SetUnitLocation may register non-operator units.
@@ -229,11 +245,12 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       }
       return { id: job.id, status: reasons.some(reason => ['map-mismatch', 'difficulty-mismatch', 'full-job-required', 'unsupported-job-type'].includes(reason)) ? 'blocked' as Status : status(checks), reasons, source: job.source,
         requirements: operators.requirements, assignment: operators.assignment, content: structuredClone(content), hash: digest(content),
-        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job), actionNames };
+        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job), actionNames, support: operators.support };
     });
     // Candidates keep the API order as evidence; suggestions demote not-enough/unknown and then low ratings, stably.
-    const ready = candidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.status === 'ready')
+    const ranked = (state: Status) => candidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.status === state)
       .sort((a, b) => ratingTier(a.candidate.rating) - ratingTier(b.candidate.rating) || a.index - b.index).map(({ candidate }) => candidate);
+    const ready = ranked('ready');
     // The live backend matches level_keyword against level name / levelId / stageId; with no match it drops the stage
     // filter (no document parameter is sent) and returns unrelated site-wide jobs. Classify what this query returned.
     const searched = coverage.find(item => item.stageId === selected.stageId)!, keyword = levelId.split('level_').at(-1)!;
@@ -242,7 +259,8 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
     const outcome: SearchOutcome = searched.mode === 'offline' ? 'offline' : belonging ? 'found' : !returned.length ? searched.truncated ? 'insufficient' : 'empty'
       : !returned.some(name => typeof name === 'string' && name.includes(keyword)) ? 'fallback-suspected' : searched.truncated ? 'insufficient' : 'other-stages';
     return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id),
-      searchResult: { outcome, returned: returned.length, belonging } };
+      // 需借助战 candidates are never default suggestions; the user names them explicitly at approval.
+      supportCandidates: ranked('support').map(candidate => candidate.id), searchResult: { outcome, returned: returned.length, belonging } };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
     tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }),
@@ -310,6 +328,7 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
     lines.push(`## 地图 ${escape(batch.map)}`);
     for (const stage of report.stages.filter(item => batch.stages.includes(item.stageId))) {
       lines.push(`### ${escape(stage.code)} / ${stage.difficulty} / ${escape(stage.difficultyGroup)} / ${escape(stage.stageId)} × ${stage.loops}`, `主作业候选：${stage.primary ?? '待核'}；备选候选：${stage.alternates.join(', ') || '无'}`);
+      if (stage.supportCandidates.length) lines.push(`需借助战候选（不进默认建议，批准时须点名）：${stage.supportCandidates.join(', ')}`);
       const coverage = report.search.find(item => item.stageId === stage.stageId)!;
       lines.push(coverage.mode === 'offline' ? '检索覆盖：离线输入；未进行在线检索。' : `检索覆盖：${coverage.pages} 页（每页最多 20 条）；${coverage.truncated ? '未穷尽，达到分页上限仍有下一页' : '查询已结束，仅代表本次检索条件'}。`);
       const found = stage.searchResult, insufficient = '覆盖不足，不能据此判断这一关没有作业。';
@@ -320,7 +339,8 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
         : `返回的 ${found.returned} 份作业都属于名称相近的其他关卡；本次检索条件下这一关没有作业。`}`);
       for (const condition of stage.prerequisites) lines.push(`- 前置 ${escape(condition.stageId)} ${condition.required}：${condition.status}`);
       for (const candidate of stage.candidates) {
-        lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
+        lines.push(`- 作业 ${candidate.id}：${candidate.status}${candidate.status === 'support' ? '（需借助战）' : ''}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
+        if (candidate.support) lines.push(`  - 需借助战：缺 ${escape(candidate.support.slot)}，可借 ${candidate.support.members.map(member => `${escape(member.name)}（S${escape(member.skill)}，要求 ${escape(JSON.stringify(member.effectiveRequired))}）`).join('、')}；MAA 只按干员名和技能从助战列表挑选，不核对作业写的精英化和等级，助战练度需要自己确认；开始前在自动战斗页勾选「借助战」并选「补漏」。`);
         if (candidate.actionNames.undeclared.length) lines.push(`  - 动作引用了未声明的干员：${candidate.actionNames.undeclared.map(escape).join('、')}（待核）`);
         if (candidate.actionNames.unrecognized.length) lines.push(`  - 动作引用了无法识别的名字：${candidate.actionNames.unrecognized.map(escape).join('、')}（待核）`);
         lines.push(`  - 原文指纹：${candidate.hash}；执行指纹：${candidate.execution?.hash ?? '待核'}；执行分配：${escape(JSON.stringify(candidate.assignment))}`);
@@ -351,12 +371,16 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
     const stage = verified.stages.find(stage => stage.stageId === selection.stageId);
     if (!stage || stage.map !== approval.map || seen.has(stage.stageId) || selection.loops !== stage.loops || !Array.isArray(selection.alternates)) throw new Error('approval-mismatch');
     seen.add(stage.stageId);
-    const ids = [selection.primary, ...selection.alternates];
+    const ids = [selection.primary, ...selection.alternates], supportJobs = selection.supportJobs ?? [];
     if (new Set(ids).size !== ids.length) throw new Error('approval-mismatch');
+    // 需借助战 jobs need the user's explicit naming; naming anything else as borrowed is a mismatch, not a widening.
+    if (!Array.isArray(supportJobs) || new Set(supportJobs).size !== supportJobs.length
+      || supportJobs.some(id => !ids.includes(id) || stage.candidates.find(candidate => candidate.id === id)?.status !== 'support')) throw new Error('approval-mismatch');
     const selectedJobs = ids.map(id => {
       const candidate = stage.candidates.find(candidate => candidate.id === id);
-      if (!candidate || candidate.status !== 'ready' || !candidate.execution) throw new Error('approval-requires-ready-candidate');
-      return { id, hash: candidate.execution.hash, sourceHash: candidate.hash, source: candidate.source };
+      if (!candidate || !candidate.execution || !(candidate.status === 'ready' || candidate.status === 'support' && supportJobs.includes(id))) throw new Error('approval-requires-ready-candidate');
+      return { id, hash: candidate.execution.hash, sourceHash: candidate.hash, source: candidate.source,
+        ...(candidate.support ? { support: { slot: candidate.support.slot, members: candidate.support.members.map(member => member.name) } } : {}) };
     });
     return { stageId: stage.stageId, code: stage.code, difficulty: stage.difficulty, difficultyGroup: stage.difficultyGroup, loops: selection.loops, primary: selectedJobs[0]!, alternates: selectedJobs.slice(1) };
   }) };
