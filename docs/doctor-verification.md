@@ -54,3 +54,5 @@ doctor 真实基线与正向恢复语义，以及本次受影响 help/daily/core
 修后 `.tmp/06-r2-model-evidence/frozen-models-XfJS76` 新增 30 条实际调用，冻结框架仍为 c0b916、payload 为 67af7f8；15 次 Codex 401、15 次 Claude 未登录，无完成事件、无 runner 失败，全部 unverified。doctor 10 对、daily 14 对、core 6 对与已留存旧批次的模型/CLI/场景和框架指纹一致，比较仍 unverified；help 目录未变，沿用旧 c0b916 实际 6 对，不冒称修后重跑。两批共 92 份原始记录由 R2 独立重算 evidenceHash、normalizeHost、grade 与执行窗口，冻结文件与对应 Git 源核对。所有模型 fixture 已清理、相关 CLI 残留 0。
 
 本票单独列明的实现交付条件已经满足；doctor 成功模型基线、正向恢复语义及受影响 help/daily/core 分数不降继续阻塞 26。真实 MAA/模拟器/游戏、真实账号和跨版本升级仍未验证。最终验收记录只改文档，不改固定产品/skill/评测框架；原生仓库全量文件字节结论仅针对实际安装的 67af7f8。
+
+工单 10 的八组检查、运行日志分析与转介见 [doctor 完整检查与转介验证](doctor-checks-verification.md)。
