@@ -4,7 +4,7 @@
 // Usage: node host-double.mjs <script.json> <host arguments...>
 import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const doubleVersionPrefix = 'maa-eval-host-double';
@@ -41,6 +41,34 @@ if (host === 'codex' && args.includes('login') && args.includes('status')) {
   process.stderr.write(`${text}\n`); process.exit(/^Logged in|API key configured/.test(text) ? 0 : 1);
 }
 
+// `codex sandbox <-c values> -- <command>` runs the command, without a model, under the permission profile in the -c values: a read
+// under a `permissions.<profile>.filesystem={'<path>'='deny'}` entry fails with EPERM (the -e script gets a patched readFileSync).
+// On Windows a deny entry without `windows.sandbox="mxc"` is refused, as the real CLI does. `script.sandbox` picks other behaviours:
+// 'ignore-deny' (every read succeeds), 'silent' (a denied path runs nothing and exits 0), 'deny-all' (every read fails), 'refuse'.
+if (host === 'codex' && args[0] === 'sandbox') {
+  if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(), configDirectory: process.env.CODEX_HOME, args })}\n`);
+  const end = args.indexOf('--');
+  const options = end < 0 ? [] : args.slice(1, end);
+  const command = end < 0 ? [] : args.slice(end + 1);
+  const values = options.filter((_, index) => options[index - 1] === '-c');
+  const denied = values.flatMap((value) => [...value.matchAll(/'([^']*)'='deny'/g)].map((match) => match[1]));
+  const mode = script.sandbox ?? 'enforce';
+  if (!command.length || mode === 'refuse' || (process.platform === 'win32' && denied.length && !values.includes('windows.sandbox="mxc"'))) {
+    process.stderr.write('cannot enforce deny-read restrictions directly; refusing to run unsandboxed\n'); process.exit(1);
+  }
+  const target = resolve(command.at(-1)).toLowerCase();
+  const underDenied = denied.some((path) => { const base = resolve(path).toLowerCase(); return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep); });
+  if (mode === 'silent' && underDenied) process.exit(0);
+  const blocked = mode === 'deny-all' || (mode === 'enforce' && underDenied);
+  const scriptIndex = command.indexOf('-e') + 1;
+  if (blocked && !scriptIndex) { process.stderr.write('Permission denied\n'); process.exit(1); }
+  const patch = "{const f=require('fs');f.readFileSync=()=>{throw Object.assign(new Error('EPERM: operation not permitted, open'),{code:'EPERM'})}};";
+  const run = blocked ? command.map((part, index) => index === scriptIndex ? patch + part : part) : command;
+  const result = spawnSync(run[0] === 'node' ? process.execPath : run[0], run.slice(1), { cwd: process.cwd(), env: process.env, encoding: 'utf8', windowsHide: true });
+  process.stdout.write(result.stdout ?? ''); process.stderr.write(result.stderr ?? '');
+  process.exit(result.status ?? 1);
+}
+
 let prompt = '';
 try { prompt = readFileSync(0, 'utf8'); } catch { /* no stdin */ }
 // Tests inspect which variables reached the host: names only, plus the configuration directory it was pointed at.
@@ -53,7 +81,8 @@ if (script.sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
 const model = script.model === undefined ? optionValue('--model') ?? optionValue('-m') : script.model;
 const sentinel = prompt.match(/哨兵文件：(.+)/)?.[1]?.trim();
 const resolvePath = (value) => value === '{{sentinel}}' ? sentinel : value;
-const reply = [script.reply ?? 'Done.', ...(script.noise ? [noise(sentinel ? [sentinel] : [])] : [])].join(' ');
+// `leak`: the reply carries the sentinel's value although no recorded call read it (a reader the record does not show).
+const reply = [script.reply ?? 'Done.', ...(script.leak && sentinel ? [readFileSync(sentinel, 'utf8')] : []), ...(script.noise ? [noise(sentinel ? [sentinel] : [])] : [])].join(' ');
 if (script.noise) process.stderr.write(`${noise(sentinel ? [sentinel] : [])}\n`);
 const readCommand = (path) => ['node', '-e', 'process.stdout.write(require("fs").readFileSync(process.argv[1],"utf8"))', path];
 const quote = (value) => /[\s"]/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;

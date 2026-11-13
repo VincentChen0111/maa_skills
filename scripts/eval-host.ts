@@ -43,15 +43,26 @@ export function claudeSettings(loginDirectory?: string): string {
 }
 
 export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectory?: string };
+/**
+ * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base and
+ * the deny entry for the login directory. `exec` and the read-protection enforcement probe (`codex sandbox`) both take it from here.
+ */
+export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectory?: string }): string[] {
+  return [...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
+    '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
+    ...(options.loginDirectory ? ['-c', `permissions.maa_eval.filesystem={'${options.loginDirectory}'='deny'}`] : [])];
+}
+/** `codex sandbox` running one command under exactly the profile `exec` gets for the same options; no model is involved. */
+export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectory?: string }, command: string[]): string[] {
+  return ['sandbox', ...codexPermissionArguments(options), '--', ...command];
+}
 /** One argument set for every authentication mode, so plan-login and API-key records share the runner fingerprint. */
 export function hostArguments(host: Host, options: HostArgumentOptions): string[] {
   if (host === 'codex') {
     return ['exec', '--json', '--model', options.model, '--cd', options.workspace, '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules',
-      '-c', 'cli_auth_credentials_store="file"', ...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
+      '-c', 'cli_auth_credentials_store="file"',
       // The built-in image tool reads files on disk itself, outside the command sandbox, and has no record item of its own.
-      '-c', 'features.view_image=false',
-      '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
-      ...(options.loginDirectory ? ['-c', `permissions.maa_eval.filesystem={'${options.loginDirectory}'='deny'}`] : []), '-'];
+      '-c', 'features.view_image=false', ...codexPermissionArguments(options), '-'];
   }
   const commands = options.toolless ? [] : options.commands ?? [];
   const tools = options.toolless ? [''] : [commands.length ? 'Read,Bash' : 'Read'];

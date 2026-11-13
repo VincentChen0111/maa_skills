@@ -89,8 +89,9 @@ test('every producer writes every artifact through the one redaction: no private
 });
 
 test('no evaluation module writes an artifact except through artifactWriter', async () => {
-  // Direct file writes allowed outside the writer: the sentinel inside the login directory, and the lock beside it.
-  const allowed: Record<string, string[]> = { 'scripts/eval-run.ts': [], 'scripts/eval-auth.ts': ['sentinel'], 'scripts/eval-batch.ts': ['path'] };
+  // Direct file writes allowed outside the writer: the sentinel inside the login directory, the Codex enforcement probe's control
+  // file inside the temporary workspace, and the lock beside the login directory.
+  const allowed: Record<string, string[]> = { 'scripts/eval-run.ts': [], 'scripts/eval-auth.ts': ['sentinel', 'control'], 'scripts/eval-batch.ts': ['path'] };
   for (const [file, targets] of Object.entries(allowed)) {
     const text = await readFile(join(repository, file), 'utf8');
     assert.match(text, /import \{[^}]*\bartifactWriter\b[^}]*\} from '\.\/eval-redact\.ts'/, `${file} uses the one writer`);
