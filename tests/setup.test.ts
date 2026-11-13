@@ -9,6 +9,9 @@ import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { checkSetup, checkRuntime, prepareSetup, discoverSetupConnections, testSetupConnection, applySetupConnection, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
 import { executeConfigWrite, executeSetupConfigWrite, inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
+import { inspectCredentials, recordCredentialOutcome, saveCredential } from '../skills/maa-core/scripts/credentials.ts';
+import type { Protector } from '../skills/maa-core/scripts/credential-protection.ts';
+import { randomUUID } from 'node:crypto';
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-')));
@@ -34,7 +37,7 @@ test('setup checks fresh settings without creating them and repeats only its own
   const result = await prepareSetup({ home: f.home });
   assert.equal(result.needsLanguagePrompt, false); assert.equal(result.needsDirectoryPrompt, false);
   assert.equal(result.language, 'en');
-  assert.deepEqual(result.checks.map(item => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version']);
+  assert.deepEqual(result.checks.map(item => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version', 'credential-nga', 'credential-skland', 'credential-bilibili']);
   assert.equal(result.checks.every(item => item.repair.description !== item.repair.id), true, 'each check supplies an actionable explanation');
   await writeFile(join(f.privateDirectory, 'account-snapshot.json'), 'synthetic existing snapshot');
   await prepareSetup({ home: f.home });
@@ -279,6 +282,7 @@ test('corrupt or unreadable settings produce specific read-only checks without f
     assert.equal(checked.checks.find((item: { id: string }) => item.id === 'node').status, 'normal');
     assert.equal(checked.checks.find((item: { id: string }) => item.id === 'platform').status, process.platform === 'win32' ? 'normal' : 'error');
     assert.equal(checked.checks.find((item: { id: string }) => item.id === 'private-directory').reason, 'private-directory-unverified');
+    assert.deepEqual(checked.checks.filter((item: { id: string }) => item.id.startsWith('credential-')).map((item: { reason: string }) => item.reason), Array(3).fill('credential-unknown'));
     assert.equal(checked.needsLanguagePrompt, false); assert.equal(checked.needsDirectoryPrompt, false);
     assert.equal(checked.language, null); assert.doesNotMatch(result.stdout, /broken synthetic|synthetic-relative|maa-setup-/);
     await assert.rejects(prepareSetup({ home: f.home }));
@@ -288,4 +292,31 @@ test('corrupt or unreadable settings produce specific read-only checks without f
     assert.equal(explicit.checks.find(item => item.id === 'maa')?.status, 'normal');
     assert.equal(explicit.checks.find(item => item.id === 'settings')?.reason, 'settings-unreadable');
   });
+});
+
+test('setup and doctor report the same credential check; credential fixes stay with the user', async t => {
+  const f = await fixture(t);
+  await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
+  const double = (await import(new URL('./fixtures/credential-protection-double.mjs', import.meta.url).href) as { windowsProtector: Protector }).windowsProtector;
+  const value = `synthetic-credential-${randomUUID()}`;
+  const saved = await saveCredential('skland', value, { privateDirectory: f.privateDirectory, protector: double });
+  await recordCredentialOutcome('skland', saved.revision, 'expired', { privateDirectory: f.privateDirectory });
+  const setup = await checkSetup({ home: f.home }, async () => null);
+  const credentials = setup.checks.filter(item => item.id.startsWith('credential-'));
+  assert.deepEqual(credentials.map(item => [item.id, item.status, item.reason]), [
+    ['credential-nga', 'normal', 'credential-unset'], ['credential-skland', 'error', 'credential-expired'], ['credential-bilibili', 'normal', 'credential-unset']]);
+  assert.equal(setup.exitCode, 1);
+  const maa: MaaProcess = { inspect: async () => ({ running: false, ready: false, treeExited: true, idle: true }), close: async () => undefined, start: async () => undefined };
+  const doctor = await runChecks({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory }, maa);
+  assert.deepEqual(doctor.checks.filter(item => item.id.startsWith('credential-')), credentials, 'one shared check for setup and doctor');
+  assert.equal(doctor.exitCode, 1);
+  const latest = await readFile(join(f.privateDirectory, 'doctor-latest.json'), 'utf8');
+  for (const output of [JSON.stringify(setup), JSON.stringify(doctor), latest]) {
+    assert.equal(output.includes(value), false); assert.equal(output.includes(f.root), false);
+  }
+  for (const approved of [['reenter-credential'], ['enter-credential'], ['reconcile-lock', 'reenter-credential']]) {
+    assert.deepEqual(await executeRepairs({ host: 'codex', approved, reference: 'synthetic named approval', evidenceRevision: doctor.recovery.evidenceRevision,
+      maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory } as never, maa), { status: 'rejected', reason: 'user-manual-repair' });
+  }
+  assert.equal((await inspectCredentials(f.privateDirectory)).credentials[1]!.state, 'expired', 'a refused repair changes nothing');
 });

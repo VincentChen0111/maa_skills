@@ -29,7 +29,8 @@ test('shared checks report configuration and lock status without changing either
   const f = await fixture(t); const original = await readFile(f.file);
   const result = await runChecks(f, f.maa);
   assert.equal(result.exitCode, 0);
-  assert.deepEqual(result.checks.map(item => [item.id, item.status]), [['configuration', 'normal'], ['write-lock', 'normal']]);
+  assert.deepEqual(result.checks.map(item => [item.id, item.status]), [['configuration', 'normal'], ['write-lock', 'normal'],
+    ['credential-nga', 'normal'], ['credential-skland', 'normal'], ['credential-bilibili', 'normal']]);
   for (const item of result.checks) { assert.ok(item.reason); assert.ok(item.repair.id); assert.ok(['skill', 'user'].includes(item.repair.executor)); }
   assert.deepEqual(await readFile(f.file), original);
   assert.deepEqual(await readdir(join(f.maaDirectory, 'config')), ['gui.new.json']);
