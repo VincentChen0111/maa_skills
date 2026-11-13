@@ -16,9 +16,11 @@ import { accountScenarios } from '../eval/maa-account/scenarios.ts';
 import { baseScenarios } from '../eval/maa-account/base-scenarios.ts';
 import { costScenarios } from '../eval/maa-account/cost-scenarios.ts';
 import { gapScenarios } from '../eval/maa-account/gap-scenarios.ts';
+import { researchScenarios } from '../eval/maa-account/research-scenarios.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { dailyScenarios } from '../eval/maa-daily/scenarios.ts';
 import { stageScenarios } from '../eval/maa-daily/stage-scenarios.ts';
+import { stageRunScenarios } from '../eval/maa-daily/stage-run-scenarios.ts';
 import { trainingScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
@@ -52,12 +54,22 @@ async function files(directory: string): Promise<string[]> {
   return result;
 }
 
-test('every eval scenario is reachable by id and group, once, with its skill and the companions it needs', () => {
+test('every eval scenario is reachable by id and group, once, with its skill and the companions it needs', async () => {
   const catalog = scenarioCatalog();
   const ids = catalog.map(entryId);
-  const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios, doctorScenarios,
-    helpScenarios, setupScenarios, crossSkillScenarios].flat().map((scenario) => scenario.id);
+  const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios,
+    stageRunScenarios, doctorScenarios, helpScenarios, setupScenarios, crossSkillScenarios].flat().map((scenario) => scenario.id);
   assert.deepEqual([...ids].sort(), [...all].sort());
+  // Every scenario module under eval/<skill>/ is in the catalog: each exported array of definitions (objects with an id and a
+  // prompt) is found by walking those directories, so a module added without a catalog group fails here.
+  const evalDirectory = join(repository, 'eval');
+  const exported: string[] = [];
+  for (const file of (await files(evalDirectory)).filter((path) => path.endsWith('.ts') && relative(evalDirectory, path).split(/[\\/]/).length === 2)) {
+    for (const value of Object.values(await import(pathToFileURL(file).href) as Record<string, unknown>)) {
+      if (Array.isArray(value) && value.length && value.every((item) => typeof item?.id === 'string' && typeof item?.prompt === 'string')) exported.push(...value.map((item) => item.id as string));
+    }
+  }
+  assert.deepEqual([...ids].sort(), [...exported].sort(), 'every scenario exported under eval/<skill>/ is in the catalog');
   assert.equal(new Set(ids).size, ids.length, 'scenario ids are unique');
   for (const entry of catalog) {
     if (!['maa-core', 'maa-help'].includes(entry.group)) assert.ok(entry.companionSkills['maa-core'], `${entryId(entry)} installs maa-core`);

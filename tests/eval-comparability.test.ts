@@ -82,6 +82,16 @@ const productRelease = () => release ??= (async () => {
   const parser = await readFile(snapshot, 'utf8');
   assert.ok(parser.includes(`'missing-' + field`), 'the issue code the release changes');
   await writeFile(snapshot, parser.replace(`'missing-' + field`, `'absent-' + field`));
+  // A research cache key scheme change and a run classifier change (longer finding ids): the cached NGA thread page and the
+  // saved run records in world data must not follow them either.
+  const research = join(directory, 'skills/maa-core/scripts/research.ts');
+  const keys = await readFile(research, 'utf8');
+  assert.ok(keys.includes('.update(JSON.stringify(canonical(parts)))'), 'the cache key scheme the release changes');
+  await writeFile(research, keys.replace('.update(JSON.stringify(canonical(parts)))', `.update('v2:' + JSON.stringify(canonical(parts)))`));
+  const runState = join(directory, 'skills/maa-core/scripts/stage-run-state.ts');
+  const classifier = await readFile(runState, 'utf8');
+  assert.ok(classifier.includes('${key}`).slice(0, 24)'), 'the finding id the release changes');
+  await writeFile(runState, classifier.replace('${key}`).slice(0, 24)', '${key}`).slice(0, 32)'));
   return directory;
 })();
 
@@ -140,12 +150,15 @@ test('scenario world data runs no product code: the runtime import closure of ev
   assert.deepEqual([...new Set(product)].sort(), Object.keys(allowedProductImports).sort(), 'only allow-listed product values reach scenario world data');
   // Every producer of a scenario definition (prompt, policy, eval fixtures, network fixtures): a new module in the closure
   // must be looked at and added here.
+  // tests/fixtures/stage-run-records.ts holds ticket 16's run records as literals; tests/fixtures/stage-run-data.ts, which runs
+  // product code, serves only the product's own tests and stays out of this closure.
   assert.deepEqual([...closure].sort(), ['eval/cross-skill/scenarios.ts', 'eval/daily-observer.mjs', 'eval/host-double.mjs', 'eval/maa-account/base-scenarios.ts',
-    'eval/maa-account/cost-scenarios.ts', 'eval/maa-account/gap-scenarios.ts', 'eval/maa-account/scenarios.ts', 'eval/maa-core/scenarios.ts', 'eval/maa-daily/scenarios.ts',
-    'eval/maa-daily/stage-scenarios.ts', 'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts', 'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs',
+    'eval/maa-account/cost-scenarios.ts', 'eval/maa-account/gap-scenarios.ts', 'eval/maa-account/research-scenarios.ts', 'eval/maa-account/scenarios.ts',
+    'eval/maa-core/scenarios.ts', 'eval/maa-daily/scenarios.ts', 'eval/maa-daily/stage-run-scenarios.ts', 'eval/maa-daily/stage-scenarios.ts',
+    'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts', 'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs',
     'eval/maa-setup/scenarios.ts', 'eval/network-fixture.mjs', 'eval/observe-node.mjs', 'eval/probe.ts', 'eval/rule-samples.ts', 'eval/setup-boundary.mjs',
-    'scripts/eval-scenarios.ts', 'tests/fixtures/cost-data.ts', 'tests/fixtures/gap-data.ts', 'tests/fixtures/stage-data.ts', 'tests/fixtures/training-data.ts',
-    'tests/fixtures/training-runtime.ts']);
+    'scripts/eval-scenarios.ts', 'tests/fixtures/cost-data.ts', 'tests/fixtures/gap-data.ts', 'tests/fixtures/stage-data.ts', 'tests/fixtures/stage-run-records.ts',
+    'tests/fixtures/training-data.ts', 'tests/fixtures/training-runtime.ts']);
   // The allow-listed values reach identity only as network fixture URLs, and only their pinned commit may vary: repository
   // and file stay part of the scenario (which URL serves which table), so a product change there fails here first.
   const sources = new Set(scenarioCatalog().flatMap((entry) => Object.keys((entry.definition as ScenarioDefinition).networkFixtures ?? {}))
