@@ -61,6 +61,12 @@ doctor 真实基线与正向恢复语义，以及本次受影响 help/daily/core
 
 - 待执行记录的授权除 `source`、`reference`、`medicineCount` 外，接受 `stoneCount` 和 `expiringMedicine`，取值由同一个谓词严格校验；未知字段、超出 32 位范围或非整数的数量、天数不在 1–30、活动项不是布尔值、多出字段，以及来源是已批准报告却带消耗授权的记录，都让证据保持未知，两种修法都不可用。用例在 `tests/doctor.test.ts` 的「unknown or malformed transaction metadata never permits either recovery action」。
 - `doctor.ts repair` 的输入字段白名单加入 `stoneCount`、`expiringMedicine`，其他键仍以 `request-invalid` 拒绝（同一文件的 CLI 用例）。
-- 恢复只用修复请求自己带的授权：取值无效时在加互斥锁之前以谓词的原因码拒绝；恢复会重新打开碎石时，没有当次的 `stoneCount` 就由写入器以 `stone-grant-required` 拒绝，配置和保留的锁不变，原事务里的授权不复用。用例在 `tests/consumption-grant.test.ts` 的 `doctor-recovery` 两项。
+- 恢复只用修复请求自己带的授权：取值无效时在加互斥锁之前以谓词的原因码拒绝（`tests/consumption-grant.test.ts` 的 `doctor-recovery` 拒绝样例）。原事务授权不复用：作者初版的说法超出了当时的用例，那两项样例里中断事务的待执行记录没有带消耗授权，把原事务授权并进修复请求的变异（C9）没有被抓到。第一轮修复后（见下）有了直接用例。
 
 真实 MAA 上的恢复和真模型的 doctor 场景未验证，留给工单 26。
+
+### 第一轮修复（2026-11-14，未经独立审查）
+
+- `tests/consumption-grant.test.ts` 的「doctor recovery never reuses the interrupted transaction grant when restoring would reopen stone or expiring medicine」：中断事务的待执行记录带 `stoneCount: 3`（把碎石从第一个任务移到第二个）或 `expiringMedicine`（3 天，同样移到第二个任务），恢复会把第一个任务的碎石或临期药重新打开。修复请求不带授权时分别以 `stone-grant-required`、`expiring-grant-required` 拒绝，配置字节、保留的锁字节和配置目录都不变；带当次授权时恢复完成，配置回到事务之前。
+- 在 `git archive` 导出的临时副本里，把原事务授权并进修复请求（C9）后，这个测试失败（被抓到）；副本用后删除。变异表见 [daily 验证记录](daily-verification.md)「27 批准后的碎石与临期药」的「第一轮修复」。
+- 随之而来的一点：恢复要把关着的临期药天数改回原值时，按「没有某类授权时只能写关闭值」的规则也要带临期药授权，天数等于改回的天数；同一次恢复若还要用别的天数重新打开另一个任务的临期药，一份授权满足不了两个天数，恢复被拒绝，交用户手动核对（失败方向是不写）。这一点只直接调用谓词核对过（两种天数都得到 `expiring-days-mismatch`），没有写成用例。

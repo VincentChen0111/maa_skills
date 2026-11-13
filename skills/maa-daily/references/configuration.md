@@ -30,7 +30,7 @@
 | --- | --- |
 | `["Configurations",配置序号,"TaskQueue",任务位置,"IsEnable"]` | 布尔值；启用仅支持已核的普通任务，未知类型和 StartUp 等入口不自动启用 |
 | `["Configurations",配置序号,"TaskQueue"]` | 原队列位置的完整排列，例如 `[2,1,0]`；每个位置只出现一次，重复类型可独立排序，保留原任务对象，不与同队列字段改动混用；队列须全部为类型对应一致的已核普通任务，未知或不一致任务即使停用也拒绝重排 |
-| `["Configurations",配置序号,"TaskQueue",Fight位置,"UseMedicine"]` / `"MedicineCount"` | 当次 `authorization.medicineCount` 为本次总上限（0–2147483647）；各任务按用户明确的分配设置数量和开关，来源必须为 current-request；启用药剂时同时设置这两个字段 |
+| `["Configurations",配置序号,"TaskQueue",Fight位置,"UseMedicine"]` / `"MedicineCount"` | 当次 `authorization.medicineCount` 为本次总上限（0–2147483647）；各任务按用户明确的分配设置数量和开关，来源必须为 current-request；启用药剂时同时设置这两个字段；关闭见下文「碎石与临期药」 |
 | 同一路径末项为 `"UseStone"` / `"UseStoneAllowSave"` / `"StoneCount"` | 碎石。当次 `authorization.stoneCount` 为本次总上限（0–2147483647）；打开时三个字段一起写：两个开关都为 true，`StoneCount` 大于 0 且不超过授权 |
 | 同一路径末项为 `"UseExpiringMedicine"` / `"MedicineExpireDays"` | 临期药。当次 `authorization.expiringMedicine.days` 是批准的临期天数（1–30）；打开时 `MedicineExpireDays` 等于这个天数 |
 | 同一路径末项为 `"UseExpireMedicineForActivity"` | 活动结束前用当周过期的理智药。只在 `expiringMedicine.forActivity` 为 true（用户点名批准）时可以打开 |
@@ -70,7 +70,7 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 请用户批准碎石之前说明两件事：写入会同时打开 MAA 的「允许使用源石保存状态」（MAA 自己的界面把它标为危险功能）；这项设置写入后留在配置里，之后每次运行这个任务都会按数量碎石，直到再次修改。还要说明：MAA 不在理智药和源石之间选择，游戏显示理智药页面时它只用理智药，理智药数量用完就关掉页面、结束这次作战，只有游戏显示源石页面时才按碎石数量确认；背包里还有理智药时，只批准碎石通常不会碎石（依据见 daily 验证记录）。临期药批准的是「用临期药」这一策略和临期天数：开启后即使理智药数量用完，MAA 仍会使用临期天数内的药，数量授权约束不了它。
 
-关闭碎石或临期药是普通的当次请求，不需要数量或天数：把 `UseStone`（可同时把 `UseStoneAllowSave`）、`UseExpiringMedicine` 或 `UseExpireMedicineForActivity` 改为 false。只把 `UseStoneAllowSave` 改为 false 而 `UseStone` 留在 true 不算关闭，仍需碎石授权。
+关闭理智药、碎石或临期药是普通的当次请求，不需要数量或天数：把 `UseMedicine`、`UseStone`（可同时把 `UseStoneAllowSave`）、`UseExpiringMedicine` 或 `UseExpireMedicineForActivity` 改为 false，也可以同时把 `MedicineCount`、`StoneCount` 改为 0。配置里剩下的数量不用改、也不和授权比较，但之后再打开要重新批准。只把 `UseStoneAllowSave` 改为 false 而 `UseStone` 留在 true 不算关闭，仍需碎石授权。没有某一类的当次批准时，对这一类只能做上面这些关闭改动；把 `UseStoneAllowSave` 改为 true、写非零的 `StoneCount` 或 `MedicineCount`、改 `MedicineExpireDays`，即使开关仍关着，也要这一类的当次批准：数量不超过批准，天数等于批准的天数。
 
 拒绝时脚本给出静态原因码，据此告诉用户缺哪一项批准：`stone-grant-required`、`expiring-grant-required`、`medicine-grant-required`（缺对应授权）；`current-request-required`（来源不是当次请求）；`stone-quantity-exceeded`、`medicine-quantity-exceeded`（超出数量）；`expiring-days-mismatch`、`expiring-activity-not-approved`（天数或活动项与批准不符）；`stone-settings-invalid`、`medicine-settings-invalid`（开关或数量没有一起写对）；`recurring-quantity-not-authorized`（有限数量不能挂在每日重复的定时上）；`training-expiring-grant-required`（专精定时会运行到开着临期药的 Fight 任务：请用户把临期药和这份计划一起批准，或者先把临期药关掉）；`training-stone-enabled`（专精定时会运行到开着碎石的 Fight 任务：先经当次请求把碎石关掉）；`conflicting-authorizations`、`consumption-grant-invalid`（授权组合或取值不对）；`forbidden-setting`（抽卡、礼包，任何批准都不能打开）。
 

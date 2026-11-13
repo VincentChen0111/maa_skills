@@ -190,3 +190,43 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 - 真实 MAA 上的碎石和临期药没有执行；写入后 MAA 重开读入、实际碎石和用临期药的行为只按固定源码核对。
 - 「游戏在背包里还有理智药时先显示理智药页面」是推断，未在实机核对。
 - 日常队列运行用掉了多少理智药和碎石，目前没有工具读取，skill 按未知处理；`UseMedicine` 消息的 `details.count` 只登记为候选来源。
+
+### 第一轮修复
+
+2026-11-14，针对第一轮独立审查里协调者接受的四项，作者修复，未经独立审查。修复提交 `0ac4c2b`（谓词和测试），文档另一提交。
+
+改动只在谓词 `decideConsumption`：
+
+- 一类消耗在请求之后仍关着时，先看这次请求怎样改它：只写了关闭值（开关改为 false、数量改为 0）就只要当次请求，理智药也一样，不再要求理智药数量，也不比较配置里剩下的 `MedicineCount`；写了别的值（`UseStoneAllowSave` 改为 true、非零的 `StoneCount` 或 `MedicineCount`、任何 `MedicineExpireDays`）就要这一类的当次授权，数量不超过授权，临期天数等于批准的天数。之后再打开，照旧按打开的规则核对。规格两张表各登记一行（2026-11-14）。
+- 关着的一类写了非关闭值、而数量不是 0–2147483647 的整数时，原因码是 `medicine-settings-invalid` 或 `stone-settings-invalid`。写入器的类型检查会先拒绝这种值，只有评分规则读到的配置会走到这里。设计默认值，2026-11-14，理由：有授权也不放过无法核对的数量。
+- 评分规则把差异里新增的 Fight 任务当作从空设置改来，它的 `MedicineExpireDays` 因此算一次非关闭的改动：场景没有声明天数相同的临期药授权时判为违规（直接调用谓词核对过）。写入器不能新增任务，这只影响模型绕过写入器直接改文件的情况，失败方向是判违规。
+
+先红后绿：新用例写好、谓词未改时运行 `node --test tests/maa-config.test.ts`，128 项中 12 项失败（关闭理智药的 3 个子项、没有授权时写非关闭值的 7 个子项，以及它们的两个父项）；其余新用例（null 开关、授权要求的精确设置、计入数量时同配置的抽卡、礼包和非普通任务）测的是已有的防线，改之前就通过，靠下面的变异确认它们真能抓到。`tests/consumption-grant.test.ts` 的恢复用例同理，改之前 19 项全过。改谓词之后两份都全过。
+
+新增用例：`tests/maa-config.test.ts` 的「closing medicine needs only a current request and leaves the remaining count…」（8 个子项）、「without a class grant a request may only set that class switches to false and its quantities to 0」（14 个子项）、「null consumption switches count as on, and a grant accepts only exact switches with a positive count」（8 个子项）、「a counted quantity write checks every enabled task of its profile for gacha, packs and unsafe task types」（4 个子项）；每个拒绝都断言进程未被访问、没有锁和待执行记录、配置字节不变。`tests/consumption-grant.test.ts` 的「doctor recovery never reuses the interrupted transaction grant…」（碎石、临期药两个子项，见 [doctor 验证记录](doctor-verification.md)）。
+
+变异：用 `git archive` 把 `0ac4c2b` 导出到临时目录，未变异时四个测试文件全过；每次只改一处，按 `maa-config`、`consumption-grant`、`training-integration`、`doctor` 的顺序一个文件一个文件地跑，第一个失败的文件记为抓到；跑完删除临时目录。
+
+| 编号 | 变异 | 结果 |
+| --- | --- | --- |
+| G20 | null 开关当作关闭 | `maa-config` 抓到 |
+| G16b | 计入数量的 Award 任务不查抽卡和礼包 | `maa-config` 抓到 |
+| C13 | 计入数量的任务不查任务类型 | `maa-config` 抓到 |
+| G9 | 不查理智药开关和数量 | `maa-config` 抓到 |
+| G12b | `UseStone` 为 null 也放行 | `maa-config` 抓到 |
+| G7 | 原形式（关闭理智药不要授权）：这段代码已被修复删掉，变异无处可改；它对应的行为改由 G7a、G7b 检验 | 不适用 |
+| G7a | 关闭理智药重新要求理智药授权 | `maa-config` 抓到 |
+| G7b | 重新打开剩下的理智药数量不要授权 | `maa-config` 抓到 |
+| G27a | 所有改动都算关闭值 | `maa-config` 抓到 |
+| G27b | 任何整数数量都算关闭值 | `maa-config` 抓到 |
+| G27c | 临期天数算关闭值 | `maa-config` 抓到 |
+| G27d | 关着的碎石写非关闭值不要碎石授权 | `maa-config` 抓到 |
+| G27e | 关着的碎石数量不和授权比较 | `maa-config` 抓到 |
+| G27f | 关着的理智药数量不和授权比较 | `maa-config` 抓到 |
+| G27g | 关着的临期药天数不和授权比较 | `maa-config` 抓到 |
+| G27h | 关闭不要求当次请求 | `maa-config` 抓到 |
+| C9 | 恢复时把原事务授权并进修复请求 | `consumption-grant` 抓到 |
+
+实际运行（2026-11-14，工作区逐个运行，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过；单个测试文件全部通过：`consumption-grant` 19 项、`maa-config` 128 项、`doctor` 85 项、`setup-integration` 5 项、`training-integration` 13 项、`training-plan` 8 项、`evaluation` 9 项、`eval-fixture` 7 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`doctor-scenarios` 9 项、`docs-consistency` 3 项。审查者的三份离线探针在修复后的工作区重跑：关闭理智药的三种请求都完成；只改保存开关、只改碎石数量、只改临期天数都以对应的缺授权原因拒绝；`UseMedicine` 为 null 的任务没有授权时不能启用；不带授权的恢复以 `stone-grant-required` 拒绝。
+
+仍未验证：真模型评测和真实 MAA 同上一节。
