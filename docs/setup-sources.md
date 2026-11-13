@@ -64,4 +64,20 @@ R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主�
 - 记录状态里有 401／403 的厂商，出方案和下载都直接返回 `source-refused`，不向它发任何请求。脚本不能下载的厂商：`bluestacks-cn`（蓝叠 5）。用户在自己的浏览器里从官方页面 `https://www.bluestacks.cn/` 下载安装包，然后从方案里的 `run-emulator-installer` 这一步继续：由用户自己运行安装程序，不需要把文件交给脚本；之后照常是模拟器首次设置、游戏客户端（用户）和 adb 连接、复检（skill）。
 - 不带官网页面作 Referer：维护者 2026-11-14 确认，原话「yes as you recommended」（按协调者的建议不带，用户在自己的浏览器里下载）。以后若要带，需作为新规则登记：在规格两张来源表登记来源，重新只读核对后再改厂商表。
 
-未核实的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。上表的模拟器下载主机和状态已由 HEAD 核对，但只代表核对当日：没有下载任何安装包，安装包内容和完整性没有核对（大小只来自 HEAD 的 Content-Length）；蓝叠 5 的 403 以后是否解除未知，解除后也要重新核对并改表，脚本才会下载它。Windows 自带 `tar.exe`（bsdtar）解压 zip、拒绝含 `..` 的条目，本机用合成 zip 实测过（见 [setup 验证记录](setup-verification.md)）。
+未核实的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。上表的模拟器下载主机和状态已由 HEAD 核对，但只代表核对当日：没有下载任何安装包，安装包内容和完整性没有核对（大小只来自 HEAD 的 Content-Length）；蓝叠 5 的 403 以后是否解除未知，解除后也要重新核对并改表，脚本才会下载它。MAA zip 里的 `DependencySetup_依赖库安装.bat` 条目名是否带 UTF-8 标志（0x0800）也未核实：带标志按 UTF-8 解码；不带标志时同样按 UTF-8 严格解码，解不出就整包失败，不会写出乱码名。
+
+### 解压方式（2026-11-14）
+
+要解压的只有两种 zip：MAA 发布包和 platform-tools；Node 的 `.msi` 和模拟器安装程序只下载，由用户运行，从来不解压，所以不涉及别的格式。
+
+发现：原先用 Windows 自带的 `tar.exe`（bsdtar 3.8.9，libarchive 在 System32 的 `archiveint.dll`）。它把 zip 条目名从 UTF-8 转成本进程的 ANSI 代码页；代码页里没有的字符转不了，这个条目就被跳过（「Archive entry has empty or unreadable filename ... skipping」），最后以 1 退出。MAA 发布包里有 `DependencySetup_依赖库安装.bat`，其中「赖」「库」是简体字，英文（1252）、日文（932）代码页里没有（两者都已实测，见下），韩文（949）只收繁体汉字、按字符表推断也没有，所以这些系统上的真实用户解压 MAA 一定失败；只有代码页是 936 或启用了「使用 Unicode UTF-8 提供全球语言支持」（65001）的系统能成功。证据：
+
+- GitHub windows-latest（代码页 1252）上，PR #70 的「MAA extraction is the skill's only install step…」两次得到 `failed` 而不是 `extracted`。
+- 本机的 ANSI 代码页是 65001（不是 936），所以本机能通过。本机把 `tar.exe` 复制到临时目录，只换掉它内嵌的清单，加上 `activeCodePage` 强制本进程代码页，再解压同一个合成 zip：en-US（1252）、ja-JP（932）、Legacy（本机系统区域为 en-US，即 1252）下，中文名、韩文名和 emoji 名都被跳过并退出 1；zh-CN（936）下中文名成功、韩文名和 emoji 名失败；UTF-8 下全部成功。转换失败的提示文字也在 `archiveint.dll` 里（「Pathname cannot be converted from %s to current locale」等）。
+- 同一实验还显示 `tar.exe` 对危险条目名是「改名后照样解压」：去掉盘符或开头的 `/` 后解到目标文件夹里、`a:b` 解成 `b`、`MAA.exe.` 和 `NUL.txt` 原样写出，不分大小写重名时直接覆盖，都以 0 退出；只有含 `..` 的条目会报错。没有写到目标文件夹之外。
+
+做法（设计默认值，2026-11-14，见[规格](spec.md)「默认值及其来源」）：改用 Windows 10／11 自带的 Windows PowerShell 5.1（`System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -Command`）里的 .NET Framework `ZipArchive`。.NET 按 UTF-8 标志把条目名直接解码成 UTF-16，用宽字符接口写盘，不经过 ANSI 代码页；同样的强制代码页实验里，复制出来的 powershell.exe 在 1252、932、936 和 65001 下都原样解出了中文、韩文、带重音字母和 emoji 的名字。脚本文字固定，压缩包和目标路径只经环境变量传入；不调用 cmdlet，只用 .NET 方法，并且不把调用方的 `PSModulePath` 传给它（PowerShell 7 的模块路径会让 5.1 加载模块失败）。写入前先检查全部条目名，任何一条不合格就整包拒绝、什么都不写：空名、`/` 或 `\` 开头（含 `\\?\`）、空段、`.`／`..` 段、Windows 文件名非法字符（含 `:`，即盘符和备用数据流）、设备名（CON、PRN、AUX、NUL、COM0–9、LPT0–9、CONIN$、CONOUT$，带不带扩展名）、末尾点或空格、含替换字符（名字不是有效 UTF-8）、规范化后路径改变或不在目标文件夹下、不分大小写重名、文件与文件夹同名。写入时逐级建文件夹，已有的一级必须是普通文件夹，遇到重解析点（联接、符号链接）即停；文件用「只新建」打开，已有同名文件时失败，不覆盖。退出码 0 为成功，2 为条目名或路径被拒绝，3 为目标路径形式不对，其他为出错；产品把任何非零、超时或启动失败都记为 `extract-failed` 并清空目标文件夹。
+
+长路径：`tar.exe` 的清单声明了 longPathAware，powershell.exe 没有；本机（LongPathsEnabled 为 0）先用普通路径写，完整路径 240 字符成功、300 字符以 1 退出。所以条目名在普通完整路径上检查，写盘改用同一路径的扩展长度形式（`\\?\` 前缀，UNC 为 `\\?\UNC\`），超过 260 字符也能写，和 `tar.exe` 一致。目标路径本身已是 `\\?\` 或 `\\.\` 形式时拒绝（退出码 3）。
+
+已知限制：受约束语言模式（WDAC／AppLocker 强制）会禁止这些 .NET 调用，那时解压失败（`extract-failed`），不会写到别处；这一点按 PowerShell 文档推断，本机未实测。

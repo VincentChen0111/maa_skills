@@ -35,7 +35,7 @@
 
 首轮全绿后自读代码又发现三处问题并修正：模拟器下载后的「下一步」错误地包含下载步骤本身；进程中途退出的下载留下的临时文件从不回收；下载记录里的文件名未校验，被改写的记录可以指向下载文件夹以外。这三处都是先改产品、后补断言（模拟器 `next`、新下载回收死进程的临时文件、指向外部的记录被忽略且不解压），再临时恢复旧行为确认每条新断言失败，最后恢复：三项均为 exit 1、各 1 项失败。在最终代码上重跑上表全部变异，结论不变。
 
-本机另做的边界事实核对（临时目录，非仓库测试）：Node 的 fetch 在 `redirect: 'manual'` 下返回真实 302 和 Location（本机回环服务器）；Windows 自带 `tar.exe` 能解压 zip，遇到含 `..` 的条目报错退出 1、只解出其他条目，产品把非零退出当失败并清空目标文件夹（测试里用合成 zip 实测）。
+本机另做的边界事实核对（临时目录，非仓库测试）：Node 的 fetch 在 `redirect: 'manual'` 下返回真实 302 和 Location（本机回环服务器）；Windows 自带 `tar.exe` 能解压 zip，遇到含 `..` 的条目报错退出 1、只解出其他条目，产品把非零退出当失败并清空目标文件夹（测试里用合成 zip 实测）。（2026-11-14 起不再用 `tar.exe`：它依赖进程 ANSI 代码页，见下文「Windows CI 解压失败修复」。）
 
 ### 验收条件与证据
 
@@ -60,7 +60,7 @@
 - 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe` 只由 MAA 的 ci.yml 推断（见 [setup 来源](setup-sources.md)「R1 补充」）；platform-tools zip 为 `platform-tools/adb.exe` 未核实。GitHub 资产跳转到 `release-assets.githubusercontent.com` 由 R1 审查员只读核实；六个模拟器厂商的下载链路由本作者 2026-11-13、2026-11-14 用 HEAD 逐跳只读核对（见 [setup 来源](setup-sources.md)「下载链路核对」），只代表核对当日，没有下载任何安装包，安装包内容没有核对。
 - 真实安装：没有运行任何安装程序，没有在本机安装 MAA、模拟器、adb 或 Node，也没有接触维护者的 MAA、模拟器或 adb。
 - Node 主版本不是 24 时的 CLI 放行只经代码阅读确认；本机只有 Node 24，没有用其他 Node 版本实际运行。
-- Linux CI 上两个 Windows 解压测试和 CLI 下载测试会跳过；Windows CI 尚未在本分支运行。
+- Linux CI 上 Windows 解压测试（2026-11-14 起共六项）和 CLI 下载测试会跳过；Windows CI 在本分支的结果见下文「Windows CI 解压失败修复」。
 
 ### R1 修复（2026-11-13，协调者已接受全部三项）
 
@@ -171,6 +171,36 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 测试先行：先改测试，`check-purposes` 7 项中 1 项失败（复检的检查编号缺 `configuration`、`write-lock`），`setup-download` 新增三项失败（复检结果里没有这两行）；改代码后这三项通过，原有两项复检用例因编号表和缺 `Timers` 的合成配置失败，补齐后通过。新用例：遗留锁（不存在的 pid）和认不出的锁各一次，`complete: false`、退出码 1、`pending` 为 `['write-lock']`、环境记录同样保存，且两行与同一现场 `runChecks` 的同名行逐字相同；持锁进程仍在（本进程 pid）为提醒、仍完成；没有锁时照旧完成；`Timers` 为 null 时 `maa` 正常、`configuration` 出错并挡住。
 
 实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 7/7、setup-download 23/23、setup-download-scenarios 20/20、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、审查员的复现脚本（它不传进程替身，遗留锁会调用真实进程边界）、真实下载和网络。未验证：真模型在 `pending` 带 `write-lock` 时是否转 maa-doctor（行为评测待 26；复检要真实 adb 传输，离线评测没有替身，没有新增场景）；非 Windows 机器上的用例只按代码推断。
+
+### Windows CI 解压失败修复（2026-11-14）
+
+问题：PR #70 在 GitHub windows-latest 上两次失败，`tests/setup-download.test.ts` 的「MAA extraction is the skill's only install step…」得到 `failed` 而不是 `extracted`；本机通过。合成包里有 `DependencySetup_依赖库安装.bat`（带 UTF-8 标志），真实 MAA 包里也有这个文件名。
+
+根因（已证实）：Windows 自带的 `tar.exe`（bsdtar 3.8.9）把条目名转成本进程的 ANSI 代码页，转不了的条目跳过（「Archive entry has empty or unreadable filename ... skipping」）并以 1 退出。协调者的假设成立，只有一处更正：本机的 ANSI 代码页是 65001（系统区域 en-US，启用了 UTF-8 全球语言支持），不是 936。证据（实验在临时目录，脚本不进仓库）：把 `tar.exe` 和 `powershell.exe` 各复制一份，只换掉内嵌清单、加 `activeCodePage` 强制进程代码页，用同一个合成 zip 解压。
+
+| 进程代码页 | tar.exe：中文名 | tar.exe：韩文名、emoji 名 | 新做法（powershell.exe 副本跑产品脚本）：中文、韩文、带重音字母、emoji |
+| --- | --- | --- | --- |
+| 1252（en-US，也是本机 Legacy） | 跳过，退出 1 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 932（ja-JP） | 跳过，退出 1 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 936（zh-CN） | 成功 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 65001（UTF-8，即本机） | 成功 | 成功 | 全部原样解出，退出 0 |
+
+所以英文、日文等系统的真实用户用旧做法解压 MAA 一定失败。同一实验还看到 `tar.exe` 对危险条目名是改名后照样解压：去掉盘符、`\\?\` 前缀或开头的 `/` 后解进目标文件夹，`a:b` 解成 `b`，`MAA.exe.` 和 `resource/NUL.txt` 原样写出，不分大小写重名时覆盖前一个，都以 0 退出；只有含 `..` 的条目报错。没有写到目标文件夹之外。详见 [setup 来源](setup-sources.md)「解压方式」。
+
+修复：`setup-download.ts` 的解压边界 `systemArchive`（现导出，接口 `ArchiveBoundary.extract`、600 秒上限、`windowsHide`、结果形状和「非零即 `extract-failed`、超时为 `extract-timeout`」的映射都不变）改为运行 `System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -Command <固定脚本>`，路径只经环境变量 `MAA_SKILLS_EXTRACT_ARCHIVE`／`MAA_SKILLS_EXTRACT_TARGET` 传入，不传调用方的 `PSModulePath`，标准输入立即关闭。脚本规则见规格「默认值及其来源」新行「08 解压」（设计默认值，2026-11-14）。只有 MAA 和 platform-tools 两种 zip 走这条路，Node `.msi` 和模拟器安装程序从不解压，没有别的格式依赖 `tar.exe`。另改：`tests/fixtures/zip.ts` 支持 deflate 条目和原始字节名；`skills/maa-setup/references/setup.md` 的 `install` 一行和解压说明；规格「检查与修法」08 一条、「规则来源」08 行；`setup-sources.md`「解压方式」。工单正文未改。
+
+测试先行（新增，均为 Windows 专用，Linux 上跳过）：先只把 `systemArchive` 导出、仍用 `tar.exe`，写下面四项，再换实现。
+
+- 「the Windows extraction boundary keeps UTF-8 entry names and bytes exactly, whatever the ANSI code page」：目标文件夹名「明日方舟 MAA」，条目含简体中文、韩文、带重音字母和 emoji（没有哪个旧 ANSI 代码页能同时容纳），stored 与 deflate 各有，逐字节比对内容，目标外无任何文件。旧做法在本机通过（代码页 65001），无法在测试里切换进程代码页（系统代码页是全系统设置，改要管理员并重启，不做）；红的证据是 CI 日志和上表的强制代码页实验。
+- 「…refuses unsafe entry names before writing anything」11 个子项：`../`、`sub\..\..\`、带盘符的绝对路径、`\\?\` 前缀、`/` 开头、`a:b`、`resource/NUL.txt`、`MAA.exe.`、非 UTF-8 字节名、不分大小写重名、`MAA.exe/inner.txt`；每项都要求退出码 2（被条目名检查拒绝）且目标内外都没有写任何东西。旧做法：前 10 项全部失败（7 项改名或覆盖后退出 0；`../`、`sub\..\..\` 和非 UTF-8 名退出 1，但不是写入前的整包拒绝，实验里 `../` 一项已先写出 `MAA.exe`）。第 11 项是换实现后补的。
+- 「…never overwrites an existing file and never follows a reparse point」：目标里已有 `MAA.exe` 时失败且内容不变；目标里的联接指向外部文件夹时退出 2，外部文件夹仍为空。旧做法：覆盖了已有文件，失败。
+- 「…writes paths longer than 260 characters, as tar.exe did」：第一版新实现只用普通路径写，本机（LongPathsEnabled 为 0）完整路径 240 字符成功、300 字符退出 1；补这一项（失败）后改为用 `\\?\` 形式写，通过。
+
+改实现后全部通过；原有两项 Windows 解压用例（含 CI 失败的那项）照常通过。变异核对（逐个改坏脚本、只跑这几项、再恢复）：去掉重解析点检查、设备名检查、重名检查、文件夹与文件同名检查、替换字符检查、改成允许覆盖、写盘改回普通路径，7 处各自有对应用例失败。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 38/38、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、check-purposes 7/7、help-installation 6/6、metadata 2/2；`node scripts/privacy.ts` 无发现，`node scripts/tracker.ts` 无错误。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。
+
+未验证：新提交上的 Windows CI（windows-latest，代码页 1252）尚未运行，是这次修复的最终核对；真实 MAA 包和 platform-tools 包从未下载、解压（包内是否带 UTF-8 标志、最长路径都未核实）；真实英文或日文系统只用强制进程代码页的副本模拟；受约束语言模式（WDAC／AppLocker）下会失败只按文档推断；`setup.md` 是 skill 文字，行为评测未运行（待 26）。
 
 ## 当前交付结论
 
