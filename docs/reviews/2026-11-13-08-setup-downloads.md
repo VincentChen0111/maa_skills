@@ -5,12 +5,14 @@
 - 第一轮修复 `1350bb3`、`6a4c02c`、`64f1b74`；
 - 第二轮修复 `1ef2f7d`、`acebe2c`、`f201da9`；
 - 第三轮修复 `9e67414`、`363785e`、`0a5f030`（第四轮审查）；
-- 第四轮修复 `87721e6`、`1e46fc7`、`efc90e5`（第五轮审查）。
+- 第四轮修复 `87721e6`、`1e46fc7`、`efc90e5`（第五轮审查）；
+- 合并 main（含 10）与适配 `8208ea0`、`09cb5d2`、`1a5fe21`（第六轮审查）；
+- 第六轮修复 `259d1fa`（第七轮审查）。
 
 审查方式：
 - 每轮由一名新上下文的独立审查员审查。审查员读取自包含说明、AGENTS.md、CONTRIBUTING.md、工单 08 和 07、规格相关章节和 diff；第二轮起只审修复。
 - 意见由协调者逐条判断，只接受真实错误。
-- 共五轮。前三轮已达到维护者定的上限（「轮数上限3」）。维护者 2026-11-14 同意这次可以开第四轮（「这次可以开第四轮，但是还是尽可能在3轮之内」），之后又同意本次任务需要时可以再开（「for this task only, if need more rounds they're okay but still when designing and running reviews make 3 rounds as a important target.」）。没有被拒绝的意见。
+- 共七轮，第六、七轮审查合并 10 之后的适配。前三轮已达到维护者定的上限（「轮数上限3」）。维护者 2026-11-14 同意这次可以开第四轮（「这次可以开第四轮，但是还是尽可能在3轮之内」），之后又同意本次任务需要时可以再开（「for this task only, if need more rounds they're okay but still when designing and running reviews make 3 rounds as a important target.」）。没有被拒绝的意见。
 
 ## 第一轮
 
@@ -151,10 +153,26 @@
 | --- | --- | --- |
 | P3：skill 对 `source-refused` 只写了模拟器的处理，没写 MAA、Node、adb 遇到 GitHub 限流 403 时可以稍后重试或用同一份方案重试 | 接受，转 [Issue #67](https://github.com/VincentChen0111/maa_skills/issues/67) | 共享出口 IP 上 GitHub 限流很常见，agent 会给出不可行的下一步；脚本本身失败即关 |
 
+## 第六轮：合并 10 之后的适配
+
+2026-11-14。main 并入 10（`blockingChecks` 按用途决定哪些检查结果挡住什么），08 的复检原来自己按 `status === 'error'` 判断，凭据读不出等无关错误会让 setup 永远不算完成，PR #70 的 CI 也因此失败。适配：`blockingChecks` 新增用途 `setup-recheck`，复检的 `pending` 和 `complete` 改由它判断，另加复检自己的 `connection` 一项；不挡完成的错误记在 `notBlocking`。审查范围 `58e2d19..1a5fe21`。
+
+结论：有条件通过，一条 P2。审查员核对后认为合并解决和归类正确：08 的两条修法文字原样移进共享修法表，连接测试的前提与原来等价，只有凭据错误（和非 Windows 的 platform）会进 `notBlocking`，未知编号一律挡住。
+
+| 意见 | 处置 | 理由 |
+| --- | --- | --- |
+| P2：`setup-recheck` 把 `write-lock` 列为挡住完成，规格和 setup.md 也这样写，但复检从不产生 `write-lock` 这一行；上次连接写入结果未知、锁还在时，复检仍报 `complete: true` | 接受 | 有离线复现；完成的结论是假的，之后 daily 写入会被拒 |
+
+修复 `259d1fa`：doctor 的 `configuration` 和 `write-lock` 两行原样移成共用函数，doctor 和复检都用；复检在设置里有 MAA 目录时带上这两行。一致性测试新增一条：一个用途挡住的编号，必须出现在这个使用方拿到的检查行里，或登记为另行提供，或登记为这个使用方不产生。
+
+## 第七轮
+
+结论：通过，没有意见。审查员离线复现：旧代码在遗留锁、认不出的锁下返回 `complete: true`，新代码返回 `complete: false`、`pending` 为 `['write-lock']`；doctor 移出的两行在 9 种现场下与修改前逐字相同；复检只在遗留锁时只读查看 MAA 进程，查看出错时保持挡住；按固定 MAA v6.21.4 源码（`52d0b2a` 的 `Root.cs` 第 42–43 行、`ConfigFactory.cs` 的保存路径）核对，MAA 写出的 `gui.new.json` 一定带对象形式的 `Timers`，新装也一样，所以复检要求它不会挡住正常接入；删掉复检的 write-lock 行的变异被两个测试文件抓到。
+
 ## 验证
 
 - 每轮作者都运行了 `npm run typecheck` 和受影响的单文件测试，全部通过。
-- 每轮审查员都独立运行了 typecheck 和受影响的测试，全部通过。
+- 每轮审查员都独立运行了 typecheck 和受影响的测试，全部通过。第七轮：check-purposes 7/7、setup-download 23/23、setup-download-scenarios 20/20、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2。
 - 完整离线入口 `node scripts/check.ts` 在 `2fc26bc` 和第一轮修复后都全部通过（各有 1 项非 Windows 用例跳过）。
 - 第二、三轮修复后的完整入口只有一项失败，就是 `tests/maa-process.test.ts` 的「关闭 MAA」用例：
   - 报错为 `maa-close-timeout` 或 `maa-start-timeout`；
