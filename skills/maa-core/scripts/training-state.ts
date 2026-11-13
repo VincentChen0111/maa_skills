@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parseCallbackBody, parseCoreLogLine, parseTaskAssignment, parseTaskParamsChange, parseTaskSubmission } from './maa-callback.ts';
 
 export type TrainingActionKind = 'preplace' | 'start' | 'assistant' | 'observe';
 export type TrainingPlan = {
@@ -44,22 +45,23 @@ export function reconcileTraining(input: TrainingPlan, text: string, observedAt:
   if (!validTime(since)) throw new Error('training-plan-invalid');
   const appends = new Map<string, { chain: string; at: string; hash: string }>();
   for (const line of text.split(/\r?\n/)) {
-    const envelope = /^\[([^\]]+)\].*?\[Px(\d+)\]\[Tx(\d+)\].*?Assistant::(append_task|append_callback|set_task_params)\s+(.+)$/.exec(line);
+    const envelope = parseCoreLogLine(line);
     if (!envelope || !plan.action) continue;
-    const at = new Date(envelope[1]!), process = envelope[2]!, thread = `${process}/${envelope[3]}`;
+    const at = new Date(envelope.time), process = envelope.processId, thread = `${process}/${envelope.threadId}`;
     if (!Number.isFinite(at.getTime()) || at.getTime() < Date.parse(since)) continue;
-    const stamp = at.toISOString(), method = envelope[4], body = envelope[5]!;
+    const stamp = at.toISOString(), method = envelope.method, body = envelope.body;
     if (at.getTime() > Date.parse(observedAt)) { plan.state = 'unknown'; plan.issues.push('training:future-log-record'); continue; }
     if (method === 'append_task') {
-      const submission = /^(\w+)\s+(\{.*\})\s*$/.exec(body), assignment = /^\|\s*task_id:\s*(\d+)\s*$/.exec(body);
+      const submission = parseTaskSubmission(body), assignment = parseTaskAssignment(body);
       if (submission) {
         appends.delete(thread);
-        let parameters: unknown; try { parameters = JSON.parse(submission[2]!); } catch { continue; }
-        if (matchesNativeParameters(plan, submission[1]!, parameters)) appends.set(thread, { chain: submission[1]!, at: stamp, hash: createHash('sha256').update(JSON.stringify(parameters)).digest('hex') });
-      } else if (assignment) {
+        if (!submission.valid) continue;
+        const parameters = submission.params;
+        if (matchesNativeParameters(plan, submission.type, parameters)) appends.set(thread, { chain: submission.type, at: stamp, hash: createHash('sha256').update(JSON.stringify(parameters)).digest('hex') });
+      } else if (assignment !== null) {
         const candidate = appends.get(thread); appends.delete(thread);
         if (!candidate || at.getTime() < Date.parse(candidate.at)) continue;
-        const taskId = Number(assignment[1]); if (!Number.isSafeInteger(taskId) || taskId <= 0) continue;
+        const taskId = assignment; if (!Number.isSafeInteger(taskId) || taskId <= 0) continue;
         const bound = plan.action.native;
         if (bound && (bound.process !== process || bound.taskId !== taskId || bound.appendedAt !== candidate.at || bound.paramsHash !== candidate.hash)) {
           plan.state = 'unknown'; plan.issues.push('training:ambiguous-native-task');
@@ -68,16 +70,14 @@ export function reconcileTraining(input: TrainingPlan, text: string, observedAt:
       continue;
     }
     if (method === 'set_task_params') {
-      const change = /^(\d+)\s+(\{.*\})\s*$/.exec(body), bound = plan.action.native;
-      if (change && bound?.process === process && bound.taskId === Number(change[1]) && !plan.action.completedAt) {
+      const change = parseTaskParamsChange(body), bound = plan.action.native;
+      if (change && bound?.process === process && bound.taskId === change.taskId && !plan.action.completedAt) {
         plan.state = 'unknown'; plan.issues.push('training:native-task-parameters-changed');
       }
       continue;
     }
-    const match = /^\|\s*(\w+)\s+(\{.*\})\s*$/.exec(body); if (!match) continue;
-    let payload: ObjectValue;
-    try { payload = object(JSON.parse(match[2]!)); } catch { continue; }
-    const message = ({ '10001': 'TaskChainStart', '10002': 'TaskChainCompleted', '20001': 'SubTaskStart', '20002': 'SubTaskCompleted', '20003': 'SubTaskExtraInfo' } as Record<string, string>)[match[1]!] ?? match[1];
+    const callback = parseCallbackBody(body); if (!callback) continue;
+    const { message, payload } = callback;
     const bound = plan.action.native;
     if (!bound || bound.process !== process || bound.taskId !== payload.taskid || bound.chain !== payload.taskchain) continue;
     const key = createHash('sha256').update(line).digest('hex');
