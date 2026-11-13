@@ -351,6 +351,17 @@ export const craftingSources: Record<string, PublicJsonSource> = {
   stages: { ...operatorCostSources.items!, file: 'zh_CN/gamedata/excel/stage_table.json' },
 };
 
+/** The pinned cost and recipe tables every gap calculation uses; the cultivation report reuses this loader. */
+export async function loadGapTables(fetcher?: typeof fetch): Promise<GapTables> {
+  const tables = await loadOperatorCostTables(fetcher);
+  const load = async (key: string) => {
+    try { return await readPublicJson(craftingSources[key]!, fetcher); } catch { throw new Error(`gaps-source-unavailable:${key}`); }
+  };
+  const [building, stages] = await Promise.all([load('building'), load('stages')]);
+  return { ...tables, building: building.value, stages: stages.value,
+    sources: [...tables.sources ?? [], building.source, stages.source].sort((a, b) => a.file.localeCompare(b.file)) };
+}
+
 /** Reads only the selected snapshot and pinned public sources; no recognition, reports or account writes. */
 export async function queryCultivationGaps(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}): Promise<GapResult> {
   const request = object(input), settings = await readSettings(options.home);
@@ -358,13 +369,7 @@ export async function queryCultivationGaps(input: unknown, options: { home?: str
   if (!file) throw new Error('gaps-snapshot-directory-required');
   let snapshot: unknown;
   try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('gaps-snapshot-unavailable'); }
-  const tables = await loadOperatorCostTables(options.fetcher);
-  const load = async (key: string) => {
-    try { return await readPublicJson(craftingSources[key]!, options.fetcher); } catch { throw new Error(`gaps-source-unavailable:${key}`); }
-  };
-  const [building, stages] = await Promise.all([load('building'), load('stages')]);
-  return calculateCultivationGaps({ ...tables, building: building.value, stages: stages.value,
-    sources: [...tables.sources ?? [], building.source, stages.source].sort((a, b) => a.file.localeCompare(b.file)) }, snapshot, input);
+  return calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
 }
 
 const cell = (value: unknown) => String(value).replace(/[\r\n|]/g, ' ');
