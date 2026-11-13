@@ -148,7 +148,7 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 
 测试先行：先写 `tests/stage-identity.test.ts`。由于新判断尚未导出，整文件先因导入失败报红；另把不依赖新导出的三项复制到被忽略的 `.tmp/29/r1-red-raid.test.ts` 对旧代码运行，`.tmp/29/r1-red2.txt` 记录 3 项全部失败：第 9 章突袭的两份作业是 blocked；写着 `act50side_ex02` 的作业在 TD-EX-1 下是 ready（错关会被准备）；没写难度的作业在普通关是 blocked。实现后这些用例通过。
 
-与 15 相比还有两处行为变化，都是同一判断的直接结果：只写 levelId 末段、而末段不是任何 stageId 的作业（例如 `training_1`）现在判为无法确定，MAA 同样查不到它；写完整 levelId、而这个 levelId 被两个同难度的关卡共用时（固定表有 71 个，例如活动任务关卡的 `_m1`/`_m2`），现在判为同图无法证明，不再接受。
+与 15 相比还有两处行为变化，都是同一判断的直接结果：只写 levelId 末段、而末段不是任何 stageId 的作业（例如 `training_1`）现在判为无法确定，MAA 同样查不到它；写完整 levelId、而这个 levelId 被两个同难度的关卡共用时（固定表有 71 个这样的 levelId、共 142 关），现在判为同图无法证明，不再接受。（R2 更正：R1 的实现漏了「一个普通一个突袭」这个条件，其中同代号、同难度组的 27 个 levelId（54 关，act1–6 bossrush 的 `_tm` 系列和 act21side_03/04/05 的 `_m1`/`_m2`）在写另一关 stageId 时仍判为本关；R2 已改，见下文。）
 
 本轮只改了上一轮自己的 29 测试，15 的测试没有改：检索结果多了 `sameMap`、`unresolved` 两个计数；「名称相近的其他关卡」用例给合成关卡表补了一条 `synthetic_010`，因为查不到的名字不再算作其他关卡；`#s` 用例的理由从 `map-mismatch` 改为 `stage-same-map-unproven`。
 
