@@ -75,3 +75,56 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 六个模型场景、fixture 和固定框架不变。8e 的 CI/原生/32 次 after 证据及累计 96 次真实尝试按本页顶部完整保留；修后候选由根代理重新固定并执行相应原生、模型及 CI，不冒用旧头成功。PR41 保持草稿，15 仍进行中，16 依赖不解除。
 
 本次最终完整离线入口 `.tmp/stage-r3-final-check.txt` 退出 0：297 total / 295 pass / 0 fail / 2 skip（仍为短路径别名和非 Windows adapter 平台条件），tracker/privacy/metadata 无错误，评分自检 7 rules / 14 samples 通过。类型检查及差异空白检查通过，文档后续更新另核 tracker/privacy/metadata；逐文件检查新回归和完整 R3 记录均为合成/公开数据。prepare 回归同时拒绝未知、不满足、重复或与主作业重复的备选，明确删减后未选资产不落盘。上述作者结果不替代 R4 独立结论或新候选的远程原生/模型/CI。
+
+## 29 匹配改进作者验证（2026-11-13）
+
+基点 `4a1fd26`（PR 49 合并后的 main），分支 `claude/29-stage-job-matching`；工单 [29](issues/29-stage-job-matching-improvements.md)。本节是作者记录，不代替独立审查、真实模型评测或实机运行。来源、固定提交和逐项结论见[作业接口核对](stage-jobs-sources.md)「29 匹配改进核对」。
+
+### 逐项结论
+
+| 项 | 核实结论 | 交付 |
+| --- | --- | --- |
+| 线上后端 | 线上是 ZootPlusBackend `746b394`（`/version` 实读）；MaaCopilotServer `e3f9cbf` 已归档，不是线上版本；15 用到的参数和端点在线上仍成立 | 只更新核对记录，查询不用改 |
+| 没写要求的旧作业 | MAA 对缺省 requirements 不作要求，没有按稀有度的默认值；MAA-PRTS 的默认表是其用户定的规则 | 缺省、null、空对象记为「要求未写明，待核」；不给推定值 |
+| 借助战 | 成立：MAA 恰好缺一组时借助战补位，只按名字和技能挑人；列表模式的开关是界面运行状态 | 候选标为 support（需借助战），单列、批准时 `supportJobs` 点名，记录借的位置；不写 SupportMode |
+| 评分 | 字段含义成立；「≤50 票评分不足」只在源码默认值上成立，线上分界是 10 票；详情接口有缓存 | 评分取自查询摘要，按作业站自己的标记和随票数上升的好评率门槛分三档排序 |
+| 关卡后缀 | 有：`#s`（SIX_STAR，45 条），协议没有对应难度位 | `stages` 返回 `tableDifficulty`；`#s` 继续 unsupported，补测试 |
+| 动作里的干员名 | 名字可以是干员名或群组名；设置单位坐标可登记装置；召唤物、装置在游戏表里是 TOKEN/TRAP | 未声明的干员和无法识别的名字记为待核并列出；在线查询另读固定干员表 |
+| 接口语义 | `level_keyword` 匹配关卡名、levelId、stageId（不含章节 ID），没命中时不筛关卡；`~` 排除成立 | 每关记录返回的作业 ID，报告区分没有作业、其他关卡、疑似退回、覆盖不足 |
+
+核实后没有实施的部分：`operator` 参数（含 `~` 排除）不用于查询，因为服务端只索引 `opers` 的名字、不含群组成员，按名字排除会误删群组里另有可用成员的作业；按稀有度的默认练度不采用（见上表）；`has_next` 在恰好装满的最后一页也为真，只会让报告多标一次未穷尽，不改；`limit` 上限是 50，但每关 3 页×20 条是 15 的规格上限，本票不改；作业站前端的评分文字分档只作背景，没有采用。
+
+### 测试先行与实际运行
+
+新增 `tests/stage-jobs-matching.test.ts`，每项都先在共享 CLI 或导出函数接缝写失败测试，用合成作业和合成账号快照，网络只用边界替身。逐项观察到的红灯：没写要求的条目返回 ready（`.tmp/29/red1.txt`）；评分排序下主作业仍是接口第一份（`red2.txt`）；检索结果字段不存在（`red3.txt`）；未声明干员的作业仍是 ready（`red4.txt`）；缺一人的作业是 unknown 而不是 support（`red5.txt`）；准备时点名的需借助战作业被拒（`red6.txt`）；`stages` 没有原始难度（`red7.txt`）。这些文件在被忽略的 `.tmp/29`，不随提交。
+
+新文件 11 项测试：
+
+- `operator entries without written requirements stay 待核 instead of passing on ownership alone`、`CLI query reports unstated requirements as 待核 in Markdown`；
+- `ratings only reorder ready candidates: …`、`online collection reads rating counts from the query summary, not the cached detail view`；
+- `search results distinguish no jobs, unrelated fallback results and insufficient coverage`；
+- `operators referenced by actions but not declared in opers or groups keep the job 待核`、`online table loading reads the pinned character table for queries and degrades to unclassified names when it is unavailable`；
+- `a job missing exactly one operator the account does not own is listed separately as 需借助战`、`a 需借助战 job is prepared only when the approval names it; the plan records the borrowed slot`；
+- `reports in the earlier match structure no longer verify, so their approvals do not carry over`；
+- `the six-star #s stage spelling is listed but not matched: …`。
+
+15 的既有测试保留，只做了两处结构适配，断言没有放宽：`tests/stage-jobs-regressions.test.ts` 的「derived groups preserve …」把只作分配用途的「仅甲」组成员从无要求改为 `{ elite: 0 }`，因为本票有意让无要求条目待核，这个用例要测的唯一分配和派生内容不变；「approval binds displayed execution and search coverage …」里手工改写的检索覆盖补上新的 `ids: []` 字段，仍断言改动后被拒。准备入口把「报告无法重新核对」统一按批准不匹配拒绝，旧结构报告因此不能沿用批准；报告指纹、批准绑定和派生执行内容的校验逻辑没有改。
+
+`tests/stage-scenarios.test.ts` 在两种安装布局实际调用共享 CLI，覆盖原有六个和新增四个场景（`daily-stage-requirements-unstated`、`daily-stage-support-named`、`daily-stage-rating-order`、`daily-stage-undeclared-action`），并核对新增场景的状态、单列和排序。
+
+实际运行（本机 Windows，Node 24）：`npm run typecheck` 通过；单文件 `tests/stage-jobs-matching.test.ts` 11/11、`stage-jobs.test.ts` 6/6、`stage-jobs-regressions.test.ts` 11/11、`stage-scenarios.test.ts` 1/1、`stage-demo.test.ts` 1/1、`maa-config.test.ts` 59/59、`doctor.test.ts` 74/74、`doctor-scenarios.test.ts` 6/6 通过。完整离线入口 `node scripts/check.ts`（输出 `.tmp/29/check-1.txt`）退出 0：394 项，393 通过、0 失败、1 跳过（非 Windows 适配器在本平台不适用），tracker、privacy、metadata 无错误，评分自检 7 rules / 14 samples 通过。
+
+### 报告结构变化（供 16、17 合并时对照）
+
+- 候选状态多了 `support`（需借助战）；只有 `ready`，或在 `supportJobs` 点名的 `support`，能进入批准。
+- 每份候选新增 `rating`、`actionNames`、`support`；每关新增 `supportCandidates`、`searchResult`；`search[]` 每项新增 `ids`；`tables` 新增 `characters`（只含用到的条目）和 `charactersSource`；`stages` 动作返回 `tableDifficulty`。
+- 主作业和备选的建议顺序按评分分档，同档保持接口顺序；`candidates` 仍按接口顺序完整保留。
+- 批准的 `selections[]` 可带 `supportJobs`；待执行记录的 `ApprovedJob` 可带 `support: { slot, members }`。
+- 报告指纹随这些字段变化，旧报告上的批准不沿用。
+
+### 未验证
+
+- 六个原有 stage 场景和四个新增场景的同模型前后评测没有运行：28 正在并行实现，评测专用登录目录还没有登录，按规则不调用真实模型。记为未验证，由 [26](issues/26-v0-1-0-release-validation.md) 发布验收补上；26 正文目前只列出原有六个场景。
+- 没有运行真实 MAA、模拟器或游戏：借助战补位、「借助战」开关和「补漏」档位只有固定源码和合成配置证据；MAA 能否在好友助战里找到对应干员取决于实际助战列表。
+- 在线查询读取固定干员表只用边界替身测试；作者 2026-11-13 匿名下载该文件（15.6 MB）用于核对，CLI 在线路径没有实跑。
+- 线上评分分界（10 票）来自一次 300 份作业的抽样，作业站配置以后可能改变；本工具直接使用作业站的标记，不依赖这个数字。
