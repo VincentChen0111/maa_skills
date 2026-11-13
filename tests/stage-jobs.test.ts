@@ -10,6 +10,7 @@ import { parseMaaSnapshot } from '../skills/maa-core/scripts/account-snapshot.ts
 import { matchStageJobs, collectStageJobs, formatStageJobs, prepareStageJobs } from '../skills/maa-core/scripts/stage-jobs.ts';
 import { inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 
 const snapshot = (elite: number | null = 2) => parseMaaSnapshot(JSON.stringify({ operBox: { done: true, own_opers: [
   { id: 'char_synthetic_a', name: '合成甲', own: true, elite, level: 50, potential: 1 },
@@ -89,6 +90,41 @@ test('approved batch prepares only primaries through the unified writer, expands
   assert.equal(pending.authorization.jobPlan.entries[0].alternates[0].id, 2);
   assert.equal(pending.authorization.reference, approval.reference);
   assert.deepEqual(JSON.parse(await readFile(readback.Configurations.Synthetic.Copilot.TaskList[0].FilePath, 'utf8')), job(1).content);
+  assert.equal(prepared.versions.state, 'unrecorded', 'a report saved before version stamps existed is still prepared');
+});
+
+test('preparation reports a MAA or record version that differs from the one read when the report was saved, and still prepares', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-stage-version-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
+  await mkdir(join(maaDirectory, 'config'), { recursive: true }); await writeFile(join(maaDirectory, 'MAA.exe'), 'synthetic executable placeholder');
+  await writeFile(join(maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [],
+    Copilot: { TaskList: [], LoopTimes: 1, EnableUserAdditional: false, UseFormation: false, SupportMode: 1 } } }, Timers: { List: [] } }));
+  const account = snapshot(), recordVersion = (await readVerificationRecord()).recordVersion;
+  const report = { ...matchStageJobs(account, tables, request, [job(1)]), versions: { maaVersion: '6.21.4', recordVersion } };
+  let running = true;
+  const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; },
+    start: async () => { running = true; }, version: async () => '6.22.0' };
+  const prepared = await prepareStageJobs({ report, snapshot: account, maaDirectory, privateDirectory, profile: 0, host: 'codex', expectedRevision: (await inspectConfiguration(maaDirectory)).revision,
+    approval: { reportHash: report.hash, reference: '批准 SYN-1 主作业 1 三次', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [], loops: 3 }] } }, maa);
+  assert.equal(prepared.status, 'complete', JSON.stringify(prepared));
+  assert.deepEqual(prepared.versions, { state: 'changed', recorded: { maaVersion: '6.21.4', recordVersion }, current: { maaVersion: '6.22.0', recordVersion }, changed: ['maaVersion'] });
+});
+
+test('a saved stage report records the MAA version and verification record version read at query time', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-stage-saved-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const privateDirectory = join(root, 'private'), maaDirectory = join(root, 'maa'); await mkdir(privateDirectory); await mkdir(maaDirectory);
+  await updateSettings({ language: 'zh-CN', privateDirectory, maaDirectory }, root);
+  await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(snapshot()));
+  const tablesFile = join(root, 'tables.json'), jobsFile = join(root, 'jobs.json');
+  await writeFile(tablesFile, JSON.stringify(tables)); await writeFile(jobsFile, JSON.stringify([job(1)]));
+  const script = fileURLToPath(new URL('../skills/maa-core/scripts/stage-jobs.ts', import.meta.url));
+  const cli = spawnSync(process.execPath, [script, 'query'], { input: JSON.stringify({ request, tablesFile, jobsFile, saveReport: true }), encoding: 'utf8', env: { ...process.env, MAA_SKILLS_HOME: root } });
+  assert.equal(cli.status, 0, cli.stdout + cli.stderr);
+  const printed = JSON.parse(cli.stdout).report;
+  const saved = JSON.parse(await readFile(join(privateDirectory, 'stage-jobs', 'reports', `${printed.hash}.json`), 'utf8'));
+  // No MAA.exe in this temporary directory, so the version is recorded as unknown rather than guessed.
+  assert.deepEqual(saved.versions, { maaVersion: null, recordVersion: (await readVerificationRecord()).recordVersion });
+  assert.deepEqual(printed.versions, saved.versions);
 });
 
 test('public search uses only read-only endpoints, fetches full jobs, and reports bounded pagination and operator views', async () => {

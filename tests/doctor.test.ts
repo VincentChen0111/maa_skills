@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
 import { type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 
 const windows = process.platform === 'win32';
 // MAA.exe metadata and adb are system boundaries; the other checks read the real temporary directories.
@@ -236,6 +237,36 @@ async function abandoned(f: Awaited<ReturnType<typeof fixture>>, applied = true)
   if (applied) await writeFile(f.file, JSON.stringify({ ...f.config, Timers: { ...f.config.Timers, NotifyBeforeScheduledStart: true } }));
   return { id, metadata, lockFile };
 }
+
+test('recovery reports a changed MAA or record version since the pending record was written, without refusing', async (t) => {
+  const recordVersion = (await readVerificationRecord()).recordVersion;
+  for (const mode of ['changed', 'same', 'unrecorded', 'malformed']) await t.test(mode, async (t) => {
+    const f = await fixture(t); const retained = await abandoned(f);
+    const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
+    const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
+    if (mode !== 'unrecorded') pending.versions = mode === 'malformed' ? { maaVersion: 'latest', recordVersion } : { maaVersion: mode === 'changed' ? '6.21.4' : '6.22.0', recordVersion };
+    await writeFile(pendingFile, JSON.stringify(pending) + '\n');
+    f.maa.version = async () => '6.22.0';
+    const checked = await runChecks(f, f.maa, quiet);
+    if (mode === 'malformed') { assert.equal(checked.recovery.canReconcile, false); assert.equal(checked.recovery.versions, null); return; }
+    const current = { maaVersion: '6.22.0', recordVersion };
+    assert.deepEqual(checked.recovery.versions, mode === 'unrecorded' ? { state: 'unrecorded', recorded: null, current, changed: [] }
+      : { state: mode, recorded: pending.versions, current, changed: mode === 'changed' ? ['maaVersion'] : [] });
+    const result = await executeRepairs({ ...f, host: 'codex', evidenceRevision: checked.recovery.evidenceRevision, approved: ['reconcile-lock'], reference: 'synthetic reconcile approval' }, f.maa);
+    assert.deepEqual([result.status, (result as { versions?: unknown }).versions], ['complete', checked.recovery.versions]);
+    assert.ok(retained.id);
+  });
+});
+
+test('a restoration writes the current version stamp into its own pending record', async (t) => {
+  const f = await fixture(t); await abandoned(f);
+  f.maa.version = async () => '6.22.0';
+  const checked = await runChecks(f, f.maa, quiet);
+  const result = await executeRepairs({ ...f, host: 'codex', approved: ['restore-config'], reference: 'restore the reminder only', evidenceRevision: checked.recovery.evidenceRevision }, f.maa);
+  assert.equal(result.status, 'complete');
+  const lines = (await readFile(join(f.privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim().split('\n');
+  assert.deepEqual(JSON.parse(lines.at(-1)!).versions, { maaVersion: '6.22.0', recordVersion: (await readVerificationRecord()).recordVersion });
+});
 
 test('diagnosis distinguishes live, stale applied, stale unchanged and unprovable locks with redacted evidence', async (t) => {
   for (const mode of ['active', 'applied', 'unchanged', 'missing-backup', 'corrupt', 'closed', 'malformed']) await t.test(mode, async (t) => {

@@ -40,7 +40,8 @@ export const checkMessages: Record<string, string> = {
   'verification-record-unavailable': 'The packaged verification record could not be read.',
   'verification-record-empty': 'The packaged verification record lists no verified MAA version yet, so no installed version can be confirmed; setup and doctor still continue.',
   'maa-version-unknown': 'The installed MAA version could not be identified.',
-  'maa-version-not-fully-verified': 'This MAA version is not fully verified by this repository; setup may continue.', 'maa-version-verified': 'This MAA version has source and device verification records.',
+  'maa-version-not-fully-verified': 'This MAA version is not fully verified by this repository; setup may continue.',
+  'maa-upgrade-available': 'A newer stable MAA release has passed this repository\'s source check; the installed version keeps working and upgrading is your choice.', 'maa-version-verified': 'This MAA version has source and device verification records.',
   // Connection states and their messages have one owner: `connectionStates` in setup-connection.ts.
   'managed-fields-valid': 'The task, medicine and timer fields this project writes have valid types and ranges.',
   'managed-fields-invalid': 'Some task, medicine or timer fields this project writes have invalid types or ranges; details name the field kinds only.',
@@ -75,6 +76,7 @@ const repairTable: Record<string, Omit<Repair, 'id'>> = {
   'inspect-settings': { executor: 'user', description: 'Preserve config.json in the selected settings home, then restore a known-good copy or repair its JSON, schema and access permissions; rerun check before saving preferences or creating directories.' },
   'prepare-private-directory': { executor: 'skill', description: 'Run setup prepare after saving the selected private directory.', channel: 'setup.ts prepare' },
   'read-version-verification': { executor: 'user', description: 'Read the packaged version record and retain the unverified warning; no upgrade is required.' },
+  'upgrade-maa-yourself': { executor: 'user', description: 'If you choose to upgrade, use MAA\'s own update setting or the official release page; the skills never upgrade MAA, and the current version keeps working.' },
   'inspect-connection-in-maa': { executor: 'user', description: 'No action is needed; if MAA still fails to connect, compare the connection settings shown in MAA.' },
   'restart-emulator-and-adb': { executor: 'user', description: 'Restart the emulator, and adb if needed, then check again; doctor does not restart either.' },
   'authorize-adb': { executor: 'user', description: 'Accept the debugging authorization in the emulator or device, then check again.' },
