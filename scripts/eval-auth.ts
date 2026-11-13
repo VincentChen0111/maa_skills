@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { settingsHome, readSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { createFixture, type Fixture } from './eval-fixture.ts';
 import { normalizeHost, type Host } from './evaluation.ts';
-import { claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, credentialVariables, hostArguments, pathRedactor, probeVersion,
+import { claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, credentialVariables, hostArguments, probeVersion,
   reportedUsage, type Usage } from './eval-host.ts';
+import { artifactWriter } from './eval-redact.ts';
 
 export const loginDirectoryVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_LOGIN_DIR', codex: 'MAA_EVAL_CODEX_LOGIN_DIR' };
 export const executableVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_EXECUTABLE', codex: 'MAA_EVAL_CODEX_EXECUTABLE' };
@@ -249,11 +250,10 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     result.leaked = [raw, stderr, ...transcript.outputs, ...(transcript.observedStrings ?? [])].some((text) => text.includes(value));
     const isolation = host === 'claude' ? claudeIsolationProblems(raw, { tools: ['Bash', 'Read'], plan: true }) : [];
     if (options.artifactDirectory) {
-      const redact = pathRedactor([[sentinel, '<login-dir>/<sentinel>'], [options.loginDirectory, '<login-dir>'], [fixture.workspace, '<workspace>'], [fixture.root, '<fixture>'],
-        [repositoryRoot, '<repo>'], [isAbsolute(options.executable) ? options.executable : undefined, '<host-executable>']]);
-      const scrub = (text: string) => redact(text).replaceAll(value, '<sentinel-value>');
-      await writeFile(join(options.artifactDirectory, `read-protection-${host}.jsonl`), scrub(raw));
-      await writeFile(join(options.artifactDirectory, `read-protection-${host}.stderr.txt`), scrub(stderr));
+      const save = artifactWriter(options.artifactDirectory, { sentinel, loginDirectory: options.loginDirectory, fixture, executable: options.executable,
+        values: [[value, '<sentinel-value>']] });
+      await save(`read-protection-${host}.jsonl`, raw);
+      await save(`read-protection-${host}.stderr.txt`, stderr);
     }
     if (outcome.reason !== 'completed' || !transcript.completed) return Object.assign(result, { category: categoryFor(outcome.reason, outcome.detail), detail: outcome.reason });
     if (isolation.length) return Object.assign(result, { category: 'isolation-unverified', detail: isolation.join(',') });

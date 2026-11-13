@@ -25,12 +25,15 @@ async function files(root: string, directory = ''): Promise<Map<string, Buffer>>
   return result;
 }
 
+/** Every fixture root is `<temporary directory>/<fixturePrefix><six generated characters>`; redaction covers any of them. */
+export const fixturePrefix = 'maa-evaluation-';
+
 export async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   for (const url of Object.keys(options.networkFixtures ?? {})) {
     if (!/^https:\/\/raw\.githubusercontent\.com\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[a-f0-9]{40}\/[A-Za-z0-9][A-Za-z0-9._/-]*\.json$/.test(url)
       || url.split('/').slice(6).some(part => !part || part === '.' || part === '..')) throw new Error('network-fixture-url');
   }
-  const root = await mkdtemp(join(tmpdir(), 'maa-evaluation-'));
+  const root = await mkdtemp(join(tmpdir(), fixturePrefix));
   const workspace = join(root, 'workspace');
   const home = join(root, 'home');
   try {

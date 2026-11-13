@@ -9,6 +9,7 @@ import { compareRuns, type Comparison, type Host, type RunRecord } from './evalu
 import { probeVersion } from './eval-host.ts';
 import { entryId, scenarioCatalog, scenarioGroups, selectScenarios, type ScenarioEntry } from './eval-scenarios.ts';
 import { createFixture } from './eval-fixture.ts';
+import { artifactWriter, redactor } from './eval-redact.ts';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -41,7 +42,7 @@ async function tree(directory: string, base = directory): Promise<string[]> {
 }
 /** Runner fingerprint sources: every file that decides how a run is launched, observed, recorded or graded (repository-relative). */
 export const runnerSources = ['scripts/eval-run.ts', 'scripts/eval-host.ts', 'scripts/eval-auth.ts', 'scripts/eval-fixture.ts', 'scripts/evaluation.ts', 'scripts/eval-daily.ts',
-  'scripts/eval-transaction.ts', 'skills/maa-core/scripts/preferences.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
+  'scripts/eval-transaction.ts', 'scripts/eval-redact.ts', 'skills/maa-core/scripts/preferences.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
   'eval/maa-process.mjs', 'eval/network-fixture.mjs', 'eval/setup-boundary.mjs'];
 export async function runnerFingerprint(): Promise<string> {
   return digest((await Promise.all(runnerSources.map(async (file) => `${file}:${digest(await readFile(join(repositoryRoot, file)))}`))).join('\n'));
@@ -53,7 +54,6 @@ export async function payloadFingerprint(entries: ScenarioEntry[]): Promise<stri
   return digest(JSON.stringify({ scenarios: entries.map((entry) => entry.definition), skills }));
 }
 
-const save = (directory: string, manifest: BatchManifest) => writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2));
 export async function readManifest(directory: string): Promise<BatchManifest> {
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as BatchManifest;
   if (manifest.kind !== 'maa-skills-evaluation-batch' || manifest.version !== 1) throw new Error('batch-manifest');
@@ -78,12 +78,14 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
   let version;
   try { version = probeVersion(executable, executableArgs, probeFixture.workspace, probeFixture.env); } finally { await probeFixture.dispose(); }
   const fingerprint = { hostVersion: version.version, model: options.model, auth, payload: await payloadFingerprint(options.entries), runner: await runnerFingerprint() };
+  // The manifest is an artifact like any other: saved only through the one redaction (so it is compared in redacted form too).
+  const artifactContext = { ...(loginDirectory ? { loginDirectory } : {}), executable };
   let directory: string; let manifest: BatchManifest;
   if (options.resume) {
     directory = resolve(options.resume);
     manifest = await readManifest(directory);
     // Same CLI, model, payload and runner, or no resume: a changed batch is a different batch.
-    if (manifest.host !== options.host || JSON.stringify(manifest.fingerprint) !== JSON.stringify(fingerprint) ||
+    if (manifest.host !== options.host || JSON.stringify(manifest.fingerprint) !== redactor(artifactContext)(JSON.stringify(fingerprint)) ||
       JSON.stringify(manifest.scenarios) !== JSON.stringify(options.entries.map(entryId))) throw new Error('fingerprint-mismatch');
     manifest.status = 'running'; delete manifest.abort;
   } else {
@@ -93,13 +95,15 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
     manifest = { kind: 'maa-skills-evaluation-batch', version: 1, id: randomUUID(), createdAt: new Date().toISOString(), host: options.host, model: options.model,
       auth, double: version.double, fingerprint, scenarios: options.entries.map(entryId), ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}), attempts: [], runs: [], status: 'running' };
   }
+  const write = artifactWriter(directory, artifactContext);
+  const save = () => write('manifest.json', JSON.stringify(manifest, null, 2));
   const abort = async (reason: string, stage: NonNullable<BatchManifest['abort']>['stage'], scenario?: string) => {
-    manifest.status = 'aborted'; manifest.abort = { reason, stage, ...(scenario ? { scenario } : {}) }; await save(directory, manifest);
+    manifest.status = 'aborted'; manifest.abort = { reason, stage, ...(scenario ? { scenario } : {}) }; await save();
     return { directory, manifest };
   };
   const attempt: BatchManifest['attempts'][number] = { at: new Date().toISOString() };
   manifest.attempts.push(attempt);
-  await save(directory, manifest);
+  await save();
   // One batch per login directory on this machine, across processes: an exclusive lock file beside (never inside) the directory.
   // A missing parent means there is no login to share; the auth preflight then reports it.
   let lock: string | undefined;
@@ -137,7 +141,7 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
         runAuth = { mode: 'plan', readProtection: pass };
       }
     }
-    await save(directory, manifest);
+    await save();
     const done = completedScenarios(manifest);
     const repeat = options.repeat ?? 1;
     for (const entry of options.entries) {
@@ -153,13 +157,13 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
         const stopped = interrupted();
         manifest.runs.push({ scenario, directory: relative(directory, outcome.artifactDirectory).replaceAll('\\', '/'), id: outcome.record.id,
           reason: stopped ? 'interrupted' : outcome.reason, grade: outcome.record.grade.status, ...(outcome.record.rerunOf ? { rerunOf: outcome.record.rerunOf } : {}) });
-        await save(directory, manifest);
+        await save();
         if (stopped) return await abort('interrupted', 'scenario', scenario);
         if ((abortReasons as readonly string[]).includes(outcome.reason)) return await abort(outcome.reason, 'scenario', scenario);
       }
     }
     manifest.status = 'complete';
-    await save(directory, manifest);
+    await save();
     return { directory, manifest };
   } finally {
     process.off('SIGINT', onInterrupt);

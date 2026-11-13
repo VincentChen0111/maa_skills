@@ -157,26 +157,6 @@ export function claudeIsolationProblems(raw: string, expected: { tools: string[]
   return problems;
 }
 
-/** Replaces each path, in every spelling a host or JSON may print it, with a fixed placeholder before anything is saved. */
-export function pathRedactor(entries: [string | undefined, string][]): (text: string) => string {
-  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Any run of slashes or backslashes separates segments: forward slashes, Windows separators, and any depth of JSON escaping.
-  const separator = '[\\\\/]+';
-  const patterns: { regex: RegExp; placeholder: string; length: number }[] = [];
-  for (const [path, placeholder] of entries) {
-    if (!path || path.length < 4) continue;
-    const parts = path.split(/[\\/]+/).filter(Boolean);
-    const drive = parts[0]?.match(/^([A-Za-z]):$/);
-    const segment = (part: string) => escape(part) === escape(encodeURIComponent(part)) ? escape(part) : `(?:${escape(part)}|${escape(encodeURIComponent(part))})`;
-    const body = (drive ? parts.slice(1) : parts).map(segment).join(separator);
-    // A drive letter also appears in MSYS and permission-rule form: `/c/...`, `//c/...`.
-    const head = drive ? `(?:${drive[1]}:|/${drive[1]})${separator}` : '[\\\\/]';
-    // A longer sibling name (`login-10` beside `login-1`) is a different path.
-    patterns.push({ regex: new RegExp(`${head}${body}(?![\\p{L}\\p{N}_.-])`, 'giu'), placeholder, length: path.length });
-  }
-  patterns.sort((a, b) => b.length - a.length);
-  return (text) => patterns.reduce((current, { regex, placeholder }) => current.replace(regex, () => placeholder), text);
-}
 
 export function probeVersion(executable: string, executableArgs: string[], cwd: string, env: NodeJS.ProcessEnv): { available: boolean; version: string; double: boolean } {
   const result = spawnSync(executable, [...executableArgs, '--version'], { cwd, env, encoding: 'utf8', timeout: 10_000, windowsHide: true });

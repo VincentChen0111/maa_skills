@@ -4,6 +4,8 @@
 // Usage: node host-double.mjs <script.json> <host arguments...>
 import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const doubleVersionPrefix = 'maa-eval-host-double';
 const [scriptFile, ...args] = process.argv.slice(2);
@@ -13,7 +15,21 @@ if (host !== 'claude' && host !== 'codex') throw new Error('host-double-script')
 const print = (value) => process.stdout.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`);
 const optionValue = (name) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
 
-if (args.includes('--version')) { print(`${doubleVersionPrefix} 1 (${host})`); process.exit(0); }
+// Redaction tests: `noise` lists paths the double names (with its workspace and the fixture around it) in every spelling a
+// host, JSON or a URL may give, each right next to CJK text, punctuation, a digit or quotes, in its version, reply and stderr.
+const slash = String.fromCharCode(92);
+const spell = (path) => {
+  const forward = path.replaceAll(slash, '/');
+  const drive = path.match(/^([A-Za-z]):[\\/]/);
+  const mixed = [...path].map((char, index) => index % 2 ? char.toLowerCase() : char.toUpperCase()).join('');
+  return [path, path.replaceAll(slash, slash + slash), path.replaceAll(slash, slash.repeat(4)), forward,
+    ...(drive ? [`/${drive[1].toLowerCase()}${forward.slice(2)}`, `//${drive[1].toLowerCase()}${forward.slice(2)}`, `${slash}${slash}?${slash}${path}`] : []),
+    pathToFileURL(path).href, path.toUpperCase(), mixed, encodeURIComponent(path), path.replaceAll(slash, `${slash}u005c`)];
+};
+const around = (text) => [`${text}目录不可读。`, `${text}.`, `${text}-old`, `${text}7`, `"${text}"`, `'${text}'`, `（${text}）`, `${text}_x`];
+const noise = (extra = []) => script.noise ? [...script.noise, process.cwd(), dirname(process.cwd()), ...extra].flatMap(spell).flatMap(around).join(' | ') : '';
+
+if (args.includes('--version')) { print(`${doubleVersionPrefix} 1 (${host})${script.noise ? ` ${noise()}` : ''}`); process.exit(0); }
 if (host === 'claude' && args[0] === 'auth' && args[1] === 'status') {
   // Mirrors the fields of the real command, including the ones the runner must never save.
   const status = { loggedIn: false, authMethod: 'none', apiProvider: 'firstParty', configDirectory: process.env.CLAUDE_CONFIG_DIR ?? null,
@@ -37,6 +53,8 @@ if (script.sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
 const model = script.model === undefined ? optionValue('--model') ?? optionValue('-m') : script.model;
 const sentinel = prompt.match(/哨兵文件：(.+)/)?.[1]?.trim();
 const resolvePath = (value) => value === '{{sentinel}}' ? sentinel : value;
+const reply = [script.reply ?? 'Done.', ...(script.noise ? [noise(sentinel ? [sentinel] : [])] : [])].join(' ');
+if (script.noise) process.stderr.write(`${noise(sentinel ? [sentinel] : [])}\n`);
 const readCommand = (path) => ['node', '-e', 'process.stdout.write(require("fs").readFileSync(process.argv[1],"utf8"))', path];
 const quote = (value) => /[\s"]/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 const execute = (command, input) => {
@@ -108,9 +126,9 @@ if (host === 'claude') {
     print({ type: 'result', subtype: 'success', is_error: true, result: failureText[script.failure], usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} });
     journal('run'); process.exit(1);
   }
-  print({ type: 'assistant', message: { model, content: [{ type: 'text', text: script.reply ?? 'Done.' }] } });
+  print({ type: 'assistant', message: { model, content: [{ type: 'text', text: reply }] } });
   if (script.failure !== 'no-terminal') {
-    print({ type: 'result', subtype: 'success', is_error: false, result: script.reply ?? 'Done.', ...(usage === null ? {} : { usage }),
+    print({ type: 'result', subtype: 'success', is_error: false, result: reply, ...(usage === null ? {} : { usage }),
       modelUsage: model ? { [model]: { inputTokens: usage?.input_tokens ?? 0, outputTokens: usage?.output_tokens ?? 0 } } : {} });
   }
 } else {
@@ -123,7 +141,7 @@ if (host === 'claude') {
     print({ type: 'turn.failed', error: { message: codexFailure[script.failure] } });
     journal('run'); process.exit(1);
   }
-  print({ type: 'item.completed', item: { id: 'item_reply', type: 'agent_message', text: script.reply ?? 'Done.' } });
+  print({ type: 'item.completed', item: { id: 'item_reply', type: 'agent_message', text: reply } });
   if (script.failure !== 'no-terminal') print({ type: 'turn.completed', ...(usage === null ? {} : { usage: script.usage ?? { input_tokens: 120, cached_input_tokens: 0, output_tokens: 30, reasoning_output_tokens: 0 } }) });
 }
 journal('run');
