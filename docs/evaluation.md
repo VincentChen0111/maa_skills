@@ -17,7 +17,7 @@ node scripts/eval-batch.ts run <host> <model> <场景名> --rerun-of <之后的�
 node scripts/eval-batch.ts preflight
 ```
 
-组名是 `maa-core`、`maa-help`、`maa-setup`、`maa-doctor`、`maa-account`、`maa-daily`、`cross-skill` 和 `all`。一批只用一个宿主和一个固定模型，场景一个接一个地跑，同一时刻只有一个进程在用该宿主的登录目录；入口没有并行选项。每批的记录在当前检出的 `.tmp/evaluations/batch-*`（默认被 Git 忽略）：`manifest.json` 是批次清单（宿主、模型、认证方式类别、指纹、每次尝试的预检结果、每次运行的原因与评分），`run-*` 是各次运行的 `run.json`、归一化证据、原始输出、调用参数和场景。`compare` 只读已保存的 `run.json`，对整批和每个场景调用 `compareRuns`，输出每个场景的结论和需要单独重跑三次的场景；`--rerun-of` 让所选场景各重跑三次，记录用 `rerunOf` 指向首次失败的运行。汇总和比较都不改写旧记录。
+组名是 `maa-core`、`maa-help`、`maa-setup`、`maa-doctor`、`maa-account`、`maa-daily`、`cross-skill` 和 `all`。一批只用一个宿主和一个固定模型，场景一个接一个地跑，同一时刻只有一个进程在用该宿主的登录目录；入口没有并行选项。一台机器上同一个登录目录同时只能跑一批：套餐登录的批次在认证预检之前，在登录目录旁边（不在目录里）独占创建 `<登录目录>.lock`，批次结束、出错或被 Ctrl+C 停下时删掉；这个文件已经存在时，新批次记为 `login-directory-busy` 并停下，不碰别人的锁。进程被强行结束（任务管理器、直接关掉终端窗口）会留下这个文件：确认没有别的批次在跑之后，手动删掉它。按一次 Ctrl+C，宿主子进程同时收到，当前这次宿主运行返回后整批停下（`interrupted`），这次运行在清单里标为 `interrupted`，续跑时重新跑它；再按一次立即删锁退出。每批的记录在当前检出的 `.tmp/evaluations/batch-*`（默认被 Git 忽略）：`manifest.json` 是批次清单（宿主、模型、认证方式类别、指纹、每次尝试的预检结果、每次运行的原因与评分），`run-*` 是各次运行的 `run.json`、归一化证据、原始输出、调用参数和场景。`compare` 只读已保存的 `run.json`，只取计入完成的记录：被用量、登录或网络问题中止的运行和被 Ctrl+C 打断的运行留在磁盘上，但不参与比较；普通批次每个场景取最后一条完成的记录，重跑批次取全部完成的重跑。它对整批和每个场景调用 `compareRuns`，输出每个场景的结论和需要单独重跑三次的场景；`--rerun-of` 让所选场景各重跑三次，记录用 `rerunOf` 指向首次失败的运行。汇总和比较都不改写旧记录。
 
 宿主 CLI 的位置用 `--executable`，或环境变量 `MAA_EVAL_CLAUDE_EXECUTABLE`、`MAA_EVAL_CODEX_EXECUTABLE` 指定；都没有时用 PATH 里的 `claude`、`codex`。文档和记录里只写占位符，不写维护者机器上的实际路径。
 
@@ -29,7 +29,11 @@ node scripts/eval-batch.ts preflight
 
 **认证预检**在批量运行之前对要用的宿主探测一次。先不调用模型：宿主能否启动；即将交给子进程的环境里有没有其他凭据（见「套餐登录」）；专用登录目录是否被拒绝、是否存在；再用宿主自己的登录状态命令确认登录方式。Claude 用 `auth status --json`，只看 `loggedIn`、`authMethod`、`apiKeySource` 和 `loginExpiresAt`，`authMethod` 为 `claude.ai` 才是套餐登录；Codex 用 `-c cli_auth_credentials_store="file" login status`，输出 `Logged in using ChatGPT` 才是套餐登录。环境里的 key 记为 `api-key-in-environment`；专用目录里保存的是 API key 登录时记为 `other`（`api-key-login`），同样停下。状态输出可能含账号标识和登录目录路径，只在内存里分类，不写进任何记录。随后 Claude 发一次 `--tools ""` 的最小请求，`system/init` 里的工具清单必须为空；Codex 的文档和固定版本的 `--help` 都没有不带工具的运行方式，所以 Codex 的认证预检不发模型请求，它第一次用套餐登录调用模型就是读保护检查本身。任何一步不通过就停下整批，不逐场景尝试，并报告类别：`host-unavailable`、`not-logged-in`、`login-expired`、`api-key-in-environment`、`quota-exhausted`、`network-unavailable`、`other`；显式选 API key 时换成 `api-key-missing`、`api-key-rejected`。
 
-**读保护检查**排在认证预检之后、第一个带工具的场景之前，每批、每次续跑都做。运行器在登录目录里放一个合成哨兵文件，提示词要求模型用读文件工具读一次（Claude），再用一条被允许的命令读一次；允许的命令模式是 `node *`，它是所有产品场景命令模式的上界。一次尝试指宿主自己的记录里对哨兵路径的一次读取调用，结果是被拒绝或失败；Codex 没有独立的读文件工具（读取都经命令），文件工具这一路记为不适用。所有要求的尝试都在且被拒绝或失败、哨兵的值不在任何输出里才算通过；少了尝试、读到了值或宿主没有完成都算没有通过，这个宿主的整批停下。检查一结束，不管通过与否，运行器就删掉哨兵并确认它已经不在。只有本进程里通过的检查产生的通行对象才能让 `runScenario` 用套餐登录启动带工具的场景，调用方伪造的对象无效。检查的原始输出存为批次目录下的 `read-protection-<host>.jsonl`，路径和哨兵值已换成占位符。
+**读保护检查**排在认证预检之后、第一个带工具的场景之前，每批、每次续跑都做。运行器在登录目录里放一个合成哨兵文件，提示词要求模型用读文件工具读一次（Claude），再用一条被允许的命令读一次；允许的命令模式是 `node *`，它是所有产品场景命令模式的上界。一次尝试指宿主自己的记录里对哨兵路径的一次读取调用，结果是被拒绝或失败，而且就是提示词要求的那种形式：读文件工具；或者那条 node 读取命令。Claude 一侧整条命令必须匹配允许的模式，不能带 `;`、`&`、`|`、`<`、`>`、反引号或换行（Claude 的允许列表按整条命令判断，复合命令或别的命令被拒，只说明允许列表起了作用，不说明登录目录读不到）；Codex 把命令包在 shell 里，要求命令文字里含那段 node 读取脚本。别的命令（例如 `type`、`cat`）被拒都不算尝试。所有要求的尝试都在且被拒绝或失败、哨兵的值不在任何输出里才算通过；少了尝试、读到了值或宿主没有完成都算没有通过，这个宿主的整批停下。除这两种形式之外，任何别的工具碰到哨兵路径（Claude 的其他工具；Codex 记录里除命令执行、模型文字和推理之外的任何条目），不管结果如何，检查都不通过（`other-tool-touched-sentinel`）。
+
+Codex 一侧按「读取都经命令」处理，文件工具这一路记为不适用。这一点**未验证**：固定版本 0.167.0-alpha.3.2 的 `exec --help` 没有工具开关；程序文本里 `exec --json` 的条目类型是模型文字、推理、命令执行、文件修改、MCP 工具调用、协作工具调用、网页搜索和计划，没有读文件条目；但程序文本里另有内置的看图工具 `view_image`（说明文字是读取磁盘上已有的图片，自己读文件、不经命令沙箱，也没有对应的记录条目）。所以运行器对每次 Codex 运行都加 `-c features.view_image=false`；在空的临时 `CODEX_HOME` 里，`codex features list` 不加这个覆盖时显示 `view_image` 生效为 `true`，加上后为 `false`。功能列表里其他默认打开的项（如浏览器、电脑操作、多代理）在 `exec` 里是否可用、能否读文件，离线证明不了。第一次真实运行时由上面那条断言把关：记录里出现命令执行以外的条目碰到哨兵，检查就不通过；结果写进验证记录。
+
+检查开始前，运行器先按文件名（`maa-eval-sentinel-*.txt`）删掉以前被打断的检查留下的哨兵，不读内容，确认一个都不剩才写新的；检查进行中按 Ctrl+C，检查记为 `interrupted`，删掉哨兵后再停。检查一结束，不管通过与否，运行器就删掉哨兵并确认它已经不在；第一个场景开始前再确认登录目录里没有任何哨兵。只有本进程里通过的检查产生的通行对象才能让 `runScenario` 用套餐登录启动带工具的场景，调用方伪造的对象无效。检查的原始输出存为批次目录下的 `read-protection-<host>.jsonl`，路径和哨兵值已换成占位符。
 
 ## 套餐登录
 
@@ -40,7 +44,7 @@ node scripts/eval-batch.ts preflight
 | Claude Code | `~/.maa-skills-eval/claude-config`（作为 `CLAUDE_CONFIG_DIR`） | `--login-dir` 或 `MAA_EVAL_CLAUDE_LOGIN_DIR` |
 | Codex CLI | `~/.maa-skills-eval/codex-home`（作为 `CODEX_HOME`） | `--login-dir` 或 `MAA_EVAL_CODEX_LOGIN_DIR` |
 
-登录目录是临时 home 之外唯一持久的评测状态。运行器在启动宿主之前拒绝落在仓库、临时 home 或工作区、设置文件所在目录或私有目录之内（或包含它们）、两个宿主日常的配置位置（`~/.claude`、`~/.codex`、`~/.claude.json`）之内、或者两个宿主的登录目录互相重叠的位置。私有目录按产品自己的规则只读定位（`settingsHome`、`readSettings`），这两个路径只用来比较，不写进记录。运行器不复制、不读取维护者日常使用的登录文件，也不读取登录目录里的任何文件内容；清理只删临时 home 和工作区。运行器不创建登录目录：目录不存在时认证预检报告「没有登录」。
+登录目录是临时 home 之外唯一持久的评测状态。运行器在启动宿主之前拒绝落在仓库、临时 home 或工作区、设置文件所在目录或私有目录之内（或包含它们）、两个宿主日常的配置位置（`~/.claude`、`~/.codex`、`~/.claude.json`）之内、或者两个宿主的登录目录互相重叠的位置。私有目录按产品自己的规则只读定位（`settingsHome`、`readSettings`），这两个路径只用来比较，不写进记录。另有两条拒绝：路径里有单引号、换行或 NUL 字符时拒绝（`unsupported-character`），因为 Codex 的拒绝读取配置把路径写成 TOML 字面字符串，字面字符串装不下单引号，换行和 NUL 也会改变配置本身；产品设置文件存在但读不了或格式不对时拒绝（`settings-unreadable`），因为那样找不到私有目录，也就无法确认登录目录和它不重叠，只能停下。遇到这两种情况，用 `--login-dir` 或上表的环境变量换一个不含这些字符的位置，或者先修好设置目录里的 `config.json`。运行器不复制、不读取维护者日常使用的登录文件，也不读取登录目录里的任何文件内容；清理只删临时 home 和工作区。运行器不创建登录目录：目录不存在时认证预检报告「没有登录」。
 
 维护者自己登录，每个目录一次，过期后再登录一次；agent 不输入凭据。在 PowerShell 里（占位符换成实际位置）：
 
@@ -57,7 +61,7 @@ Codex 的登录必须带 `cli_auth_credentials_store="file"`，登录才写进�
 
 显式 `--auth api-key` 时，只把 `MAA_EVAL_ANTHROPIC_API_KEY` 转发为 `ANTHROPIC_API_KEY`（Claude），`MAA_EVAL_OPENAI_API_KEY` 转发为 `CODEX_API_KEY`（Codex 非交互文档写明 `codex exec` 用它指定单次运行的 key），配置目录仍用每个场景的临时目录。两种认证方式用同一套宿主参数，认证方式只以类别写进批次清单和 `run.json`。
 
-**用量上限与续跑**：宿主报告套餐用量用尽（`quota-exhausted`）、登录失败（`auth-failed`）或网络不通（`network-unavailable`）时，这次运行记为单独的 `unverified` 原因，整批立刻中止，剩下的场景不再启动，也不记成场景失败。`node scripts/eval-batch.ts resume <批次目录>` 重新做认证预检和读保护检查，只跑还没有完成记录的场景；宿主 CLI 版本、模型、认证方式、载荷指纹（场景定义与所有装入 skill 的文件）或运行器指纹（启动、观察、记录和评分的源码）任何一项和原批次不同就拒绝续跑，另开一批。认不出的失败按原有类别记录。
+**用量上限与续跑**：宿主报告套餐用量用尽（`quota-exhausted`）、登录失败（`auth-failed`）或网络不通（`network-unavailable`）时，这次运行记为单独的 `unverified` 原因，整批立刻中止，剩下的场景不再启动，也不记成场景失败。`node scripts/eval-batch.ts resume <批次目录>` 重新做认证预检和读保护检查，只跑还没有完成记录的场景（被中止或被 Ctrl+C 打断的那次不算完成）；宿主 CLI 版本、模型、认证方式、载荷指纹（场景定义与所有装入 skill 的文件）或运行器指纹（启动、观察、记录和评分的源码）任何一项和原批次不同就拒绝续跑，另开一批。认不出的失败按原有类别记录。
 
 ## 失败类别与超时
 
@@ -76,6 +80,8 @@ Codex 的登录必须带 `cli_auth_credentials_store="file"`，登录才写进�
 | `invalid-evidence` | 运行器采集到无法解析的证据 |
 | `isolation-unverified` | Claude 的 `system/init` 出现清单之外的工具、MCP 服务器、命令、skill、插件、子代理、输出样式或 API key 来源 |
 | `read-protection-required`、`login-directory-refused`、`api-key-in-environment`、`host-double-required`、`ci-disabled` | 运行器没有启动宿主 |
+
+批次清单的 `abort` 另有几个只在批次层面出现的原因：`login-directory-busy`（登录目录的锁被别的批次占着）、`login-directory-lock-failed`（锁文件建不起来，原因不是已存在）、`interrupted`（Ctrl+C）、`sentinel-not-removed`（第一个场景前登录目录里还有哨兵），以及认证预检和读保护检查的类别。
 
 分类只读宿主自己报告的失败文字和字段（Claude 的结果消息、`is_api_error_message` 消息的 `error`、被拒绝的 `rate_limit_event`；Codex 最后的 `turn.failed` 或 `error`），不读模型的回复。
 
@@ -106,7 +112,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 
 ## Codex 一侧
 
-参数：`exec --json --model <id> --cd <工作区> --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules -c cli_auth_credentials_store="file" -c windows.sandbox="mxc" -c default_permissions="maa_eval" -c permissions.maa_eval.extends=":workspace" -c permissions.maa_eval.filesystem={'<登录目录>'='deny'} -`（独立审查用 `:read-only`；Windows 以外不加 `windows.sandbox`）。不再传 `--sandbox`：文档写明传了它就改用旧的沙箱设置而不用 `default_permissions`。`--ignore-user-config` 的 `--help` 写明认证仍用 `CODEX_HOME`。
+参数：`exec --json --model <id> --cd <工作区> --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules -c cli_auth_credentials_store="file" -c windows.sandbox="mxc" -c features.view_image=false -c default_permissions="maa_eval" -c permissions.maa_eval.extends=":workspace" -c permissions.maa_eval.filesystem={'<登录目录>'='deny'} -`（独立审查用 `:read-only`；Windows 以外不加 `windows.sandbox`）。不再传 `--sandbox`：文档写明传了它就改用旧的沙箱设置而不用 `default_permissions`。`--ignore-user-config` 的 `--help` 写明认证仍用 `CODEX_HOME`。关掉内置看图工具（`features.view_image=false`）的依据见上文「读保护检查」。
 
 ## 核实结果（固定版本 Claude Code 2.1.321、Codex CLI 0.167.0-alpha.3.2）
 
