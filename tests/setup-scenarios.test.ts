@@ -16,9 +16,10 @@ test('setup scenarios observe installed check and preference CLI behavior in bot
     t.after(() => fixture.dispose());
     const calls: [string, string, unknown][] = [['preferences.ts', 'read', { currentLanguage: 'zh-CN' }], ['setup.ts', 'check', {}]];
     if (scenario.id === 'setup-first-preferences') calls.push(['preferences.ts', 'set', { language: 'en' }], ['preferences.ts', 'read', { currentLanguage: 'zh-CN' }]);
+    if (scenario.id.startsWith('setup-credential-')) calls.push(['credentials.ts', 'check', {}]);
     const outputs: string[] = [];
     for (const [script, action, input] of calls) {
-      const result = spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts', script), action, ...(script === 'setup.ts' ? ['--json'] : [])],
+      const result = spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts', script), action, ...(['setup.ts', 'credentials.ts'].includes(script) ? ['--json'] : [])],
         { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
       assert.equal(result.status, script === 'setup.ts' && (scenario.id === 'setup-missing-program' || process.platform !== 'win32') ? 1 : 0, result.stdout + result.stderr);
       outputs.push(result.stdout);
@@ -27,6 +28,23 @@ test('setup scenarios observe installed check and preference CLI behavior in bot
     const actual = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
     assert.equal(actual.status, 'pass', JSON.stringify(actual));
   });
+});
+
+test('the pasted-credential scenario fails when the chat value is saved through the input script', async t => {
+  const scenario = setupScenarios.find(item => item.id === 'setup-credential-pasted')!;
+  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-setup', import.meta.url)),
+    companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) }, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
+  t.after(() => fixture.dispose());
+  const core = join(fixture.workspace, '.agents/skills/maa-core');
+  for (const [action, args, input] of [['read', [], '{"currentLanguage":"zh-CN"}'], ['check', ['--json'], ''], ['input', ['bilibili', '--stdin'], 'y\nsynthetic-chat-pasted-value-0009\n']] as const) {
+    const script = action === 'read' ? 'preferences.ts' : 'credentials.ts';
+    const result = spawnSync(process.execPath, ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, join(core, 'scripts', script), action, ...args],
+      { cwd: fixture.workspace, env: { ...fixture.env, MAA_CREDENTIAL_TEST_CORE: core }, input, encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+  const actual = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
+  assert.equal(actual.status, 'fail'); assert.ok(actual.failed.includes('authorization'), JSON.stringify(actual));
 });
 
 test('installed setup CLI applies a selected synthetic connection through the real writer in both layouts', { skip: process.platform !== 'win32' }, async t => {

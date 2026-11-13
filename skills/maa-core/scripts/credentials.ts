@@ -20,12 +20,12 @@ export type CredentialStatus = { service: CredentialService; state: CredentialSt
   savedAt: string | null; lastResultAt: string | null; expiresAt: string | null };
 export type CredentialCheck = CheckResult & { message: string };
 
-type ServiceDefinition = { fields: readonly string[]; kind: 'opaque' | 'cookie'; experimental: boolean; label: string; purpose: string };
+type ServiceDefinition = { fields: readonly string[]; kind: 'opaque' | 'cookie'; experimental: boolean; label: string; purpose: string; value: string };
 const services: Record<CredentialService, ServiceDefinition> = {
-  nga: { fields: ['cookie'], kind: 'cookie', experimental: false, label: 'NGA', purpose: 'NGA research' },
+  nga: { fields: ['cookie'], kind: 'cookie', experimental: false, label: 'NGA', purpose: 'NGA research', value: 'Cookie header value' },
   skland: { fields: ['token'], kind: 'opaque', experimental: false, label: 'Skland account',
-    purpose: 'reading your own account data from Skland (public Skland community pages never use it)' },
-  bilibili: { fields: ['sessdata'], kind: 'opaque', experimental: true, label: 'Bilibili (experimental)', purpose: 'experimental Bilibili research' },
+    purpose: 'reading your own account data from Skland (public Skland community pages never use it)', value: 'token' },
+  bilibili: { fields: ['sessdata'], kind: 'opaque', experimental: true, label: 'Bilibili (experimental)', purpose: 'experimental Bilibili research', value: 'SESSDATA value' },
 };
 const protection = 'windows-dpapi-current-user';
 const maximumValueLength = 8192;
@@ -107,9 +107,10 @@ async function inspectOne(privateDirectory: string | null, service: CredentialSe
 }
 
 const command = (service: CredentialService) => `node <maa-core>/scripts/credentials.ts input ${service}`;
-function checkFor(status: CredentialStatus): CredentialCheck {
-  const { label, purpose } = services[status.service];
-  const run = `run "${command(status.service)}" yourself in your own terminal`;
+/** The check entry for one service and state; it carries no value, time or location. */
+export function credentialCheck(service: CredentialService, state: CredentialState): CredentialCheck {
+  const { label, purpose, value } = services[service];
+  const run = `run "${command(service)}" yourself in your own terminal`;
   const never = 'Never paste the value into the conversation; the skill never signs in for you.';
   const results: Record<CredentialState, [CheckResult['status'], string, string, string]> = {
     unset: ['normal', `The ${label} credential is not set. It is optional and only needed for ${purpose}.`, 'enter-credential',
@@ -119,14 +120,14 @@ function checkFor(status: CredentialStatus): CredentialCheck {
     usable: ['normal', `The most recent actual read with the saved ${label} credential succeeded; it can still expire before the next read.`, 'replace-credential',
       `No action is needed. To replace it, ${run}. ${never}`],
     expired: ['error', `The saved ${label} credential is known to be expired or rejected.`, 'reenter-credential',
-      `${run[0]!.toUpperCase()}${run.slice(1)} and enter a new value you obtained yourself. ${never}`],
+      `${run[0]!.toUpperCase()}${run.slice(1)} and paste a new ${value} you obtained yourself. ${never}`],
     unreadable: ['error', `The saved ${label} credential cannot be read on this Windows account or its record is damaged, so it is unusable.`, 'reenter-credential',
-      `${run[0]!.toUpperCase()}${run.slice(1)} and enter a new value you obtained yourself. ${never}`],
+      `${run[0]!.toUpperCase()}${run.slice(1)} and paste a new ${value} you obtained yourself. ${never}`],
     unknown: ['warning', `The private directory is unknown until the settings are repaired, so the ${label} credential was not checked.`, 'inspect-settings',
       'Repair the settings file first, as its own check describes; credentials are checked afterwards.'],
   };
-  const [result, message, repair, description] = results[status.state];
-  return { id: `credential-${status.service}`, status: result, reason: `credential-${status.state}`, message, repair: { id: repair, executor: 'user', description } };
+  const [result, message, repair, description] = results[state];
+  return { id: `credential-${service}`, status: result, reason: `credential-${state}`, message, repair: { id: repair, executor: 'user', description } };
 }
 
 /**
@@ -136,7 +137,7 @@ function checkFor(status: CredentialStatus): CredentialCheck {
 export async function inspectCredentials(privateDirectory: string | null, now = new Date()) {
   const credentials: CredentialStatus[] = [];
   for (const service of credentialServices) credentials.push(await inspectOne(privateDirectory === null ? null : resolve(privateDirectory), service, now));
-  return { credentials, checks: credentials.map(checkFor) };
+  return { credentials, checks: credentials.map(item => credentialCheck(item.service, item.state)) };
 }
 
 /** Repairs the credential checks offer; only the user performs them, so doctor cannot execute them. */

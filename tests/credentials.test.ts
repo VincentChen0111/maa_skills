@@ -136,7 +136,7 @@ test('the shared check separates unset, unverified, usable, known-expired and un
     ['credential-nga', 'normal', 'credential-usable', 'user'], ['credential-skland', 'error', 'credential-expired', 'user'], ['credential-bilibili', 'normal', 'credential-usable', 'user']]);
   const expired = result.checks[1]!;
   assert.equal(expired.repair.id, 'reenter-credential');
-  assert.match(expired.repair.description, /credentials\.ts input skland/);
+  assert.match(expired.repair.description, /credentials\.ts input skland" yourself in your own terminal and paste a new token/, 'an expired token is fixed only by pasting again');
   assert.doesNotMatch(JSON.stringify(result), /password|log ?in\b|sign-in page/i);
   assert.match(result.checks[2]!.message, /experimental/i);
   for (const value of values) assert.equal(JSON.stringify(result).includes(value), false);
