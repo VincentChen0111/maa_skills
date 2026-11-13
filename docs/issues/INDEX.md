@@ -36,7 +36,7 @@
 | 22 | [基建建议与排班生成](22-base-report-and-plan.md) | [#24](https://github.com/VincentChen0111/maa_skills/issues/24) | 20、21 | 未开始 |
 | 23 | [执行已批准的基建排班](23-apply-approved-base-plan.md) | [#25](https://github.com/VincentChen0111/maa_skills/issues/25) | 05、22 | 未开始 |
 | 24 | [专精助手与单次定时](24-mastery-training-schedule.md) | [#26](https://github.com/VincentChen0111/maa_skills/issues/26) | 05、14、21 | 已完成 |
-| 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 未开始 |
+| 25 | [MAA 版本核对与升级提醒](25-maa-version-verification.md) | [#27](https://github.com/VincentChen0111/maa_skills/issues/27) | 10 | 进行中 |
 | 26 | [v0.1.0 发布验收](26-v0-1-0-release-validation.md) | [#28](https://github.com/VincentChen0111/maa_skills/issues/28) | 08、12、17、19、23、24、27、28 | 未开始 |
 | 27 | [批准后的碎石与临期药](27-approved-stone-expiring-medicine.md) | [#44](https://github.com/VincentChen0111/maa_skills/issues/44) | 03、05、06 | 未开始 |
 | 28 | [行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md) | [#45](https://github.com/VincentChen0111/maa_skills/issues/45) | 03 | 未开始 |
