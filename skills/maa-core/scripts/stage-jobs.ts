@@ -18,7 +18,8 @@ export type JobRating = { like: number; dislike: number; notEnoughRating: boolea
 export type Job = { id: number; content: ObjectValue; source: SourceRecord; rating?: JobRating };
 export type CandidateRating = { flag: 'ok' | 'low' | 'not-enough' | 'unknown'; like?: number; dislike?: number; votes?: number; notEnoughRating?: boolean;
   likeRatio?: number; requiredRatio?: number; ratingLevel?: number | null; ratingRatio?: number | null; source?: SourceRecord | null };
-type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean };
+type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean; ids: number[] };
+type SearchOutcome = 'offline' | 'empty' | 'found' | 'fallback-suspected' | 'insufficient' | 'other-stages';
 export type StageReport = ReturnType<typeof matchStageJobs>;
 export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number }[] };
 const object = (value: unknown): ObjectValue => {
@@ -162,10 +163,14 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
 export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, request: StageRequest, jobs: Job[], search?: SearchCoverage[]) {
   const snapshot = object(snapshotValue), tables = object(object(tablesValue).stages);
   if (!Array.isArray(request.stages) || !request.stages.length || request.stages.length > 100) throw new Error('scope-invalid');
-  const coverage = search ?? request.stages.map(stage => ({ stageId: stage.stageId, mode: 'offline' as const, pages: 0, truncated: false }));
+  const coverage = search ?? request.stages.map(stage => ({ stageId: stage.stageId, mode: 'offline' as const, pages: 0, truncated: false, ids: [] }));
+  if (!Array.isArray(jobs)) throw new Error('jobs-invalid');
+  const jobsById = new Map(jobs.map(job => [job?.id, job]));
   if (!Array.isArray(coverage) || coverage.length !== request.stages.length || coverage.some((item, index) => item.stageId !== request.stages[index]!.stageId
     || !['online', 'offline'].includes(item.mode) || !Number.isInteger(item.pages) || item.pages < (item.mode === 'online' ? 1 : 0) || item.pages > 3
-    || typeof item.truncated !== 'boolean' || item.mode === 'offline' && (item.pages !== 0 || item.truncated) || item.truncated && item.pages !== 3)) throw new Error('search-coverage-invalid');
+    || typeof item.truncated !== 'boolean' || item.mode === 'offline' && (item.pages !== 0 || item.truncated) || item.truncated && item.pages !== 3
+    // ids are the jobs this stage's own query returned, in order; they let the report tell "no jobs" from unrelated results.
+    || !Array.isArray(item.ids) || item.ids.length > item.pages * 20 || new Set(item.ids).size !== item.ids.length || item.ids.some(id => !Number.isSafeInteger(id) || id < 1 || !jobsById.has(id)))) throw new Error('search-coverage-invalid');
   const seen = new Set<string>();
   const stages = request.stages.map(selected => {
     if (seen.has(selected.stageId)) throw new Error('duplicate-stage'); seen.add(selected.stageId);
@@ -205,7 +210,15 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
     // Candidates keep the API order as evidence; suggestions demote not-enough/unknown and then low ratings, stably.
     const ready = candidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.status === 'ready')
       .sort((a, b) => ratingTier(a.candidate.rating) - ratingTier(b.candidate.rating) || a.index - b.index).map(({ candidate }) => candidate);
-    return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id) };
+    // The live backend matches level_keyword against level name / levelId / stageId; with no match it drops the stage
+    // filter (no document parameter is sent) and returns unrelated site-wide jobs. Classify what this query returned.
+    const searched = coverage.find(item => item.stageId === selected.stageId)!, keyword = levelId.split('level_').at(-1)!;
+    const returned = searched.ids.map(id => object(jobsById.get(id)!.content).stage_name);
+    const belonging = returned.filter(name => aliases.includes(name)).length;
+    const outcome: SearchOutcome = searched.mode === 'offline' ? 'offline' : belonging ? 'found' : !returned.length ? searched.truncated ? 'insufficient' : 'empty'
+      : !returned.some(name => typeof name === 'string' && name.includes(keyword)) ? 'fallback-suspected' : searched.truncated ? 'insufficient' : 'other-stages';
+    return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id),
+      searchResult: { outcome, returned: returned.length, belonging } };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
     tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
@@ -239,7 +252,7 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
   const jobs: Job[] = [], seen = new Set<number>(), search: SearchCoverage[] = [];
   for (const stage of request.stages) {
     const keyword = text(object(object(object(tables).stages)[stage.stageId]).levelId).split('level_').at(-1)!;
-    let next = true, page = 1;
+    let next = true, page = 1; const ids: number[] = [];
     for (; next && page <= 3; page++) {
       const url = `https://prts.maa.plus/copilot/query?${new URLSearchParams({ page: String(page), limit: '20', level_keyword: keyword, language: 'cn' })}`;
       const response = await publicResponse(url, fetcher), data = response.data;
@@ -248,6 +261,7 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
       for (const entry of data.data) {
         const summary = object(entry), id = Number(summary.id);
         if (!Number.isSafeInteger(id) || id < 1) throw new Error('job-id-invalid');
+        if (!ids.includes(id)) ids.push(id);
         if (seen.has(id)) continue; seen.add(id);
         const result = await publicResponse(`https://prts.maa.plus/copilot/get/${id}`, fetcher);
         if (Number(result.data.id) !== id || typeof result.data.content !== 'string') throw new Error('job-detail-invalid');
@@ -257,7 +271,7 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
         jobs.push({ id, content: object(JSON.parse(result.data.content)), source: result.source, ...(rating ? { rating } : {}) });
       }
     }
-    search.push({ stageId: stage.stageId, mode: 'online', pages: page - 1, truncated: next });
+    search.push({ stageId: stage.stageId, mode: 'online', pages: page - 1, truncated: next, ids });
   }
   return matchStageJobs(snapshot, tables, request, jobs, search);
 }
@@ -272,6 +286,12 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
       lines.push(`### ${escape(stage.code)} / ${stage.difficulty} / ${escape(stage.difficultyGroup)} / ${escape(stage.stageId)} × ${stage.loops}`, `主作业候选：${stage.primary ?? '待核'}；备选候选：${stage.alternates.join(', ') || '无'}`);
       const coverage = report.search.find(item => item.stageId === stage.stageId)!;
       lines.push(coverage.mode === 'offline' ? '检索覆盖：离线输入；未进行在线检索。' : `检索覆盖：${coverage.pages} 页（每页最多 20 条）；${coverage.truncated ? '未穷尽，达到分页上限仍有下一页' : '查询已结束，仅代表本次检索条件'}。`);
+      const found = stage.searchResult, insufficient = '覆盖不足，不能据此判断这一关没有作业。';
+      if (found.outcome !== 'offline') lines.push(`检索结果：${found.outcome === 'found' ? `返回 ${found.returned} 份，其中 ${found.belonging} 份属于这一关。`
+        : found.outcome === 'empty' ? '接口没有返回作业，本次检索条件下这一关没有作业。'
+        : found.outcome === 'fallback-suspected' ? `返回的 ${found.returned} 份作业都不属于这一关，查询疑似退回到了关键字搜索，结果与这一关无关；${insufficient}`
+        : found.outcome === 'insufficient' ? `读完 ${coverage.pages} 页共 ${found.returned} 份，没有一份属于这一关；${insufficient}`
+        : `返回的 ${found.returned} 份作业都属于名称相近的其他关卡；本次检索条件下这一关没有作业。`}`);
       for (const condition of stage.prerequisites) lines.push(`- 前置 ${escape(condition.stageId)} ${condition.required}：${condition.status}`);
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
@@ -293,7 +313,9 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
   profile: number; host: 'codex' | 'claude'; expectedRevision: string; closedConfirmed?: boolean }, maa: MaaProcess) {
   const { approval, report } = structuredClone(input);
   const { hash: reportHash, ...displayed } = report;
-  const verified = matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search);
+  // A report that no longer re-verifies (tampered, or produced by an older matcher structure) cannot bind an approval.
+  let verified: StageReport;
+  try { verified = matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search); } catch { throw new Error('approval-mismatch'); }
   if (digest(displayed) !== reportHash || verified.hash !== report.hash || approval.reportHash !== report.hash || digest(input.snapshot) !== report.snapshotHash
     || !approval.reference?.trim() || !Array.isArray(approval.selections) || !approval.selections.length || !Number.isInteger(input.profile) || input.profile < 0) throw new Error('approval-mismatch');
   const seen = new Set<string>();

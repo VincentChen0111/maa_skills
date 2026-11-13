@@ -229,7 +229,7 @@ test('approval binds displayed execution and search coverage as well as original
   const maa: MaaProcess = { inspect: async () => { inspections++; throw new Error('must-not-inspect'); }, close: async () => {}, start: async () => {} };
   const changed = structuredClone(report); changed.stages[0]!.candidates[0]!.execution!.content.groups[0].opers[0].name = '合成甲';
   await assert.rejects(() => prepareStageJobs({ ...base, report: changed }, maa), /approval/);
-  const searchChanged = structuredClone(report); searchChanged.search[0] = { stageId: 'synthetic_01', mode: 'online', pages: 3, truncated: true };
+  const searchChanged = structuredClone(report); searchChanged.search[0] = { stageId: 'synthetic_01', mode: 'online', pages: 3, truncated: true, ids: [] };
   await assert.rejects(() => prepareStageJobs({ ...base, report: searchChanged }, maa), /approval/);
   assert.equal(inspections, 0);
 });

@@ -90,3 +90,43 @@ test('online collection reads rating counts from the query summary, not the cach
   assert.equal(withoutRating!.rating.flag, 'unknown');
   assert.equal(report.jobs[0]!.rating!.like, 95);
 });
+
+const pagedFetcher = (pages: { stageName: string; ids: number[] }[], hasNext: (page: number) => boolean): typeof fetch => async url => {
+  const parsed = new URL(String(url));
+  if (parsed.pathname.endsWith('/query')) {
+    const page = Number(parsed.searchParams.get('page')), current = pages[page - 1] ?? { ids: [] };
+    return Response.json({ status_code: 200, data: { has_next: hasNext(page), data: current.ids.map(id => ({ id })) } });
+  }
+  const id = Number(parsed.pathname.split('/').at(-1)), stageName = pages.find(item => item.ids.includes(id))!.stageName;
+  return Response.json({ status_code: 200, data: { id, content: JSON.stringify({ ...stageJob(id).content, stage_name: stageName }) } });
+};
+
+test('search results distinguish no jobs, unrelated fallback results and insufficient coverage', async () => {
+  const { collectStageJobs } = await import('../skills/maa-core/scripts/stage-jobs.ts');
+  const run = (pages: { stageName: string; ids: number[] }[], hasNext: (page: number) => boolean) => collectStageJobs(snapshot, stageTables, stageRequest, pagedFetcher(pages, hasNext));
+  const unrelated = await run([1, 2, 3].map(page => ({ stageName: 'unrelated_stage_9', ids: [page * 10, page * 10 + 1] })), () => true);
+  assert.deepEqual(unrelated.stages[0]!.searchResult, { outcome: 'fallback-suspected', returned: 6, belonging: 0 });
+  assert.deepEqual(unrelated.search[0]!.ids, [10, 11, 20, 21, 30, 31]);
+  const fallbackText = formatStageJobs(unrelated);
+  assert.match(fallbackText, /检索结果：返回的 6 份作业都不属于这一关，查询疑似退回到了关键字搜索，结果与这一关无关；覆盖不足，不能据此判断这一关没有作业。/);
+  assert.equal(unrelated.stages[0]!.primary, null);
+  const empty = await run([], () => false);
+  assert.deepEqual(empty.stages[0]!.searchResult, { outcome: 'empty', returned: 0, belonging: 0 });
+  assert.match(formatStageJobs(empty), /检索结果：接口没有返回作业，本次检索条件下这一关没有作业。/);
+  const near = await run([{ stageName: 'synthetic_010', ids: [61] }], () => false);
+  assert.equal(near.stages[0]!.searchResult.outcome, 'other-stages');
+  assert.match(formatStageJobs(near), /检索结果：返回的 1 份作业都属于名称相近的其他关卡；本次检索条件下这一关没有作业。/);
+  const nearTruncated = await run([1, 2, 3].map(page => ({ stageName: 'synthetic_010', ids: [70 + page] })), () => true);
+  assert.equal(nearTruncated.stages[0]!.searchResult.outcome, 'insufficient');
+  assert.match(formatStageJobs(nearTruncated), /检索结果：读完 3 页共 3 份，没有一份属于这一关；覆盖不足，不能据此判断这一关没有作业。/);
+  const found = await run([{ stageName: 'synthetic_01', ids: [81] }, { stageName: 'unrelated_stage_9', ids: [82] }], page => page < 2);
+  assert.deepEqual(found.stages[0]!.searchResult, { outcome: 'found', returned: 2, belonging: 1 });
+  assert.match(formatStageJobs(found), /检索结果：返回 2 份，其中 1 份属于这一关。/);
+  // Offline inputs make no search claim; coverage ids must name supplied jobs and fit the page bound.
+  assert.equal(first([stageJob(1)]).searchResult.outcome, 'offline');
+  const jobs = [stageJob(1)];
+  for (const ids of [[2], [1, 1], Array.from({ length: 21 }, (_, index) => index + 1)]) {
+    assert.throws(() => matchStageJobs(snapshot, stageTables, stageRequest, jobs, [{ stageId: 'synthetic_01', mode: 'online', pages: 1, truncated: false, ids }]), /search-coverage-invalid/);
+  }
+  assert.throws(() => matchStageJobs(snapshot, stageTables, stageRequest, jobs, [{ stageId: 'synthetic_01', mode: 'offline', pages: 0, truncated: false, ids: [1] }]), /search-coverage-invalid/);
+});
