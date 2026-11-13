@@ -23,8 +23,9 @@ export type Marker = { at: string; marker: string };
 export type RunList = { index: number; stageId: string; code: string; jobId: number; fileKey: string }[];
 export type RunState = {
   chain: { processId: string; taskId: number; at: string; terminal: (Evidence & { message: 'TaskChainCompleted' | 'TaskChainError' | 'TaskChainStopped' }) | null } | null;
-  submission: { processId: string; threadId: string; toggle: boolean | null; taskId: number | null } | null;
+  submission: { processId: string; threadId: string; toggle: boolean | null; listMode: boolean | null; taskId: number | null } | null;
   medicineToggle: boolean | null;
+  listMode: boolean | null;
   attempts: Attempt[];
   medicine: { events: { at: string; count: number }[]; unreadable: number; confirmPending: boolean };
   environment: EnvironmentEvent[];
@@ -48,7 +49,7 @@ const record = (value: unknown): Record<string, unknown> => value !== null && ty
 const word = (value: unknown) => typeof value === 'string' && /^[A-Za-z][\w@.#-]{0,95}$/.test(value) ? value : undefined;
 
 export function emptyRunState(): RunState {
-  return { chain: null, submission: null, medicineToggle: null, attempts: [], medicine: { events: [], unreadable: 0, confirmPending: false }, environment: [], findings: [],
+  return { chain: null, submission: null, medicineToggle: null, listMode: null, attempts: [], medicine: { events: [], unreadable: 0, confirmPending: false }, environment: [], findings: [],
     gui: { errors: [], completions: [], schedule: [], durationLimits: [], chainStarts: [] }, takeover: null, gaps: [], rotated: false, startFailure: null, processGone: null };
 }
 function addFinding(state: RunState, key: string, finding: Omit<Finding, 'id'>) {
@@ -105,14 +106,13 @@ const exceptionCategory: Record<string, EnvironmentCategory> = { OpenCVException
 const setupErrors = new Set(['CopilotFileReadError', 'CopilotStageNotSupported', 'UserAdditionalOperInvalid', 'OperboxDataParseFailed']);
 const jobFailure = new Set<BusinessResult>(['failed', 'not-three-star', 'no-sanity', 'timeout']);
 
-function classify(state: RunState, attempt: Attempt, evidence: Evidence, stopCheck: boolean): BusinessResult | null {
+function classify(state: RunState, attempt: Attempt, stopCheck: boolean): BusinessResult | null {
   if (attempt.result !== 'not-evaluated') return null;
   if (attempt.flags.environment) return null;
   if (attempt.flags.missionFailed) return 'failed';
   if (stopCheck && attempt.flags.endOfAction && !attempt.flags.threeStar) return 'not-three-star';
   if (stopCheck && attempt.flags.waitExceeded && !attempt.flags.endOfAction) return 'timeout';
   if (attempt.flags.sanityPopup && !attempt.flags.battle && state.medicine.events.every(event => time(event.at) < time(attempt.at))) return 'no-sanity';
-  void evidence;
   return null;
 }
 function setResult(state: RunState, attempt: Attempt, result: BusinessResult, evidence: Evidence, key: string) {
@@ -136,7 +136,7 @@ export function applyCoreLines(state: RunState, list: RunList, lines: string[], 
       if (submission?.type === 'Copilot' && !state.chain) {
         const params = record(submission.params);
         state.submission = { processId: entry.processId, threadId: entry.threadId, taskId: null,
-          toggle: submission.valid ? params.use_sanity_potion === true : null };
+          toggle: submission.valid ? params.use_sanity_potion === true : null, listMode: submission.valid ? Array.isArray(params.copilot_list) : null };
       } else if (assignment !== null && state.submission && state.submission.taskId === null && state.submission.threadId === entry.threadId
         && state.submission.processId === entry.processId) state.submission.taskId = assignment;
       continue;
@@ -164,8 +164,10 @@ export function applyCoreLines(state: RunState, list: RunList, lines: string[], 
     if (message === 'TaskChainStart') {
       if (!state.chain && chainName === 'Copilot' && Number.isSafeInteger(payload.taskid)) {
         state.chain = { processId: entry.processId, taskId: payload.taskid as number, at, terminal: null };
-        const submission = state.submission;
-        state.medicineToggle = submission && submission.processId === entry.processId && submission.taskId === payload.taskid ? submission.toggle : null;
+        const submission = state.submission, own = submission && submission.processId === entry.processId && submission.taskId === payload.taskid;
+        state.medicineToggle = own ? submission.toggle : null;
+        state.listMode = own ? submission.listMode : null;
+        if (state.listMode === false) addFinding(state, line, { kind: 'list-mismatch', ...evidence, detail: 'not-list-mode' });
       } else if (!end) takeOver(state, { at, source: 'other-task-chain', detail: word(chainName) ?? 'unknown' });
       continue;
     }
@@ -225,7 +227,7 @@ export function applyCoreLines(state: RunState, list: RunList, lines: string[], 
       const first = Array.isArray(payload.first) ? payload.first.filter((item): item is string => typeof item === 'string') : [];
       const errorEvidence = { ...evidence, task: evidence.task ?? word(first[0]) };
       const stopCheck = first.some(item => /^Copilot@WaitUntilEndOfAction(-Bypass)?$/.test(item));
-      const result = attempt ? classify(state, attempt, errorEvidence, stopCheck) : null;
+      const result = attempt ? classify(state, attempt, stopCheck) : null;
       if (attempt && result) setResult(state, attempt, result, errorEvidence, line);
       else addFinding(state, line, { kind: 'subtask-error', index: attempt?.index, ...errorEvidence });
     }
@@ -266,7 +268,7 @@ export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], 
   const inWindow = (marker: Marker) => !(time(marker.at) >= windowEnd);
   const guiErrors = state.gui.errors.filter(inWindow), verdict = guiErrors.length ? 'error' : state.gui.completions.some(inWindow) ? 'completed' : 'none';
   const durationLimit = state.gui.durationLimits.some(inWindow);
-  const listMismatch = counted.some(item => item.file !== 'approved');
+  const listMismatch = counted.some(item => item.file !== 'approved') || state.listMode === false;
   let execution: Execution, reason: string;
   if (state.takeover) [execution, reason] = ['unknown', 'taken-over'];
   else if (state.gaps.length) [execution, reason] = ['unknown', 'evidence-incomplete'];

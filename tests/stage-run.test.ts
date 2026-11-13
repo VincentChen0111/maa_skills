@@ -220,3 +220,12 @@ test('run record and summaries keep paths only for MAA debug images and never de
     }
   }
 });
+
+test('a copilot run started without list mode is not attributed to the approved batch', async t => {
+  const { batch, observe } = await tracked(t);
+  await batch.core([...copilotStart(0, { singleFile: true }), ...chainEnd(60, 'TaskChainCompleted')]);
+  const single = await observe();
+  assert.equal(single.execution, 'unknown'); assert.equal(single.executionReason, 'list-mismatch');
+  assert.deepEqual(single.allowedDecisions, ['stop-and-tell-user']);
+  assert.ok(single.newFindings.some(item => item.kind === 'list-mismatch' && item.detail === 'not-list-mode'));
+});
