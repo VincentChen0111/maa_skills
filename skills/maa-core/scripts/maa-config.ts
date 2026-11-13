@@ -65,8 +65,9 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   // Ticket 23: an approved base plan derives its own exact change set; the copy was loaded from the approved report.
   if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
   const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
+  // The derived set may be empty (fields already at target): then the transaction only installs the copy (see writeConfiguration).
   if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan'].includes(key)) || request.authorization.source !== 'approved-report'
-    || !request.changes.length || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
+    || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
   const medicineTasks = new Set<string>();
@@ -499,7 +500,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (medicine !== undefined && (!Number.isInteger(medicine) || medicine < 0 || medicine > 2147483647)) return rejected('medicine-quantity-invalid');
     if (!['codex', 'claude'].includes(request.host) || !['current-request', 'approved-report'].includes(request.authorization.source)
       || typeof request.authorization.reference !== 'string' || !request.authorization.reference.trim()
-      || !Array.isArray(request.changes) || !request.changes.length) return rejected('authorization-invalid');
+      || !Array.isArray(request.changes) || !request.changes.length && !request.authorization.basePlan) return rejected('authorization-invalid');
     original = await readConfiguration(request.maaDirectory);
     if (typeof request.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedRevision)) return rejected('revision-required');
     if (request.expectedRevision !== revision(original)) return rejected('configuration-changed');
@@ -523,6 +524,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
     if (baseAsset) baseBefore = await inspectBaseAsset(baseAsset, request.privateDirectory);
+    // Ticket 23: a base transaction without field changes exists only to install a missing copy; anything else is a no-op.
+    if (!request.changes.length && baseBefore !== 'absent') return rejected('plan-already-applied');
     targets = request.changes.map(change => {
       const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
         : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
@@ -549,7 +552,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
   if (recovery) { const changed = await locked(); if (changed) return changed; }
-  const connectionOnly = request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
+  const connectionOnly = request.changes.length > 0 && request.changes.every(change =>change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
   const metadata = { id, skill: recovery ? 'maa-doctor' : connectionOnly ? 'maa-setup' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
@@ -600,12 +603,15 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await checkAsset();
     if (trainingAsset) await installTrainingAsset(trainingAsset);
     if (baseAsset) await installBaseAsset(baseAsset, request.privateDirectory);
-    const temporary = `${file}.${id}.tmp`;
-    const handle = await open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
+    // A copy-only base transaction (no field changes) leaves gui.new.json byte for byte as it was.
+    const temporary = request.changes.length ? `${file}.${id}.tmp` : null;
+    if (temporary) {
+      const handle = await open(temporary, 'wx', 0o600);
+      try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
+    }
     if (!(await maa.inspect()).treeExited || object(JSON.parse(await readFile(lockFile, 'utf8'))).id !== id) throw new Error('write-ownership-lost');
     checkBeforeRestart();
-    await rename(temporary, file);
+    if (temporary) await rename(temporary, file);
     await phase('restart'); checkBeforeRestart(); await maa.start();
     if (!(await maa.inspect()).ready) throw new Error('restart-unverified');
     const reopened = new Date();

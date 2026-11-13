@@ -3,25 +3,26 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { applyBasePlan, checkBaseApply } from '../skills/maa-core/scripts/base-apply.ts';
 import { executeConfigWrite, inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
-import { draftBaseReport } from '../skills/maa-core/scripts/base-report.ts';
-import { loadAdviceReport } from '../skills/maa-core/scripts/advice-report.ts';
+import { approveBaseReportItems, draftBaseReport } from '../skills/maa-core/scripts/base-report.ts';
+import { loadAdviceReport, recordReviewSkip, saveAdviceReport } from '../skills/maa-core/scripts/advice-report.ts';
 import { applyHome, goals, infrastConfig, type ApplyHome } from './fixtures/base-apply-data.ts';
 import { nameTable, planInput, planSnapshot, planTables } from './fixtures/base-plan-data.ts';
 
 // Ticket 23: applying an approved base plan. Real temporary homes and the real report, plan and configuration tools;
 // only the MAA process is replaced (it records calls). No device, adb or game is involved in any test.
 const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
-function fakeMaa(options: { startFails?: boolean; closeFails?: boolean } = {}) {
+/** onClose / onStart run inside the fake GUI's close and start: something else touching the private directory meanwhile. */
+function fakeMaa(options: { startFails?: boolean; closeFails?: boolean; onClose?: () => Promise<unknown>; onStart?: () => Promise<unknown> } = {}) {
   let running = true; const calls: string[] = [];
   const maa: MaaProcess = {
     inspect: async () => { calls.push('inspect'); return { running, treeExited: !running, idle: true, ready: running }; },
-    close: async () => { calls.push('close'); if (options.closeFails) throw new Error('synthetic close failure'); running = false; },
-    start: async () => { calls.push('start'); if (options.startFails) throw new Error('synthetic restart failure'); running = true; },
+    close: async () => { calls.push('close'); if (options.closeFails) throw new Error('synthetic close failure'); await options.onClose?.(); running = false; },
+    start: async () => { calls.push('start'); if (options.startFails) throw new Error('synthetic restart failure'); await options.onStart?.(); running = true; },
   };
   return { maa, calls };
 }
@@ -47,6 +48,24 @@ async function nothingWritten(h: ApplyHome, before: Buffer) {
   for (const folder of ['maa-config-backups', 'base-applied']) assert.deepEqual(await readdir(join(h.home, folder)).catch(() => []), []);
   assert.deepEqual(await records(join(h.home, 'daily-pending.jsonl')), []);
 }
+/** Another report version saved by the real report store from an edited copy of the fixture's content, then skipped and approved as the fixture does. */
+async function crafted(h: ApplyHome, edit: (content: Record<string, any>) => void): Promise<string> {
+  const content = structuredClone((await loadAdviceReport(h.home, 'base', h.reportHash)).content) as Record<string, any>;
+  edit(content);
+  const saved = await saveAdviceReport(h.home, content as never);
+  await recordReviewSkip(h.home, 'base', saved.hash, { userWords: '这次跳过审查' });
+  await approveBaseReportItems(h.home, saved.hash, { items: ['P1'], userWords: '我批准排班这一项 P1' });
+  return `base/${saved.hash}#P1`;
+}
+const approvedSha = async (h: ApplyHome) => (await checkBaseApply({ reference: h.reference, profile: 0, task: 1 }, { home: h.home })).plan!.sha256;
+const grant = (sha256: string) => ({ sha256, binding: { profile: 0, task: 1 }, decision: { unverified: [], userWords: null } });
+/** The complete change set base-apply derives for the fixture's Infrast task (profile 0, task 1), with the copy path for `sha`. */
+const derivedChanges = (h: ApplyHome, sha: string) => ([['Mode', 'Custom'], ['Filename', join(h.home, 'base-applied', `${sha}.json`)], ['PlanSelect', -1], ['CustomFileType', 'user_defined']] as const)
+  .map(([key, value]) => ({ path: ['Configurations', 0, 'TaskQueue', 1, key], value }));
+/** The common writer called directly, as only base-apply does, with an approved-report authorization the case adjusts. */
+const writeDirect = async (h: ApplyHome, authorization: Record<string, unknown>, changes: unknown[], maa: MaaProcess) =>
+  executeConfigWrite({ maaDirectory: h.maa, privateDirectory: h.home, host: 'claude', closedConfirmed: true, expectedRevision: (await inspectConfiguration(h.maa)).revision,
+    authorization: { source: 'approved-report', reference: h.reference, ...authorization } as never, changes: changes as never }, maa);
 
 test('report → approval → check → safe write → read-back: only the custom infrast fields change and MAA reads the approved bytes', async (t) => {
   const h = await home(t, { baseFile: { metadata: { note: 'synthetic' }, 'x-unknown-field': { keep: true } } });
@@ -266,4 +285,166 @@ test('the check CLI prints fixed codes and relative names only', async (t) => {
   const bad = spawnSync(process.execPath, [fileURLToPath(new URL('../skills/maa-core/scripts/base-apply.ts', import.meta.url)), 'check'], {
     env: { ...process.env, MAA_SKILLS_HOME: h.home }, encoding: 'utf8', windowsHide: true, input: JSON.stringify({ reference: h.reference, profile: 0 }) });
   assert.deepEqual(JSON.parse(bad.stdout), { ok: false, error: 'base-apply-input-invalid' });
+});
+
+test('inputs that cannot be read now stop the apply: no snapshot, no tables, or a report input this version cannot check', async (t) => {
+  const cases: [keyof NonNullable<Awaited<ReturnType<typeof checkBaseApply>>['freshness']>, string, (h: ApplyHome) => Promise<unknown>][] = [
+    ['snapshot', 'base-snapshot-unavailable', h => rm(join(h.home, 'account-snapshot.json'))],
+    ['tables', 'base-tables-unavailable', h => rm(h.tablesFile)],
+  ];
+  for (const [input, reason, damage] of cases) {
+    const h = await home(t), before = await readFile(h.configFile);
+    await damage(h);
+    const checked = await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+    assert.equal(checked.status, 'refused', input); assert.deepEqual(checked.reasons, [reason], input);
+    assert.equal(checked.freshness![input], 'unknown', input); assert.equal(checked.check, null, `${input}: no recheck, and the report's old result is not used`);
+    const { maa, calls } = fakeMaa();
+    const result = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), maa, { home: h.home });
+    assert.equal(result.status, 'rejected', input); assert.equal(result.reason, reason, input); assert.deepEqual(calls, [], input);
+    await nothingWritten(h, before);
+  }
+  // A report version whose input carries a field this version does not know: snapshot and tables are fresh, but the check cannot run.
+  const h = await home(t), before = await readFile(h.configFile);
+  const reference = await crafted(h, content => { content.input.futureField = 'synthetic'; });
+  const checked = await checkBaseApply({ reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+  assert.deepEqual(checked.reasons, ['base-recheck-unavailable']); assert.equal(checked.check, null);
+  assert.equal(checked.freshness!.snapshot, 'fresh'); assert.equal(checked.freshness!.tables, 'fresh');
+  const { maa, calls } = fakeMaa();
+  const result = await applyBasePlan({ ...(await request(h, { decision: accept(['maa-timers']) })), reference }, maa, { home: h.home });
+  assert.equal(result.reason, 'base-recheck-unavailable'); assert.deepEqual(calls, []);
+  await nothingWritten(h, before);
+});
+
+test('the apply-time gate 15 audits the report\'s own texts again: a superlative in an approved report stops the apply', async (t) => {
+  // Reports saved by an earlier version could carry texts its gate 15 never audited; the recheck audits the same texts the draft audits now.
+  const h = await home(t), before = await readFile(h.configFile);
+  const edits: [string, (content: Record<string, any>) => void][] = [
+    ['plan title', content => { content.input.title = '最优两班'; }],
+    ['assumption', content => { content.assumptions = [...content.assumptions, '这是最佳安排']; }],
+    ['summary', content => { content.summary = '合成样例：最优的排班'; }],
+    ['assumed goal', content => { content.goals = { source: 'assumed', text: '最高效地拿龙门币' }; }],
+  ];
+  for (const [where, edit] of edits) {
+    const reference = await crafted(h, edit);
+    const checked = await checkBaseApply({ reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+    assert.deepEqual(checked.reasons, ['base-plan-not-applicable'], where);
+    const gate = checked.check!.gates.find(entry => entry.gate === 15)!;
+    assert.equal(gate.verdict, 'fail', where); assert.ok(gate.evidence.some(line => /最优|最佳|最高效/.test(line)), `${where}: ${JSON.stringify(gate.evidence)}`);
+  }
+  await nothingWritten(h, before);
+});
+
+test('the writer binds a base grant to the approved bytes and route: even the full derived change set is refused with a wrong hash, another grant, another source or an edited approval', async (t) => {
+  const h = await home(t), before = await readFile(h.configFile), sha = await approvedSha(h), forged = 'f'.repeat(64);
+  const cases: [string, Record<string, unknown>, unknown[]][] = [
+    ['a wrong hash with the approved copy path', { basePlan: grant(forged) }, derivedChanges(h, sha)],
+    ['a wrong hash with its own copy path', { basePlan: grant(forged) }, derivedChanges(h, forged)],
+    ['a medicine grant alongside', { basePlan: grant(sha), medicineCount: 0 }, derivedChanges(h, sha)],
+    ['the current-request source', { source: 'current-request', basePlan: grant(sha) }, derivedChanges(h, sha)],
+  ];
+  for (const [name, authorization, changes] of cases) {
+    const { maa, calls } = fakeMaa();
+    const result = await writeDirect(h, authorization, changes, maa);
+    assert.equal(result.status, 'rejected', `${name}: ${JSON.stringify(result)}`); assert.deepEqual(calls, [], name);
+  }
+  await nothingWritten(h, before);
+  // The approval record's scope edited after approval no longer matches the report: base-apply and the writer both refuse.
+  const folder = join(h.home, 'reports', 'base', h.reportHash, 'approvals'), [name] = await readdir(folder), file = join(folder, name!);
+  const raw = await readFile(file, 'utf8'), record = JSON.parse(raw);
+  record.items[0].scope.note = 'synthetic edit after approval'; await writeFile(file, JSON.stringify(record));
+  assert.deepEqual((await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home })).reasons, ['base-approval-scope-mismatch']);
+  const edited = fakeMaa();
+  assert.equal((await writeDirect(h, { basePlan: grant(sha) }, derivedChanges(h, sha), edited.maa)).status, 'rejected'); assert.deepEqual(edited.calls, []);
+  await nothingWritten(h, before);
+  // Control: the same change set with the true hash and the record restored is accepted, so each refusal above was the binding.
+  await writeFile(file, raw);
+  const control = await writeDirect(h, { basePlan: grant(sha) }, derivedChanges(h, sha), fakeMaa().maa);
+  assert.equal(control.status, 'complete', JSON.stringify(control));
+  // With the fields at target and the copy matching there is nothing to do: an empty base transaction is refused.
+  const empty = fakeMaa(), configAfter = await readFile(h.configFile);
+  assert.equal((await writeDirect(h, { basePlan: grant(sha) }, [], empty.maa)).status, 'rejected'); assert.deepEqual(empty.calls, []);
+  assert.deepEqual(await readFile(h.configFile), configAfter);
+});
+
+test('the applied copy has a way back: a deleted copy is installed again by a copy-only transaction, an edited copy is never overwritten', async (t) => {
+  const h = await home(t);
+  const first = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), fakeMaa().maa, { home: h.home });
+  assert.equal(first.status, 'complete', JSON.stringify(first));
+  const sha = first.plan!.sha256, copy = join(h.home, 'base-applied', `${sha}.json`), approved = await readFile(copy);
+  // Fields at target and the copy matching: unchanged, but a stale revision is still refused.
+  const stale = fakeMaa();
+  const outdated = await applyBasePlan({ ...(await request(h, { decision: accept(['maa-timers']) })), expectedRevision: '0'.repeat(64) }, stale.maa, { home: h.home });
+  assert.equal(outdated.status, 'rejected'); assert.equal(outdated.reason, 'configuration-changed'); assert.deepEqual(stale.calls, []);
+  // The user edited the copy (for example while hand-tuning in MAA): refused by name; MAA, the configuration and the edits are untouched.
+  const edits = '{"title":"synthetic hand-tuned"}', configBefore = await readFile(h.configFile);
+  await writeFile(copy, edits);
+  const changed = await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+  assert.equal(changed.status, 'refused'); assert.deepEqual(changed.reasons, ['base-plan-copy-changed']); assert.equal(changed.configuration!.copy, 'changed');
+  const refusedRun = fakeMaa();
+  const refused = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), refusedRun.maa, { home: h.home });
+  assert.equal(refused.status, 'rejected'); assert.equal(refused.reason, 'base-plan-copy-changed'); assert.deepEqual(refusedRun.calls, []);
+  assert.equal(await readFile(copy, 'utf8'), edits); assert.deepEqual(await readFile(h.configFile), configBefore);
+  // The user moved the edited file away: check and apply agree, and apply installs the approved bytes through the writer, nothing else.
+  await rename(copy, join(h.home, 'my-edited-plan.json'));
+  const missing = await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+  assert.equal(missing.status, 'ready', JSON.stringify(missing)); assert.deepEqual(missing.configuration!.changes, []); assert.equal(missing.configuration!.copy, 'absent');
+  const { maa, calls } = fakeMaa();
+  const reinstalled = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), maa, { home: h.home });
+  assert.equal(reinstalled.status, 'complete', JSON.stringify(reinstalled));
+  assert.deepEqual(reinstalled.changedKeys, []); assert.equal(reinstalled.copyInstalled, true);
+  assert.deepEqual(reinstalled.readback, { fields: [], copy: 'matching', periodSelection: 'gui-at-each-run-not-observed' });
+  assert.ok(calls.indexOf('close') >= 0 && calls.indexOf('close') < calls.indexOf('start'), 'the copy is installed while MAA is closed');
+  assert.deepEqual(await readFile(copy), approved);
+  assert.deepEqual(await readFile(h.configFile), configBefore, 'the configuration is not rewritten');
+  assert.equal(await readFile(join(h.home, 'my-edited-plan.json'), 'utf8'), edits, 'the user\'s edits stay where the user put them');
+  const pending = (await records(join(h.home, 'daily-pending.jsonl'))).at(-1);
+  assert.equal(pending.skill, 'maa-daily'); assert.deepEqual(pending.changes, []); assert.equal(pending.baseManifest.before, 'absent'); assert.equal(pending.authorization.basePlan.sha256, sha);
+  const run = (await records(join(h.home, 'daily-runs.jsonl'))).at(-1);
+  assert.equal(run.status, 'complete'); assert.equal(run.basePlan.sha256, sha);
+  assert.deepEqual(await readFile(join(h.home, reinstalled.backup!)), configBefore);
+  assert.equal((await readdir(join(h.maa, 'config'))).includes('.maa-skills.lock'), false);
+  // Everything matches again: unchanged, MAA untouched.
+  const again = fakeMaa();
+  assert.equal((await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), again.maa, { home: h.home })).status, 'unchanged'); assert.deepEqual(again.calls, []);
+});
+
+test('a copy that changes while the writer has MAA closed is never overwritten or claimed: the outcome is unknown and kept as evidence', async (t) => {
+  // After MAA closed and before the backup, something writes the copy: stop there.
+  const h = await home(t), before = await readFile(h.configFile), copy = join(h.home, 'base-applied', `${await approvedSha(h)}.json`);
+  const meanwhile = '{"synthetic":"written meanwhile"}';
+  const early = fakeMaa({ onClose: async () => { await mkdir(dirname(copy), { recursive: true }); await writeFile(copy, meanwhile); } });
+  const result = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), early.maa, { home: h.home });
+  assert.equal(result.status, 'unknown'); assert.equal(result.phase, 'backup'); assert.equal(result.readback, null);
+  assert.deepEqual(await readFile(h.configFile), before); assert.equal(await readFile(copy, 'utf8'), meanwhile);
+  assert.deepEqual(await readdir(join(h.home, 'maa-config-backups')).catch(() => []), [], 'stopped before the backup');
+  // After the write and the restart, before the read-back: the copy no longer matches, so success is not claimed.
+  const late = await home(t), lateCopy = join(late.home, 'base-applied', `${await approvedSha(late)}.json`);
+  const after = await applyBasePlan(await request(late, { decision: accept(['maa-timers']) }), fakeMaa({ onStart: () => writeFile(lateCopy, meanwhile) }).maa, { home: late.home });
+  assert.equal(after.status, 'unknown'); assert.equal(after.phase, 'readback'); assert.equal(after.readback, null);
+  assert.equal((await records(join(late.home, 'daily-runs.jsonl'))).at(-1).status, 'unknown');
+});
+
+test('a weekly schedule that skips days is an unverified item the user decides on', async (t) => {
+  const weekly = (use: boolean, off: string[]) => {
+    const config = infrastConfig({ timers: true }) as { Configurations: { synthetic: { TaskQueue: Record<string, unknown>[] } } };
+    Object.assign(config.Configurations.synthetic.TaskQueue[1]!, { UseWeeklySchedule: use,
+      WeeklySchedule: Object.fromEntries(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => [day, !off.includes(day)])) });
+    return config;
+  };
+  const h = await home(t, { config: weekly(true, ['Sunday', 'Saturday']) });
+  const checked = await checkBaseApply({ reference: h.reference, profile: 0, task: 1 }, { home: h.home });
+  assert.equal(checked.status, 'needs-decision'); assert.deepEqual(checked.unverified.map(entry => entry.id), ['maa-weekly-schedule']);
+  assert.ok(/周日/.test(checked.unverified[0]!.evidence.join('')) && /周六/.test(checked.unverified[0]!.evidence.join('')), JSON.stringify(checked.unverified));
+  assert.deepEqual(checked.configuration!.notes, [], 'no longer only a note');
+  const { maa, calls } = fakeMaa();
+  assert.equal((await applyBasePlan(await request(h), maa, { home: h.home })).reason, 'base-unverified-decision-required'); assert.deepEqual(calls, []);
+  const done = await applyBasePlan(await request(h, { decision: accept(['maa-weekly-schedule']) }), maa, { home: h.home });
+  assert.equal(done.status, 'complete', JSON.stringify(done));
+  assert.deepEqual((await records(join(h.home, 'daily-runs.jsonl'))).at(-1).basePlan.decision.unverified, ['maa-weekly-schedule']);
+  // The weekly schedule switched off (MAA then ignores it), or every day on: nothing extra to decide.
+  for (const config of [weekly(false, ['Sunday']), weekly(true, [])]) {
+    const other = await home(t, { config });
+    const ready = await checkBaseApply({ reference: other.reference, profile: 0, task: 1 }, { home: other.home });
+    assert.equal(ready.status, 'ready', JSON.stringify(ready)); assert.deepEqual(ready.unverified, []);
+  }
 });

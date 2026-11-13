@@ -31,7 +31,7 @@ export type ApplyCheck = {
   freshness: Record<keyof PlanInputs | 'check', Freshness> | null;
   check: { applicable: boolean; errors: string[]; warnings: string[]; gates: GateResult[] } | null;
   unverified: Unverified[]; decision: BaseDecision | null;
-  configuration: { changes: string[]; taskEnabled: boolean | null; lock: string | null; copy: 'absent' | 'matching' | null; notes: string[] } | null;
+  configuration: { changes: string[]; taskEnabled: boolean | null; lock: string | null; copy: 'absent' | 'matching' | 'changed' | null; notes: string[] } | null;
 };
 type Internal = { result: ApplyCheck; grant?: BasePlanGrant; changes?: Change[]; asset?: BaseAsset; maaDirectory?: string; privateDirectory: string };
 
@@ -48,6 +48,10 @@ function parseInput(value: unknown, keys: string[]) {
     decision: decision ? { accept: decision.acceptUnverified as string[], userWords: decision.userWords as string } : null, input };
 }
 
+// MAA v6.21.4 stores WeeklySchedule as a DayOfWeek → bool dictionary (names; numbers accepted too).
+const weekdays: Record<string, string> = { Sunday: '周日', Monday: '周一', Tuesday: '周二', Wednesday: '周三', Thursday: '周四', Friday: '周五', Saturday: '周六',
+  0: '周日', 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六' };
+
 /** Facts MAA's GUI uses but the plan check cannot see: timers and the weekly switch of this task. */
 function configurationNotes(config: ObjectValue, profile: string, task: ObjectValue, runs: string[] | null): { unverified: Unverified[]; notes: string[] } {
   const timers = object(config.Timers), list = Array.isArray(timers.List) ? timers.List.map(object) : [];
@@ -57,10 +61,19 @@ function configurationNotes(config: ObjectValue, profile: string, task: ObjectVa
   const unverified: Unverified[] = [];
   if (runs && JSON.stringify(times) !== JSON.stringify([...runs].sort()))
     unverified.push({ id: 'maa-timers', evidence: [`排班按每天 ${[...runs].sort().join('、')} 运行检查；这个 MAA 配置的每日定时是 ${times.length ? times.join('、') : '没有'}。由你手动或其他方式在这些时间运行时可以不管这一项`] });
+  // On a day the weekly schedule switches off, MAA skips the whole Infrast task (v6.21.4): no shift change that day, so the
+  // last shift stays on until the next run and the gates' mood results, computed for runs every day, may not hold.
+  const off = task.UseWeeklySchedule === true ? Object.entries(object(task.WeeklySchedule)).filter(([, on]) => on === false).map(([day]) => weekdays[day] ?? day.slice(0, 20)) : [];
+  if (off.length) unverified.push({ id: 'maa-weekly-schedule', evidence: [`这个基建任务开着 MAA 的周计划，${off.join('、')}不运行：那天整个基建任务跳过、不换班，前一天最后一班会一直上到下一次运行。验收门的心情结论按每天都按排班运行计算，这几天可能不成立`] });
   const notes: string[] = [];
   if (task.IsEnable === false) notes.push('infrast-task-disabled');
-  if (task.UseWeeklySchedule === true && Object.values(object(task.WeeklySchedule)).some(day => day === false)) notes.push('weekly-schedule-skips-days');
   return { unverified, notes };
+}
+
+/** The copy's state for the check: a copy whose bytes differ from the approved ones is reported, never replaced. */
+async function copyState(asset: BaseAsset, privateDirectory: string): Promise<'absent' | 'matching' | 'changed'> {
+  try { return await inspectBaseAsset(asset, privateDirectory); }
+  catch (error) { if (error instanceof Error && error.message === 'base-plan-copy-changed') return 'changed'; throw error; }
 }
 
 async function inspect(value: unknown, options: Options, keys: string[]): Promise<Internal> {
@@ -119,7 +132,9 @@ async function inspect(value: unknown, options: Options, keys: string[]): Promis
       configuration.taskEnabled = built.enabled;
       const facts = configurationNotes(config, built.profile, task, recheck?.facts.runs ?? null);
       result.unverified.push(...facts.unverified); configuration.notes = facts.notes;
-      configuration.copy = await inspectBaseAsset(asset, settings.privateDirectory);
+      // An edited copy (for example hand-tuned in MAA) is the user's: refused by name, never overwritten here.
+      configuration.copy = await copyState(asset, settings.privateDirectory);
+      if (configuration.copy === 'changed') result.reasons.push('base-plan-copy-changed');
       Object.assign(internal, { grant, changes: built.changes, asset });
     } catch (error) { result.reasons.push(code(error)); }
   }
@@ -151,19 +166,23 @@ export async function applyBasePlan(value: unknown, maa: MaaProcess, options: Op
   const summary = { review: checked.review, plan: checked.plan, unverified: checked.unverified, decision: checked.decision && { unverified: checked.decision.unverified },
     notes: checked.configuration?.notes ?? [] };
   if (checked.status !== 'ready' || !internal.grant || !internal.changes || !internal.asset || !internal.maaDirectory)
-    return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, readback: null, reason: checked.status === 'needs-decision' ? 'base-unverified-decision-required' : checked.reasons[0] ?? 'base-apply-check-failed',
+    return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: checked.status === 'needs-decision' ? 'base-unverified-decision-required' : checked.reasons[0] ?? 'base-apply-check-failed',
       reasons: checked.reasons, check: checked.check, ...summary };
   if (!internal.changes.length) {
-    // Nothing to change: the configuration already points at the approved copy. Still no write while a lock is retained.
-    if ((await inspectConfiguration(internal.maaDirectory)).revision !== input.expectedRevision) return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, readback: null, reason: 'configuration-changed', ...summary };
-    if (await inspectBaseAsset(internal.asset, internal.privateDirectory) !== 'matching') return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, readback: null, reason: 'base-plan-copy-missing', ...summary };
-    return { status: 'unchanged', phase: 'check', operation: null, changedKeys: [], backup: null, readback: null, reason: 'plan-already-applied', ...summary };
+    // The four fields already point at the approved copy. Unchanged only when the copy is there too; a missing copy (for
+    // example moved away by the user) is installed again by a copy-only transaction below, so check and apply agree.
+    if ((await inspectConfiguration(internal.maaDirectory)).revision !== input.expectedRevision) return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'configuration-changed', ...summary };
+    const copy = await copyState(internal.asset, internal.privateDirectory);
+    if (copy === 'changed') return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'base-plan-copy-changed', ...summary };
+    if (copy === 'matching') return { status: 'unchanged', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'plan-already-applied', ...summary };
   }
+  // The single writer: lock, MAA shutdown, backup, timer window, the derived changes (none for a copy-only transaction),
+  // the copy installed while MAA is closed, read-back.
   const result = await executeConfigWrite({ maaDirectory: internal.maaDirectory, privateDirectory: internal.privateDirectory, host: input.host as 'codex' | 'claude',
     expectedRevision: input.expectedRevision, ...(input.closedConfirmed === undefined ? {} : { closedConfirmed: input.closedConfirmed as boolean }),
     authorization: { source: 'approved-report', reference: checked.reference, basePlan: internal.grant }, changes: internal.changes }, maa);
   const complete = result.status === 'complete';
-  return { ...result, backup: complete ? `maa-config-backups/${result.operation}.json` : null,
+  return { ...result, backup: complete ? `maa-config-backups/${result.operation}.json` : null, copyInstalled: complete ? checked.configuration!.copy === 'absent' : null,
     // Read-back covers exactly the values written and the copy's bytes. Which plan MAA runs is chosen by the GUI from
     // `period` at each run; nothing here observes or claims that switch.
     readback: complete ? { fields: checked.configuration!.changes, copy: 'matching', periodSelection: 'gui-at-each-run-not-observed' } : null, ...summary };
