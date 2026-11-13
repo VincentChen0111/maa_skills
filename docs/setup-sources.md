@@ -35,7 +35,7 @@ MAA 固定 [v6.21.4 / 52d0b2acaca116585b02e1e6a9da303460f81a24](https://github.c
 
 ### R1 补充（2026-11-13）
 
-- MuMu 下载链路：审查员只读查看 mumu.163.com/download/ 的脚本，下载按钮加载 `adl.netease.com` 上的脚本，再调用下载接口 `https://mumu.nie.netease.com/api/dl/win`。本作者另用不跟随跨主机跳转的只读请求核对：该接口返回 302，Location 指向 `a11.gdl.netease.com` 上的 `MuMu_6.0.6_..._zh-Hans_....exe`，查询串带 `n=` 文件名和两个签名参数；没有下载安装包。因此 MuMu 另放行这两个确切主机，不放行 `adl.netease.com`（只提供脚本）和 netease.com 的其他主机。用户提供接口地址或浏览器下载列表里的文件地址都可以；带签名参数的文件地址可能过期，接口地址更稳定。
+- MuMu 下载链路：审查员只读查看 mumu.163.com/download/ 的脚本，下载按钮加载 `adl.netease.com` 上的脚本，再调用下载接口 `https://mumu.nie.netease.com/api/dl/win`。本作者另用不跟随跨主机跳转的只读请求核对：该接口返回 302，Location 指向 `a11.gdl.netease.com` 上的 `MuMu_6.0.6_..._zh-Hans_....exe`，查询串带 `n=` 文件名和两个签名参数；没有下载安装包。因此 MuMu 另放行这两个确切主机，不放行 `adl.netease.com`（只提供脚本）和 netease.com 的其他主机。用户提供接口地址或浏览器下载列表里的文件地址都可以。R2 审查员 2026-11-13 用 HEAD 只读核对：接口每次调用都给出新的 `n=` 和签名参数，文件主机每次请求在 Content-Disposition 里给出不同的随机文件名（例如 `MuMu_6.0.6_12g9XL3C.exe` 与 `MuMu_6.0.6_12g9YkKC.exe`），而文件地址的路径名 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe` 和大小两次一致，签名参数 key2 的有效期为 48 小时。所以脚本用最终地址的路径名作文件名，只有路径里没有安装包名时才用 Content-Disposition；这样从接口地址或文件地址开始，方案和下载的指纹都一致。从文件地址开始时，签名过期后需要用户重新取地址、重新出方案。
 - MAA 发行包结构：MAA 仓库 [ci.yml](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/dev/.github/workflows/ci.yml) 把 GUI 发布到 `install` 目录（`-o install`），再在该目录内执行 `Compress-Archive -Destination MAA-<tag>-win-<arch>.zip -Path ./*`，所以 zip 的顶层就是 `install` 目录的内容。`MAA.exe` 在顶层是由此得出的推断（审查员与本作者均只读查看了 ci.yml），没有用真实发行包核实。
 - 雷电：官网首页的安装包来自 `lddl01.ldmnq.com`，属于已放行的 `ldmnq.com`。
 

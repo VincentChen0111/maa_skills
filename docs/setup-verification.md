@@ -72,6 +72,12 @@
 
 R1 修后实际运行：`npm run typecheck` 通过；`node --test tests/setup-download.test.ts tests/setup-download-scenarios.test.ts tests/setup.test.ts tests/setup-scenarios.test.ts tests/setup-integration.test.ts tests/eval-network.test.ts` 共 88 项全部通过；首轮变异表与三处后续修复的变异在修后代码上重跑，结论不变（确认原话变异因改为具名常量更新了匹配文本后重跑，被发现）。完整离线入口 `node scripts/check.ts`（提交 `6a4c02c`，工作树干净）：419 项，418 pass、0 fail、1 skip（非 Windows 进程适配器用例），tracker、隐私、元数据为空，评分规则 7 条／样例 14 个通过；「关闭 MAA」用例本次通过。
 
+### R2 修复（2026-11-13，协调者已接受唯一一项 P3）
+
+| 意见 | 修复 | 测试先行与证据 |
+| --- | --- | --- |
+| P3 从 MuMu 下载接口开始的方案永远不能下载：模拟器文件名优先取 Content-Disposition，而 MuMu 接口每次给新的 `n=`、文件主机每次给不同的随机名字，文件名进入指纹，下载时必然 `plan-changed`；原替身不返回 Content-Disposition，与真实服务器不符 | 改为优先取最终下载地址的路径名（MuMu 为 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe`，两次请求一致），路径里没有安装包名时才用 Content-Disposition。`safeFileName`、只写在 downloads 文件夹内、指纹绑定版本／大小／来源不变。改正来源文档里「接口地址更稳定」的说法，接口说明和规格「默认值及其来源」的模拟器一行写明文件名取法及理由 | MuMu 测试改为按真实服务器行为的替身：接口每次 302 带新的 `n=` 和签名，文件主机每次给不同的 Content-Disposition 名字。修前运行失败（方案文件名为 `MuMu_9.0.1_2cd.exe`，每次请求都会变），修后通过：从接口地址和从浏览器下载列表的文件地址开始，各自只确认一次就下载成功，文件名都是路径名，文件内容正确。另加一条：地址路径没有安装包名时，按 Content-Disposition 命名 |
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
