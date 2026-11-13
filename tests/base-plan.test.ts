@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -34,7 +34,8 @@ test('generation writes a plan file inside the private directory from the layout
   assert.equal(result.status, 'written', JSON.stringify(result));
   if (result.status !== 'written') return;
   assert.match(result.relative.replaceAll('\\', '/'), /^base-plans\/plan-[a-f0-9]{16}\.json$/);
-  assert.ok(resolve(result.file).startsWith(resolve(home)), 'the plan file stays in the private directory');
+  // The writer resolves the private directory to its real path (a CI temp dir may be an 8.3 short name).
+  assert.ok(resolve(result.file).startsWith(await realpath(home)), 'the plan file stays in the private directory');
   const written = await readFile(result.file, 'utf8');
   assert.equal(written, result.text, 'the delivered file is the export');
   const plan = JSON.parse(written) as Plan;
