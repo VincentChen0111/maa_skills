@@ -182,9 +182,13 @@ export async function withResearchGate<T>(directory: string, limits: GateLimits,
 export function plainText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f​-‏‪-‮⁠-⁩﻿]/g, '');
 }
-/** Escapes untrusted text for Markdown: no links, HTML, fences or tables can form, and URLs are defanged. */
+/**
+ * Escapes untrusted text for Markdown: no links, autolinks, HTML, fences or tables can form. URLs of any
+ * scheme, bare `www.` domains and e-mail-like addresses are defanged (`hxxps[:]//`, `ftp[:]//`, `www[.]`, `[@]`).
+ */
 function inert(value: string): string {
   return plainText(value).replace(/\b(h)(ttps?)(:\/\/)/gi, (_all, h: string, rest: string) => `${h === 'H' ? 'HXX' : 'hxx'}${rest.slice(2)}[:]//`)
+    .replace(/:\/\//g, '[:]//').replace(/\b(www)\./gi, '$1[.]').replace(/([A-Za-z0-9._+-])@(?=[A-Za-z0-9_-])/g, '$1[@]')
     .replace(/[\\`*_[\]()<>|#!~]/g, (char) => `\\${char}`);
 }
 const inline = (value: string) => inert(value).replace(/\s+/g, ' ').trim();

@@ -132,12 +132,12 @@ test('requests are validated before anything is read or sent', async (t) => {
   const f = await setup(t);
   const { transport, calls } = transportDouble(() => undefined);
   const options = { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock };
-  for (const request of [{ keyword: '' }, { keyword: 'x'.repeat(ngaLimits.keywordChars + 1) }, { keyword: 'ok', pages: ngaLimits.maxSearchPages + 1 }, { keyword: 'ok', forum: 'other' },
-    { keyword: 'ok', extra: true }, { keyword: 'line\nbreak' }]) {
+  for (const request of [{ keyword: '' }, { keyword: 'x'.repeat(ngaLimits.keywordChars + 1) }, { keyword: 'ok', pages: 0 }, { keyword: 'ok', pages: 1.5 }, { keyword: 'ok', pages: '2' },
+    { keyword: 'ok', forum: 'other' }, { keyword: 'ok', extra: true }, { keyword: 'line\nbreak' }]) {
     await assert.rejects(searchNga(request as never, options), /request-invalid/, JSON.stringify(request));
   }
   for (const request of [{ thread: 'https://evil.example/read.php?tid=7' }, { thread: 'https://bbs.nga.cn/thread.php?fid=1' }, { thread: 0 }, { thread: 7, pages: [] },
-    { thread: 7, pages: [1, 1] }, { thread: 7, pages: [1, 2, 3, 4, 5, 6] }, { thread: 7, pages: [0] }, { thread: 7, fresh: true, cacheOnly: true }]) {
+    { thread: 7, pages: [1, 1] }, { thread: 7, pages: [0] }, { thread: 7, pages: [2.5] }, { thread: 7, pages: ['3'] }, { thread: 7, fresh: true, cacheOnly: true }]) {
     await assert.rejects(readNgaThread(request as never, options), /request-invalid/, JSON.stringify(request));
   }
   for (const thread of ['https://ngabbs.com/read.php?tid=7', 'https://nga.178.com/read.php?tid=7&page=2', '7']) {
@@ -145,6 +145,26 @@ test('requests are validated before anything is read or sent', async (t) => {
     assert.equal(result.request.thread, 7);
   }
   assert.equal(calls.length, 0);
+});
+
+test('there is no per-run page cap: every requested page is read, each request spaced by the interval', async (t) => {
+  const f = await setup(t);
+  const times: number[] = [];
+  const { transport, calls } = transportDouble((url) => {
+    times.push(f.clock.now());
+    if (url.pathname === '/thread.php') return json(searchPayload([{ tid: 7, subject: '合成帖', author: '合成作者甲' }], 400));
+    return json(threadPayload({ tid: 7, title: '合成长帖', users: { 101: '合成作者甲' }, rows: 40_000, posts: [{ floor: Number(url.searchParams.get('page')) * 20, author: 101, text: '楼层内容' }] }));
+  });
+  const options = { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock };
+  const eight = [1, 2, 3, 4, 5, 6, 7, 8];
+  const thread = await readNgaThread({ thread: 7, pages: eight }, options);
+  assert.deepEqual([thread.status, thread.requests, thread.pages.map((page) => page.outcome)], ['ok', 8, Array(8).fill('fresh')]);
+  const late = await readNgaThread({ thread: 7, pages: [1500, 2000] }, options);
+  assert.deepEqual([late.status, late.items.map((item) => item.meta.totalPages)], ['ok', [2000, 2000]], 'a megathread page far beyond 1000 is readable');
+  const search = await searchNga({ keyword: '合成', pages: 5 }, options);
+  assert.deepEqual([search.status, search.requests], ['ok', 5]);
+  assert.equal(calls.length, 15);
+  assert.ok(times.slice(1).every((time, index) => time - times[index]! >= ngaLimits.minIntervalMs), 'the shared interval spaces every request');
 });
 
 test('without a usable credential nothing is sent; stale cache is still offered and marked', async (t) => {

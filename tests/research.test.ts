@@ -120,6 +120,24 @@ test('Markdown keeps citation fields, marks unknowns honestly and renders post t
   }
 });
 
+test('Markdown leaves no autolink in fetched text: bare www domains, e-mail addresses and any scheme are defanged', () => {
+  const linky = result({ sourceLabel: 'NGA www.label.example' });
+  Object.assign(linky.items[0]!, { title: 'www.title-link.example', author: 'author@mail.example',
+    excerpt: '看 WWW.Upper.example 或 someone+tag@example.com，mailto:someone@example.com，ftp://files.example/x，xmpp:bot@chat.example' });
+  linky.pages[0]!.target = 'www.target.example';
+  for (const language of ['zh', 'en'] as const) {
+    const markdown = formatResearchMarkdown(linky, language);
+    const fetched = markdown.split('\n').filter((line) => !/^- (来源|Source)[：:]/.test(line));
+    for (const line of fetched) {
+      assert.doesNotMatch(line, /\bwww\.[a-z0-9]/i, line);
+      assert.doesNotMatch(line, /[A-Za-z0-9._+-]@[A-Za-z0-9_-]+\./, line);
+      assert.doesNotMatch(line, /[a-z][a-z0-9+.-]*:\/\//i, line);
+    }
+    assert.match(markdown, /title-link/, 'the text itself is kept, only made inert');
+    assert.match(markdown, /https:\/\/bbs\.nga\.cn\/read\.php\?tid=7&page=1/, 'the tool-built source link stays usable');
+  }
+});
+
 test('Markdown states blocking outcomes and stale cache plainly', () => {
   const stopped = result({ status: 'risk-stopped', complete: false, requests: 0, stoppedUntil: '2026-11-13T00:30:00.000Z',
     pages: [{ target: 'thread 7 page 1', outcome: 'risk-stopped', served: 'stale-cache', readAt: '2026-11-12T00:00:00.000Z' }] });
