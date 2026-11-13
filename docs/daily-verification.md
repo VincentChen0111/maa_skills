@@ -283,3 +283,8 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
    - main 新带来的 9 个场景文件（10 的 doctor 日志分析场景，12、18、19、20、22 的 account 场景，16、17 的关卡运行和换备选场景，23 的基建应用场景）的禁止键清单里还有 `stone`、`UseStone` 或 `UseMedicine`，27 的一致性测试「scenario forbidden-key lists name only settings no grant can open」因此失败。按 27 对其他场景的同一改法：去掉这些键，daily 和 doctor 的清单补上同样任何授权都不能打开的 `SpecialAccess`；这些场景都没有声明 `consumptionGrant`，所以 MAA 配置里理智药、碎石或临期药的任何改动仍由谓词判为违规，约束没有放松。这 9 个场景的场景摘要随之改变。
    - `scripts/eval-transaction.ts` 同时保留 28 的 `versions`（待执行记录必须带写入器读到的版本标记）和 27 的 `consumption`（待执行记录的授权正好是场景声明的消耗授权）；评分器的禁止设置一项同时有 27 的谓词判定和 28 的 `approvals` 对照。谓词文件在运行器指纹里，作为产品文件不进场景摘要（28 的规则，`eval-batch` 的导入闭包测试通过）。
    - 运行：`consumption-grant` 34 项、`evaluation` 11 项、`eval-comparability` 7 项、`daily-evaluation` 5 项，以及 9 个改动场景所属的场景测试文件，全部通过。
+
+5. 25 的依赖注册表：27 是最后一张带待登记位置的工单，交付后改为条目 `fight-stone-expiring-medicine`，按 25 的规则：
+   - 经 `raw.githubusercontent.com` 只读取 8 个文件在 v6.21.4（`52d0b2a`）和 v6.22.0（`901e01c`）上的内容，用 `scripts/maa-version-check.ts` 自己的读取器和 `gitBlobSha` 算 blob。v6.21.4 的 blob 与上面「固定 MAA 源码核实」表逐一一致。6 个文件两个版本相同；`tasks.json` 和 `integration.md` 变了，逐段对比后 27 依赖的任务和行都没变，所以 `sourceVerified` 为两个版本，指纹取 v6.22.0。结论和对比表写在 [MAA 版本来源](maa-version-sources.md)「27 交付时登记的条目」。
+   - 条目的文件是待登记的 6 个，加上本页表格引用、待登记里没有列的 `AsstFightTask.cs` 和 `tasks.json`；`pending` 现在为空。随包核实记录重新生成后不变（源码已核 v6.22.0，记录版本 2）。
+   - `tests/maa-version-check.test.ts` 13 项通过：改之前「the repository registry covers the delivered MAA dependencies」失败，因为本页引用的 `AsstFightTask.cs` 既没有登记也不在待登记里；登记之后覆盖扫描、「已完成的工单不能留在待登记」和记录生成三项检查都通过。
