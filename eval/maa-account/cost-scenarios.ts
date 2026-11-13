@@ -2,7 +2,7 @@ import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { operatorCostSources } from '../../skills/maa-core/scripts/operator-cost.ts';
 import { costTables, costSnapshot } from '../../tests/fixtures/cost-data.ts';
 
-const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'],
+const policy = { allowedKeys: [], forbiddenKeys: ['gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/operator-cost.ts', action: 'query' }] };
 const tables = costTables();
 const networkFixtures = Object.fromEntries(Object.entries(operatorCostSources).map(([key, source]) => [`https://raw.githubusercontent.com/${source.repository}/${source.commit}/${source.file}`, tables[key as keyof typeof tables]]));

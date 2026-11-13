@@ -21,7 +21,7 @@ export const baseInputs = {
     ] }] },
   },
 };
-const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [],
   expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/base-query.ts', action: 'query' }] };
 export const baseScenarios: ScenarioDefinition[] = [

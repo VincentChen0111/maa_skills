@@ -13,6 +13,10 @@ export type WriterTransactionPolicy = {
   changes?: { path: Path; value: unknown }[];
   /** For approved stage jobs: the approved map and, per entry, stage, loops, primary and alternate job ids. */
   jobPlan?: { map: string; entries: { stageId: string; loops: number; primary: number; alternates: number[] }[] };
+  /** Changes the agent writes field by field (in an order it chooses): the recorded changes and changed keys must equal these as sets. */
+  changeSet?: { path: Path; value: unknown }[];
+  /** Consumption grants the user gives in the current request (medicine, stone, expiring medicine); the pending record carries exactly these. */
+  consumption?: { medicineCount?: number; stoneCount?: number; expiringMedicine?: { days: number; forActivity: boolean } };
 };
 type Value = Record<string, any>;
 const object = (value: unknown): Value => {
@@ -74,7 +78,9 @@ export function assessWriterTransaction(policy: WriterTransactionPolicy, evidenc
     if (startedAt < start || startedAt > end) throw new Error('record-time');
     const authorization = object(record.authorization);
     exact(authorization.source, policy.source); exact(authorization.reference, policy.reference);
-    if (Object.keys(authorization).some((key) => !['source', 'reference', ...(policy.jobPlan ? ['jobPlan'] : [])].includes(key))) throw new Error('authorization-fields');
+    const consumption = policy.consumption ?? {};
+    if (Object.keys(authorization).some((key) => !['source', 'reference', ...(policy.jobPlan ? ['jobPlan'] : []), ...Object.keys(consumption)].includes(key))) throw new Error('authorization-fields');
+    for (const [key, value] of Object.entries(consumption)) exact(authorization[key], value);
     if (policy.jobPlan) {
       const plan = object(authorization.jobPlan);
       exact(plan.map, policy.jobPlan.map);
@@ -83,10 +89,13 @@ export function assessWriterTransaction(policy: WriterTransactionPolicy, evidenc
     }
     if (!Array.isArray(record.changes) || !record.changes.length) throw new Error('changes-required');
     if (policy.changes) exact(record.changes, policy.changes);
+    const unordered = (items: unknown) => (items as unknown[]).map((item) => JSON.stringify(item)).sort();
+    if (policy.changeSet) exact(unordered(record.changes), unordered(policy.changeSet));
     exact(after, applied(before, record.changes));
     const runs = appended('private/daily-runs.jsonl');
+    if (policy.changeSet) exact(unordered(runs.record.changedKeys), unordered(policy.changedKeys));
     exact(runs.record, { id, skill: policy.skill, host: record.host, pid: record.pid, startedAt: record.startedAt, phase: 'complete', status: 'complete',
-      operation: id, changedKeys: policy.changedKeys, reason: null });
+      operation: id, changedKeys: policy.changeSet ? runs.record.changedKeys : policy.changedKeys, reason: null });
     if (evidence.changes.some((change) => change.file === 'config/.maa-skills.lock')) throw new Error('lock-left');
     const operation = { operation: id, pid: record.pid as number };
     const grants: Grant[] = [config, backup, pending.change, runs.change].map((change) => ({ file: change.file, key: '$file', value: change.after }));

@@ -97,6 +97,11 @@ test('doctor CLI provides human and JSON reports with 0/1/2 exit codes and refus
   const healthy = invoke(['check', '--json']); assert.equal(healthy.status, 0, healthy.stdout); assert.equal(JSON.parse(healthy.stdout).exitCode, 0);
   const human = invoke(['check']); assert.equal(human.status, 0); assert.match(human.stdout, /configuration/); assert.match(human.stdout, /正常|normal/);
   const invalid = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all' }); assert.equal(invalid.status, 1); assert.equal(JSON.parse(invalid.stdout).status, 'rejected');
+  // 27: the repair input accepts the stone and expiring-medicine grants by name; any other key is refused as input.
+  const grants = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all', stoneCount: 1, expiringMedicine: { days: 2, forActivity: false } });
+  assert.equal(JSON.parse(grants.stdout).reason, 'named-approval-required');
+  const unknown = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all', stonecount: 1 });
+  assert.equal(JSON.parse(unknown.stdout).reason, 'request-invalid');
   await writeFile(f.file, '{');
   const corrupt = invoke(['check', '--json']); assert.equal(corrupt.status, 1); assert.equal(JSON.parse(corrupt.stdout).checks[0].status, 'error');
   await rm(f.privateDirectory, { recursive: true }); await writeFile(f.privateDirectory, 'synthetic blocked directory');
@@ -140,7 +145,7 @@ test('parallel approved restorations perform one transaction and reject the comp
 });
 
 test('unknown or malformed transaction metadata never permits either recovery action', async (t) => {
-  const cases: { target: 'lock' | 'pending' | 'authorization' | 'change'; key: string; value?: unknown; omit?: boolean; name?: string }[] = [
+  const cases: { target: 'lock' | 'pending' | 'authorization' | 'change'; key: string; value?: unknown; omit?: boolean; name?: string; also?: Record<string, unknown> }[] = [
     { target: 'lock', key: 'jobPlan', value: { file: 'synthetic-unverified-resource.json' } },
     { target: 'change', key: 'trainingPlan', value: { file: 'synthetic-unverified-resource.json' } },
     { target: 'pending', key: 'authorization', value: {} },
@@ -163,18 +168,31 @@ test('unknown or malformed transaction metadata never permits either recovery ac
     { target: 'authorization', key: 'medicineCount', value: 1.5 },
     { target: 'authorization', key: 'medicineCount', value: 2147483648 },
     { target: 'authorization', key: 'medicineCount', value: '1' },
+    // 27: stone and expiring-medicine grants follow the same strict schema; an approved report cannot carry one.
+    { target: 'authorization', key: 'stoneCount', value: -1 },
+    { target: 'authorization', key: 'stoneCount', value: 1.5 },
+    { target: 'authorization', key: 'stoneCount', value: 2147483648 },
+    { target: 'authorization', key: 'stoneCount', value: '1' },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 0, forActivity: false } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 31, forActivity: false } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 2 } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 2, forActivity: false, extra: true } },
+    { target: 'authorization', key: 'expiringMedicine', value: 2 },
+    { target: 'authorization', key: 'stonecount', value: 1 },
+    { target: 'authorization', key: 'source', value: 'approved-report', also: { stoneCount: 1 } },
     { target: 'change', key: 'path', omit: true },
     { target: 'change', key: 'value', omit: true },
     { target: 'change', key: 'path', value: ['Timers', { name: 'NotifyBeforeScheduledStart' }] },
     { target: 'change', key: 'path', value: [] },
   ];
-  for (const sample of cases) await t.test(`${sample.target}.${sample.key} ${sample.omit ? 'missing' : JSON.stringify(sample.value)}`, async (t) => {
+  for (const sample of cases) await t.test(`${sample.target}.${sample.key} ${sample.omit ? 'missing' : JSON.stringify(sample.value)}${sample.also ? ' with ' + JSON.stringify(sample.also) : ''}`, async (t) => {
     const f = await fixture(t); const retained = await abandoned(f);
     const lock = JSON.parse(await readFile(retained.lockFile, 'utf8'));
     const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
     const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
     const target = sample.target === 'lock' ? lock : sample.target === 'pending' ? pending : sample.target === 'change' ? pending.changes[0] : pending['authorization'];
     if (sample.omit) delete target[sample.key]; else target[sample.key] = sample.value;
+    Object.assign(target, sample.also ?? {});
     await writeFile(retained.lockFile, JSON.stringify(lock)); await writeFile(pendingFile, JSON.stringify(pending) + '\n');
     const original = await readFile(f.file); const lockBytes = await readFile(retained.lockFile); const pendingBytes = await readFile(pendingFile);
     const checked = await runChecks(f, f.maa);

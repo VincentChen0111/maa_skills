@@ -71,7 +71,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
             let text = '';
             for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 65536) throw new Error('input-too-large'); }
             const value: unknown = JSON.parse(text);
-            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount'].includes(key))) throw new Error('request-invalid');
+            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))) throw new Error('request-invalid');
             body = value as Record<string, unknown>;
           } catch { /* Invalid input never authorizes a mutation. */ }
           const result = body ? await executeRepairs({ ...body, ...context } as RepairRequest, maa) : { status: 'rejected', reason: 'request-invalid' };

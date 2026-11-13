@@ -36,15 +36,19 @@ async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
 
 test('setup rejects complete job, training and medicine grants in request or context without creating a transaction', async t => {
   const f = await fixture(t), original = await readFile(f.file), revision = (await inspectConfiguration(f.maaDirectory)).revision;
-  const extras = [{ jobPlan: f.jobPlan }, { trainingPlan: f.trainingPlan }, { medicineCount: 1 }, { trainingManifest: f.training.asset },
+  // 27: stone and expiring medicine are consumption grants too; the setup entry accepts none of them.
+  const expiringMedicine = { days: 2, forActivity: false };
+  const extras = [{ jobPlan: f.jobPlan }, { trainingPlan: f.trainingPlan }, { medicineCount: 1 }, { stoneCount: 1 }, { expiringMedicine }, { trainingManifest: f.training.asset },
     { authorization: { source: 'current-request', reference: 'synthetic', jobPlan: f.jobPlan } },
     { authorization: { source: 'current-request', reference: 'synthetic', trainingPlan: f.trainingPlan } },
-    { authorization: { source: 'current-request', reference: 'synthetic', medicineCount: 1 } }, { changes: f.jobChanges }, { changes: f.training.changes }];
+    { authorization: { source: 'current-request', reference: 'synthetic', medicineCount: 1 } },
+    { authorization: { source: 'current-request', reference: 'synthetic', stoneCount: 1 } },
+    { authorization: { source: 'current-request', reference: 'synthetic', expiringMedicine } }, { changes: f.jobChanges }, { changes: f.training.changes }];
   for (const extra of extras) {
     assert.equal((await executeSetupConfigWrite({ ...f.setup, ...extra }, f.context, f.adb, f.maa)).reason, 'request-invalid');
     assert.equal((await executeSetupConfigWrite(f.setup, { ...f.context, ...extra }, f.adb, f.maa)).reason, 'request-invalid');
   }
-  for (const grant of [{ jobPlan: f.jobPlan }, { trainingPlan: f.trainingPlan }, { medicineCount: 1 }]) {
+  for (const grant of [{ jobPlan: f.jobPlan }, { trainingPlan: f.trainingPlan }, { medicineCount: 1 }, { stoneCount: 1 }, { expiringMedicine }]) {
     const result = await executeConfigWrite({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
       expectedRevision: revision, authorization: { source: 'current-request', reference: 'synthetic', ...grant },
       changes: [{ path: ['Configurations', 0, 'Gui', 'ConnectSettings', 'Address'], value: '127.0.0.1:5555' }] }, f.maa);

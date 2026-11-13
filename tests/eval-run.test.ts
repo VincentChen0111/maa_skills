@@ -22,7 +22,7 @@ test('custom scenarios preserve their own prompt and identity for subsequent ski
   const result = await runScenario({ host: 'codex', model: 'fixed-model', executable: 'maa-synthetic-absent-cli', scenario: {
     id: 'custom-preferences', prompt: '使用待测 skill，保持文件不变。',
     jsonInputs: { 'private/config.json': { language: 'en' } }, jsonFiles: ['private/config.json'],
-    policy: { allowedKeys: [], forbiddenKeys: ['stone'], grants: [], downloadGrants: [], expectedCalls: ['node custom-tool.ts inspect'], expectedChanges: [], reportRequired: false, skipReview: false },
+    policy: { allowedKeys: [], forbiddenKeys: ['gacha'], grants: [], downloadGrants: [], expectedCalls: ['node custom-tool.ts inspect'], expectedChanges: [], reportRequired: false, skipReview: false },
   } });
   t.after(() => rm(result.artifactDirectory, { recursive: true, force: true }));
   assert.equal(result.record.scenario, 'custom-preferences');

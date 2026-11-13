@@ -42,7 +42,7 @@ async function tree(directory: string, base = directory): Promise<string[]> {
 }
 /** Runner fingerprint sources: every file that decides how a run is launched, observed, recorded or graded (repository-relative). */
 export const runnerSources = ['scripts/eval-run.ts', 'scripts/eval-host.ts', 'scripts/eval-auth.ts', 'scripts/eval-fixture.ts', 'scripts/evaluation.ts', 'scripts/eval-daily.ts',
-  'scripts/eval-transaction.ts', 'scripts/eval-redact.ts', 'skills/maa-core/scripts/preferences.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
+  'scripts/eval-transaction.ts', 'scripts/eval-redact.ts', 'skills/maa-core/scripts/preferences.ts', 'skills/maa-core/scripts/consumption-grant.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
   'eval/maa-process.mjs', 'eval/network-fixture.mjs', 'eval/setup-boundary.mjs'];
 export async function runnerFingerprint(): Promise<string> {
   return digest((await Promise.all(runnerSources.map(async (file) => `${file}:${digest(await readFile(join(repositoryRoot, file)))}`))).join('\n'));
