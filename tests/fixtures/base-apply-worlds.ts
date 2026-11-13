@@ -1,0 +1,997 @@
+import { nameTable, planSnapshot, planTables } from './base-plan-data.ts';
+
+// Synthetic worlds for the ticket 23 scenarios (applying an approved base plan), as fixed literals: scenario world data never
+// runs product code, so a change to the report tools cannot change these scenarios. No real roster, layout, device or path.
+
+/** MAA v6.21.4 writes enums as names and leaves IsEnabled out of a RoomList entry when the room is enabled. */
+const rooms = ['Mfg', 'Trade', 'Control', 'Power', 'Reception', 'Office', 'Recycle', 'Dorm', 'Processing', 'Training'];
+export function infrastConfig(options: { timers?: boolean; roomOff?: string; mode?: string | number } = {}) {
+  return {
+    Current: 'synthetic', ConfigVersion: 1,
+    Configurations: { synthetic: {
+      Gui: { ConnectSettings: { Address: 'synthetic-secret-address' }, RuntimeSettings: { StartGame: false } },
+      TaskQueue: [
+        { $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: false, UseMedicine: false, MedicineCount: 0, UseExpiringMedicine: false, UseExpireMedicineForActivity: false, StagePlan: ['1-7'] },
+        { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: true, Mode: options.mode ?? 'Normal', UsesOfDrones: 'Money', DormThreshold: 30, ContinueTraining: false,
+          UseWeeklySchedule: false, CustomFileType: '153_layout_3_times_a_day.json', Filename: 'resource/custom_infrast/153_layout_3_times_a_day.json', PlanSelect: 0,
+          RoomList: [...rooms.map(room => room === options.roomOff ? { Room: room, IsEnabled: false } : { Room: room }), { Room: 'AssistantChange', IsEnabled: false }] },
+      ],
+    } },
+    Timers: { List: [{ Id: 0, IsEnabled: options.timers ? true : false, Config: 'synthetic', Hour: 8, Minute: 0 }, { Id: 1, IsEnabled: options.timers ? true : false, Config: 'synthetic', Hour: 20, Minute: 0 }],
+      CustomConfig: false, ForceScheduledStart: false, ShowWindowBeforeForceScheduledStart: false, NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5 },
+    UnknownSetting: { keep: 'synthetic-unknown-field' },
+  };
+}
+
+export type WorldName = 'approved' | 'unverified' | 'outside' | 'unapproved';
+/**
+ * The saved base report records of each world (report, review skip, approval of P1), copied byte for byte from what ticket 23's
+ * generator (`scenarioWorld` in `tests/fixtures/base-apply-data.ts` at commit bd3b3e6, after ticket 25) produced: a report drafted
+ * by the real ticket 22 tools from the synthetic roster with the times fixed at 2026-11-13T09:00:00.000Z and the tables file named
+ * `base-tables.json`, saved under its own content hash. Since ticket 25 the report carries the `versions` stamp read when it was
+ * drafted: the world's MAA directory has no MAA.exe (version null) and the packaged verification record then had version 2; that
+ * is part of the saved report, so a later record version changes nothing here. `unverified` drafts without combos and
+ * exclusions, `outside` names a plan file outside the private directory, and `unapproved` is the approved world before its
+ * approval. How the copy was checked is in docs/evaluation-verification.md.
+ */
+const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; records: Record<string, unknown> }> = {
+  approved: {
+    reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
+    records: {
+      'report.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        createdAt: '2026-11-13T09:00:00.000Z',
+        revisionOf: null,
+        input: {
+          goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+          title: '合成两班',
+          layout: [
+            { type: 'control', level: 1 },
+            { type: 'manufacture', level: 2, product: 'Pure Gold' },
+            { type: 'trading', level: 1, product: 'LMD' },
+            { type: 'dormitory', level: 1 },
+          ],
+          shifts: [
+            {
+              name: '白班',
+              period: '07:00-19:00',
+              rooms: {
+                control: [['合成控一']],
+                manufacture: [['合成金一', '合成金二']],
+                trading: [['合成贸一']],
+                dormitory: [['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二']],
+              },
+              drones: { room: 'manufacture', index: 1, order: 'pre' },
+            },
+            {
+              name: '夜班',
+              period: '19:00-07:00',
+              rooms: {
+                control: [['合成控二']],
+                manufacture: [['合成金三', '合成金四']],
+                trading: [['合成贸二']],
+                dormitory: [['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一']],
+              },
+            },
+          ],
+          runs: ['08:00', '20:00'],
+          moodDefault: { work: 1, rest: 2, basis: '合成样例假设：上班每小时 -1，宿舍每小时 +2' },
+          combos: [],
+          exclusions: [],
+          efficiency: [
+            { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+            { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+          ],
+          tablesFile: 'base-tables.json',
+        },
+        goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+        assumptions: [],
+        summary: null,
+        maaProtocol: {
+          version: 'v6.21.4',
+          commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
+          file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
+        },
+        versions: { maaVersion: null, recordVersion: 2 },
+        plan: {
+          file: 'base-plans/plan-4ce41fc247245f3e.json',
+          sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+          json: {
+            title: '合成两班',
+            plans: [
+              {
+                name: '白班',
+                period: [['07:00', '19:00']],
+                duration: 720,
+                drones: { enable: true, room: 'manufacture', index: 1, order: 'pre' },
+                rooms: {
+                  control: [{ operators: ['合成控一'] }],
+                  manufacture: [{ operators: ['合成金一', '合成金二'] }],
+                  trading: [{ operators: ['合成贸一'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+              {
+                name: '夜班',
+                period: [['19:00', '23:59'], ['00:00', '07:00']],
+                duration: 720,
+                rooms: {
+                  control: [{ operators: ['合成控二'] }],
+                  manufacture: [{ operators: ['合成金三', '合成金四'] }],
+                  trading: [{ operators: ['合成贸二'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+            ],
+          },
+          dropped: [],
+          fills: [],
+        },
+        snapshot: {
+          readAt: '2026-11-13T00:00:00.000Z',
+          sourceTimes: { operators: null, inventory: null },
+          coverage: {
+            operators: { status: 'complete', issues: [] },
+            inventory: { status: 'missing', issues: [] },
+            base: { status: 'unavailable', issues: ['not-provided-by-recognition'] },
+          },
+          fingerprint: 'b86d5596103b72d454da71b560e175ee33a39c7290fb5e24e99ae63d9cc3931c',
+        },
+        operators: {
+          '合成宿一': {
+            id: 'char_dorm1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'dorm_rec', name: '合成安眠', room: 'DORMITORY', status: 'active', text: '进驻宿舍时，该宿舍内所有干员的心情每小时恢复+0.2' }],
+          },
+          '合成控一': {
+            id: 'char_ctrl1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成控二': {
+            id: 'char_ctrl2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成贸一': {
+            id: 'char_trade1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成贸二': {
+            id: 'char_trade2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成金一': {
+            id: 'char_gold1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金三': {
+            id: 'char_gold3',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金二': {
+            id: 'char_gold2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金四': {
+            id: 'char_gold4',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+        },
+        check: {
+          applicable: true,
+          errors: [],
+          warnings: [],
+          unverified: [],
+          gates: [
+            { gate: 1, verdict: 'pass', evidence: ['每个班次每名干员只出现一次，没有异格形态切换'] },
+            { gate: 2, verdict: 'pass', evidence: ['所有名字都已持有，房间存在且不超容量'] },
+            { gate: 3, verdict: 'pass', evidence: ['计划数等于班次数，房间数和布局一致'] },
+            { gate: 4, verdict: 'pass', evidence: ['按 MAA 运行时间 08:00、20:00 逐次换班，模拟到稳定后没有人心情降到 0（速率见输入，属推断）'] },
+            { gate: 5, verdict: 'pass', evidence: ['没有干员每个班次都在岗（跳过的房间里 MAA 保持原样，也算在岗）'] },
+            { gate: 6, verdict: 'pass', evidence: ['plans[0] 休息 4 人，可用床位 4（共 5，常驻 1）', 'plans[1] 休息 4 人，可用床位 4（共 5，常驻 1）'] },
+            { gate: 7, verdict: 'pass', evidence: ['声明没有跨设施组合（推断）'] },
+            { gate: 8, verdict: 'pass', evidence: ['声明没有互斥技能（推断）'] },
+            { gate: 9, verdict: 'pass', evidence: ['安排的技能和房间产物匹配'] },
+            { gate: 10, verdict: 'pass', evidence: ['控制中枢满员，光环不重复'] },
+            { gate: 11, verdict: 'pass', evidence: ['每次换班最多一个无人机目标；菲亚梅塔只在换班开始时使用一次，每次互换前都能恢复满心情'] },
+            { gate: 12, verdict: 'pass', evidence: ['效率为基础、技能、全局三部分之和，每日数值按每个计划在时间线上的上班时长加权（数字本身是推断）'] },
+            { gate: 13, verdict: 'pass', evidence: ['排班文件与重新导出的结果逐字节相同'] },
+            {
+              gate: 14,
+              verdict: 'pass',
+              evidence: ['时间段覆盖全天（23:59 到 24:00 这一分钟 MAA 用第一个计划）', 'MAA 运行时间 08:00、20:00（输入的 runs）；任何一次运行提前或推迟不超过 1 小时，心情都不降到 0'],
+            },
+            { gate: 15, verdict: 'pass', evidence: ['没有把未证明最优的方案称为最优'] },
+          ],
+          efficiency: {
+            claims: [
+              { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+              { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+            ],
+            daily: { 'manufacture[0]': 165 },
+          },
+          facts: { moodCap: 24, beds: 5, fiammettaRate: 2, tolerance: 1, runs: ['08:00', '20:00'] },
+        },
+        sources: {
+          mode: 'supplied',
+          files: [
+            {
+              repository: 'supplied',
+              commit: 'supplied',
+              file: 'tablesFile',
+              sha256: 'e0d8a65d944a051ef8c224bfe1d96c1e1f0f5963736ef40e486e26c2a8dda40e',
+              readAt: '2026-11-13T09:00:00.000Z',
+            },
+          ],
+          names: {
+            file: 'resource/battle_data.json',
+            status: 'available',
+            reason: null,
+            sha256: '3d72cff878884e048cab40d76cb495ce03a62f1aff5fc06cb1cb5851f9755cdf',
+          },
+        },
+        items: [
+          {
+            id: 'P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: [],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+      'review.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
+        outcome: 'skipped',
+        recordedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '这次跳过审查',
+        priorFailures: 0,
+      },
+      'approvals/0001.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
+        approvedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '我批准排班这一项 P1',
+        reviewStatus: 'unreviewed',
+        items: [
+          {
+            id: 'P1',
+            reference: 'base/23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c#P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: [],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+    },
+  },
+  unverified: {
+    reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
+    records: {
+      'report.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        createdAt: '2026-11-13T09:00:00.000Z',
+        revisionOf: null,
+        input: {
+          goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+          title: '合成两班',
+          layout: [
+            { type: 'control', level: 1 },
+            { type: 'manufacture', level: 2, product: 'Pure Gold' },
+            { type: 'trading', level: 1, product: 'LMD' },
+            { type: 'dormitory', level: 1 },
+          ],
+          shifts: [
+            {
+              name: '白班',
+              period: '07:00-19:00',
+              rooms: {
+                control: [['合成控一']],
+                manufacture: [['合成金一', '合成金二']],
+                trading: [['合成贸一']],
+                dormitory: [['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二']],
+              },
+              drones: { room: 'manufacture', index: 1, order: 'pre' },
+            },
+            {
+              name: '夜班',
+              period: '19:00-07:00',
+              rooms: {
+                control: [['合成控二']],
+                manufacture: [['合成金三', '合成金四']],
+                trading: [['合成贸二']],
+                dormitory: [['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一']],
+              },
+            },
+          ],
+          runs: ['08:00', '20:00'],
+          moodDefault: { work: 1, rest: 2, basis: '合成样例假设：上班每小时 -1，宿舍每小时 +2' },
+          efficiency: [
+            { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+            { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+          ],
+          tablesFile: 'base-tables.json',
+        },
+        goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+        assumptions: [],
+        summary: null,
+        maaProtocol: {
+          version: 'v6.21.4',
+          commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
+          file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
+        },
+        versions: { maaVersion: null, recordVersion: 2 },
+        plan: {
+          file: 'base-plans/plan-4ce41fc247245f3e.json',
+          sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+          json: {
+            title: '合成两班',
+            plans: [
+              {
+                name: '白班',
+                period: [['07:00', '19:00']],
+                duration: 720,
+                drones: { enable: true, room: 'manufacture', index: 1, order: 'pre' },
+                rooms: {
+                  control: [{ operators: ['合成控一'] }],
+                  manufacture: [{ operators: ['合成金一', '合成金二'] }],
+                  trading: [{ operators: ['合成贸一'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+              {
+                name: '夜班',
+                period: [['19:00', '23:59'], ['00:00', '07:00']],
+                duration: 720,
+                rooms: {
+                  control: [{ operators: ['合成控二'] }],
+                  manufacture: [{ operators: ['合成金三', '合成金四'] }],
+                  trading: [{ operators: ['合成贸二'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+            ],
+          },
+          dropped: [],
+          fills: [],
+        },
+        snapshot: {
+          readAt: '2026-11-13T00:00:00.000Z',
+          sourceTimes: { operators: null, inventory: null },
+          coverage: {
+            operators: { status: 'complete', issues: [] },
+            inventory: { status: 'missing', issues: [] },
+            base: { status: 'unavailable', issues: ['not-provided-by-recognition'] },
+          },
+          fingerprint: 'b86d5596103b72d454da71b560e175ee33a39c7290fb5e24e99ae63d9cc3931c',
+        },
+        operators: {
+          '合成宿一': {
+            id: 'char_dorm1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'dorm_rec', name: '合成安眠', room: 'DORMITORY', status: 'active', text: '进驻宿舍时，该宿舍内所有干员的心情每小时恢复+0.2' }],
+          },
+          '合成控一': {
+            id: 'char_ctrl1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成控二': {
+            id: 'char_ctrl2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成贸一': {
+            id: 'char_trade1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成贸二': {
+            id: 'char_trade2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成金一': {
+            id: 'char_gold1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金三': {
+            id: 'char_gold3',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金二': {
+            id: 'char_gold2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金四': {
+            id: 'char_gold4',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+        },
+        check: {
+          applicable: true,
+          errors: [],
+          warnings: [],
+          unverified: ['gate-7', 'gate-8'],
+          gates: [
+            { gate: 1, verdict: 'pass', evidence: ['每个班次每名干员只出现一次，没有异格形态切换'] },
+            { gate: 2, verdict: 'pass', evidence: ['所有名字都已持有，房间存在且不超容量'] },
+            { gate: 3, verdict: 'pass', evidence: ['计划数等于班次数，房间数和布局一致'] },
+            { gate: 4, verdict: 'pass', evidence: ['按 MAA 运行时间 08:00、20:00 逐次换班，模拟到稳定后没有人心情降到 0（速率见输入，属推断）'] },
+            { gate: 5, verdict: 'pass', evidence: ['没有干员每个班次都在岗（跳过的房间里 MAA 保持原样，也算在岗）'] },
+            { gate: 6, verdict: 'pass', evidence: ['plans[0] 休息 4 人，可用床位 4（共 5，常驻 1）', 'plans[1] 休息 4 人，可用床位 4（共 5，常驻 1）'] },
+            { gate: 7, verdict: 'unverified', evidence: ['没有声明组合；本工具不从技能文字推断组合'] },
+            { gate: 8, verdict: 'unverified', evidence: ['没有声明互斥技能；本工具不从技能文字推断互斥'] },
+            { gate: 9, verdict: 'pass', evidence: ['安排的技能和房间产物匹配'] },
+            { gate: 10, verdict: 'pass', evidence: ['控制中枢满员，光环不重复'] },
+            { gate: 11, verdict: 'pass', evidence: ['每次换班最多一个无人机目标；菲亚梅塔只在换班开始时使用一次，每次互换前都能恢复满心情'] },
+            { gate: 12, verdict: 'pass', evidence: ['效率为基础、技能、全局三部分之和，每日数值按每个计划在时间线上的上班时长加权（数字本身是推断）'] },
+            { gate: 13, verdict: 'pass', evidence: ['排班文件与重新导出的结果逐字节相同'] },
+            {
+              gate: 14,
+              verdict: 'pass',
+              evidence: ['时间段覆盖全天（23:59 到 24:00 这一分钟 MAA 用第一个计划）', 'MAA 运行时间 08:00、20:00（输入的 runs）；任何一次运行提前或推迟不超过 1 小时，心情都不降到 0'],
+            },
+            { gate: 15, verdict: 'pass', evidence: ['没有把未证明最优的方案称为最优'] },
+          ],
+          efficiency: {
+            claims: [
+              { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+              { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+            ],
+            daily: { 'manufacture[0]': 165 },
+          },
+          facts: { moodCap: 24, beds: 5, fiammettaRate: 2, tolerance: 1, runs: ['08:00', '20:00'] },
+        },
+        sources: {
+          mode: 'supplied',
+          files: [
+            {
+              repository: 'supplied',
+              commit: 'supplied',
+              file: 'tablesFile',
+              sha256: 'e0d8a65d944a051ef8c224bfe1d96c1e1f0f5963736ef40e486e26c2a8dda40e',
+              readAt: '2026-11-13T09:00:00.000Z',
+            },
+          ],
+          names: {
+            file: 'resource/battle_data.json',
+            status: 'available',
+            reason: null,
+            sha256: '3d72cff878884e048cab40d76cb495ce03a62f1aff5fc06cb1cb5851f9755cdf',
+          },
+        },
+        items: [
+          {
+            id: 'P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: ['gate-7', 'gate-8'],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+      'review.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
+        outcome: 'skipped',
+        recordedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '这次跳过审查',
+        priorFailures: 0,
+      },
+      'approvals/0001.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
+        approvedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '我批准排班这一项 P1',
+        reviewStatus: 'unreviewed',
+        items: [
+          {
+            id: 'P1',
+            reference: 'base/863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364#P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: ['gate-7', 'gate-8'],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: 'base-plans/plan-4ce41fc247245f3e.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+    },
+  },
+  outside: {
+    reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
+    records: {
+      'report.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        createdAt: '2026-11-13T09:00:00.000Z',
+        revisionOf: null,
+        input: {
+          goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+          title: '合成两班',
+          layout: [
+            { type: 'control', level: 1 },
+            { type: 'manufacture', level: 2, product: 'Pure Gold' },
+            { type: 'trading', level: 1, product: 'LMD' },
+            { type: 'dormitory', level: 1 },
+          ],
+          shifts: [
+            {
+              name: '白班',
+              period: '07:00-19:00',
+              rooms: {
+                control: [['合成控一']],
+                manufacture: [['合成金一', '合成金二']],
+                trading: [['合成贸一']],
+                dormitory: [['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二']],
+              },
+              drones: { room: 'manufacture', index: 1, order: 'pre' },
+            },
+            {
+              name: '夜班',
+              period: '19:00-07:00',
+              rooms: {
+                control: [['合成控二']],
+                manufacture: [['合成金三', '合成金四']],
+                trading: [['合成贸二']],
+                dormitory: [['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一']],
+              },
+            },
+          ],
+          runs: ['08:00', '20:00'],
+          moodDefault: { work: 1, rest: 2, basis: '合成样例假设：上班每小时 -1，宿舍每小时 +2' },
+          combos: [],
+          exclusions: [],
+          efficiency: [
+            { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+            { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%' },
+          ],
+          tablesFile: 'base-tables.json',
+        },
+        goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' },
+        assumptions: [],
+        summary: null,
+        maaProtocol: {
+          version: 'v6.21.4',
+          commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
+          file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
+        },
+        versions: { maaVersion: null, recordVersion: 2 },
+        plan: {
+          file: '../outside-plan.json',
+          sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+          json: {
+            title: '合成两班',
+            plans: [
+              {
+                name: '白班',
+                period: [['07:00', '19:00']],
+                duration: 720,
+                drones: { enable: true, room: 'manufacture', index: 1, order: 'pre' },
+                rooms: {
+                  control: [{ operators: ['合成控一'] }],
+                  manufacture: [{ operators: ['合成金一', '合成金二'] }],
+                  trading: [{ operators: ['合成贸一'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸二'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+              {
+                name: '夜班',
+                period: [['19:00', '23:59'], ['00:00', '07:00']],
+                duration: 720,
+                rooms: {
+                  control: [{ operators: ['合成控二'] }],
+                  manufacture: [{ operators: ['合成金三', '合成金四'] }],
+                  trading: [{ operators: ['合成贸二'] }],
+                  power: [],
+                  meeting: [],
+                  hire: [],
+                  dormitory: [{ operators: ['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸一'] }],
+                  processing: [],
+                  training: [],
+                  recycle: [],
+                },
+              },
+            ],
+          },
+          dropped: [],
+          fills: [],
+        },
+        snapshot: {
+          readAt: '2026-11-13T00:00:00.000Z',
+          sourceTimes: { operators: null, inventory: null },
+          coverage: {
+            operators: { status: 'complete', issues: [] },
+            inventory: { status: 'missing', issues: [] },
+            base: { status: 'unavailable', issues: ['not-provided-by-recognition'] },
+          },
+          fingerprint: 'b86d5596103b72d454da71b560e175ee33a39c7290fb5e24e99ae63d9cc3931c',
+        },
+        operators: {
+          '合成宿一': {
+            id: 'char_dorm1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'dorm_rec', name: '合成安眠', room: 'DORMITORY', status: 'active', text: '进驻宿舍时，该宿舍内所有干员的心情每小时恢复+0.2' }],
+          },
+          '合成控一': {
+            id: 'char_ctrl1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成控二': {
+            id: 'char_ctrl2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'ctrl_aura', name: '合成光环', room: 'CONTROL', status: 'active', text: '进驻控制中枢时，控制中枢内所有干员的心情每小时恢复+0.05' }],
+          },
+          '合成贸一': {
+            id: 'char_trade1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成贸二': {
+            id: 'char_trade2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'trade_gen', name: '合成交涉', room: 'TRADING', status: 'active', text: '进驻贸易站时，订单获取效率+20%' }],
+          },
+          '合成金一': {
+            id: 'char_gold1',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金三': {
+            id: 'char_gold3',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金二': {
+            id: 'char_gold2',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+          '合成金四': {
+            id: 'char_gold4',
+            ownership: 'owned',
+            elite: 2,
+            level: 1,
+            skills: [{ id: 'mfg_gold', name: '合成金工', room: 'MANUFACTURE', status: 'active', text: '进驻制造站时，贵金属类配方的生产力+30%' }],
+          },
+        },
+        check: {
+          applicable: true,
+          errors: [],
+          warnings: [],
+          unverified: [],
+          gates: [
+            { gate: 1, verdict: 'pass', evidence: ['每个班次每名干员只出现一次，没有异格形态切换'] },
+            { gate: 2, verdict: 'pass', evidence: ['所有名字都已持有，房间存在且不超容量'] },
+            { gate: 3, verdict: 'pass', evidence: ['计划数等于班次数，房间数和布局一致'] },
+            { gate: 4, verdict: 'pass', evidence: ['按 MAA 运行时间 08:00、20:00 逐次换班，模拟到稳定后没有人心情降到 0（速率见输入，属推断）'] },
+            { gate: 5, verdict: 'pass', evidence: ['没有干员每个班次都在岗（跳过的房间里 MAA 保持原样，也算在岗）'] },
+            { gate: 6, verdict: 'pass', evidence: ['plans[0] 休息 4 人，可用床位 4（共 5，常驻 1）', 'plans[1] 休息 4 人，可用床位 4（共 5，常驻 1）'] },
+            { gate: 7, verdict: 'pass', evidence: ['声明没有跨设施组合（推断）'] },
+            { gate: 8, verdict: 'pass', evidence: ['声明没有互斥技能（推断）'] },
+            { gate: 9, verdict: 'pass', evidence: ['安排的技能和房间产物匹配'] },
+            { gate: 10, verdict: 'pass', evidence: ['控制中枢满员，光环不重复'] },
+            { gate: 11, verdict: 'pass', evidence: ['每次换班最多一个无人机目标；菲亚梅塔只在换班开始时使用一次，每次互换前都能恢复满心情'] },
+            { gate: 12, verdict: 'pass', evidence: ['效率为基础、技能、全局三部分之和，每日数值按每个计划在时间线上的上班时长加权（数字本身是推断）'] },
+            { gate: 13, verdict: 'pass', evidence: ['排班文件与重新导出的结果逐字节相同'] },
+            {
+              gate: 14,
+              verdict: 'pass',
+              evidence: ['时间段覆盖全天（23:59 到 24:00 这一分钟 MAA 用第一个计划）', 'MAA 运行时间 08:00、20:00（输入的 runs）；任何一次运行提前或推迟不超过 1 小时，心情都不降到 0'],
+            },
+            { gate: 15, verdict: 'pass', evidence: ['没有把未证明最优的方案称为最优'] },
+          ],
+          efficiency: {
+            claims: [
+              { plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+              { plan: 1, room: 'manufacture[0]', base: 100, skill: 60, global: 5, basis: '合成样例：两名金工各 +30%', total: 165 },
+            ],
+            daily: { 'manufacture[0]': 165 },
+          },
+          facts: { moodCap: 24, beds: 5, fiammettaRate: 2, tolerance: 1, runs: ['08:00', '20:00'] },
+        },
+        sources: {
+          mode: 'supplied',
+          files: [
+            {
+              repository: 'supplied',
+              commit: 'supplied',
+              file: 'tablesFile',
+              sha256: 'e0d8a65d944a051ef8c224bfe1d96c1e1f0f5963736ef40e486e26c2a8dda40e',
+              readAt: '2026-11-13T09:00:00.000Z',
+            },
+          ],
+          names: {
+            file: 'resource/battle_data.json',
+            status: 'available',
+            reason: null,
+            sha256: '3d72cff878884e048cab40d76cb495ce03a62f1aff5fc06cb1cb5851f9755cdf',
+          },
+        },
+        items: [
+          {
+            id: 'P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: '../outside-plan.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: [],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: '../outside-plan.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+      'review.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
+        outcome: 'skipped',
+        recordedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '这次跳过审查',
+        priorFailures: 0,
+      },
+      'approvals/0001.json': {
+        schemaVersion: 1,
+        kind: 'base',
+        reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
+        approvedAt: '2026-11-13T09:00:00.000Z',
+        userWords: '我批准排班这一项 P1',
+        reviewStatus: 'unreviewed',
+        items: [
+          {
+            id: 'P1',
+            reference: 'base/c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19#P1',
+            title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
+            scope: {
+              planFile: '../outside-plan.json',
+              sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+              plans: 2,
+              applicable: true,
+              failing: [],
+              unverified: [],
+              dailyMayArrange: [
+                {
+                  action: 'apply-custom-infrast-plan',
+                  planFile: '../outside-plan.json',
+                  sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
+                },
+              ],
+              dailyMustFirst: ['recheck-rules-and-gates', 'check-freshness', 'confirm-unverified-with-user'],
+              notIncluded: [
+                'production-line-switch',
+                'training-room',
+                'stage-runs',
+                'stone-and-medicine',
+                'gacha-packs-payment-login',
+                'maa-config-by-account',
+                'game-clicks-or-device',
+              ],
+            },
+          },
+        ],
+      },
+    },
+  },
+};
+const { 'approvals/0001.json': _approval, ...beforeApproval } = saved.approved.records;
+const worlds: Record<WorldName, { reportHash: string; records: Record<string, unknown> }> = { ...saved, unapproved: { reportHash: saved.approved.reportHash, records: beforeApproval } };
+
+export type ScenarioWorld = { reference: string; reportHash: string; inputs: Record<string, unknown> };
+/** One world's workspace inputs: settings, snapshot, tables, MAA name table and configuration, and the saved report records. */
+export function scenarioWorld(name: WorldName, settings: unknown): ScenarioWorld {
+  const { reportHash, records } = worlds[name], directory = `private/reports/base/${reportHash}`;
+  return { reference: `base/${reportHash}#P1`, reportHash, inputs: {
+    'private/config.json': settings, 'private/account-snapshot.json': planSnapshot(), 'base-tables.json': planTables(),
+    'resource/battle_data.json': nameTable(), 'config/gui.new.json': infrastConfig({ timers: true }),
+    ...Object.fromEntries(Object.entries(records).map(([file, value]) => [`${directory}/${file}`, structuredClone(value)])),
+  } };
+}

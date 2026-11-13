@@ -12,6 +12,11 @@ if (native) {
     const { observeDaily } = await import('./.eval-daily-observer.mjs');
     observeDaily(workspace, file);
   }
+  // doctor and stage preparation reach MAA through the same boundary; only that module is replaced, never the writer.
+  else if (process.env.MAA_EVAL_MAA_PROCESS && ['maa-core/scripts/doctor.ts', 'maa-core/scripts/stage-jobs.ts'].includes(native[1])) {
+    const { redirectMaaProcess } = await import('./.eval-daily-observer.mjs');
+    redirectMaaProcess(workspace);
+  }
   const action = process.argv[2];
   process.on('exit', (exitCode) => {
     appendFileSync(join(workspace, 'events.jsonl'), `${JSON.stringify({ kind: 'invocation', file: native[1], action, exitCode, pid: process.pid })}\n`);

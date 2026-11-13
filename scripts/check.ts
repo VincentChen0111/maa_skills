@@ -30,6 +30,10 @@ async function check(): Promise<void> {
     if (scorerExists) {
       if (!run(['scripts/eval-selftest.ts'])) process.exitCode = 1;
     } else console.log('评分规则自检：尚未建立（工单 03），未验证。真模型和真实 MAA 不在离线入口运行。');
+    // No-model environment preflight: every evaluation boundary plus a full runScenario pass per host with the host double.
+    let preflightExists = true;
+    try { await access(join(root, 'scripts/eval-preflight.ts')); } catch { preflightExists = false; }
+    if (preflightExists && !run(['scripts/eval-preflight.ts'])) process.exitCode = 1;
     if (tracker.errors.length || privacy.length || metadata.length) process.exitCode = 1;
   } finally {
     await rm(temporaryHome, { recursive: true, force: true });

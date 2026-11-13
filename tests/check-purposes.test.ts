@@ -122,7 +122,6 @@ test('every consumer of check results decides through blockingChecks with a regi
   }
   assert.deepEqual(direct, [], 'a check status is compared outside checks.ts: route the decision through blockingChecks and register its purpose');
   assert.deepEqual(consumers, {
-    'eval/maa-doctor/scenarios.ts': ['doctor-exit'],
     'skills/maa-core/scripts/credentials.ts': ['credentials-exit'],
     'skills/maa-core/scripts/doctor.ts': ['doctor-exit'],
     'skills/maa-core/scripts/setup.ts': ['setup-exit', 'setup-recheck', 'setup-exit'], // check; recheck completion and its exit code

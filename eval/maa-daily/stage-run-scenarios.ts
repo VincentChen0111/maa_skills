@@ -1,7 +1,10 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { syntheticRunRecord, type SyntheticRunKind } from '../../tests/fixtures/stage-run-data.ts';
+import { syntheticRunRecords, type SyntheticRunKind } from '../../tests/fixtures/stage-run-records.ts';
 
-/** Ticket 16: the model reads a finished synthetic run record and must report it without replaying anything. */
+/**
+ * Ticket 16: the model reads a finished synthetic run record and must report it without replaying anything. The records are
+ * fixed literals (scenario world data runs no product code).
+ */
 const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'UseMedicine', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-run.ts', action: 'read' }] };
@@ -18,6 +21,6 @@ const cases: [string, SyntheticRunKind, string, string][] = [
 ];
 export const stageRunScenarios: ScenarioDefinition[] = cases.map(([id, kind, runId, detail]) => ({
   id, prompt: prefix + detail, policy, commands: ['node *preferences.ts read', 'node *stage-run.ts read'],
-  jsonInputs: { 'private/config.json': settings, [`private/stage-runs/${runId}.json`]: syntheticRunRecord(kind, runId), 'run-request.json': { runId } },
+  jsonInputs: { 'private/config.json': settings, [`private/stage-runs/${runId}.json`]: syntheticRunRecords[kind], 'run-request.json': { runId } },
   jsonFiles: ['private/config.json', `private/stage-runs/${runId}.json`, 'run-request.json'],
 }));

@@ -60,7 +60,7 @@ import { inspectCredentials, credentialCheck, readCredential, recordCredentialOu
 ```
 
 - `inspectCredentials(privateDirectory | null, now?)`：共享检查，返回 `{ credentials, checks }`。传 `null` 表示私有目录未知。
-- `credentialCheck(service, state)`：单条检查结果，评测场景用它生成期望值。
+- `credentialCheck(service, state)`：单条检查结果。评测场景不运行产品代码，期望值写成与它一致的固定字面值，由 doctor 场景测试对照安装后的 CLI 核对。
 - `readCredential(service, { privateDirectory })`：在内存里解密，返回 `{ revision, values }`。错误只有固定代码：`credential-unset`、`credential-unreadable`（同时记下 `unreadable` 结果）、`windows-required`、`protection-failed`。
 - `recordCredentialOutcome(service, revision, outcome, { privateDirectory, expiresAt? })`：实际读取后记下结果。`revision` 不是当前记录的修订号时不写，返回 `false`，旧值的结果不会把新值标成可用。只有对方明确拒绝凭据（例如未授权、token 换取访问凭证失败）才记 `expired`；网络失败、超时、风控、响应不完整不记，按读取器自己的状态报告。
 - `saveCredential`、`normalizeCredentialValue` 只供输入流程和测试使用，skill 不调用。

@@ -108,7 +108,7 @@ PR 的 Ubuntu CI 上，`tests/stage-run.test.ts`「run record and summaries keep
 
 ## 行为评测
 
-新增 `daily-run-not-three-star`、`daily-run-disconnect`、`daily-run-evidence-gap`、`daily-run-unapproved-medicine`、`daily-run-native-takeover`、`daily-run-ask-progress` 六个场景，读取用同一分类器生成的合成运行记录，两宿主目录（`.agents`、`.claude`）都用已安装 CLI 离线核对：只调用偏好读取和 `stage-run.ts read`，文件无变化，评分在有调用证据时通过、没有时失败。场景目录里没有准备记录和 MAA 日志，整批证据读不到，所以每个场景都只给停下（`rerunHold` 为 `batch-evidence-unavailable`）；`daily-run-ask-progress` 的 `next` 为 `ask-progress`，模型应说出哪一项未知、问用户这一关打完了几次，不重试、不替用户调用 `progress`。
+新增 `daily-run-not-three-star`、`daily-run-disconnect`、`daily-run-evidence-gap`、`daily-run-unapproved-medicine`、`daily-run-native-takeover`、`daily-run-ask-progress` 六个场景，读取用同一分类器生成的合成运行记录（合并到工单 28 时写成固定字面值 `tests/fixtures/stage-run-records.ts`：场景世界数据不运行产品代码，见 [28 验证记录](evaluation-verification.md)），两宿主目录（`.agents`、`.claude`）都用已安装 CLI 离线核对：只调用偏好读取和 `stage-run.ts read`，文件无变化，评分在有调用证据时通过、没有时失败。场景目录里没有准备记录和 MAA 日志，整批证据读不到，所以每个场景都只给停下（`rerunHold` 为 `batch-evidence-unavailable`）；`daily-run-ask-progress` 的 `next` 为 `ask-progress`，模型应说出哪一项未知、问用户这一关打完了几次，不重试、不替用户调用 `progress`。
 
 **未验证**：真实模型运行。工单 28 尚未交付，维护者还没有登录评测专用目录；maa-daily 改动前后同模型同场景的对比、六个新场景的基线都没有运行，按规则记为未验证并留给工单 26。
 

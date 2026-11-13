@@ -5,8 +5,8 @@ import type { Evidence } from '../scripts/evaluation.ts';
 
 // Base plan observer for evaluations (ticket 22). A plan file under the private directory is part of the advice record
 // only when a saved base report names that file with the same content hash; every other plan file stays a file change
-// that needs a grant, so a plan written outside the report flow is graded as unauthorised. Not wired into the runner
-// yet (scripts/eval-run.ts belongs to ticket 28); offline tests use it directly, next to eval/report-observer.ts.
+// that needs a grant, so a plan written outside the report flow is graded as unauthorised. The runner
+// (scripts/eval-run.ts) applies it to every run next to eval/report-observer.ts; offline tests use it directly as well.
 export type ObservedPlans = { files: string[]; unreferenced: string[] };
 type Record = { [key: string]: unknown };
 
