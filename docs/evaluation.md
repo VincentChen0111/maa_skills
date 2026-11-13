@@ -33,6 +33,8 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，其他文件名、动作和目录保持原行为。实际公共读取接口仍计算响应字节的 SHA-256，CLI 调用与文件差异仍实测，不接受模型提供的成功事件代替它们。映射、启用逻辑、预加载器内容进入场景指纹，映射保存于 `scenario.json`；工作区映射或预加载器被改写照常产生未授权差异。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。14 增加的精确入口同样改变场景指纹，需以新运行器对冻结旧产品重测前基线；旧记录原样保留，不能混作同语义前后比较。
 
+08 的下载场景声明 `networkFixtures: {}` 启用同一个预加载器，并用 `jsonInputs` 写入 `.eval-setup-network.json`：官方发布索引与合成下载样例的可信映射（`json`／`text`／`headers`，下载样例标 `download: true`）。预加载器只在两个临时原生目录内 `maa-core/scripts/setup.ts plan` 或 `download` 进程替代 `fetch`，只接受映射里的 GET／HEAD；GET 标为下载的地址时向 `events.jsonl` 追加 `download` 事件，由 `download-confirmation` 规则按场景的 `downloadGrants` 评分。映射位于工作区，被改写照常产生未授权差异；预加载器内容进入场景指纹。确认后的下载会写入带随机标识和时间的下载记录，现有评分无法逐字段授权，因此正向下载由 `tests/setup-download-scenarios.test.ts` 经已安装 CLI 覆盖，模型场景只断言没有确认时不下载、未通过检查时不报完成。预加载器内容变化也改变 13、14 成本／缺口场景的指纹，需以新运行器对冻结旧产品重测前基线，旧记录不能混作同语义前后比较。
+
 `jsonFiles` 中的顶层 JSON 对象按字段比较；创建和删除另产生 `$exists` 布尔变化，空对象也不会丢失。数组、损坏 JSON 及含保留键 `$exists` / `$file` 的对象退回 `$file` 完整字节比较。创建文件须同时授权 `$exists: true` 和每个预期字段；额外字段、删除或未授权路径照常失败。
 
 确实由产品产生的读取时间可由可信场景声明 `generatedUtcFields: [{ file: 'private/account-snapshot.json', key: 'readAt' }]`。它同时是该字段的写入授权和必需变化：只接受确切相对 JSON 文件、非保留顶层标识符，拒绝通配符、重复项及与静态 `grants` / `expectedChanges` 同位置的声明。其余字段仍用精确值授权，生成时间也须通过允许键、禁止键、持锁范围和秘密输出规则。

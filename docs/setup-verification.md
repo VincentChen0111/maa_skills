@@ -1,6 +1,66 @@
 # setup 现有环境接入验证
 
-## 当前交付结论
+本文件先记录 08（下载并补齐环境），其后各节为 07（接入现有环境）的验证记录，保持原样。
+
+## 08 下载与补齐：作者验证（进行中，未经独立审查）
+
+2026-11-13 从 origin/main `4a1fd26` 开始，在 `claude/08-setup-downloads` 分支实施。来源核对见 [setup 来源](setup-sources.md) 的「08 下载来源核对」，限制及其来源见[规格](spec.md)「检查与修法」的 08 一条和两张来源表的 08 行。作者验证不代替独立审查；工单保持「进行中」。
+
+### 交付内容
+
+- `skills/maa-core/scripts/setup-download.ts`：唯一实现。`plan` 只读官方发布索引（MAA 的 GitHub 最新正式发布、Node dist index.json 与 SHASUMS256、Google SDK 仓库 repository2-1.xml 稳定频道、模拟器厂商官方域名下的地址），给出文件名、版本及出处、来源、官方页面、大小或未知、校验值、许可和逐步执行者，不写文件；`download` 核对确认原话、方案指纹和许可接受后独占登记，逐跳检查官方主机，核对大小与校验值；新下载开始前回收进程已退出的下载留下的临时文件；`downloads` 每次重新计算摘要，格式不对或文件名越界的记录一律不用；`install` 只把 MAA／adb 解压到空文件夹，Node／模拟器只返回用户步骤。
+- `skills/maa-core/scripts/setup.ts`：CLI 动作 `plan`、`download`、`downloads`、`install`、`recheck`；`recheck` 复用 07 的 `checkSetup`、`discoverSetupConnections`、`testSetupConnection`，把下载状态和连接结果写进 `setup-environment.json`，只有全部通过且连接测试通过才 `complete`。Node 主版本不是 24 时只放行 node 的 plan／download 和 downloads。check 的两条修法说明改为指向下载方案。
+- skill：`maa-setup` SKILL.md 与接口说明加入下载流程；`maa-core` 脚本表、`maa-help` 路由、README 同步（help 文字变化同样需要前后评测，见下）。
+- 评测：`eval/maa-setup/scenarios.ts` 新增 `setupDownloadScenarios` 五个场景；`eval/network-fixture.mjs` 新增 setup 分支，读工作区 `.eval-setup-network.json`，只在 `setup.ts plan|download` 进程替代 fetch，GET 下载样例时记录 `download` 事件。`scripts/eval-fixture.ts`、`eval-run.ts`、`evaluation.ts` 未改。
+
+### 实际运行（本机 Windows，Node 24.22.1）
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm ci --ignore-scripts` | 成功 |
+| `npm run typecheck` | 首次 2 个 TS2345（`architecture` 参数类型）；修正参数类型后通过 |
+| `node --test tests/setup-download.test.ts` | 15 pass / 0 fail（含 Windows 专用的真实 `tar.exe` 解压两项） |
+| `node --test tests/setup-download-scenarios.test.ts` | 17 pass / 0 fail |
+| `node --test tests/setup.test.ts tests/setup-scenarios.test.ts tests/eval-network.test.ts tests/setup-integration.test.ts` | 52 pass / 0 fail |
+| `node --test tests/help-installation.test.ts` | 6 pass / 0 fail |
+| 完整离线入口 `node scripts/check.ts` | 见下方「完整离线入口」 |
+
+测试先行的实际顺序如实记录：`setup-download.ts` 的主体先于其行为测试写成；先写 `tests/setup-download.test.ts`，经 `setup.ts` 接缝运行时观察到红（`does not provide an export named 'downloadSetupProgram'`），补上 `setup.ts` 的导出和 `recheck` 后，最初 13 项一次全部通过。为确认这些测试确实约束行为，另在临时副本上做了变异核对（每次改一处产品代码、跑该测试文件、恢复原字节）：
+
+| 变异 | 结果 |
+| --- | --- |
+| 允许任意主机；去掉校验值比较；去掉指纹比较；去掉确认原话检查；去掉许可检查；把进程已退出的下载报为已下载；不再重新计算文件摘要；recheck 不要求连接；重复解压 | 各有 1–2 项失败，均被发现 |
+| 去掉下载前的「方案已用」快速检查 | 未被发现：独占登记仍拒绝第二次使用，两道检查互为后备 |
+| 独占登记改为可覆盖写入 | 最初未被发现（快速检查兜住顺序调用）；新增「同一方案并发下载两次只请求一次文件」测试后被发现 |
+
+首轮全绿后自读代码又发现三处问题并修正：模拟器下载后的「下一步」错误地包含下载步骤本身；进程中途退出的下载留下的临时文件从不回收；下载记录里的文件名未校验，被改写的记录可以指向下载文件夹以外。这三处都是先改产品、后补断言（模拟器 `next`、新下载回收死进程的临时文件、指向外部的记录被忽略且不解压），再临时恢复旧行为确认每条新断言失败，最后恢复：三项均为 exit 1、各 1 项失败。在最终代码上重跑上表全部变异，结论不变。
+
+本机另做的边界事实核对（临时目录，非仓库测试）：Node 的 fetch 在 `redirect: 'manual'` 下返回真实 302 和 Location（本机回环服务器）；Windows 自带 `tar.exe` 能解压 zip，遇到含 `..` 的条目报错退出 1、只解出其他条目，产品把非零退出当失败并清空目标文件夹（测试里用合成 zip 实测）。
+
+### 验收条件与证据
+
+| 验收条件 | 证据 |
+| --- | --- |
+| 四类程序缺项流程，文件名、版本、官方来源与大小，大小未知如实说明 | `setup-download.test.ts`：MAA 方案字段与执行者；Node 方案 `size: null`、`sizeKnown: false`；adb 方案版本、大小、许可；模拟器方案版本出处 `official-page-stated`、大小未知 |
+| 每次下载先展示方案并确认，拒绝不下载，不借旧授权 | 「download needs the confirmation of this exact plan…」：缺确认、空确认、别的方案均不请求文件；「a confirmed plan downloads once…」：同一方案第二次 `plan-already-used`；「two concurrent downloads…」；「a release that changed…」：`plan-changed`。评测场景见下 |
+| 官方来源、记录版本与出处；测试用下载样例 | 「unofficial sources are refused…」：非官方资产地址、仿冒域名、http、未列厂商、跳转到非官方主机均拒绝且不访问该主机；下载记录含 version、versionSource、source、officialPage、sha256；全部测试只用网络替身，未访问真实发行包 |
+| 区分 skill 与用户步骤；不输入游戏账号、不操作设备 | 方案 `steps[].executor`；Node／模拟器 `install` 只返回用户步骤；模拟器步骤写明 skill 不输入游戏账号、不操作设备；SKILL.md 第 3 步 |
+| 失败、中断、未装完不记已安装；恢复先查现状、不重复已通过步骤 | 「an interrupted download…」：中断不保留临时文件，记录 failed，进程退出的记录报 interrupted，需新方案；「a downloaded file changed on disk…」：`download-invalid` 且不解压；「MAA extraction…」：解压后 MAA 未首次启动时 recheck 不完整、`plan` 返回 `not-needed`、重复 `install` 返回 `already-extracted` 不再解压；已核下载再次 `plan` 返回 `already-downloaded` |
+| 完成后复检 Node、MAA、adb 与连接并更新环境记录；设置和配置走原通道 | 「final recheck covers…」：未选候选时不 connect、`complete: false`；选定后 connected；连接失败不完整；每次写入 `setup-environment.json`；解压不写设置（测试断言 `maaDirectory` 未被写入），MAA 目录经 `updateSettings`（偏好脚本的导出函数）保存 |
+| 网络替身覆盖同意／拒绝、来源异常、大小未知、中断及安装后复检 | 同上各测试；`setup-download-scenarios.test.ts` 经两个原生布局的已安装 CLI 走同一替身：未确认被拒、附加字段被拒、确认后只下载一次并记录一个 download 事件、重复使用被拒、再次 plan 返回 already-downloaded、非官方模拟器地址被拒 |
+| 行为评测断言下载在明确确认之后、未通过检查不报完成 | 五个场景：`setup-download-install-request-is-not-consent`、`setup-download-declined`、`setup-download-old-approval`、`setup-download-interrupted-resume`、`setup-download-incomplete-not-reported`。离线重放（模拟合规调用）在两个布局下评分 pass；模拟「拿安装请求当确认去下载」的反例评分 fail，失败规则含 `download-confirmation` 和 `authorization`。**真模型运行：未验证** |
+
+### 设计默认值（2026-11-13，均已登记规格「默认值及其来源」）
+
+方案单次使用与指纹绑定；官方来源清单与 https、最多 5 次跳转、逐跳检查；大小未知上限 4 GiB、60 秒无数据记中断、索引 8 MiB／30 秒；adb 许可由用户本人接受；模拟器版本由用户从官方页面读出并标明出处；skill 只下载、校验和解压到空文件夹（非根目录、Program Files、Windows 目录，不与私有目录互含，失败清空）；下载不记已安装、状态每次重算摘要、最终 recheck 才能报完成；Node 不是 24 时只放行 node 的下载动作。评测上的选择：确认后的正向下载会写入带随机标识和时间的记录，现有评分规则无法逐字段授权，所以由 CLI 测试覆盖，模型场景只做不确认不下载、未通过不报完成；不改评分器以免和 27、28 的并行改动冲突。
+
+### 未验证
+
+- 真模型行为评测：五个新场景以及因 SKILL 文字变化受影响的 07 五个 setup 场景、help 场景都没有运行。28 的可运行入口和登录预检尚未交付、维护者也还没有在专用登录目录登录；前后对照和分数不降由 [26](issues/26-v0-1-0-release-validation.md) 执行。`network-fixture.mjs` 的变化同时改变 13、14 成本／缺口场景的指纹，需以新运行器重测前基线。
+- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe`、platform-tools zip 为 `platform-tools/adb.exe`、GitHub 资产跳转主机、MuMu／蓝叠／夜神／逍遥的真实安装包主机均未用真实文件核实。
+- 真实安装：没有运行任何安装程序，没有在本机安装 MAA、模拟器、adb 或 Node，也没有接触维护者的 MAA、模拟器或 adb。
+- Node 主版本不是 24 时的 CLI 放行只经代码阅读确认；本机只有 Node 24，没有用其他 Node 版本实际运行。
+- Linux CI 上两个 Windows 解压测试和 CLI 下载测试会跳过；Windows CI 尚未在本分支运行。
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
 
