@@ -27,7 +27,7 @@
 | 13 | [单干员培养成本查询](13-operator-cost-query.md) | [#15](https://github.com/VincentChen0111/maa_skills/issues/15) | 11 | 已完成 |
 | 14 | [加工与材料凭证后的缺口](14-crafting-voucher-gaps.md) | [#16](https://github.com/VincentChen0111/maa_skills/issues/16) | 13 | 已完成 |
 | 15 | [指定关卡作业准备](15-stage-job-preparation.md) | [#17](https://github.com/VincentChen0111/maa_skills/issues/17) | 05、11 | 已完成 |
-| 16 | [跟踪关卡运行结果](16-stage-run-tracking.md) | [#18](https://github.com/VincentChen0111/maa_skills/issues/18) | 06、15 | 未开始 |
+| 16 | [跟踪关卡运行结果](16-stage-run-tracking.md) | [#18](https://github.com/VincentChen0111/maa_skills/issues/18) | 06、15 | 进行中 |
 | 17 | [批准范围内切换备选作业](17-approved-alternate-jobs.md) | [#19](https://github.com/VincentChen0111/maa_skills/issues/19) | 16 | 未开始 |
 | 18 | [NGA 调研闭环](18-nga-research.md) | [#20](https://github.com/VincentChen0111/maa_skills/issues/20) | 09 | 未开始 |
 | 19 | [森空岛社区与 B 站调研](19-community-bilibili-research.md) | [#21](https://github.com/VincentChen0111/maa_skills/issues/21) | 09 | 未开始 |
