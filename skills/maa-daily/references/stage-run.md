@@ -27,7 +27,7 @@
 
 ## 核对和决定
 
-9. `next` 为 `verify` 时运行 `verify`（`{"runId":"<runId>"}`）。它只读：MAA 进程、批准的列表和作业文件、共享 doctor 检查；理智、理智药、源石和关卡进度一律标为未知，不沿用批准时的值，需要时请用户告诉你或重新读取。
+9. `next` 为 `verify` 时运行 `verify`（`{"runId":"<runId>"}`）。它只读：MAA 进程、批准的列表和作业文件、共享 doctor 检查；理智、理智药、源石和关卡进度一律标为未知，不沿用批准时的值，需要时请用户告诉你或重新读取。`verification.blocking` 列出挡住重试的检查（MAA 安装与配置、连接、写入锁等），不为空时只能停下，把这些检查和它们的修法告诉用户；`verification.notBlocking` 列出与重试无关的错误（例如凭据过期、skill 目录联接损坏），不挡重试，但也要告诉用户，修法照 doctor 的说明由用户决定。
 10. 能不能再打（重试、换备选、重新 `start`）只看脚本的判断，`allowedDecisions`、`decide`、`progress` 和 `start` 用的是同一个判断（整批日志），不要自己推。某一项已经进入战斗或到了结算画面、结果却未知（`unresolvedAttempts` 非空，`next` 为 `ask-progress`）时，只能停下：告诉用户哪一关、哪一次结果未知，请用户自己看游戏并说明这一批里这一关到现在一共打完了几次（包括之前的记录），等用户回答后再用 `progress` 原样记下：`{"runId":"<runId>","reference":"<用户原话>","stages":[{"stageId":"<关卡>","completedRuns":<次数>}]}`。不要替用户填次数；用户说不清就停下，不猜。次数少于回调已经证明打完的次数时 `progress` 拒绝（`progress-contradicts-evidence`）：把 MAA 的证据告诉用户，请他再看一次。
 11. 核对清楚、也没有未决的结果后 `next` 为 `decide`，由你在 `allowedDecisions` 里选一项并用 `decide` 记录理由：`{"runId":"<runId>","decision":"<选项>","reason":"<理由>"}`。
     - `retry-within-approval`：同一批准范围内重试。先请用户在 MAA 的作业列表里取消勾选已经打完的条目，以及结果未知、用户也说不清的条目（MAA 只在三星时自己取消勾选），确认后再 `start` 并带 `"retryOf":"<runId>"`，然后请用户点开始。`start` 会读 MAA 保存的勾选状态：每关仍勾选的条目不能多于批准次数减去已打完的次数（用户说明的和回调证明的取较大者），否则拒绝（`finished-items-ticked`），请用户取消勾选后再试。不增加任何药剂或碎石授权，也不改启动方式。一个重试决定只对应一条任务链：重试的任务链开始后，或用户在 `start` 之前自己先点了开始，同一个决定都不能再用。

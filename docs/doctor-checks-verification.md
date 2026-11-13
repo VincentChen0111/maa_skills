@@ -66,6 +66,16 @@
 
 先红后绿：`tests/connection-states.test.ts` 在实现前因缺少导出整体失败；`tests/doctor-checks.test.ts` 改测试后 27 项中 3 项失败（`emulator-5556` 和 `127.0.0.1:5555` 不在列表时仍报 `device-not-listed`）；加入重复条目情形后一致性测试 2 项中 1 项失败（`127.0.0.1:5555` 遇到先列出的过期 `localhost:5555`）。修复后逐个运行：`tests/connection-states.test.ts` 2/2，`tests/doctor-checks.test.ts` 27/27，`tests/doctor-analysis.test.ts` 19/19，`tests/doctor-scenarios.test.ts` 17/17，`tests/setup.test.ts` 29/29，`npm run typecheck` 通过；审查员的 `r2-address.ts` 复现中不在列表的情形都报 `device-not-connected`，重复条目情形报在线。本轮没有运行完整离线入口。
 
+## 合并 16 后的调整
+
+2026-11-14，把含 16（关卡运行跟踪，#61）的 main 合进本分支（合并提交 `3572626`）后发现语义冲突：16 的 `verify` 在环境类失败后要求「共享 doctor 检查没有错误」才放开重试或换备选，本票把 `runChecks` 扩成八组之后，凭据过期、skill 目录联接损坏、一份无关的私有记录出错都会挡住合理的重试。08 的分支上 setup 复查也有同类问题（把过期的可选凭据算成没装好，尚未合并）。处理：
+
+- 协调者先把 `runChecks` 必需的 `home` 传进 `verifyStageRun`（默认用户的设置目录），两份 16 的测试传夹具目录；保留，夹具改为显式的 `home`。
+- 一个判断、一个所有者：`checks.ts` 的 `blockingChecks(检查结果, 用途)`。本票的退出码（`doctor-exit`）、setup 的退出码（`setup-exit`）、`credentials.ts check` 的退出码（`credentials-exit`）照旧把所有错误算上，行为不变；doctor 评测场景计算期望退出码也改为调用它。16 的核对用 `stage-retry`，只让以下编号挡住：`maa`、`server`、`settings`、`private-directory`、`connection`、`configuration`、`configuration-fields`、`remote-control`、`write-lock`；`platform`、`node`、`version`、三项凭据、`private-files`、`skill-version`、`skill-links` 出错不挡，记在核对结果的 `notBlocking` 里。没有归类的编号一律挡住。`checks.ts` 导出 `knownCheckIds`（与分组表同源）供一致性测试使用。每项的理由见规格「默认值及其来源」的「10、16 检查结果按用途」一行和 [16 的验证记录](stage-run-verification.md)「合并 10 后的调整」。
+- 一致性测试 `tests/check-purposes.test.ts` 5 项：编号全集、每种用途的归类、源码里不得在 `checks.ts` 之外直接比较检查状态、`blockingChecks` 调用处与登记表一致；另测不相关的错误不挡、连接和写入锁的错误挡、未知编号挡、退出码仍算所有错误。16 的测试另有端到端的一项（凭据和私有记录出错时仍可重试，连接离线、遗留写入锁时只能停下）。
+- 实际运行（Windows，逐个）：`npm run typecheck` 通过；`check-purposes` 5/5、`doctor` 74/74、`doctor-checks` 27/27、`doctor-scenarios` 17/17、`doctor-analysis` 19/19、`setup` 29/29、`setup-scenarios` 22/22、`connection-states` 2/2、`credentials` 6/6，以及 16 的五个测试文件（数字见 16 的验证记录）。完整离线入口由协调者运行。
+- 规格「检查与修法」的本票条目、「规则来源」的 10 行和「默认值及其来源」新增行已同步；`maa-doctor/references/checks.md` 和 maa-core 的 SKILL 目录表各加一句。这两处是 agent 读的文字，真模型前后评测未运行（同上文「评测」），留给 26。
+
 ## 设计默认值
 
 带限制的默认值都登记在规格「默认值及其来源」以「10 」开头的各行。只记在这里的实现选择：

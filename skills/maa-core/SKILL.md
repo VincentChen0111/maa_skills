@@ -16,7 +16,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
 | `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |
 | `scripts/doctor.ts` | doctor 八组检查、运行日志分析与转介摘要、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
-| `scripts/checks.ts`、`scripts/doctor-checks.ts` | setup/doctor 共用的检查原因与修法表；远程控制、私有文件、skill 版本与目录联接的只读检查 | [检查与恢复接口](../maa-doctor/references/checks.md) |
+| `scripts/checks.ts`、`scripts/doctor-checks.ts` | setup/doctor 共用的检查原因与修法表，以及按用途判断哪些错误挡住的 `blockingChecks`（退出码、关卡重试前的核对）；远程控制、私有文件、skill 版本与目录联接的只读检查 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/maa-version.ts` | 读 MAA.exe 产品版本并对照随包核实记录，setup 与 doctor 共用 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/maa-log.ts` | 解析 MAA 日志里的结构化回调，划分运行并分类失败，白名单脱敏 | [排查与转介对照](../maa-doctor/references/triage.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
