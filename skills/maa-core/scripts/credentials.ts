@@ -51,7 +51,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 async function readJson(path: string): Promise<unknown> {
   let handle;
   try { handle = await open(path, 'r'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+  catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return undefined; throw error; }
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.size > maximumRecordBytes) throw new CredentialError('record-invalid');
@@ -287,33 +287,49 @@ async function stdinTerminal(): Promise<Terminal> {
   let input = '';
   for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 65536) throw new CredentialError('input-too-large'); }
   const lines = input.split(/\r?\n/);
-  return { write: line => process.stdout.write(line), read: async () => lines.length ? lines.shift()! : null };
+  // Answers are never echoed; only the line break the user's Enter would have produced.
+  return { write: text => process.stdout.write(text), read: async () => { process.stdout.write('\n'); return lines.length ? lines.shift()! : null; } };
 }
 
-/** Raw-mode reading: nothing typed or pasted is echoed; Ctrl+C, Ctrl+D and Ctrl+Z cancel. */
+export type TerminalLine = { value: string; skipLineFeed: boolean };
+/**
+ * Applies raw terminal input to the answer being read. `result` is the finished answer (null when
+ * cancelled with Ctrl+C, Ctrl+D or Ctrl+Z); `rest` is input after Enter, kept for the next prompt.
+ * Enter is CR in a Windows console; an LF arriving right after it is not a second, empty answer.
+ */
+export function applyTerminalInput(line: TerminalLine, chunk: string): { line: TerminalLine; result?: string | null; rest: string } {
+  let { value, skipLineFeed } = line;
+  for (let index = 0; index < chunk.length; index += 1) {
+    const char = chunk[index]!;
+    if (skipLineFeed) { skipLineFeed = false; if (char === '\n') continue; }
+    if (char === '\r' || char === '\n') return { line: { value: '', skipLineFeed: char === '\r' }, result: value, rest: chunk.slice(index + 1) };
+    if (char === '\u0003' || char === '\u0004' || char === '\u001a') return { line: { value: '', skipLineFeed: false }, result: null, rest: '' };
+    if (char === '\u001b') {
+      if (chunk[index + 1] === '[' || chunk[index + 1] === 'O') { index += 2; while (index < chunk.length && !/[@-~]/.test(chunk[index]!)) index += 1; }
+      continue;
+    }
+    if (char === '\b' || char === '\u007f') { value = Array.from(value).slice(0, -1).join(''); continue; }
+    if (char >= ' ' && value.length <= maximumValueLength * 2) value += char;
+  }
+  return { line: { value, skipLineFeed }, rest: '' };
+}
+
+/** Raw-mode reading: nothing typed or pasted is echoed. */
 function ttyTerminal(): Terminal {
+  let pending = ''; let line: TerminalLine = { value: '', skipLineFeed: false };
   const read = () => new Promise<string | null>((resolveRead) => {
     const input = process.stdin;
-    let value = '';
-    const done = (result: string | null) => {
-      input.off('data', onData); input.setRawMode(false); input.pause(); process.stdout.write('\n'); resolveRead(result);
+    const feed = (chunk: string) => {
+      const step = applyTerminalInput(line, chunk);
+      line = step.line;
+      if (step.result === undefined) return;
+      pending = step.rest;
+      input.off('data', feed); input.setRawMode(false); input.pause(); process.stdout.write('\n'); resolveRead(step.result);
     };
-    const onData = (chunk: string) => {
-      for (let index = 0; index < chunk.length; index += 1) {
-        const char = chunk[index]!;
-        if (char === '\r' || char === '\n') { done(value); return; }
-        if (char === '\u0003' || char === '\u0004' || char === '\u001a') { done(null); return; }
-        if (char === '\u001b') {
-          if (chunk[index + 1] === '[' || chunk[index + 1] === 'O') { index += 2; while (index < chunk.length && !/[@-~]/.test(chunk[index]!)) index += 1; }
-          continue;
-        }
-        if (char === '\b' || char === '\u007f') { value = Array.from(value).slice(0, -1).join(''); continue; }
-        if (char >= ' ' && value.length <= maximumValueLength * 2) value += char;
-      }
-    };
-    input.setEncoding('utf8'); input.setRawMode(true); input.resume(); input.on('data', onData);
+    input.setEncoding('utf8'); input.setRawMode(true); input.resume(); input.on('data', feed);
+    if (pending) { const queued = pending; pending = ''; feed(queued); }
   });
-  return { write: line => process.stdout.write(line), read };
+  return { write: text => process.stdout.write(text), read };
 }
 
 /** The interactive flow. Every non-zero result leaves the saved record and its status untouched. */

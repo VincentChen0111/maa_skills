@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
-import { inspectCredentials, readCredential, recordCredentialOutcome, saveCredential } from '../skills/maa-core/scripts/credentials.ts';
+import { applyTerminalInput, inspectCredentials, readCredential, recordCredentialOutcome, saveCredential } from '../skills/maa-core/scripts/credentials.ts';
 import type { Protector } from '../skills/maa-core/scripts/credential-protection.ts';
 
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
@@ -62,6 +62,8 @@ test('the Skland input flow discloses before the paste prompt, has no password p
   const prompt = result.stdout.search(/粘贴.*token/);
   assert.ok(disclosure >= 0 && readOnly >= 0 && prompt > disclosure && prompt > readOnly, result.stdout);
   assert.doesNotMatch(result.stdout + result.stderr, /密码|password/i);
+  assert.match(result.stdout, /森空岛社区公开内容的调研不会使用这个 token/, 'community research never reuses the account credential');
+  assert.match(result.stdout, /token 过期后，重新运行本脚本粘贴新的 token/);
   await assertNoLeak(f.root, value, result.stdout, result.stderr);
   assert.deepEqual(await readFile(join(f.home, 'config.json')), settings, 'the settings file carries no credential data');
   assert.ok((await stat(join(f.privateDirectory, 'credentials/skland.json'))).isFile());
@@ -215,4 +217,28 @@ test('Windows per-user protection round-trips through the real input flow and th
   await writeFile(join(f.privateDirectory, 'credentials/skland.json'), JSON.stringify(record));
   await assert.rejects(readCredential('skland', { privateDirectory: f.privateDirectory }), { message: 'credential-unreadable' });
   assert.equal((await inspectCredentials(f.privateDirectory)).credentials[1]!.state, 'unreadable');
+});
+
+test('hidden terminal input handles typing, pasting, editing keys, cancellation and split line endings', () => {
+  const empty = { value: '', skipLineFeed: false };
+  const feed = (chunks: string[]) => {
+    const results: (string | null)[] = [];
+    let line = empty; let queue = [...chunks];
+    while (queue.length) {
+      const step = applyTerminalInput(line, queue.shift()!);
+      line = step.line;
+      if (step.result !== undefined) { results.push(step.result); if (step.rest) queue = [step.rest, ...queue]; }
+    }
+    return { results, line };
+  };
+  assert.deepEqual(feed(['y\r']).results, ['y']);
+  assert.deepEqual(feed(['to', 'ken-part', '\r']).results, ['token-part'], 'typed or pasted pieces join until Enter');
+  assert.deepEqual(feed(['abx\u007fc\bd\r']).results, ['abd'], 'backspace removes the last character');
+  assert.deepEqual(feed(['partial\u0003']).results, [null], 'Ctrl+C cancels');
+  assert.deepEqual(feed(['\u001a']).results, [null]);
+  assert.deepEqual(feed(['\u001b[Aab\u001bOD\r']).results, ['ab'], 'arrow-key sequences are ignored');
+  assert.deepEqual(feed(['y\r', '\nsecond\r']).results, ['y', 'second'], 'a line feed split from its carriage return does not end the next answer');
+  assert.deepEqual(feed(['y\r\nsecond\r']).results, ['y', 'second'], 'input after Enter is kept for the next prompt');
+  assert.deepEqual(feed(['\r']).results, [''], 'Enter alone gives an empty answer, which the flow treats as cancelled');
+  assert.equal(feed(['x'.repeat(20_000)]).line.value.length <= 16_385, true, 'runaway input is bounded');
 });
