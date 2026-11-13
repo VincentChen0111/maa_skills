@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { decideStageRun, loadBatchView, observeStageRun, recordStageProgress, startStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
-import { rerunGate, type BatchView } from '../skills/maa-core/scripts/stage-run-state.ts';
+import { decideStageRun, loadBatchView, observeStageRun, recordStageProgress, startStageRun, switchStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
+import { rerunGate, type BatchView, type Decision } from '../skills/maa-core/scripts/stage-run-state.ts';
 import { inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
 import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { matchStageJobs, prepareStageJobs } from '../skills/maa-core/scripts/stage-jobs.ts';
 import { stageJob, stageSnapshot, stageTables } from './fixtures/stage-data.ts';
-import { attempt, chainEnd, connection, copilotStart, core, gui, preparedBatch, runJobs, runRequest, runTables, type PreparedBatch } from './fixtures/stage-run-data.ts';
+import { attempt, chainEnd, connection, copilotStart, core, gui, medicineConfirm, medicineUsed, preparedBatch, runJobs, runRequest, runTables, type PreparedBatch }
+  from './fixtures/stage-run-data.ts';
 
 /**
  * Conformance for the one re-run gate (`rerunGate`). Every producer of "a chain may have run / the outcome is unproven"
@@ -34,12 +35,15 @@ const verify = (c: Context, runId = c.runId) => verifyStageRun({ ...c.paths, run
 const beforeBattle = async (c: Context) => c.batch.core([...copilotStart(0, { files: c.batch.files }), loaded(10, c.batch.files[0]!), connection(12, 'Disconnect'), ...chainEnd(13, 'TaskChainError')]);
 const settledThenDisconnect = async (c: Context) => c.batch.core([...copilotStart(0, { files: c.batch.files }),
   ...attempt(10, 0, c.batch.files[0]!, 'open', [endOfAction(80), connection(81, 'Reconnecting'), connection(85, 'Disconnect')]), ...chainEnd(86, 'TaskChainError')]);
-async function injectedRetry(c: Context): Promise<BatchView> {
+async function injected(c: Context, decision: Decision): Promise<BatchView> {
   const { batch } = await loadBatchView(c.paths, c.runId);
   const latest = batch.records.at(-1)!;
-  latest.decisions = [...latest.decisions, { at: new Date().toISOString(), decision: 'retry-within-approval', reason: 'injected' }];
+  latest.decisions = [...latest.decisions, { at: new Date().toISOString(), decision, reason: 'injected' }];
   return batch;
 }
+const injectedRetry = (c: Context) => injected(c, 'retry-within-approval');
+/** Ticket 17's consumer: carrying out an alternate switch. It is refused before any write when the gate refuses. */
+const switchRequest = async (c: Context) => ({ ...c.paths, runId: c.runId, stageId: 'synthetic_01', expectedRevision: (await inspectConfiguration(c.batch.maaDirectory)).revision, host: 'codex' as const });
 const fullProgress = [{ stageId: 'synthetic_01', completedRuns: 2 }, { stageId: 'synthetic_02', completedRuns: 1 }];
 
 type Producer = { name: string; unlockedByProgress?: boolean; run(t: test.TestContext): Promise<Context> };
@@ -99,15 +103,58 @@ test('every consumer refuses a re-run for every producer of an unproven chain or
     }
     let batch = await injectedRetry(c);
     assert.equal(rerunGate(batch, { kind: 'start', retryOf: c.runId }).allowed, false, `${name}: even with a recorded retry decision`);
+    await assert.rejects(switchStageRun(await switchRequest(c), c.batch.maa), /switch-not-decided/, `${name}: switch`);
+    assert.equal(rerunGate(await injected(c, 'switch-alternate'), { kind: 'switch', runId: c.runId, stageId: 'synthetic_01' }).allowed, false,
+      `${name}: even with a recorded switch decision`);
     const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：每关都打满了', stages: fullProgress });
     if (producer.unlockedByProgress) assert.ok(stated.allowedDecisions.includes('retry-within-approval'), `${name}: the user's statement settles the unknown attempt`);
     else assert.deepEqual(stated.allowedDecisions, ['stop-and-tell-user'], `${name}: a statement does not lift a batch-wide hold`);
+    assert.ok(!stated.allowedDecisions.includes('switch-alternate'), `${name}: every run stated done leaves nothing to switch`);
     batch = await injectedRetry(c);
     assert.equal(rerunGate(batch, { kind: 'start', retryOf: c.runId }).allowed, false, `${name}: after the statement (hold or finished entries still ticked)`);
+    assert.equal(rerunGate(await injected(c, 'switch-alternate'), { kind: 'switch', runId: c.runId, stageId: 'synthetic_01' }).allowed, false, `${name}: switch after the statement`);
     await assert.rejects(startStageRun({ ...c.paths, operation: c.batch.operation, reference: '重新开始' }), /run-unresolved/, name);
     for (const use of ['first', 'second']) {
       await assert.rejects(startStageRun({ ...c.paths, operation: c.batch.operation, reference: '重试', retryOf: c.runId }), /retry-not-decided|run-unresolved|chain-already-started/, `${name} ${use}`);
     }
+  }
+});
+
+/**
+ * Issue #48 (ticket 17, acceptance 4): MAA reported medicine use, or its use cannot be read, or the medicine toggle was on
+ * or unknown at start. Even with a MAA-reported failure and an approved alternate, nothing switches or retries: the run
+ * stops and waits for the user's decision; a progress statement does not change that.
+ */
+const medicineProducers: { name: string; reason: string; count: number | 'unknown'; lines(c: Context): string[] }[] = [
+  { name: 'MAA reported medicine use', reason: 'medicine-used', count: 2,
+    lines: c => [...copilotStart(0, { files: c.batch.files, medicine: true }), ...attempt(10, 0, c.batch.files[0]!, 'failed', [medicineConfirm(11), medicineUsed(12, 2)]), ...chainEnd(60, 'TaskChainError')] },
+  { name: 'medicine use unreadable (confirmed, no count reported)', reason: 'medicine-unknown', count: 'unknown',
+    lines: c => [...copilotStart(0, { files: c.batch.files, medicine: true }), ...attempt(10, 0, c.batch.files[0]!, 'failed', [medicineConfirm(11)]), ...chainEnd(60, 'TaskChainError')] },
+  { name: 'medicine toggle on at start, none reported', reason: 'medicine-toggle', count: 0,
+    lines: c => [...copilotStart(0, { files: c.batch.files, medicine: true }), ...attempt(10, 0, c.batch.files[0]!, 'failed'), ...chainEnd(60, 'TaskChainError')] },
+  { name: 'medicine toggle unknown (submission not seen)', reason: 'medicine-toggle', count: 0,
+    lines: c => [...copilotStart(0, { files: c.batch.files }).slice(2), ...attempt(10, 0, c.batch.files[0]!, 'failed'), ...chainEnd(60, 'TaskChainError')] },
+];
+test('medicine reported, unreadable or possibly enabled: no alternate switch, no retry, wait for the user (issue #48)', async t => {
+  for (const producer of medicineProducers) {
+    const c = await context(t), name = producer.name;
+    await c.batch.core(producer.lines(c));
+    const observed = await observe(c);
+    assert.equal(observed.stages[0]!.result, 'failed', name);
+    assert.equal(observed.medicine.count, producer.count, name);
+    assert.deepEqual(observed.alternates[0], { stageId: 'synthetic_01', job: 1, next: 2, left: 1 }, `${name}: an approved alternate is there`);
+    assert.deepEqual(observed.allowedDecisions, ['stop-and-tell-user'], name); assert.equal(observed.next, 'report', `${name}: report and wait`);
+    assert.deepEqual((await verify(c)).allowedDecisions, ['stop-and-tell-user'], name);
+    for (const decision of ['retry-within-approval', 'switch-alternate'] as const) {
+      await assert.rejects(decideStageRun({ ...c.paths, runId: c.runId, decision, reason: '授权应该够用' }), /decision-not-allowed/, `${name} ${decision}`);
+    }
+    await assert.rejects(switchStageRun(await switchRequest(c), c.batch.maa), /switch-not-decided/, name);
+    assert.deepEqual(rerunGate(await injected(c, 'switch-alternate'), { kind: 'switch', runId: c.runId, stageId: 'synthetic_01' }), { allowed: false, reason: producer.reason }, name);
+    assert.equal(rerunGate(await injectedRetry(c), { kind: 'start', retryOf: c.runId }).allowed, false, name);
+    const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：SYN-1 打完一次，就是失败的那次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+    assert.deepEqual(stated.allowedDecisions, ['stop-and-tell-user'], `${name}: a statement does not lift it`);
+    const list = (await readFile(join(c.batch.maaDirectory, 'config/gui.new.json'), 'utf8'));
+    assert.ok(!list.includes(`"CopilotId": 2`) && !list.includes('"CopilotId":2'), `${name}: the alternate was never written`);
   }
 });
 
