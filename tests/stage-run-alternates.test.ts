@@ -136,7 +136,7 @@ test('an environment failure is not a job failure: verify first, then the model 
   const observed = await observe(c);
   assert.equal(observed.next, 'verify'); assert.deepEqual(observed.allowedDecisions, ['stop-and-tell-user']);
   await assert.rejects(decideStageRun({ ...c.paths, runId: c.runId, decision: 'switch-alternate', reason: '断连了，换备选' }), /decision-not-allowed/);
-  const verified = await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa);
+  const verified = await verifyStageRun({ ...c.paths, home: c.batch.home, runId: c.runId }, c.batch.maa, c.batch.boundaries);
   assert.deepEqual(verified.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
   const switched = await decideAndSwitch(c, '断连已核对清楚，模型决定换备选 2');
   assert.deepEqual([switched.trigger, switched.from, switched.to, switched.state], ['environment', 1, 2, 'prepared']);
@@ -231,7 +231,7 @@ test('runs done add a statement and the 3-star runs proven after it: the alterna
   const c = await tracked(t, 3), files = c.batch.files, t0 = fromNow(-900), t1 = fromNow(-300);
   await c.batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
   assert.equal((await observe(c)).next, 'verify');
-  assert.equal((await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa)).next, 'ask-progress');
+  assert.equal((await verifyStageRun({ ...c.paths, home: c.batch.home, runId: c.runId }, c.batch.maa, c.batch.boundaries)).next, 'ask-progress');
   await recordStageProgress({ ...c.paths, runId: c.runId, reference: '合成用户：断连那一把其实打完了，三星', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户说明 SYN-1 完成一次，原批准范围内重试' });
   const file = join(c.batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
@@ -256,7 +256,7 @@ test('runs done add a statement and the 3-star runs proven after it: the alterna
 test('a second statement below the runs already recorded is refused; the summary shows the count and the statement it rests on', async t => {
   const c = await tracked(t, 3), files = c.batch.files, t0 = fromNow(-900), t1 = fromNow(-300);
   await c.batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
-  await observe(c); await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa);
+  await observe(c); await verifyStageRun({ ...c.paths, home: c.batch.home, runId: c.runId }, c.batch.maa, c.batch.boundaries);
   await recordStageProgress({ ...c.paths, runId: c.runId, reference: '合成用户：断连那一把打完了', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户说明完成一次' });
   const file = join(c.batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
@@ -266,7 +266,7 @@ test('a second statement below the runs already recorded is refused; the summary
   await c.batch.core(retag([...copilotStart(t1, { files: files.slice(1) }), ...attempt(t1 + 10, 1, files[1]!, 'three-star'),
     ...attempt(t1 + 60, 2, files[2]!, 'open', [connection(t1 + 70, 'Disconnect')]), ...chainEnd(t1 + 71, 'TaskChainError')], 2));
   await observe(c, retry.runId);
-  const asked = await verifyStageRun({ ...c.paths, runId: retry.runId }, c.batch.maa);
+  const asked = await verifyStageRun({ ...c.paths, home: c.batch.home, runId: retry.runId }, c.batch.maa, c.batch.boundaries);
   assert.equal(asked.next, 'ask-progress');
   assert.deepEqual(asked.runsDone[0], { stageId: 'synthetic_01', done: 2, statement: { runs: 1, quote: '合成用户：断连那一把打完了' }, provenSince: 1 }, 'the earlier statement is visible from the retry run');
   await assert.rejects(recordStageProgress({ ...c.paths, runId: retry.runId, reference: '合成用户：断连那次打完了，1 次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] }),

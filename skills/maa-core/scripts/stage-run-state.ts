@@ -42,8 +42,12 @@ export type RunState = {
   /** The user's own statements of how far each stage got, used only to settle unknown outcomes. */
   progress: ProgressStatement[];
 };
+/**
+ * `blocking` lists the shared checks whose error blocks a retry or switch (the `stage-retry` purpose of `blockingChecks`);
+ * `notBlocking` lists the other errors, which do not block but are told to the user.
+ */
 export type Verification = { at: string; clear: boolean; process: { running: boolean; idle: boolean } | null; preparedList: 'matches' | 'subset' | 'changed' | 'unreadable';
-  checks: CheckResult[]; unknown: string[]; accountSnapshotReadAt: string | null };
+  checks: CheckResult[]; blocking: string[]; notBlocking: string[]; unknown: string[]; accountSnapshotReadAt: string | null };
 export type DecisionRecord = { at: string; decision: Decision; reason: string };
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');

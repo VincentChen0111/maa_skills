@@ -5,13 +5,14 @@ import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { executeConfigWrite, type MaaProcess } from './maa-config.ts';
-import { runChecks } from './doctor.ts';
+import { runChecks, type CheckBoundaries } from './doctor.ts';
+import { blockingChecks } from './checks.ts';
 import { captureLogCursor, logFiles, readLogSince, type LogCursor, type LogName } from './maa-log-window.ts';
 import { approvedJobEntries, approvedJobList, approvedJobStages, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { applyCoreLines, applyGap, applyGuiLines, applyProcess, applyUserReport, deriveRun, emptyBatchEvidence, emptyRunState, fileKey, rerunGate,
   scanBatchLines, scanBeforeTracking, stageCandidates, switchTarget, type BatchView, type Decision, type DecisionRecord, type RunList, type RunState, type RunView,
   type SwitchState, type SwitchView, type Verification } from './stage-run-state.ts';
-import { readSettings } from './preferences.ts';
+import { readSettings, settingsHome } from './preferences.ts';
 
 /**
  * Tracks one prepared copilot batch from the user's start signal to a result. Read-only towards MAA: it reads the
@@ -347,8 +348,12 @@ export async function observeStageRun(input: Paths & { runId: string; waitSecond
   });
 }
 
-/** Re-reads current state only. Approval-time sanity, medicine, originium and stage progress are not reused. */
-export async function verifyStageRun(input: Paths & { runId: string }, maa: MaaProcess) {
+/**
+ * Re-reads current state only. Approval-time sanity, medicine, originium and stage progress are not reused. The shared
+ * checks run against `home` (the settings home, by default the user's); only the errors `blockingChecks` names for
+ * `stage-retry` block, and the other errors are recorded as not blocking. `boundaries` replaces only system boundaries.
+ */
+export async function verifyStageRun(input: Paths & { runId: string; home?: string }, maa: MaaProcess, boundaries: CheckBoundaries = {}) {
   return withRun(input.privateDirectory, input.runId, async record => {
     let process: Verification['process'] = null;
     try { const state = await maa.inspect(); process = { running: state.running, idle: state.idle }; } catch { /* unknown */ }
@@ -358,12 +363,13 @@ export async function verifyStageRun(input: Paths & { runId: string }, maa: MaaP
       await verifyApprovedJobFiles(plan, input.privateDirectory);
       preparedList = (await listCheck(input.maaDirectory, input.privateDirectory, plan, profileName)).result;
     } catch { preparedList = 'changed'; }
-    const checks = (await runChecks({ maaDirectory: input.maaDirectory, privateDirectory: input.privateDirectory }, maa)).checks;
+    const checks = (await runChecks({ maaDirectory: input.maaDirectory, privateDirectory: input.privateDirectory, home: input.home ?? settingsHome() }, maa, boundaries)).checks;
+    const { blocking, notBlocking } = blockingChecks(checks, 'stage-retry');
     let accountSnapshotReadAt: string | null = null;
     try { const value = object(JSON.parse(await readFile(join(input.privateDirectory, 'account-snapshot.json'), 'utf8'))).readAt; accountSnapshotReadAt = typeof value === 'string' ? value : null; }
     catch { /* no snapshot */ }
-    const verification: Verification = { at: new Date().toISOString(), process, preparedList, checks, unknown: unknownState, accountSnapshotReadAt,
-      clear: !!process?.running && (preparedList === 'matches' || preparedList === 'subset') && checks.every(check => check.status !== 'error') };
+    const verification: Verification = { at: new Date().toISOString(), process, preparedList, checks, blocking, notBlocking, unknown: unknownState, accountSnapshotReadAt,
+      clear: !!process?.running && (preparedList === 'matches' || preparedList === 'subset') && !blocking.length };
     record.verifications.push(verification);
     await save(input.privateDirectory, record);
     return { ...summarizeStageRun(record, await batchViewFor(input.maaDirectory, input.privateDirectory, record.batch.operation, record)), verification };
