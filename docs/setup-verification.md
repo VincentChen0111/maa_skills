@@ -2,9 +2,9 @@
 
 本文件先记录 08（下载并补齐环境），其后各节为 07（接入现有环境）的验证记录，保持原样。
 
-## 08 下载与补齐：作者验证（进行中，未经独立审查）
+## 08 下载与补齐：作者验证
 
-2026-11-13 从 origin/main `4a1fd26` 开始，在 `claude/08-setup-downloads` 分支实施。来源核对见 [setup 来源](setup-sources.md) 的「08 下载来源核对」，限制及其来源见[规格](spec.md)「检查与修法」的 08 一条和两张来源表的 08 行。作者验证不代替独立审查；工单保持「进行中」。
+2026-11-13 从 origin/main `4a1fd26` 开始，在 `claude/08-setup-downloads` 分支实施。来源核对见 [setup 来源](setup-sources.md) 的「08 下载来源核对」，限制及其来源见[规格](spec.md)「检查与修法」的 08 一条和两张来源表的 08 行。作者验证不代替独立审查；独立审查见[审查记录](reviews/2026-11-13-08-setup-downloads.md)，共十一轮，结论通过。
 
 ### 交付内容
 
@@ -238,7 +238,7 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 未验证：新提交上的 Windows CI；真实发行包的结构（仍没有下载任何发行包）；合并后 skill 文字的行为评测（待 26）。
 
-### 合并 28 之后（2026-11-14，未经独立审查）
+### 合并 28 之后（2026-11-14）
 
 合并提交 `8c82a8b` 把 28 的最终头 `1b39e9f`（评测可运行化，即将 squash 进 main）并入本分支。只有 `eval/maa-setup/scenarios.ts` 冲突：两边都在 `setupScenarios` 之后追加，28 推入 `setup-connection-write`、`setup-multiple-candidates`，本分支加下载映射和 `setupDownloadScenarios`，两段都保留（28 的在前）。INDEX 取本分支后用 `node scripts/tracker.ts --write` 重新生成（28 那一行按其工单文件为「进行中」）。`eval/network-fixture.mjs` 只有本分支改过，保留下载映射；setup 边界本分支没有改，用 28 的唯一实现 `eval/setup-boundary.mjs`（`tests/fixtures/setup-boundary.mjs` 只导入它）。
 
@@ -262,7 +262,9 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 21/21、setup-download-vendors 67/67、setup 29/29、setup-scenarios 27/27、setup-integration 5/5、check-purposes 7/7、evaluation 10/10、eval-comparability 7/7、eval-batch 10/10、eval-fixture 7/7、eval-host-double 12/12、eval-network 3/3、docs-consistency 5/5、maa-version-check 13/13、offline-network 2/2，另跑 doctor-scenarios 22/22、cross-skill-scenarios 7/7；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载、真模型。
 
-未验证：新提交上的 Windows CI；这些场景的真模型运行（待 26）；合并 28 的这次适配未经独立审查。
+已验证：记录 28 squash 并合并 main 之后的 `66894a6`，Windows 和 Ubuntu 两个 CI 都通过；这次适配经第十一轮独立审查，通过，没有意见。
+
+未验证：这些场景的真模型运行（待 26）。
 
 ## 当前交付结论
 
