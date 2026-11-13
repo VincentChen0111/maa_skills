@@ -80,6 +80,18 @@ R1 修后实际运行：`npm run typecheck` 通过；`node --test tests/setup-do
 
 R2 修后实际运行（提交 `acebe2c`，工作树干净）：`npm run typecheck` 通过；上述 6 个受影响测试文件共 88 项全部通过；`node scripts/check.ts` 为 419 项，417 pass、1 fail、1 skip，唯一失败是已知的「关闭 MAA」用例（`tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」报 `maa-close-timeout`），本票未改动它引用的文件。完整入口在测试失败时不再运行后续检查，所以另外单独运行：privacy、tracker、metadata 均为空，评分规则自检 7 条／样例 14 个通过。
 
+### R3 修复（2026-11-13，协调者已接受一项 P2；审查轮数已用满）
+
+R3 审查确认 R2 修复无问题，另在本包范围内发现一项 P2：夜神只放行 `yeshen.com`、逍遥只放行 `xyaz.cn`，而两者真实下载分别跳转到 `res06.bignox.com`、`download.microvirt.com`，所以永远下载不了。这和 R1 的 MuMu 是同一类缺陷，按维护者的复发规则（同类缺陷第二轮再现就不再逐条补路径）处理：
+
+- **唯一来源**：`setup-download.ts` 的 `emulatorVendors` 一张表，每个厂商有官网 `domains`（含子域名，沿用原范围）和已记录的下载链路 `chains`（起点地址、各跳主机，最后一跳是文件主机）。`vendorHosts` 只从链路取确切主机；plan 的起点检查、HEAD 逐跳和下载逐跳三处都只读这张表。原来 MuMu 专用的 `hosts` 字段删除。新增放行的确切主机只有 `res06.bignox.com`、`download.microvirt.com`，没有新增通配。
+- **链路核对**：本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对六个厂商的链路，没有下载任何安装包，结果和签名省略后的地址记录在 [setup 来源](setup-sources.md)「R3 下载链路核对」。蓝叠 CN 官网另列的 Win7 安装器 HEAD 返回 403、夜神 `win_64_12` 跳到 `.7z`，都没有收进表里。
+- **一致性测试** `tests/setup-download-vendors.test.ts`：表里恰好是六个完美支持厂商，每个至少一条链路，每条链路的起点和各跳主机都写在 `setup-sources.md` 中；逐条用网络替身回放「起点 → 各跳 → 文件主机」，出方案后只确认一次就下载成功，文件内容正确；再把最后一跳换成同公司未列出的主机（`a12.gdl.netease.com`、`res.ldplayer.net`、`cdn3.bluestacks.com`、`aliosscdn1.bluestacks.cn`、`res07.bignox.com`、`www.microvirt.com`），断言出方案被拒、该主机从未被访问。
+- **测试先行**：先只把链路数据写进表、判断仍走旧逻辑（临时保留原 MuMu 专用主机，并标明为红灯脚手架），一致性测试失败：夜神三条、逍遥一条报 `unofficial-source`，文档一致性也失败；随后删除脚手架、改为读表，并补全来源文档后全部通过。
+- **变异核对**：让 `vendorHosts` 返回空、让下载逐跳忽略表、给夜神加 `bignox.com` 通配、删掉逍遥的链路，四项都使一致性测试失败（依次 6、6、4、1 项）。
+- **准确性修正**：MuMu 文件主机的 Content-Disposition 等于地址里的 `n=`，同一个文件地址得到同一个名字；名字变化来自下载接口每次发新的 `n=`。来源文档、接口说明和规格的模拟器文件名一行已改正，行为不变。「key2 有效 48 小时」HEAD 无法证实，改记为未核实的观察。
+- 规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」官方来源一行和模拟器文件名一行已同步；接口说明的模拟器一行改为指向这张表。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

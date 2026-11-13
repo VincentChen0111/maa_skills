@@ -35,8 +35,23 @@ MAA 固定 [v6.21.4 / 52d0b2acaca116585b02e1e6a9da303460f81a24](https://github.c
 
 ### R1 补充（2026-11-13）
 
-- MuMu 下载链路：审查员只读查看 mumu.163.com/download/ 的脚本，下载按钮加载 `adl.netease.com` 上的脚本，再调用下载接口 `https://mumu.nie.netease.com/api/dl/win`。本作者另用不跟随跨主机跳转的只读请求核对：该接口返回 302，Location 指向 `a11.gdl.netease.com` 上的 `MuMu_6.0.6_..._zh-Hans_....exe`，查询串带 `n=` 文件名和两个签名参数；没有下载安装包。因此 MuMu 另放行这两个确切主机，不放行 `adl.netease.com`（只提供脚本）和 netease.com 的其他主机。用户提供接口地址或浏览器下载列表里的文件地址都可以。R2 审查员 2026-11-13 用 HEAD 只读核对：接口每次调用都给出新的 `n=` 和签名参数，文件主机每次请求在 Content-Disposition 里给出不同的随机文件名（例如 `MuMu_6.0.6_12g9XL3C.exe` 与 `MuMu_6.0.6_12g9YkKC.exe`），而文件地址的路径名 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe` 和大小两次一致，签名参数 key2 的有效期为 48 小时。所以脚本用最终地址的路径名作文件名，只有路径里没有安装包名时才用 Content-Disposition；这样从接口地址或文件地址开始，方案和下载的指纹都一致。从文件地址开始时，签名过期后需要用户重新取地址、重新出方案。
+- MuMu 下载链路：审查员只读查看 mumu.163.com/download/ 的脚本，下载按钮加载 `adl.netease.com` 上的脚本，再调用下载接口 `https://mumu.nie.netease.com/api/dl/win`。本作者另用不跟随跨主机跳转的只读请求核对：该接口返回 302，Location 指向 `a11.gdl.netease.com` 上的 `MuMu_6.0.6_..._zh-Hans_....exe`，查询串带 `n=` 文件名和两个签名参数；没有下载安装包。因此 MuMu 另放行这两个确切主机，不放行 `adl.netease.com`（只提供脚本）和 netease.com 的其他主机。用户提供接口地址或浏览器下载列表里的文件地址都可以。R2、R3 审查员和本作者 2026-11-13 用 HEAD 只读核对：接口每次调用都给出新的 `n=` 和签名参数；文件主机的 Content-Disposition 文件名等于该地址里的 `n=` 值，同一个文件地址得到同一个名字，名字的变化来自接口每次发新的 `n=`（例如 `MuMu_6.0.6_12g9XL3C.exe` 与 `MuMu_6.0.6_12g9YkKC.exe`）。文件地址的路径名 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe` 和大小在多次调用之间一致。签名参数 key2 的有效期为 48 小时只是 R2 审查员的观察，HEAD 无法证实，记为未核实。所以脚本用最终地址的路径名作文件名，只有路径里没有安装包名时才用 Content-Disposition；这样从接口地址或文件地址开始，方案和下载的指纹都一致。从文件地址开始时，签名一旦失效就需要用户重新取地址、重新出方案。
 - MAA 发行包结构：MAA 仓库 [ci.yml](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/dev/.github/workflows/ci.yml) 把 GUI 发布到 `install` 目录（`-o install`），再在该目录内执行 `Compress-Archive -Destination MAA-<tag>-win-<arch>.zip -Path ./*`，所以 zip 的顶层就是 `install` 目录的内容。`MAA.exe` 在顶层是由此得出的推断（审查员与本作者均只读查看了 ci.yml），没有用真实发行包核实。
 - 雷电：官网首页的安装包来自 `lddl01.ldmnq.com`，属于已放行的 `ldmnq.com`。
+
+### R3 下载链路核对（2026-11-13）
+
+R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主机，和 R1 的 MuMu 是同一类问题。脚本改为只从一张厂商表判断：官网域名（含子域名，沿用原有范围）加上下表记录的链路里出现的确切主机（不含子域名）。下表每条链路由本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对，没有下载任何安装包；签名参数已省略。表中的起点地址和主机与 `skills/maa-core/scripts/setup-download.ts` 的 `emulatorVendors` 一一对应，`tests/setup-download-vendors.test.ts` 检查两边一致。
+
+| 厂商 | 起点（官方页面使用的地址） | 跳转与文件主机（HEAD 结果） |
+| --- | --- | --- |
+| MuMu | `https://mumu.nie.netease.com/api/dl/win`（官网下载按钮的脚本调用；浏览器下载列表里的文件地址也可作起点） | 302 → `a11.gdl.netease.com` 的 `MuMu_6.0.6_apinochannel_zh-Hans_<编号>.exe?n=…`；文件主机 HEAD 200，约 6.5 MB |
+| 雷电 | `https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe`；`https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe`（官网首页按钮） | 起点即文件主机，HEAD 200，约 1.6 MB 在线安装器 |
+| 蓝叠 5 | `https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` | 起点即文件主机，HEAD 200，约 0.8 MB。官网 downloads.html 另列出的 `BlueStacksMicroInstallerForWin7.exe` 当日 HEAD 返回 403，没有记录 |
+| 蓝叠 5 国际版 | `https://cloud.bluestacks.com/api/getdownloadnow?platform=win`（官网 tw/download.html 的 Windows 下载按钮） | 302 → `ak-build.bluestacks.com` 的 `BlueStacksMicroInstaller_5.22.290.1031_native.exe`；HEAD 200，约 0.9 MB。两个主机都在原已放行的 `bluestacks.com` 内，此处仍逐一记录 |
+| 夜神 | `https://www.yeshen.com/cn/download/fullPackage/win_64?formal`、`https://www.yeshen.com/cn/download/fullPackage/win_64_9?formal`、`https://www.yeshen.com/cn/download/fullPackage?formal` | 302 → `res06.bignox.com` 上以十六进制命名的 `.exe`（`filename=nox_setup_v7.0.6.2_full.exe`）；HEAD 200，约 572 MB。`fullPackage/win_64_12?formal` 跳到 `.7z` 包，脚本只接受 exe／msi／zip，没有记录 |
+| 逍遥 | `https://www.xyaz.cn/download.php?file_name=XYAZ-Installer` | 303 → `download.microvirt.com` 的 `XYAZ-Installer.exe`；HEAD 200，约 19.9 MB |
+
+新增放行的确切主机只有 `res06.bignox.com` 和 `download.microvirt.com`；同公司的其他主机（例如 `bignox.com`、`microvirt.com` 的其他子域名）一律拒绝。厂商更换 CDN 主机时下载会以 `unofficial-source` 失败，需要重新核对并更新这张表。夜神按路径名命名的文件是十六进制串，方案原样显示该文件名。
 
 未核实、需要真实发行包才能确认的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）；蓝叠、夜神、逍遥安装包的真实下载主机。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。Windows 自带 `tar.exe`（bsdtar）解压 zip、拒绝含 `..` 的条目，本机用合成 zip 实测过（见 [setup 验证记录](setup-verification.md)）。
