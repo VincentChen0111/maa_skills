@@ -291,9 +291,10 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
 }
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
-async function loadStageTables(file?: unknown) {
+/** The read-only entry's stage tables; the cultivation report reuses it for job-site evidence. */
+export async function loadStageTables(file?: unknown, fetcher: typeof fetch = fetch) {
   if (file !== undefined) return { ...object(JSON.parse(await readFile(text(file), 'utf8'))), source: { kind: 'offline-input' } };
-  const result = await readPublicJson(stageTableSource); return { ...object(result.value), source: result.source };
+  const result = await readPublicJson(stageTableSource, fetcher); return { ...object(result.value), source: result.source };
 }
 export function findStages(tables: unknown, codes: string[]) {
   if (!Array.isArray(codes) || !codes.length || codes.length > 100 || codes.some(code => typeof code !== 'string' || !code.trim())) throw new Error('stage-code-required');
