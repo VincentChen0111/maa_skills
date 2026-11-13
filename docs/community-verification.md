@@ -120,7 +120,7 @@
 | 1 只读、不登录、不发帖点赞评论；与账号扫描独立（2026-11-14 修订：可用用户自己的凭据） | `tests/skland-community.test.ts`：正常读取只有 grant、cred、item 三个请求，item 为带有效签名的 GET、只带 `id`，不跟随重定向；每个用例用 `assertAllowed` 核对只请求三个鉴权接口和帖子接口；「one session owner …」核对两个读取器都从 `skland-session.ts` 导入，各自源码里没有换取、刷新、签名或凭据读写代码，社区读取器不引用账号快照代码、源码里唯一的接口路径是 `/web/v2/item`、没有 POST；CLI 的 `post`、`like`、`comment`、`search` 动作被拒 | 通过（网络替身）；真实站点未验证 |
 | 4 从用户指定资料到可引用 Markdown | `tests/community-cli.test.ts` 森空岛 CLI：未设置凭据时给出 `credentials.ts input skland` 且不发请求；用户经 09 的输入脚本保存 token 后，读链接得到 `ok`、3 个请求、`credential: usable`，Markdown 带来源链接和引用块；第二次读走缓存 | 通过（网络替身） |
 | 5 只当数据；凭据、账号标识不泄漏 | 「post text is only data …」：帖子里要求读凭据、外发 token、点赞关注的文字只在引用块，不引出任何请求；所有用例的输出、Markdown 和临时目录全部文件里搜索 token、授权码、cred、签名 token、用户 ID、角色号和作者账号 ID 的原文、JSON 转义和 URL 编码形式，都找不到 | 通过（网络替身） |
-| 6 各种失败清楚报告 | 「a 10000 reply refreshes …」；「signature still refused after both refresh levels …」：grant、cred、item、refresh、item、grant、cred、item 后报告 `signature-rejected`、`check-system-time`，凭据仍是 `unverified`、来源不暂停；「429 stops at once …」及 503、500、换取 429、网页、重定向、频繁提示、10003、cred 被拒 8 种风控：本次停止、暂停 30 分钟、不重试、不改凭据状态，暂停期间再读不发请求；「credential states …」：未设置、无法读取不发请求，换取被拒只发 grant 并记过期，三者都给出 `credentials.ts input skland`；「requests are validated …」：不提供、格式不认、回复不完整、网络失败分开报告且不暂停；缺字段由 `tests/community-content.test.ts` 逐字段核对 | 通过（网络替身） |
+| 6 各种失败清楚报告 | 「a 10000 reply refreshes …」；「signature still refused after both refresh levels …」：grant、cred、item、refresh、item、grant、cred、item 后报告 `signature-rejected`、`check-system-time`，凭据仍是 `unverified`、来源不暂停；「429 stops at once …」及 503、500、换取 429、网页、重定向（帖子、换授权码、换 cred 三处；替身按 Node fetch 的语义处理重定向）、频繁提示、10003、cred 被拒 10 种风控：本次停止、暂停 30 分钟、不重试、不改凭据状态，暂停期间再读不发请求；「with the real Node fetch a redirect on …」（第一轮修复，见下）用真实 Node fetch 和本机回环服务核对帖子和换取上的重定向；「credential states …」：未设置、无法读取不发请求，换取被拒只发 grant 并记过期，三者都给出 `credentials.ts input skland`；「requests are validated …」：不提供、格式不认、回复不完整、网络失败分开报告且不暂停；缺字段由 `tests/community-content.test.ts` 逐字段核对 | 通过（网络替身） |
 
 ### 设计默认值（2026-11-14）
 
@@ -134,7 +134,7 @@
 
 只影响实现或评测、不是产品限制的选择（记在这里）：
 - 签名时间用系统时间（`now`），闸门和缓存用调研时钟（`clock`）；测试只替换后者。理由：签名要与站点时间一致，测试的手动时钟不能用来签名。
-- 重定向：会话按 12 设 `redirect: 'error'`，真实 fetch 遇到重定向会直接报错，所以真实站点的重定向会显示为网络失败（同样停止、不重试，但不暂停来源）；只有替身直接回 3xx 时才归为风控。
+- 重定向（第一轮修复后）：会话对自己的 fetch 设 `redirect: 'error'`，社区读取器的观察层把它改为 `manual`，自己取回 3xx 并按风控处理；12 的账号读取不经观察层，仍为 `error`。原来这里记的「真实站点的重定向会显示为网络失败」是第一轮审查接受的缺陷，已修复，见「2026-11-14 第一轮修复」。
 - 评测的合成森空岛世界写在 `eval/network-fixture.mjs` 里（随预加载器进入场景指纹），只在 `skland-community.ts read` 进程启用，只接受 `synthetic-` 开头的 token；合成凭据用测试加密写进场景自己的私有目录，同一变换在场景文件里另写一份，离线场景测试读帖成功即证明两边一致。
 - 读帖场景的工具写入（闸门记录、帖子缓存、凭据结果）逐字段授权；缓存的 `expiresAt` 用新加的 `offsetMs: 86400000` 授权。理由：评分器把每处文件变化都当作需要授权的写入，到期时间只能按读取时间加固定偏移核对。
 
@@ -148,9 +148,42 @@
 
 合并后先逐个运行 `npm run typecheck`、`tests/research.test.ts`、`tests/skland-account.test.ts`、`tests/help-installation.test.ts`，全部通过。完成后逐个运行一次（不是完整门禁）：`npm run typecheck` 通过；`tests/research.test.ts` 7 项、`tests/skland-community.test.ts` 17 项、`tests/skland-account.test.ts` 18 项、`tests/skland-scenarios.test.ts` 1 项、`tests/credentials.test.ts` 6 项、`tests/help-installation.test.ts` 6 项、`tests/metadata.test.ts` 1 项、`tests/eval-network.test.ts` 3 项、`tests/community-scenarios.test.ts` 2 项、`tests/community-cli.test.ts` 3 项、`tests/community-content.test.ts` 14 项、`tests/evaluation.test.ts` 8 项全部通过；另外 `tests/research-scenarios.test.ts` 1 项、`tests/nga.test.ts` 13 项、`tests/bilibili.test.ts` 15 项通过（共用 Markdown 文字有改动）。`node scripts/tracker.ts`、`node scripts/privacy.ts .` 无错误、无发现。没有运行完整门禁和 `tests/maa-process.test.ts`；仓库里没有名为 docs-consistency 的测试文件。
 
+## 2026-11-14 第一轮修复
+
+独立审查第一轮接受一项（P3）：规格、接口说明、本记录验收第 6 条和测试都说重定向按风控处理、暂停 30 分钟，但共用会话对 fetch 设 `redirect: 'error'`，真实 Node fetch 遇到 3xx 直接报错，读取器看不到状态码，结果是 `network-failed`、来源不暂停，3 秒后的重试会带用户的 token 再发换授权码、换 cred 和帖子请求。原测试能过，只因为替身不理会 `redirect: 'error'`、直接回 302。动手前先合入 `origin/main`（含 10、22、23 和 `tests/fixtures/offline-fetch.mjs`）：合并提交 `c915980`。
+
+### 修复内容
+
+- `skills/maa-core/scripts/skland-community.ts`：观察层 `observed()` 以 `redirect: 'manual'` 调用底层 fetch，Node 的 fetch 因此把 3xx 原样交回；状态码进入已有的失败归类（风控信号优先），记为 `http-302` 等，本次停止、来源暂停 30 分钟、不重试。重定向从不跟随。
+- `skills/maa-core/scripts/skland-session.ts`：会话遇到 3xx 不读回复体，按失败处理（问题代码 `service-error`），不把 3xx 当数据。社区归类先看状态码，所以原因写 `http-3xx`。
+- 鉴权接口上的重定向也暂停（有意为之）：换授权码、换 cred、刷新被重定向时同样按风控停下并暂停来源。带凭据的换取被重定向，多半是验证码或登录页，与帖子被重定向同类。
+- 12 的账号读取行为不变：它不经观察层，仍为 `redirect: 'error'`。离线回环核对：真实 Node fetch、本机回环服务、加载了网络防护。重定向放在换授权码或 binding 接口上时，账号读取都报 `network-failed`，凭据状态 `unchanged`，所有请求都是 `error` 模式，重定向目标从未被请求。这与修复前的代码路径相同：修复前同样传 `error`，会话新加的 3xx 判断只在 fetch 交回 3xx 时生效，而 `error` 模式下真实 fetch 不会交回 3xx。`tests/skland-account.test.ts` 未改，照常通过。
+- 替身与 Node fetch 语义一致：`tests/fixtures/skland-double.mjs` 和 `eval/network-fixture.mjs` 的合成森空岛世界遇到 3xx 时，`error` 模式下以 fetch failed 拒绝，`manual` 模式下交回 3xx，要跟随的请求直接拒绝。合成世界新增帖子 7654321，回 302 到验证码页。
+- 凭据文字与修法一致（协调者补充 1）。逐个核对森空岛社区每种凭据状态的文字与 `repair`：未设置为 `enter-credential`，无法读取和被拒为 `reenter-credential`，这三种的文字都要求运行 `credentials.ts input skland`，一致；签名被拒为 `check-system-time`，文字说检查系统时间，一致。不一致的两种已修复：Windows 加密没有完成（`protection-failed`，修法 `retry-later`）和非 Windows（`windows-required`，修法 `use-windows`）原来共用「凭据无法读取，请你自己重新运行 credentials.ts input skland」。现在 `skills/maa-core/scripts/research.ts` 按页结果的原因给出专门文字：前者说稍后再试，后者说在保存凭据的 Windows 用户下使用，中英文都不要求重新输入。B 站（实验性）有同样的文字问题，读取器 `bilibili.ts` 也把这两种原因写进页结果，文字随之正确（B 站结果没有修法代码）。NGA（工单 18）也把这两种情况都报成 `credential-unreadable`，而且不带原因，所以文字仍是重新输入；这不在本包范围内，没有改动，留给协调者决定。
+- 工单 09 验收第 5 条（协调者补充 2）：「森空岛社区公开读取不复用森空岛账号凭据」原文保留，后面加 2026-11-14 修订说明，引用维护者原话。工单正文有改动，GitHub Issue #11 镜像需要同步。
+- 网络防护（协调者补充 3）：新增测试夹具 `tests/fixtures/offline-network.mjs`。它在套接字层拒绝任何非本机回环的 TCP 连接和 DNS 查询，报 `offline-test-real-network`；它不替换 fetch，所以替身、评测的合成世界和回环服务照常工作，与预加载顺序无关。没有用 `offline-fetch.mjs` 的原因：它替换 fetch，会挡住本包用真实 fetch 做的回环核对；预加载顺序不对时还会盖住评测的合成世界，审查员的第一版预加载就遇到过。各测试的加载方式：`skland-community`、`bilibili`、`community-content` 在进程内第一行导入；`community-cli` 的每个子进程都带 `--import`；`community-scenarios` 在进程内导入，并放在每个评测子进程 NODE_OPTIONS 的最前面。夹具只在测试里用，不随产品安装。「the test guard makes real network fail …」核对它确实生效：对 RFC 5737 文档保留地址的 fetch 以 `offline-test-real-network` 失败。
+
+### 验收对照（第一轮修复）
+
+| 项 | 证据 | 状态 |
+| --- | --- | --- |
+| 6 重定向按风控报告并暂停 | `tests/skland-community.test.ts`「with the real Node fetch a redirect on the post / on the exchange …」：真实 Node fetch 对本机回环服务。结果为 `risk-control`，原因 `http-302`，修法 `retry-later`，凭据 `unchanged`，暂停到 30 分钟后。服务端只看到 grant、cred、item（换取被重定向时只有 grant），重定向目标从未被请求；3 秒后再读为 `risk-stopped`、0 个请求，服务端没有再收到任何请求。风控表新增帖子、换授权码、换 cred（307）三处重定向，用按 Node 语义处理重定向的替身；`assertAllowed` 核对每个请求都是 `manual` 模式。`tests/community-scenarios.test.ts`「a redirect in the synthetic Skland world …」：已安装的读取器在合成世界读帖子 7654321，得到 `risk-control`、`http-302`、3 个请求、来源暂停；再读为 `risk-stopped`、0 个请求 | 通过（回环与替身）；真实站点未验证 |
+| 凭据文字与修法一致 | 「a credential that cannot be opened on this machine …」：`protection-failed` 得 `retry-later`，`windows-required` 得 `use-windows`，都不发请求、凭据状态不变，中英文 Markdown 都不出现 `credentials.ts input` 或重新输入；`tests/bilibili.test.ts`「a SESSDATA that cannot be opened …」同理 | 通过 |
+| 测试不碰真实网络 | 上述五个测试文件都加载 `offline-network.mjs`；「the test guard makes real network fail …」 | 通过 |
+
+### 设计默认值（第一轮修复）
+
+- 产品限制写进规格：「共享工具」正文的森空岛社区一条，「默认值及其来源」中「请求闸门……」和「失败归类」两个 19 行，以及「规则来源」19 行。标为「设计默认值，2026-11-14，第一轮审查修复」，内容是：社区读取自己取回重定向，鉴权接口上的重定向同样暂停。
+- 只影响实现：会话遇到 3xx 用已有的问题代码 `service-error`，不新增代码。理由：社区归类先看状态码，原因已经是 `http-3xx`；账号读取在真实 fetch 下根本拿不到 3xx，没必要为它扩充修法词表。网络防护选套接字层而不替换 fetch，理由见上。
+
+### 运行记录（第一轮修复）
+
+先失败的证据，产品代码修改前：`tests/skland-community.test.ts` 23 项中 18 项失败。帖子、换取和换 cred 上的三种重定向都报 `network-failed`（审查发现在替身中复现）；两个真实 fetch 回环用例都报 `network-failed`；`assertAllowed` 要求 `manual`，所以其余带请求的用例也失败；凭据文字用例失败。防护用例第一次失败是测试自身的问题：端口 9 是 fetch 禁用的端口，报 bad port；改用 80 端口后通过（它只核对防护本身，与产品代码无关）。`tests/bilibili.test.ts` 新用例失败（页结果没有原因）。整个过程没有真实网络请求：防护在这些测试运行前已经加上。修复后逐个运行一次（不是完整门禁）：`npm run typecheck` 通过；`tests/skland-community.test.ts` 23 项、`tests/skland-account.test.ts` 18 项、`tests/skland-scenarios.test.ts` 1 项、`tests/research.test.ts` 7 项、`tests/research-transport.test.ts` 3 项、`tests/community-cli.test.ts` 3 项、`tests/community-content.test.ts` 14 项、`tests/community-scenarios.test.ts` 3 项、`tests/research-scenarios.test.ts` 1 项、`tests/nga.test.ts` 13 项、`tests/bilibili.test.ts` 16 项、`tests/credentials.test.ts` 6 项、`tests/evaluation.test.ts` 8 项、`tests/eval-network.test.ts` 3 项、`tests/help-installation.test.ts` 6 项、`tests/metadata.test.ts` 2 项全部通过。`node scripts/tracker.ts` 无错误；`node scripts/privacy.ts .` 第一次报了回环测试里一处 `token:` 字面量，改成仓库惯用的 `['token']` 写法后无发现，`tests/skland-community.test.ts` 重跑仍是 23 项通过。账号读取的回环核对用的是一次性脚本，不在仓库里。没有运行完整门禁和 `tests/maa-process.test.ts`。合成世界的重定向用例没有在修复前的代码上单独跑过红灯：旧合成世界只接受 `error`，旧读取器又不会交回 3xx，两种组合都只能得到 `network-failed`。
+
 ## 未验证
 
 - 森空岛社区（2026-11-14 起）：**没有发过任何带凭据的真实森空岛请求**。帖子接口是否接受账号快照会话（`/api` 一侧）的签名、真实返回字段、真实风控信号、读取时会不会触发其他校验，都要维护者在本机用自己的 token 核对；读帖的真实可用性因此未验证。上面运行记录里那次误发的匿名请求不算核对。
+- 重定向（第一轮修复）：真实森空岛会不会对换取或帖子请求回重定向、转到哪里都未验证；读取器取回 3xx 并暂停来源的行为只用真实 Node fetch 对本机回环服务核对过。
 - 真实站点：帖子真实字段；带 SESSDATA 时字幕列表、`login_mid`、字幕文件主机与格式、失效时的真实回答；两站的真实风控信号；如实 User-Agent 长期是否被接受；3 秒和 30 分钟是否够用。清单见[社区来源核对](community-sources.md)「未验证」。核对时只发了几次不带凭据的请求。
 - Windows 传输经系统代理和证书存储访问这两个站点：与 18 相同，只对本机替身实测。
 - 真模型行为评测：所有场景（含 2026-11-14 新增的两个森空岛场景）只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。

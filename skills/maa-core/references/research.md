@@ -64,7 +64,7 @@
 - `post`：帖子号，或 `www.skland.com`、`skland.com` 的 `/article?id=` 链接；只取 `id`，帖子请求总是 `GET https://zonai.skland.com/web/v2/item?id=<帖子号>`。
 - 读一帖：缓存能回答时不读凭据、不发请求。否则先看来源是否暂停，再读用户保存的森空岛 token；没有凭据（`credential-required`）或无法读取（`credential-unreadable`）时不发任何请求，也不匿名尝试（2026-11-13 核对时匿名请求一律被要求签名）。有凭据时经 `skland-session.ts` 用 token 换授权码、换 cred，再对帖子接口发签名 GET；收到 10000 先刷新签名 token、10002 或刷新无效时重新换取，各最多一次。除这三个鉴权接口和帖子接口外不请求别的接口。不跟随重定向，每个请求 20 秒、单个回复 16 MiB，请求头与账号快照相同。一次读取在本来源闸门的一次占用里完成，`requests` 是这次实际发出的请求数（通常是 3）。
 - 没有检索、没有列表：只读用户给出链接的帖子。
-- 结论：两级刷新后仍被拒为 `signature-rejected`（不是 token 过期，凭据状态不变，请用户检查系统时间）；换取授权码时被明确拒绝为 `credential-rejected`（记为已知过期）；429、412、任何 5xx、重定向、要数据却得到网页、站点提示频繁、代码 10003，以及换取 cred 被拒等不归咎凭据的拒绝，都是 `risk-control`（`pages[].reason` 写明，如 `http-429`、`page-instead-of-data`、`site-message`、`site-code-10003`、`service-error`），本次停止、来源暂停 30 分钟、不重试；其他错误码为 `unavailable`（`site-code-<代码>`）；回复不是对象 JSON 为 `incomplete`（`response-invalid`）。帖子接口回答成功才把凭据记为可用。
+- 结论：两级刷新后仍被拒为 `signature-rejected`（不是 token 过期，凭据状态不变，请用户检查系统时间）；换取授权码时被明确拒绝为 `credential-rejected`（记为已知过期）；429、412、任何 5xx、重定向、要数据却得到网页、站点提示频繁、代码 10003，以及换取 cred 被拒等不归咎凭据的拒绝，都是 `risk-control`（`pages[].reason` 写明，如 `http-429`、`http-302`、`page-instead-of-data`、`site-message`、`site-code-10003`、`service-error`），本次停止、来源暂停 30 分钟、不重试；重定向从不跟随：读取器自己取回 3xx（`redirect: 'manual'`）并归为风控，三个鉴权接口上的重定向也一样；其他错误码为 `unavailable`（`site-code-<代码>`）；回复不是对象 JSON 为 `incomplete`（`response-invalid`）。帖子接口回答成功才把凭据记为可用。
 - 结果另有两个字段：`credential`（这次读取对凭据的结论，取值同账号快照：`usable`、`expired`、`unreadable`、`unset`、`unchanged`）和 `repair`（修法代码，同账号快照：`enter-credential`、`reenter-credential`、`use-windows`、`check-system-time`、`retry-later`、`report-issue`，读到时为 `null`）。
 - 结果条目：`kind` 为 `post`，`url` 为 `https://www.skland.com/article?id=<帖子号>`，作者是昵称（不存作者账号 ID），时间取发布时间 `publishedAtTs`，没有就写未知；正文按文字片段顺序拼接，局限代码 `text-order-approximate`；`meta.post` 为帖子号。
 - `node <maa-core>/scripts/skland-community.ts status`：不联网、不解密，返回 `stopped`、`stoppedUntil`、`stopReason`、`lastRequestAt` 和森空岛凭据状态 `credential`（与账号快照共用）。
@@ -120,8 +120,8 @@ B 站支持是实验性的：接口随时可能变化或拒绝，结果、帮助
 | `credential-required` | 没有设置凭据 | 否 |
 | `credential-rejected` | NGA 明确回答未登录、B 站（实验性）回答 `-101`、森空岛换取授权码时明确拒绝 token（本次记为过期），或凭据已知过期 | 被拒那一次是 |
 | `signature-rejected` | 森空岛社区：本次读取里 token 已被接受，两级刷新后签名仍被拒；不是过期，凭据状态不变，请用户检查系统时间 | 是 |
-| `credential-unreadable` | 凭据无法读取（损坏、换了电脑或用户、非 Windows） | 否 |
-| `risk-control` | 本次遇到风控：429、503、任何重定向、要数据却给了网页、或站点提示频繁/验证；森空岛社区另有 412、任何 5xx、代码 10003 和换取 cred 被拒（见上），B 站（实验性）另有 HTTP 412 和代码 -412、-352、-509、-799、-503 | 是，随即停止 |
+| `credential-unreadable` | 凭据无法读取（损坏、换了电脑或用户、非 Windows）。森空岛社区和 B 站（实验性）：Windows 加密没有完成时原因为 `protection-failed`，说明是稍后再试（森空岛修法 `retry-later`）；非 Windows 时原因为 `windows-required`，说明是在保存凭据的 Windows 用户下使用（修法 `use-windows`）；这两种都不要求重新输入 | 否 |
+| `risk-control` | 本次遇到风控：429、503、任何重定向、要数据却给了网页、或站点提示频繁/验证；森空岛社区另有 412、任何 5xx、代码 10003 和换取 cred 被拒（见上），重定向含鉴权接口上的，B 站（实验性）另有 HTTP 412 和代码 -412、-352、-509、-799、-503 | 是，随即停止 |
 | `risk-stopped` | 此前的风控停止仍在有效期内 | 否 |
 | `unavailable` | 站点不提供该帖或该页（已删除、超出时间限制、无权限、404） | 是 |
 | `incomplete` | 响应不完整或格式无法识别，没有读到全文。森空岛社区和 B 站（实验性）：任何内容字段（标题、作者、时间、正文、简介、分 P、登录状态、字幕列表、字幕行）缺失、改名或格式认不出时整页记为这一项，原因 `data-unrecognized`，不缓存；只有站点明确给出的空值（空字符串、空列表、null、时间 0）才算真的没有内容 | 是 |
