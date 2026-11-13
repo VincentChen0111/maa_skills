@@ -154,7 +154,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 待测目录复制到两个临时原生 skill 目录中，源目录保持不变。此复制仅构造评测样例，不是面向用户的安装器。源目录须含 `SKILL.md`，文件树含符号链接则拒绝。companion 按名字装在待测 skill 旁边；跨 skill 场景的 `skills` 列出的 skill 各按自己的名字装入，提示词列出全部入口。场景按实际工具设置允许键、禁止键、精确写入授权、确认过的下载地址及预期动作。
 
-自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。策略里以 `{{workspace}}` 开头的字符串在评分前渲染成工作区内的真实路径；恰为 `{{maa-core-version}}` 的字符串在宿主启动前渲染成本次工作区装入的 maa-core 的版本号（doctor 场景用它核对 doctor 报告的已装版本），读不到时保持原样、对应授权无法匹配。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
+自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。策略里以 `{{workspace}}` 开头的字符串在评分前渲染成工作区内的真实路径；恰为 `{{maa-core-version}}` 的字符串在宿主启动前渲染成本次工作区装入的 maa-core 的版本号（doctor 场景用它核对 doctor 报告的已装版本），恰为 `{{maa-record-version}}` 的字符串渲染成这份 maa-core 随包 MAA 核实记录（`references/verified-versions.json`）的 `recordVersion` 整数（doctor 场景用它核对版本检查的证据），读不到时保持原样、对应授权无法匹配。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 
 13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，2026-11-13 起，20 的 `maa-core/scripts/cultivation-report.ts draft` 读取同一批固定公开表，也在此列；2026-11-14 起，22 在不给 `tablesFile` 时读取固定公开表的 `maa-core/scripts/base-plan.ts generate`、`check`、`candidates` 和 `maa-core/scripts/base-report.ts draft`、`freshness` 也在此列；2026-11-14 起，19 的 `maa-core/scripts/skland-community.ts read` 也在此列，但它不读映射，而是进入预加载器内置的合成森空岛世界：这个进程的凭据存储改用测试加密打开场景放在 `private/credentials/skland.json` 的合成 token（不调用 Windows 加密，也不读真实登录或凭据文件），`fetch` 只回答共用会话的换取、刷新和一次签名读帖，只接受 `synthetic-` 开头的 token，其他地址一律 `eval-network-unlisted`；重定向按 Node fetch 的语义处理（合成帖子 7654321 回 302：`redirect: 'error'` 下报错，`manual` 下交回 3xx，要跟随的请求一律按未列出拒绝）；场景只需声明空映射 `networkFixtures: {}`。其他文件名、动作和目录保持原行为。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。
 
@@ -164,7 +164,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 确实由产品产生的读取时间可由可信场景声明 `generatedUtcFields: [{ file: 'private/account-snapshot.json', key: 'readAt' }]`。它同时是该字段的写入授权和必需变化：只接受确切相对 JSON 文件、非保留顶层标识符，拒绝通配符、重复项及与静态 `grants` / `expectedChanges` 同位置的声明。2026-11-14 起可加 `offsetMs`（0 到 31 天的整数毫秒）：字段值减去它须落在执行窗口内，用于工具写下的到期时间，例如森空岛社区帖子缓存的 `expiresAt`（`offsetMs: 86400000`）。
 
-由产品生成名字的文件用 `generatedFiles: [{ directory, count, nested?, fields?, utcFields? }]` 授权：目录下恰好新增 `count` 个 JSON 文件（不嵌套时文件名须是 UUID），每个都含给定的固定字段，时间字段落在运行窗口内；它既是授权也是必需变化。共享配置写入器的一次完整事务用 `writerTransaction` 评分：唯一一份备份等于写入前的配置，待执行和结果记录各追加一行且属于同一操作，skill 标记、授权来源与原话、改动（或关卡作业计划的地图、关卡、次数、主作业和备选）与场景一致，写入后的配置恰好是备份加上记录的改动，锁已释放。这时配置文件不放进 `jsonFiles`，按完整字节比较。
+由产品生成名字的文件用 `generatedFiles: [{ directory, count, nested?, fields?, utcFields? }]` 授权：目录下恰好新增 `count` 个 JSON 文件（不嵌套时文件名须是 UUID），每个都含给定的固定字段，时间字段落在运行窗口内；它既是授权也是必需变化。共享配置写入器的一次完整事务用 `writerTransaction` 评分：唯一一份备份等于写入前的配置，待执行和结果记录各追加一行且属于同一操作，skill 标记、授权来源与原话、改动（或关卡作业计划的地图、关卡、次数、主作业和备选）与场景一致，写入后的配置恰好是备份加上记录的改动，锁已释放；待执行记录带写入器读到的版本戳（25 的 `versions`），合成 MAA 读不出版本，所以 MAA 版本须为 null，核实记录版本须为正整数，与提醒事务的评分同一规则，缺少、猜测或多出字段都不通过。这时配置文件不放进 `jsonFiles`，按完整字节比较。
 
 运行器在真实宿主执行前后采集 `executionWindow.startedAt/endedAt`，保存到 `evidence.json` 并计入 `evidenceHash`；场景或模型同名属性不能覆盖。未启动宿主没有窗口。
 
@@ -174,7 +174,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测](daily-evaluation.md)的窄接缝。`expectedInvocations.exitCode` 默认 0；失败分支可明确要求 1，不接受任意非零。
 
-文档一致性测试（`tests/docs-consistency.test.ts`）扫描 `skills/` 下每个 `SKILL.md` 和 `references/*.md`：脚本命令的脚本存在、动作是该脚本接受的动作（更长文件名的尾部，如 `tests/x.test.ts`，不算脚本）；示例 JSON（```json 代码块，围栏可以随列表项缩进，没有结束围栏时到文件末尾；或以 `{"` 开头、或为 `{}` 的行内代码）能解析且顶层键属于该动作，冒号后不加引号的 `<…>` 占位按数字解析；每个文件只顺序扫描一遍；脚本契约表逐项绑定脚本源码；每个场景的命令模式放行文档规定的调用形式。不一致时指出文件和行。
+文档一致性测试（`tests/docs-consistency.test.ts`）扫描 `skills/` 下每个 `SKILL.md` 和 `references/*.md`：脚本命令的脚本存在、动作是该脚本接受的动作（更长文件名的尾部，如 `tests/x.test.ts`，不算脚本；文档提到的仓库维护工具，如生成核实记录的 `scripts/maa-version-check.ts`，单列名单，须在仓库的 `scripts/` 里且不带动作）；示例 JSON（```json 代码块，围栏可以随列表项缩进，没有结束围栏时到文件末尾；或以 `{"` 开头、或为 `{}` 的行内代码）能解析且顶层键属于该动作，冒号后不加引号的 `<…>` 占位按数字解析；每个文件只顺序扫描一遍；脚本契约表逐项绑定脚本源码；每个场景的命令模式放行文档规定的调用形式。不一致时指出文件和行。
 
 ## 固定版本与回归判断
 

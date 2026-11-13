@@ -79,6 +79,10 @@ const productRelease = () => release ??= (async () => {
   const packageFile = join(directory, 'skills/maa-core/package.json');
   const manifest = JSON.parse(await readFile(packageFile, 'utf8')) as { version: string };
   await writeFile(packageFile, JSON.stringify({ ...manifest, version: `${manifest.version}-release` }, null, 2));
+  // So does the packaged MAA verification record (ticket 25): a newly verified MAA version raises its own version.
+  const recordFile = join(directory, 'skills/maa-core/references/verified-versions.json');
+  const record = JSON.parse(await readFile(recordFile, 'utf8')) as { recordVersion: number; sourceVerified: string[] };
+  await writeFile(recordFile, JSON.stringify({ ...record, recordVersion: record.recordVersion + 1, sourceVerified: [...record.sourceVerified, '6.99.0'] }, null, 2));
   const preferences = join(directory, 'skills/maa-core/scripts/preferences.ts');
   await writeFile(preferences, `${await readFile(preferences, 'utf8')}\n// A product-only change.\n`);
   // A parsing change: the snapshot reader reports another issue code (world data must not follow it).
@@ -126,6 +130,11 @@ test('scenario identity counts every scenario definition, eval fixture and netwo
   changed('account-cost-raw', (definition) => { const [url] = Object.keys(definition.networkFixtures); definition.networkFixtures[url!] = { changed: true }; });
   changed('account-cost-unknown', (definition) => { definition.jsonInputs['private/account-snapshot.json'].operators = []; });
   changed('account-report-approve-one', (definition) => { definition.policy.approvals = [['S2']]; });
+  // The fixed distance of a tool-written expiry from the execution window (ticket 19's `offsetMs`) is grading too.
+  changed('account-skland-community-read', (definition) => {
+    const expiry = definition.policy.generatedUtcFields.find((field: { key: string }) => field.key === 'expiresAt');
+    assert.equal(expiry.offsetMs, 86_400_000); expiry.offsetMs = 2 * 86_400_000;
+  });
 });
 
 test('scenario world data runs no product code: the runtime import closure of every scenario module reaches the product only through the allow-list', async () => {
@@ -174,8 +183,8 @@ test('scenario world data runs no product code: the runtime import closure of ev
   // and saved base reports of tickets 16, 17 and 23 as literals; the fixtures that run product code to make such data
   // (stage-run-data.ts, base-apply-data.ts) serve only the product's own tests and stay out of this closure.
   assert.deepEqual([...closure].sort(), ['eval/base-plan-observer.ts', 'eval/cross-skill/scenarios.ts', 'eval/daily-observer.mjs', 'eval/host-double.mjs',
-    'eval/maa-account/base-report-scenarios.ts', 'eval/maa-account/base-scenarios.ts', 'eval/maa-account/cost-scenarios.ts', 'eval/maa-account/gap-scenarios.ts',
-    'eval/maa-account/report-scenarios.ts', 'eval/maa-account/research-scenarios.ts', 'eval/maa-account/scenarios.ts', 'eval/maa-account/skland-scenarios.ts',
+    'eval/maa-account/base-report-scenarios.ts', 'eval/maa-account/base-scenarios.ts', 'eval/maa-account/community-scenarios.ts', 'eval/maa-account/cost-scenarios.ts',
+    'eval/maa-account/gap-scenarios.ts', 'eval/maa-account/report-scenarios.ts', 'eval/maa-account/research-scenarios.ts', 'eval/maa-account/scenarios.ts', 'eval/maa-account/skland-scenarios.ts',
     'eval/maa-core/scenarios.ts', 'eval/maa-daily/base-apply-scenarios.ts', 'eval/maa-daily/scenarios.ts', 'eval/maa-daily/stage-alternate-scenarios.ts',
     'eval/maa-daily/stage-run-scenarios.ts', 'eval/maa-daily/stage-scenarios.ts', 'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts',
     'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs', 'eval/maa-setup/scenarios.ts', 'eval/network-fixture.mjs', 'eval/observe-node.mjs', 'eval/probe.ts',

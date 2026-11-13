@@ -156,20 +156,26 @@ function jsonFields(bytes: Buffer | undefined): Record<string, unknown> | undefi
 }
 
 /**
- * Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`, and the version of the maa-core
- * copy installed in this workspace as `{{maa-core-version}}`; both are rendered before the host starts and before grading, so the
- * scenario definition holds neither this run's path nor a product value (a release that only bumps the version keeps the
- * scenario). Without a readable installed version the placeholder stays as it is and the grant cannot match.
+ * Trusted scenario policies may name paths inside the run's own workspace as `{{workspace}}/...`, the version of the maa-core
+ * copy installed in this workspace as `{{maa-core-version}}`, and the version of that copy's packaged MAA verification record
+ * (`references/verified-versions.json`, ticket 25) as `{{maa-record-version}}`; all are rendered before the host starts and before
+ * grading, so the scenario definition holds neither this run's path nor a product value (a release that only bumps either
+ * version keeps the scenario). Without a readable installed value the placeholder stays as it is and the grant cannot match.
  */
 export function renderPolicy<T>(value: T, workspace: string): T {
   const root = realpathSync.native(workspace);
-  let version: string | undefined;
-  const installedVersion = () => version ??= (() => {
-    try {
-      const found = (JSON.parse(readFileSync(join(root, '.agents/skills/maa-core/package.json'), 'utf8')) as { version?: unknown }).version;
-      return typeof found === 'string' && found ? found : '{{maa-core-version}}';
-    } catch { return '{{maa-core-version}}'; }
-  })();
+  const installed = new Map<string, unknown>();
+  const read = (placeholder: string, file: string, field: string, valid: (found: unknown) => boolean) => {
+    if (!installed.has(placeholder)) {
+      let found: unknown;
+      try { found = (JSON.parse(readFileSync(join(root, '.agents/skills/maa-core', file), 'utf8')) as Record<string, unknown>)[field]; } catch { /* unreadable */ }
+      installed.set(placeholder, valid(found) ? found : placeholder);
+    }
+    return installed.get(placeholder);
+  };
   return JSON.parse(JSON.stringify(value), (_key, item: unknown) => typeof item !== 'string' ? item
-    : item.startsWith('{{workspace}}') ? join(root, item.slice('{{workspace}}'.length)) : item === '{{maa-core-version}}' ? installedVersion() : item);
+    : item.startsWith('{{workspace}}') ? join(root, item.slice('{{workspace}}'.length))
+    : item === '{{maa-core-version}}' ? read(item, 'package.json', 'version', (found) => typeof found === 'string' && !!found)
+    : item === '{{maa-record-version}}' ? read(item, 'references/verified-versions.json', 'recordVersion', (found) => Number.isSafeInteger(found) && (found as number) >= 1)
+    : item);
 }

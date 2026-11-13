@@ -26,15 +26,17 @@ export function infrastConfig(options: { timers?: boolean; roomOff?: string; mod
 export type WorldName = 'approved' | 'unverified' | 'outside' | 'unapproved';
 /**
  * The saved base report records of each world (report, review skip, approval of P1), copied byte for byte from what ticket 23's
- * generator (`scenarioWorld` in `tests/fixtures/base-apply-data.ts` at commit 996599a) produced: a report drafted by the real
- * ticket 22 tools from the synthetic roster with the times fixed at 2026-11-13T09:00:00.000Z and the tables file named
- * `base-tables.json`, saved under its own content hash. `unverified` drafts without combos and exclusions, `outside` names a
- * plan file outside the private directory, and `unapproved` is the approved world before its approval. How the copy was
- * checked is in docs/evaluation-verification.md.
+ * generator (`scenarioWorld` in `tests/fixtures/base-apply-data.ts` at commit bd3b3e6, after ticket 25) produced: a report drafted
+ * by the real ticket 22 tools from the synthetic roster with the times fixed at 2026-11-13T09:00:00.000Z and the tables file named
+ * `base-tables.json`, saved under its own content hash. Since ticket 25 the report carries the `versions` stamp read when it was
+ * drafted: the world's MAA directory has no MAA.exe (version null) and the packaged verification record then had version 2; that
+ * is part of the saved report, so a later record version changes nothing here. `unverified` drafts without combos and
+ * exclusions, `outside` names a plan file outside the private directory, and `unapproved` is the approved world before its
+ * approval. How the copy was checked is in docs/evaluation-verification.md.
  */
 const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; records: Record<string, unknown> }> = {
   approved: {
-    reportHash: 'e3faa3eefe5c42197500d867ba632a6ee6ca5acefec3bee467afcc20b74dfb21',
+    reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
     records: {
       'report.json': {
         schemaVersion: 1,
@@ -91,6 +93,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
           commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
           file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
         },
+        versions: { maaVersion: null, recordVersion: 2 },
         plan: {
           file: 'base-plans/plan-4ce41fc247245f3e.json',
           sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
@@ -300,7 +303,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'review.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: 'e3faa3eefe5c42197500d867ba632a6ee6ca5acefec3bee467afcc20b74dfb21',
+        reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
         outcome: 'skipped',
         recordedAt: '2026-11-13T09:00:00.000Z',
         userWords: '这次跳过审查',
@@ -309,14 +312,14 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'approvals/0001.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: 'e3faa3eefe5c42197500d867ba632a6ee6ca5acefec3bee467afcc20b74dfb21',
+        reportHash: '23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c',
         approvedAt: '2026-11-13T09:00:00.000Z',
         userWords: '我批准排班这一项 P1',
         reviewStatus: 'unreviewed',
         items: [
           {
             id: 'P1',
-            reference: 'base/e3faa3eefe5c42197500d867ba632a6ee6ca5acefec3bee467afcc20b74dfb21#P1',
+            reference: 'base/23ce09cc5beb1c237ce1bc41b83e95eb3d38401e7ab533cb99dfb519010b8d3c#P1',
             title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
             scope: {
               planFile: 'base-plans/plan-4ce41fc247245f3e.json',
@@ -349,7 +352,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
     },
   },
   unverified: {
-    reportHash: '85bcd3ef2445b3435cbe8e0698143a9c1818d7770d3096b592f306285e8efb13',
+    reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
     records: {
       'report.json': {
         schemaVersion: 1,
@@ -404,6 +407,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
           commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
           file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
         },
+        versions: { maaVersion: null, recordVersion: 2 },
         plan: {
           file: 'base-plans/plan-4ce41fc247245f3e.json',
           sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
@@ -613,7 +617,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'review.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: '85bcd3ef2445b3435cbe8e0698143a9c1818d7770d3096b592f306285e8efb13',
+        reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
         outcome: 'skipped',
         recordedAt: '2026-11-13T09:00:00.000Z',
         userWords: '这次跳过审查',
@@ -622,14 +626,14 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'approvals/0001.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: '85bcd3ef2445b3435cbe8e0698143a9c1818d7770d3096b592f306285e8efb13',
+        reportHash: '863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364',
         approvedAt: '2026-11-13T09:00:00.000Z',
         userWords: '我批准排班这一项 P1',
         reviewStatus: 'unreviewed',
         items: [
           {
             id: 'P1',
-            reference: 'base/85bcd3ef2445b3435cbe8e0698143a9c1818d7770d3096b592f306285e8efb13#P1',
+            reference: 'base/863627e87580169349907c92dfe090f75cf4d7265fb512e7c126795d2157f364#P1',
             title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
             scope: {
               planFile: 'base-plans/plan-4ce41fc247245f3e.json',
@@ -662,7 +666,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
     },
   },
   outside: {
-    reportHash: '475c129673f9b0d2a14532b8f745414ee54e46f45c8bfb0c2ccd9266bfaf9c6a',
+    reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
     records: {
       'report.json': {
         schemaVersion: 1,
@@ -719,6 +723,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
           commit: '52d0b2acaca116585b02e1e6a9da303460f81a24',
           file: 'docs/zh-cn/protocol/base-scheduling-schema.md',
         },
+        versions: { maaVersion: null, recordVersion: 2 },
         plan: {
           file: '../outside-plan.json',
           sha256: '4ce41fc247245f3e2c9dc87b2efb115502e28b1057679ebc1595fc6f784b6568',
@@ -928,7 +933,7 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'review.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: '475c129673f9b0d2a14532b8f745414ee54e46f45c8bfb0c2ccd9266bfaf9c6a',
+        reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
         outcome: 'skipped',
         recordedAt: '2026-11-13T09:00:00.000Z',
         userWords: '这次跳过审查',
@@ -937,14 +942,14 @@ const saved: Record<Exclude<WorldName, 'unapproved'>, { reportHash: string; reco
       'approvals/0001.json': {
         schemaVersion: 1,
         kind: 'base',
-        reportHash: '475c129673f9b0d2a14532b8f745414ee54e46f45c8bfb0c2ccd9266bfaf9c6a',
+        reportHash: 'c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19',
         approvedAt: '2026-11-13T09:00:00.000Z',
         userWords: '我批准排班这一项 P1',
         reviewStatus: 'unreviewed',
         items: [
           {
             id: 'P1',
-            reference: 'base/475c129673f9b0d2a14532b8f745414ee54e46f45c8bfb0c2ccd9266bfaf9c6a#P1',
+            reference: 'base/c672097aba20122835b3cc3ecaa27236bc23fba84332d222c08b76c9eaa8af19#P1',
             title: '基建排班：base-plans/plan-4ce41fc247245f3e.json（2 个班次）',
             scope: {
               planFile: '../outside-plan.json',

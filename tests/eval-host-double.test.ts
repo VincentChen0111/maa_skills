@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
 import { reportScenarios } from '../eval/maa-account/report-scenarios.ts';
+import { communityScenarios } from '../eval/maa-account/community-scenarios.ts';
 import { baseApplyScenarios, baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { planInput } from './fixtures/base-plan-data.ts';
 import { reportDraft } from './fixtures/report-data.ts';
@@ -149,17 +150,42 @@ test('the host-double mode refuses an executable that is not the double, and pla
   await assert.rejects(readFile(journal), /ENOENT/, 'the host was never started');
 });
 
-test('the runner grades a doctor scenario against the installed maa-core version, which the scenario names only by placeholder', async (t) => {
+test('the runner grades a doctor scenario against the installed maa-core version and verification record version, which the scenario names only by placeholder', async (t) => {
   const { root, write } = await scratch(t);
   const doctor = doctorScenarios.find((item) => item.id === 'doctor-inspect')!;
-  assert.ok(JSON.stringify(doctor).includes('{{maa-core-version}}'), 'the scenario definition holds no product version');
+  // A product-only release: the maa-core version and the packaged verification record's version (ticket 25) both move.
+  const release = join(root, 'maa-core');
+  await cp(core, release, { recursive: true });
+  const manifest = JSON.parse(await readFile(join(release, 'package.json'), 'utf8')) as { version: string };
+  await writeFile(join(release, 'package.json'), JSON.stringify({ ...manifest, version: `${manifest.version}-release` }, null, 2));
+  const recordFile = join(release, 'references/verified-versions.json');
+  const record = JSON.parse(await readFile(recordFile, 'utf8')) as { recordVersion: number };
+  await writeFile(recordFile, JSON.stringify({ ...record, recordVersion: record.recordVersion + 1 }, null, 2));
   const scripts = '.agents/skills/maa-core/scripts';
   const script = await write('doctor.json', { host: 'codex', steps: [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } },
     { shell: ['node', `${scripts}/doctor.ts`, 'check', '--json'], input: {} }] });
-  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario: doctor, skillDirectory: fileURLToPath(new URL('../skills/maa-doctor', import.meta.url)),
-    companionSkills: { 'maa-core': core }, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
-  assert.equal(result.reason, 'completed');
-  assert.equal(result.record.grade.status, 'pass', JSON.stringify(result.record.grade));
+  for (const installed of [core, release]) {
+    const result = await runScenario({ host: 'codex', model: 'requested-model', scenario: doctor, skillDirectory: fileURLToPath(new URL('../skills/maa-doctor', import.meta.url)),
+      companionSkills: { 'maa-core': installed }, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+    assert.equal(result.reason, 'completed');
+    assert.equal(result.record.grade.status, 'pass', `${installed === core ? 'repository' : 'release'} maa-core: ${JSON.stringify(result.record.grade)}`);
+  }
+  for (const placeholder of ['{{maa-core-version}}', '{{maa-record-version}}']) assert.ok(JSON.stringify(doctor).includes(placeholder), `the scenario definition holds no product value: ${placeholder}`);
+});
+
+test('the runner reads a linked Skland post through the synthetic Skland world of the network fixture, and a run that never reads it fails', async (t) => {
+  const { root, write } = await scratch(t);
+  const scenario = communityScenarios.find((item) => item.id === 'account-skland-community-read')!;
+  const scripts = '.agents/skills/maa-core/scripts';
+  const read = { shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } };
+  const run = async (name: string, steps: unknown[]) => runScenario({ host: 'codex', model: 'requested-model', scenario,
+    skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)), companionSkills: { 'maa-core': core }, executable: process.execPath,
+    executableArgs: [double, await write(`${name}.json`, { host: 'codex', steps })], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  const done = await run('read', [read, { shell: ['node', `${scripts}/skland-community.ts`, 'read'], input: { post: 'https://www.skland.com/article?id=1234567' } }]);
+  assert.equal(done.reason, 'completed');
+  assert.equal(done.record.grade.status, 'pass', JSON.stringify(done.record.grade));
+  const skipped = await run('skipped', [read]);
+  assert.ok(skipped.record.grade.failed.includes('expected-behavior'), JSON.stringify(skipped.record.grade));
 });
 
 test('the runner grades report records with the report and base plan observers: a skipped and approved base report passes, a pending one fails', async (t) => {

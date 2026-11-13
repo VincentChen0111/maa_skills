@@ -1,10 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { libraryCheck } from '../../skills/maa-core/scripts/checks.ts';
-import { assessMaaVersion, readVerificationRecord, versionRepair } from '../../skills/maa-core/scripts/maa-version.ts';
-
-// The installed maa-core carries the packaged record; the placeholder MAA.exe has no readable version.
-const packagedVersion = assessMaaVersion(null, await readVerificationRecord(new URL('../../skills/maa-core/references/verified-versions.json', import.meta.url)));
 
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const gui = { RuntimeSettings: { ClientType: 'Official' } };
@@ -21,6 +16,12 @@ const windows = process.platform === 'win32';
 // The installed maa-core version doctor reports is the product's own: the policy names it by placeholder, rendered from the installed
 // copy before grading, so a release that only bumps the version keeps every doctor scenario (scripts/eval-fixture.ts renderPolicy).
 const installed = '{{maa-core-version}}';
+// MAA version (ticket 25): MAA.exe is a placeholder whose version reads as unknown, checked against the verification record packaged
+// with the installed maa-core. The record is product data: it is available and lists verified versions, so the state is
+// `maa-version-unknown` (a warning); its own version is named by placeholder like the maa-core version, so a release that only
+// updates the record keeps every doctor scenario. These are what `assessMaaVersion` produced at commit bd3b3e6.
+const maaVersion = { installed: null, recordAvailable: true, recordEmpty: false, recordVersion: '{{maa-record-version}}', sourceVerified: false, deviceVerified: false,
+  newerSourceVerified: null, newerDeviceVerified: false };
 // Synthetic saved Skland record: metadata only, the ciphertext is placeholder bytes that no check decrypts.
 const revision = '00000000-0000-4000-8000-000000000009';
 const expiredSkland = {
@@ -46,8 +47,8 @@ const credentialChecks = (skland: 'unset' | 'expired') => [unsetCredential('nga'
 type Mode = 'healthy' | 'corrupt' | 'unknown' | 'remote';
 // The rows doctor's full check (ticket 10) reports in the fixture, as fixed literals in its order with each row's group: MAA.exe is a
 // placeholder whose version reads as unknown, no adb is configured and the skill update is not looked up. They are what the shared
-// check library (libraryCheck, connectionCheck, groupOf) produced at commit 996599a; tests/doctor-scenarios.test.ts runs the
-// installed doctor against them.
+// check library (libraryCheck, connectionCheck, groupOf) produced at commit 996599a, with the version row (ticket 25) and the Skland
+// credential's purpose (ticket 19) as at bd3b3e6; tests/doctor-scenarios.test.ts runs the installed doctor against them.
 const noAction = { executor: 'user', description: 'No action is needed.' };
 const inspectMaa = { id: 'inspect-maa-configuration', executor: 'user', description: 'Inspect or initialize the current configuration in the MAA GUI.' };
 const row = (group: string, id: string, status: string, reason: string, message: string, repair: Record<string, string>) => ({ id, status, reason, message, repair, group });
@@ -68,7 +69,8 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
       { id: 'set-preferences', executor: 'skill', description: 'Save the first-run choices using the shared preferences script.', channel: 'preferences.ts set' }),
     row('installation', 'private-directory', 'normal', 'private-directory-present', 'The selected private directory exists.',
       { id: 'prepare-private-directory', executor: 'skill', description: 'Run setup prepare after saving the selected private directory.', channel: 'setup.ts prepare' }),
-    { ...libraryCheck('version', packagedVersion.status, packagedVersion.reason, versionRepair(packagedVersion.reason)), group: 'installation' },
+    row('installation', 'version', 'warning', 'maa-version-unknown', 'The installed MAA version could not be identified.',
+      { id: 'read-version-verification', executor: 'user', description: 'Read the packaged version record and retain the unverified warning; no upgrade is required.' }),
     corrupt ? row('connection', 'connection', 'warning', 'connection-unreadable', 'The connection settings could not be read; see the configuration checks.', inspectMaa)
       : row('connection', 'connection', 'warning', 'connection-not-configured',
         'No adb path or no address is configured; MAA may detect the emulator itself, so the connection was not verified.',
@@ -107,7 +109,7 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
   recovery.evidenceRevision = createHash('sha256').update(JSON.stringify([retained ? JSON.stringify(retained) : null, JSON.stringify(configuration), null, null, recovery])).digest('hex');
   const checks = expectedChecks(mode, !!retained, skland);
   const exitCode = expectedExitCode(mode, skland);
-  const version = packagedVersion.evidence;
+  const version = maaVersion;
   const skills = { version: { installed, latest: null, lookup: 'not-requested' }, links: [{ name: 'maa-core', kind: 'directory', state: 'ok' }] };
   const values = { $exists: true, exitCode, checks, recovery, version, skills };
   const grants = Object.entries(values).map(([key, value]) => ({ file: record, key, value }));

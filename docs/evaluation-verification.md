@@ -401,3 +401,51 @@ CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 W
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 未验证：这些场景都没有真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
+
+## 第三次合并 main 后的调整（2026-11-14）
+
+分支在 `8438136` 合并 `origin/main`（`bd3b3e6`：19 #78 森空岛社区与 B 站调研、25 #79 MAA 版本核对与升级提醒）。合并时的取舍：
+
+- 评测说明保留本分支精简后的段落，加上 main 新增的两句（森空岛合成世界、`offsetMs`）。
+- doctor 场景保留本分支的字面值检查行和 `doctor-reconcile-approved`，接上 25 的版本行、`recovery.versions` 和 `doctor-maa-upgrade-request`；森空岛凭据的用途按 19 改写。版本行在合并提交里暂按 main 的写法由产品代码算出，本节的提交改成字面值。
+- setup 边界只有 `eval/setup-boundary.mjs` 一份实现，main 给测试边界加的版本读取（`maa-version.ts` 的 `child_process` 走同一边界、MAA 进程的 `version()` 返回 null）写进这一份。
+- 配置写入事务的评分（`scripts/eval-transaction.ts`）原来只认待执行记录的固定字段，25 起写入器多写一个版本戳 `versions`，`setup-connection-write` 因此判不通过（`.tmp/logs/sync2-red-setup-write.log`）。现在按 main 的提醒事务评分（`scripts/eval-daily.ts`）的同一规则接受它：MAA 版本须为 null（合成 MAA 读不出版本），核实记录版本须为正整数（产品数据，只查形式）。`tests/setup-scenarios.test.ts` 加了四种篡改（猜测版本、缺版本戳、记录版本为 0、多一个字段），都判不通过；把缺版本戳当作默认值的变异让「缺版本戳」一项失败（会话内核对，已还原）。
+- `scripts/evaluation.ts` 自动合并。19 的 `offsetMs` 语义不变：作者在场景里声明，0 到 31 天的整数毫秒，不能与静态授权同位置。它写在场景定义的 `policy.generatedUtcFields` 里，`scenarioIdentity` 对整份定义求摘要，所以进入场景身份；`tests/eval-comparability.test.ts` 加了一处：只把 `account-skland-community-read` 的 `offsetMs` 改成两天，只有这个场景的身份改变。按场景声明的批准评分（`461deb3`）照常运行：`tests/evaluation.test.ts` 10 项通过，报告和基建场景的声明没有变。
+
+合并后 19、25 带来的场景不符合工单 28 的规则，修复在本节的提交里，**未经独立审查**：
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码、读产品文件 | 闭包多出三条进入 `skills/` 的导入（`.tmp/logs/sync2-red-closure.log`）：19 的 `community-scenarios.ts` 用 `research.ts` 的 `cacheKey` 算三个缓存文件名；25 的 doctor 场景用 `checks.ts` 的 `libraryCheck` 和 `maa-version.ts` 的 `assessMaaVersion`、`readVerificationRecord`、`versionRepair`，并在加载时读随包的 `verified-versions.json` | 三个缓存键写成字面值（与 NGA 调研场景的写法相同，是 `bd3b3e6` 上 `cacheKey` 的输出）；doctor 的版本行和版本证据写成字面值（`bd3b3e6` 上 `assessMaaVersion` 对占位 MAA.exe 的输出：`maa-version-unknown` 警告） | 修复后 7 项通过 |
+| 核实记录一更新，doctor 场景就判不通过 | 25 的核实记录每核实一个新版本，自己的 `recordVersion` 加一；预期里写死记录版本时，只更新记录的发布会让全部 doctor 场景 `authorization`、`expected-behavior` 不通过，前后比较报成回归 | 核实记录版本写成占位 `{{maa-record-version}}`，`renderPolicy` 在宿主启动前按本次装入的 maa-core 的记录渲染成整数，读不到就保持原样（授权对不上）；一致性测试的发布副本另把记录版本加一并多列一个已核版本 | `tests/eval-host-double.test.ts` 改过的一项（同一个 `doctor-inspect` 分别对仓库的 maa-core 和改了版本号与记录版本的发布副本运行）：修复前发布副本 `authorization`、`expected-behavior` 不通过（`.tmp/logs/sync2-red-doctor-record.log`），修复后通过 |
+| 新场景不在场景目录里 | 19 的四个场景写在 `eval/maa-account/` 下，`scripts/eval-scenarios.ts` 没有收录 | 加入 `maa-account` 组 | `.tmp/logs/sync2-red-catalog.log`（缺 4 个）；修复后 10 项通过 |
+| 23 的已保存报告缺 25 的版本戳 | 25 起基建报告起草时写入 `versions`（在报告哈希里），main 的世界生成器生成的三份报告带 `{ maaVersion: null, recordVersion: 2 }`，本分支的字面值还是 `996599a` 的旧报告 | 用 `bd3b3e6` 的生成器重新生成 `tests/fixtures/base-apply-worlds.ts` 的三份报告，报告哈希随之改变 | 旧世界在合并后也能通过，所以没有红；重新生成后 `base-apply-scenarios` 和运行器的基建场景测试通过 |
+| 文档一致性扫描报 3 处 | `setup.md` 提到仓库维护工具 `scripts/maa-version-check.ts`（不在 `maa-core/scripts`）；`research.md` 的两个示例属于 19 的 `skland-community.ts read` 和 `bilibili.ts read`，契约表没有这两个脚本 | 契约表加上两个读取脚本（`read` 的键取自脚本自己的校验，加 `format`；`status` 没有输入）；仓库维护工具单列名单：须在仓库的 `scripts/` 里、文档里仍提到、不带动作，名单项不再出现就失败 | `.tmp/logs/sync2-red-docs.log`；修复后 5 项通过 |
+
+字面值与生成器逐字节相同的核对方法（会话临时脚本，不提交）：脚本遍历 `eval/<目录>/` 下每个模块导出的场景定义，打印 id 和整份定义 `JSON.stringify` 的 sha256。`bd3b3e6` 的导出副本（生成器版）有 96 个场景，本节的提交有 103 个（多出的 7 个是本分支自己的场景）。共同的 96 个，把两个占位换回 `0.1.0-dev.0` 和 `2`、去掉本分支 `461deb3` 加的 `approvals` 声明后，逐个与 `bd3b3e6` 相同；本节的提交在 `TZ=UTC` 下的输出与本机（UTC+8）相同。基建报告的生成脚本先对 `996599a` 的生成器重现了改造前的 `base-apply-worlds.ts`（逐字节相同），再对 `bd3b3e6` 生成提交的文件。doctor 的版本行由 `tests/doctor-scenarios.test.ts` 用装入的 doctor 逐行核对。
+
+新增覆盖：`tests/eval-host-double.test.ts`「the runner reads a linked Skland post through the synthetic Skland world…」：运行器经网络夹具的合成森空岛世界读帖，判通过；不读帖的运行 `expected-behavior` 不通过。它第一次运行就通过（运行器的网络夹具接线本来可用），没有红。另用会话探针把 19 的四个场景都经运行器和宿主替身各跑一次，都是 8/8（`.tmp/logs/sync2-probe-community.log`）。
+
+这一轮的选择（不是产品限制，记在这里；占位一条登记在规格）：
+- 核实记录版本用占位，不写字面值 2：理由见上表第二行，与 maa-core 版本的占位同一做法。
+- 19、25 的新场景都不能写批准记录（允许的命令里没有报告工具），按默认不声明 `approvals`；报告、基建报告、应用基建排班的声明不变。
+- 应用基建排班世界里报告带的 `recordVersion: 2` 留在字面值里：它是报告起草时读到的值，属于世界本身；之后记录升级，应用时只报告版本差异，不拦也不进评分。
+- 写入事务的版本戳与提醒事务的评分用同一规则，两个评分器对同一份待执行记录的判断一致。
+- 仓库维护工具用单列名单而不是放宽扫描：只认名单里的工具，扫描对其他不存在的脚本照常报错。
+
+场景身份：doctor 9 个、应用基建排班 10 个场景的定义变了，19 的 4 个场景第一次进入目录；`scripts/eval-fixture.ts`、`scripts/eval-transaction.ts` 在场景摘要的运行器源码里，所以全部场景的摘要和运行器指纹都变了，之前的记录不能与之后的比较。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-batch`、`eval-run`、`eval-host-double`、`eval-redact` | 7、10、5、12、3 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`docs-consistency`、`eval-network` | 10、7、7、5、3 项通过 |
+| `node --test tests/community-scenarios.test.ts`、`research-scenarios`、`skland-scenarios`、`report-scenarios`、`base-report-scenarios`、`base-apply-scenarios` | 4、1、1、1、2、1 项通过 |
+| `node --test tests/doctor-scenarios.test.ts`、`stage-alternate-scenarios`、`stage-run-scenarios`、`setup-scenarios`、`stage-scenarios` | 22、1、1、27、4 项通过 |
+| `node --test tests/offline-network.test.ts`、`maa-version-check`、`check-purposes` | 2、13、5 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：19 的四个场景和 25 的 `doctor-maa-upgrade-request` 都没有真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）；CI 由 PR 触发，本地没有运行。

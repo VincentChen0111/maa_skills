@@ -41,6 +41,9 @@ const contract: Record<string, Record<string, string[]>> = {
     read: ['runId'] },
   // search and read accept `format` beside the request keys the reader validates; status reads no input.
   'nga.ts': { search: ['keyword', 'forum', 'pages', 'fresh', 'cacheOnly', 'format'], read: ['thread', 'pages', 'fresh', 'cacheOnly', 'format'], status: [] },
+  // Ticket 19's readers, in the same form: read takes `format` beside the request keys it validates; status reads no input.
+  'skland-community.ts': { read: ['post', 'fresh', 'cacheOnly', 'format'], status: [] },
+  'bilibili.ts': { read: ['video', 'part', 'subtitles', 'fresh', 'cacheOnly', 'format'], status: [] },
   'skland-account.ts': { inspect: ['currentLanguage', 'format'], import: ['currentLanguage', 'format'], compare: ['currentLanguage', 'format', 'maaFile', 'sklandFile'] },
   // The two report tools: review, fail, skip and approve take `reportHash` and `format` beside the record keys the shared
   // advice-report library checks; the base report draft takes the base plan proposal keys beside its own.
@@ -206,11 +209,18 @@ test('every script command and example JSON in SKILL.md and references matches t
   const { mentions, examples } = await extract();
   const problems: string[] = [];
   const available = new Set(await readdir(scripts));
+  // Repository maintenance tools the docs name, with what they are: they live in the repository's scripts/, are not installed with
+  // the skills and take no action from the skill. Each must exist there and still be named, so the list cannot hide a later mention.
+  const repositoryTools: Record<string, string> = { 'maa-version-check.ts': 'generates the packaged MAA verification record (ticket 25)' };
+  const repositoryScripts = new Set(await readdir(join(skills, '..', 'scripts')));
+  const unnamedTools = new Set(Object.keys(repositoryTools));
   for (const mention of mentions) {
     const where = `skills/${mention.file}:${mention.line}`;
+    if (!available.has(mention.script) && repositoryTools[mention.script] && repositoryScripts.has(mention.script) && !mention.action) { unnamedTools.delete(mention.script); continue; }
     if (!available.has(mention.script)) { problems.push(`${where}: ${mention.script} does not exist in maa-core/scripts`); continue; }
     if (mention.action && contract[mention.script] && !Object.hasOwn(contract[mention.script]!, mention.action)) problems.push(`${where}: ${mention.script} has no action ${mention.action}`);
   }
+  for (const tool of unnamedTools) problems.push(`${tool}: listed as a repository tool but no longer named in the docs, or not in the repository's scripts/`);
   assert.ok(examples.length >= 15, 'the extraction still finds the documented examples');
   // JSON that is quoted in the docs but is not standard input to a script, with what it is. Each entry must still occur, so the
   // list cannot hide a later example.

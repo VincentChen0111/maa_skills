@@ -18,6 +18,7 @@ import { costScenarios } from '../eval/maa-account/cost-scenarios.ts';
 import { gapScenarios } from '../eval/maa-account/gap-scenarios.ts';
 import { researchScenarios } from '../eval/maa-account/research-scenarios.ts';
 import { sklandScenarios } from '../eval/maa-account/skland-scenarios.ts';
+import { communityScenarios } from '../eval/maa-account/community-scenarios.ts';
 import { reportScenarios } from '../eval/maa-account/report-scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
@@ -63,7 +64,7 @@ test('every eval scenario is reachable by id and group, once, with its skill and
   const catalog = scenarioCatalog();
   const ids = catalog.map(entryId);
   const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios,
-    stageRunScenarios, sklandScenarios, reportScenarios, baseReportScenarios, stageAlternateScenarios, baseApplyScenarios, doctorScenarios, helpScenarios, setupScenarios,
+    stageRunScenarios, sklandScenarios, communityScenarios, reportScenarios, baseReportScenarios, stageAlternateScenarios, baseApplyScenarios, doctorScenarios, helpScenarios, setupScenarios,
     crossSkillScenarios].flat().map((scenario) => scenario.id);
   assert.deepEqual([...ids].sort(), [...all].sort());
   // Every scenario module under eval/<skill>/ is in the catalog: each exported array of definitions (objects with an id and a
