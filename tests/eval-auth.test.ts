@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { realpathSync, rmSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,15 @@ process.on('exit', () => { try { rmSync(root, { recursive: true, force: true });
 let counter = 0;
 const script = async (value: Record<string, unknown>) => { const file = join(root, `script-${counter++}.json`); await writeFile(file, JSON.stringify(value)); return file; };
 const login = async () => { const directory = join(root, `login-${counter++}`); await mkdir(directory); await writeFile(join(directory, 'synthetic-login.json'), '{"synthetic":true}'); return directory; };
+const configurePrivate = (value: string) => writeFile(join(settings, 'config.json'), JSON.stringify({ privateDirectory: value }));
+/** The 8.3 short form Windows gives an existing path; undefined where there is none (not Windows, or short names off on the volume). */
+function shortForm(path: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const result = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${path}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true, windowsHide: true });
+  const short = result.status === 0 ? result.stdout.trim() : '';
+  return short && short.toLowerCase() !== path.toLowerCase() ? short : undefined;
+}
+const longRoot = realpathSync.native(root); const shortRoot = shortForm(longRoot);
 
 test('login directories are refused inside the repository, a temporary fixture, the private or settings directory, the daily host directories or each other', async () => {
   assert.equal(homedir(), home);
@@ -45,6 +55,37 @@ test('login directories are refused inside the repository, a temporary fixture, 
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'claude-config')), 'settings-unreadable', 'an unreadable product setting fails closed');
   await writeFile(join(settings, 'config.json'), JSON.stringify({ privateDirectory }));
 });
+
+test('the overlap check compares long forms: through a junction, and for a path that does not exist yet, it still refuses; private is reported before settings', async (t) => {
+  t.after(() => configurePrivate(privateDirectory));
+  const real = join(root, 'canonical-real-directory'); const link = join(root, 'canonical-link');
+  await mkdir(join(real, 'private'), { recursive: true });
+  await symlink(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+  // An existing private directory, and a login directory inside it that does not exist yet, named through the junction.
+  await configurePrivate(join(real, 'private'));
+  assert.equal(await loginDirectoryRefusal(join(link, 'private', 'login')), 'overlaps-private-directory', 'an absent login directory named through a junction');
+  // A private directory that does not exist yet, named through the junction; the login directory is its real parent.
+  await configurePrivate(join(link, 'later-private'));
+  assert.equal(await loginDirectoryRefusal(real), 'overlaps-private-directory', 'an absent private directory named through a junction');
+  // A login directory overlapping both the private and the settings directory is reported as the private one, in any environment.
+  await configurePrivate(join(settings, 'private'));
+  assert.equal(await loginDirectoryRefusal(settings), 'overlaps-private-directory');
+  assert.equal(await loginDirectoryRefusal(root), 'overlaps-private-directory');
+});
+
+test('on Windows the overlap check matches 8.3 short names both ways round, as on GitHub\'s runner whose temporary directory is a short name',
+  { skip: shortRoot ? false : 'no 8.3 short names here (not Windows, or short names are off on this volume)' }, async (t) => {
+    t.after(() => configurePrivate(privateDirectory));
+    // The runner's case: the private directory is named in the short form and does not exist; its parent is named in the long form.
+    await configurePrivate(join(shortRoot!, 'absent-private'));
+    assert.equal(await loginDirectoryRefusal(longRoot), 'overlaps-private-directory', 'long login directory, short absent private directory');
+    // The reverse, which would let a login directory inside the private directory through: an existing private directory named
+    // in the long form, and a login directory inside it named in the short form that does not exist yet.
+    await mkdir(join(longRoot, 'existing-private'), { recursive: true });
+    await configurePrivate(join(longRoot, 'existing-private'));
+    assert.equal(await loginDirectoryRefusal(join(shortRoot!, 'existing-private', 'login')), 'overlaps-private-directory', 'short absent login directory, long private directory');
+    assert.equal(await loginDirectoryRefusal(join(shortRoot!, 'settings', 'login')), 'overlaps-settings-directory');
+  });
 
 test('plan login strips every API key even when MAA_EVAL keys are set; API-key mode forwards only the explicit key', async (t) => {
   Object.assign(process.env, { MAA_EVAL_ANTHROPIC_API_KEY: 'synthetic-eval-key', ANTHROPIC_API_KEY: 'synthetic-daily-key', MAA_EVAL_OPENAI_API_KEY: 'synthetic-eval-key', OPENAI_API_KEY: 'synthetic-daily-key' });

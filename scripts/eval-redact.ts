@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixturePrefix } from './eval-fixture.ts';
 
@@ -9,7 +9,8 @@ import { fixturePrefix } from './eval-fixture.ts';
  * The one owner of what an evaluation writes to disk. Every artifact (run records, evidence, raw host output, invocation,
  * scenario, batch manifest, read-protection output) is written through `artifactWriter`, which replaces each private path
  * with a fixed placeholder first; this module alone decides which paths those are. `tests/eval-redact.test.ts` enumerates
- * every producer and every artifact.
+ * every producer and every artifact. It also owns the long form of a path (`longPath`), which the redaction and the login
+ * directory overlap check (`scripts/eval-auth.ts`) both use.
  */
 export type ArtifactContext = {
   loginDirectory?: string; sentinel?: string; fixture?: { root: string; workspace: string }; executable?: string;
@@ -37,11 +38,14 @@ const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const separatorRun = '(?:\\\\|/|%(?:5c|2f)|(?<=\\\\)u00(?:5c|2f))+';
 // Where a path without a drive letter starts: one slash, after any backslashes (a `\/` escape).
 const rootSeparator = '\\\\*(?:/|%2f|(?<=\\\\)u002f)';
-/** One character in each spelling a host, JSON or a URL may give it: as itself, percent-encoded, or as JSON `\u` escapes. */
+/**
+ * One character in each spelling a host, JSON or a URL may give it: as itself, percent-encoded, or as JSON `\u` escapes. Encoders
+ * differ in which characters they percent-encode (Node's `pathToFileURL` encodes `~`, `encodeURIComponent` does not), so every
+ * character but a letter or digit also matches its UTF-8 percent-encoding; the pattern is case-insensitive, so either hex case.
+ */
 function character(char: string): string {
   const spellings = [escape(char)];
-  const percent = encodeURIComponent(char);
-  if (percent !== char) spellings.push(escape(percent));
+  if (!/^[A-Za-z0-9]$/.test(char)) spellings.push([...new TextEncoder().encode(char)].map((byte) => `%${byte.toString(16).padStart(2, '0')}`).join(''));
   if (char.codePointAt(0)! > 0x7e) {
     spellings.push([...Array(char.length).keys()].map((index) => `\\\\+u${char.charCodeAt(index).toString(16).padStart(4, '0')}`).join(''));
   }
@@ -60,11 +64,26 @@ function pathPattern(path: string, generated = ''): RegExp {
   const head = drive ? `(?:${character(drive[1]!)}${character(':')}|/${escape(drive[1]!)})${separatorRun}` : rootSeparator;
   return new RegExp(`${head}${body}${generated}`, 'giu');
 }
-/** A path and its resolved form (a junction or a short name resolves to another spelling a host may print instead). */
+/**
+ * The long form of a path: resolved, with its deepest existing part replaced by what the file system says it is (8.3 short
+ * names expanded, junctions and symbolic links followed, a `\\?\` prefix dropped) and the part that does not exist yet appended
+ * as written. Two spellings of one place have the same long form whether or not the place exists yet.
+ */
+export function longPath(path: string): string {
+  const missing: string[] = [];
+  for (let existing = resolve(path); ; existing = dirname(existing)) {
+    try { return join(realpathSync.native(existing), ...missing.reverse()); } catch { /* not there yet: try its parent */ }
+    if (dirname(existing) === existing) return resolve(path);
+    missing.push(basename(existing));
+  }
+}
+/**
+ * A path as given, resolved, and in its long form, the spellings a host may print for it. Windows hands a host the form it was
+ * given or, when the host resolves the path, the long form; it never turns a long name into a short one unless asked, and the
+ * host's environment (home, temporary directory) points only into the fixture, so the short form of a long path is not listed.
+ */
 function spellings(path: string): string[] {
-  let resolved: string | undefined;
-  try { resolved = realpathSync.native(path); } catch { resolved = undefined; }
-  return [...new Set([path, ...(resolved ? [resolved] : [])])];
+  return [...new Set([path, resolve(path), longPath(path)])];
 }
 
 /** The redaction every artifact goes through: private paths (longest first, so a nested path keeps its own placeholder), then values. */

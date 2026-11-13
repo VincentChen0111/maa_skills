@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { realpathSync, rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runBatch } from '../scripts/eval-batch.ts';
 import { selectScenarios } from '../scripts/eval-scenarios.ts';
 
@@ -19,6 +20,16 @@ await mkdir(home); await mkdir(settings);
 await writeFile(join(settings, 'config.json'), JSON.stringify({ privateDirectory: join(root, 'private') }));
 Object.assign(process.env, { USERPROFILE: home, HOME: home, MAA_SKILLS_HOME: settings });
 process.on('exit', () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
+/** The 8.3 short form Windows gives an existing path; undefined where there is none (not Windows, or short names off on the volume). */
+function shortForm(path: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const result = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${path}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true, windowsHide: true });
+  const short = result.status === 0 ? result.stdout.trim() : '';
+  return short && short.toLowerCase() !== path.toLowerCase() ? short : undefined;
+}
+// GitHub's Windows runner names its temporary directory in the 8.3 short form; the batch below names its login directory that
+// way wherever short names exist, so this file reproduces the runner on any Windows machine.
+const longRoot = realpathSync.native(root); const shortRoot = shortForm(longRoot);
 async function files(directory: string): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -57,10 +68,38 @@ test('the one redaction replaces a private path in every spelling and whatever f
   assert.equal(posix('file://' + ['', 'home', 'someone', 'eval%20login', 'a'].join('/')), 'file://<login-dir>/a');
 });
 
+test('any character but a letter or digit may come percent-encoded: a file URL of an 8.3 short name carries %7E for its tilde', async () => {
+  const { redactor } = await import('../scripts/eval-redact.ts');
+  const slash = String.fromCharCode(92);
+  const login = ['C:', 'Users', 'RUNNER~1', 'AppData', "odd -_.!~*'()$&+,;=@[]{}^`#%name", 'LoginMarker', 'claude-config'].join(slash);
+  const redact = redactor({ loginDirectory: login });
+  const forward = login.replaceAll(slash, '/');
+  // Node's pathToFileURL encodes `~` (encodeURIComponent does not); a strict encoder may encode every punctuation character.
+  const strict = [...forward].map((char) => /[A-Za-z0-9/]/.test(char) ? char : `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+  for (const text of ['file:///' + forward.replaceAll('~', '%7E'), 'file:///' + forward.replaceAll('~', '%7e'), strict, strict.toUpperCase(),
+    'file:///' + encodeURI(forward).replaceAll('~', '%7E')]) {
+    assert.equal(redact(`${text}/x`).toLowerCase().includes('loginmarker'), false, text);
+  }
+});
+
+test('on Windows a login directory named in the 8.3 short form is redacted in its long form, and before it exists',
+  { skip: shortRoot ? false : 'no 8.3 short names here (not Windows, or short names are off on this volume)' }, async () => {
+    const { redactor } = await import('../scripts/eval-redact.ts');
+    for (const exists of [true, false]) {
+      const marker = `LoginMarker${unique()}`;
+      const short = join(shortRoot!, marker, 'claude-config'); const long = join(longRoot, marker, 'claude-config');
+      if (exists) await mkdir(long, { recursive: true });
+      const redact = redactor({ loginDirectory: short });
+      for (const text of [short, long, pathToFileURL(short).href, pathToFileURL(long).href, JSON.stringify(long)]) {
+        assert.equal(redact(`${text}目录不可读。`).toLowerCase().includes(marker.toLowerCase()), false, `${exists ? 'existing' : 'absent'}: ${text}`);
+      }
+    }
+  });
+
 test('every producer writes every artifact through the one redaction: no private path survives in any file a batch writes', async () => {
   for (const host of ['claude', 'codex'] as const) {
     const loginMarker = `LoginMarker${unique()}`;
-    const loginDirectory = join(root, loginMarker, host === 'claude' ? 'claude-config' : 'codex-home');
+    const loginDirectory = join(shortRoot ?? root, loginMarker, host === 'claude' ? 'claude-config' : 'codex-home');
     await mkdir(loginDirectory, { recursive: true });
     const script = join(root, `script-${host}.json`);
     // The double names the login directory, home, repository, its workspace and fixture (and the sentinel when it sees one)

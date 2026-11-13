@@ -1,6 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { access, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { createFixture, type Fixture } from './eval-fixture.ts';
 import { normalizeHost, type Host } from './evaluation.ts';
 import { claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, codexSandboxArguments, credentialVariables, hostArguments, probeVersion,
   reportedUsage, type Usage } from './eval-host.ts';
-import { artifactWriter } from './eval-redact.ts';
+import { artifactWriter, longPath } from './eval-redact.ts';
 
 export const loginDirectoryVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_LOGIN_DIR', codex: 'MAA_EVAL_CODEX_LOGIN_DIR' };
 export const executableVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_EXECUTABLE', codex: 'MAA_EVAL_CODEX_EXECUTABLE' };
@@ -27,9 +27,12 @@ export function resolveLoginDirectory(host: Host, explicit?: string): string {
   return resolve(explicit ?? process.env[loginDirectoryVariables[host]] ?? defaultLoginDirectory(host));
 }
 
-async function canonical(path: string): Promise<string> {
-  let value = resolve(path);
-  try { value = await realpath(value); } catch { /* compared as written while absent */ }
+/**
+ * Both sides of every overlap comparison in one form: the long form (`longPath`, also for a path that does not exist yet), and
+ * case-folded on Windows. A path compared as written while the other is resolved would let a short name or a junction through.
+ */
+function canonical(path: string): string {
+  const value = longPath(path);
   return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 const overlaps = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep) || b.startsWith(a.endsWith(sep) ? a : a + sep);
@@ -39,22 +42,25 @@ export type LoginRefusal = 'not-absolute' | 'unsupported-character' | 'inside-re
 /**
  * Locates the maintainer's real private directory with the product's own rule (settingsHome/readSettings) and compares paths only.
  * Nothing else in the private directory or any login directory is read; the paths are never written to a record.
+ * The first match in this order is reported: repository, private directory, settings directory, temporary fixture, daily
+ * host directories, the other host's login directory (so a parent of both the private and the settings directory is reported
+ * as overlapping the private one).
  */
 export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string; host?: Host } = {}): Promise<LoginRefusal | undefined> {
   if (!isAbsolute(directory)) return 'not-absolute';
   if (/['\r\n\0]/.test(directory)) return 'unsupported-character';
-  const login = await canonical(directory);
-  if (overlaps(login, await canonical(repositoryRoot))) return 'inside-repository';
+  const login = canonical(directory);
+  if (overlaps(login, canonical(repositoryRoot))) return 'inside-repository';
   const home = settingsHome();
   let privateDirectory: string;
   try { privateDirectory = (await readSettings(home)).privateDirectory; } catch { return 'settings-unreadable'; }
-  if (overlaps(login, await canonical(privateDirectory))) return 'overlaps-private-directory';
-  if (overlaps(login, await canonical(home))) return 'overlaps-settings-directory';
-  if (context.fixtureRoot && overlaps(login, await canonical(context.fixtureRoot))) return 'overlaps-temporary-fixture';
-  for (const daily of ['.claude', '.codex', '.claude.json']) if (overlaps(login, await canonical(join(homedir(), daily)))) return 'daily-host-directory';
+  if (overlaps(login, canonical(privateDirectory))) return 'overlaps-private-directory';
+  if (overlaps(login, canonical(home))) return 'overlaps-settings-directory';
+  if (context.fixtureRoot && overlaps(login, canonical(context.fixtureRoot))) return 'overlaps-temporary-fixture';
+  for (const daily of ['.claude', '.codex', '.claude.json']) if (overlaps(login, canonical(join(homedir(), daily)))) return 'daily-host-directory';
   // The other host's directory comes from the caller or, for a named host, from the same variable/default resolution.
   const other = context.otherLoginDirectory ?? (context.host ? resolveLoginDirectory(context.host === 'claude' ? 'codex' : 'claude') : undefined);
-  if (other && overlaps(login, await canonical(other))) return 'overlaps-other-login-directory';
+  if (other && overlaps(login, canonical(other))) return 'overlaps-other-login-directory';
   return undefined;
 }
 
