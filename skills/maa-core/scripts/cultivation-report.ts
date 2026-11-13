@@ -128,7 +128,7 @@ async function resolveEvidence(input: DraftInput, snapshot: unknown, privateDire
   if (jobs.length) {
     const stages = [...new Map(jobs.map(ref => [ref.stageId, { stageId: ref.stageId, code: ref.code, difficulty: ref.difficulty, loops: 1 }])).values()];
     let report: Awaited<ReturnType<typeof collectStageJobs>> | undefined, failure = 'job-site-unavailable';
-    try { report = await collectStageJobs(snapshot, await loadStageTables(undefined, options.fetcher ?? fetch), { stages } as StageRequest, options.fetcher ?? fetch); }
+    try { report = await collectStageJobs(snapshot, await loadStageTables(undefined, false, options.fetcher ?? fetch), { stages } as StageRequest, options.fetcher ?? fetch); }
     catch (error) { if (error instanceof Error && /^(stage-identity-mismatch|duplicate-stage|scope-invalid)$/.test(error.message)) failure = 'stage-invalid'; }
     for (const ref of jobs) {
       const stage = report?.stages.find(entry => entry.stageId === ref.stageId);
