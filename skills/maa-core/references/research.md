@@ -5,7 +5,7 @@
 | 脚本 | 作用 |
 | --- | --- |
 | `scripts/nga.ts` | NGA 只读检索与读帖，唯一的读取和解析核心 |
-| `scripts/skland-community.ts` | 森空岛社区公开帖子的只读读取：匿名请求，不用账号凭据，与森空岛账号快照分开 |
+| `scripts/skland-community.ts` | 森空岛社区公开帖子的只读入口：匿名请求，不用账号凭据，与森空岛账号快照分开；站点目前要求官方客户端签名，所以只会报告读不到 |
 | `scripts/bilibili.ts` | B 站（实验性）：读用户指定视频的公开信息，用户自己设置 SESSDATA 后再读字幕 |
 | `scripts/research.ts` | 共用的结果与引用格式、缓存、跨进程请求闸门（限速、风控停止）、Markdown |
 | `scripts/research-fetch.ts` | 森空岛社区与 B 站（实验性）共用的单次受闸门请求、HTTP 层风控判定、缓存回退与结果组装 |
@@ -62,7 +62,7 @@
 
 - `post`：帖子号，或 `www.skland.com`、`skland.com` 的 `/article?id=` 链接；只取 `id`，请求总是发到 `https://zonai.skland.com/web/v2/item?id=<帖子号>`。读这一帖就是这一个请求。
 - 没有检索：森空岛的检索和帖子接口要求官方客户端的请求签名（见仓库里的 `docs/community-sources.md`），本工具不伪装官方客户端。用户给出帖子链接后再读。
-- 请求只带如实的 User-Agent 和 Accept，不带 Cookie、账号 token、`cred`、`sign`、`platform`、`timestamp` 或设备标识。森空岛要求签名时（HTTP 401，或代码 10000、10002、10003）记为 `risk-control`，`pages[].reason` 为 `signature-required`，结果局限带 `client-signature-required`，来源暂停 30 分钟；不重试，也不改用账号凭据。2026-11-13 核对时，匿名请求就得到这个回答，所以目前多半读不到内容，结果会如实这样说。
+- 请求只带如实的 User-Agent 和 Accept，不带 Cookie、账号 token、`cred`、`sign`、`platform`、`timestamp` 或设备标识。森空岛要求签名时（HTTP 401，或代码 10000、10002、10003）记为 `risk-control`，`pages[].reason` 为 `signature-required`，结果局限带 `client-signature-required`，来源暂停 30 分钟；不重试，也不改用账号凭据。2026-11-13 核对时，匿名请求就得到这个回答，所以这一入口目前读不到内容，结果会如实这样说；调用方要先告诉用户这一点，不能把它当成可用的读取能力。
 - 结果条目：`kind` 为 `post`，`url` 为 `https://www.skland.com/article?id=<帖子号>`，作者是昵称（不存作者账号 ID），时间取发布时间 `publishedAtTs`，没有就写未知；正文按文字片段顺序拼接，局限代码 `text-order-approximate`；`meta.post` 为帖子号。
 - `node <maa-core>/scripts/skland-community.ts status`：不联网，返回 `stopped`、`stoppedUntil`、`stopReason`、`lastRequestAt`。这个来源没有凭据。
 
@@ -77,7 +77,7 @@ B 站支持是实验性的：接口随时可能变化或拒绝，结果、帮助
 ```
 
 - `video`（实验性入口）：`BV` 号、`av` 号，或 `www.bilibili.com`、`bilibili.com`、`m.bilibili.com` 的 `/video/<号>` 链接；只取视频号和 `p` 分 P 号。`b23.tv` 短链要跟随跳转，不接受：请用户在浏览器打开后复制完整链接。
-- `part`：分 P，1–1000，默认取链接里的 `p` 或 1。`subtitles`：默认 `true`。
+- `part`：分 P，正整数，不设上限（与 NGA 页码相同），默认取链接里的 `p` 或 1。`subtitles`：默认 `true`。
 - 没有检索、没有专栏/动态：B 站检索要求请求签名和浏览器设备 Cookie，本工具不伪装浏览器，实验性入口只读用户给出的视频链接。
 - 读一个分 P 依次发三个请求（这是读取的结构，不是上限）：`https://api.bilibili.com/x/web-interface/view`（视频公开信息，不带任何凭据）；`https://api.bilibili.com/x/player/wbi/v2?bvid=&cid=`（字幕列表，只有这一个请求在 Cookie 请求头里带用户保存的 `SESSDATA`）；字幕列表给出的字幕文件地址（只接受 `aisubtitle.hdslb.com`、`i0`/`i1`/`i2.hdslb.com` 的 https 地址，不带凭据）。
 - 没有设置 SESSDATA 时照常读视频信息，字幕页为 `credential-required`，条目带 `subtitles-not-read`。实验性的 B 站读取器只在 B 站回答 `-101`（账号未登录）时才记为过期；回答把这次请求当成未登录访客（`login_mid` 为 0）时字幕页为 `unavailable`、原因 `login-not-recognized`，不改凭据状态，提醒用户可以自己重新输入。B 站认出登录后才记为可用。

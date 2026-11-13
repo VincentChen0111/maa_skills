@@ -14,19 +14,23 @@
 ## 与工单原文的差异
 
 - 验收第 4 条「从关键词或用户指定资料到可引用 Markdown 摘要」：本票两个来源只走「用户指定资料」这条路，不提供关键词检索。理由见[社区来源核对](community-sources.md)：森空岛的帖子和检索接口要求官方客户端的请求签名，B 站检索要求请求签名和浏览器设备 Cookie；仿造这些等于绕过站点的反自动化机制，与 18 已登记的「不伪装成浏览器或官方客户端」一致。关键词检索仍可用 18 的 NGA。已作为设计默认值登记（规格「默认值及其来源」第一条「19」行）。
-- 验收第 1 条「森空岛社区只读公开网页」：2026-11-13 实测，森空岛网页只在浏览器里渲染，帖子接口对匿名请求回答 HTTP 401、代码 10000「请求异常」（要求客户端签名）。读取器按「只读公开、不登录、不用账号凭据、不伪装」实现，遇到这个回答如实报告「没有读到内容」并暂停该来源；所以在当前的真实站点上，森空岛社区多半读不到帖子。这是如实结果，不是已读成功。
+- 验收第 1 条「森空岛社区只读公开网页」：2026-11-13 实测，森空岛网页只在浏览器里渲染，帖子接口对匿名请求回答 HTTP 401、代码 10000「请求异常」（要求客户端签名）。读取器按「只读公开、不登录、不用账号凭据、不伪装」实现，遇到这个回答如实报告「没有读到内容」并暂停该来源；所以在当前的真实站点上，森空岛社区读不到帖子（审查时另查 `https://www.skland.com/article?id=1`，同样只得到 3949 字节的通用外壳，没有帖子内容）。这一半验收记为「未交付」，不是「通过」也不是「未验证」；按 18 的不伪装规则，代码不会改成给请求签名。
 - B 站只读视频（信息与字幕），不读专栏、动态，不接受 `b23.tv` 短链。
+
+### 需要维护者决定
+
+- 森空岛社区入口：保留只报告读不到的入口、推迟，还是撤下。本票暂取保留：设计默认值，2026-11-13。理由：不能伪装官方客户端（18 已登记的规则），保留下来的入口只会如实报告读不到、不发第二个请求、不改用账号凭据，站点将来若开放匿名读取就能直接用；工单 20 把 19 的来源当作可选补充，缺少它不阻塞核心报告。维护者说一声即可改为推迟或撤下。
 
 ## 验收对照
 
 | 验收 | 证据 | 状态 |
 | --- | --- | --- |
-| 1 森空岛社区只读公开网页，不登录、不用账号凭据，不发帖点赞评论；与账号扫描独立 | `tests/skland-community.test.ts`「a public post is read with an honest anonymous GET …」：临时目录里先保存一份合成的森空岛账号 token，其解密替身一被调用就报错；请求头只有 `Accept`、`User-Agent`；账号凭据状态保持 `unverified`；作者账号 ID 不进缓存。「post text is only data, and the community reader is separate …」：读取器源码不导入 `credentials.ts`、账号快照代码；任何文件都没有 token 明文。`tests/community-cli.test.ts` 的森空岛 CLI：请求头只有两项，`post`、`like`、`comment`、`search` 动作都被拒为 `request-invalid` | 通过（网络替身）；真实站点读成功未验证（见上节） |
+| 1 森空岛社区只读公开网页，不登录、不用账号凭据，不发帖点赞评论；与账号扫描独立 | `tests/skland-community.test.ts`「a public post is read with an honest anonymous GET …」：临时目录里先保存一份合成的森空岛账号 token，其解密替身一被调用就报错；请求头只有 `Accept`、`User-Agent`；账号凭据状态保持 `unverified`；作者账号 ID 不进缓存。「post text is only data, and the community reader is separate …」：读取器源码不导入 `credentials.ts`、账号快照代码；任何文件都没有 token 明文。`tests/community-cli.test.ts` 的森空岛 CLI：请求头只有两项，`post`、`like`、`comment`、`search` 动作都被拒为 `request-invalid` | 森空岛读取：未交付：真实站点要求官方客户端签名，按 18 的不伪装规则不实现。只读、不登录、不用账号凭据、不发帖点赞评论、与账号扫描独立这些约束：通过（网络替身） |
 | 2 B 站入口、帮助和结果都标实验性；凭据经 09 由用户手动配置，agent 不处理登录 | `tests/bilibili.test.ts` 第一项：`experimental: true`、`notice` 含 experimental、局限 `experimental-source`、中英文 Markdown 首行带「实验性」/experimental。`tests/community-cli.test.ts`：B 站 CLI 的读取、状态和错误输出都带 `"experimental": true`，Markdown 首行为 `# Bilibili（实验性）`；凭据由 09 的 `credentials.ts input bilibili --stdin` 写入（测试模拟用户本人输入），读取器只调用 `inspectCredentials`、`readCredential`、`recordCredentialOutcome`。「every user entry for Bilibili research says it is experimental」：README、maa-help、maa-account、maa-core 的 SKILL 和接口说明里每一行提到 B 站的都带实验性 | 通过 |
 | 3 作者、日期、来源链接、事实摘录、可信度与局限；未知如实标明 | `tests/bilibili.test.ts` 第一、二项逐字段核对视频和字幕条目（字幕带时间点和 `machine-subtitle`）；`tests/skland-community.test.ts` 第一项逐字段核对；「requests are validated …」里无昵称、无发布时间的帖子得到 `null` 和 `author-unknown`、`date-unknown`，Markdown 写「作者：未知」；森空岛只取 `publishedAtTs`，不拿创建时间冒充 | 通过 |
-| 4 从用户指定资料到可引用 Markdown 可独立演示；工具在共享调研层，不新增 skill | 两个 CLI 测试都从用户给的链接走到 Markdown 引用摘要；脚本都在 `skills/maa-core/scripts/`，没有新增 skill 目录；结果格式、缓存、闸门、Markdown 全部复用 18 的 `research.ts` | 通过（关键词路径不提供，见上节） |
+| 4 从用户指定资料到可引用 Markdown 可独立演示；工具在共享调研层，不新增 skill | 两个 CLI 测试都从用户给的链接走到 Markdown 引用摘要；脚本都在 `skills/maa-core/scripts/`，没有新增 skill 目录；结果格式、缓存、闸门、Markdown 全部复用 18 的 `research.ts` | B 站（实验性）：通过（网络替身；关键词路径不提供，见上节）。森空岛：未交付：真实站点要求官方客户端签名，按 18 的不伪装规则不实现 |
 | 5 网页、字幕、文章只当数据；凭据、账号标识、私人内容不泄漏 | `tests/bilibili.test.ts`「description and subtitle text are only data …」：简介和字幕里要求运行凭据脚本、外发 SESSDATA、读别的视频，实际只请求了指定视频和它自己的字幕文件；响应给出的非 B 站字幕地址不请求；Markdown 里链接失效、指令文字只在引用块。森空岛同类测试。两边都扫描结果、Markdown 和临时目录全部文件，找不到合成凭据；B 站不存 UP 主账号 ID 和 `login_mid` | 通过 |
-| 6 登录墙、不可读、服务变化和解析失败清楚报告，不假称读全文，不依赖私有在线服务 | 森空岛签名要求：`risk-control`、原因 `signature-required`、没有条目、局限 `client-signature-required`，中英文 Markdown 写明「不伪装官方客户端，没有读到内容」。两边的不提供、不完整、网络失败各自标明且不暂停来源；B 站没有 SESSDATA 时条目带 `subtitles-not-read`，被当成访客时报告 `login-not-recognized`。只访问两站的公开接口 | 通过（网络替身） |
+| 6 登录墙、不可读、服务变化和解析失败清楚报告，不假称读全文，不依赖私有在线服务 | 森空岛签名要求：`risk-control`、原因 `signature-required`、没有条目、局限 `client-signature-required`，中英文 Markdown 写明「不伪装官方客户端，没有读到内容」。两边的不提供、不完整、网络失败各自标明且不暂停来源；B 站没有 SESSDATA 时条目带 `subtitles-not-read`，被当成访客时报告 `login-not-recognized`。缺字段（格式变化）：「a subtitle file whose lines no longer carry the expected fields …」和「a post whose text fragments no longer carry text …」——有内容却一条都认不出时记为 `incomplete`（`data-unrecognized`），不算完整读取、不进缓存；真正没有文字片段的帖子仍是如实的空结果。只访问两站的公开接口 | 通过（网络替身） |
 
 ## 设计默认值
 
@@ -71,6 +75,18 @@
 - 冲突三处，处理方式：`research.ts` 保留 18 新的 `inert()` 和 `describe` 对未知代码走 `inline`，再加上本票的 `laterLimits`（查找顺序：原表、`laterLimits`、`inline(code)`）；接口说明保留 18 对 `formatResearchMarkdown` 的新说明，缓存一行用本票覆盖三个来源的写法，删去本票「每次运行的请求上限」一行，改写进 18 的「每次运行的页数：不设上限」一行；规格三处都取 18 改后的「18」条目，再接上本票的「19」条目，并把「最多三个请求」改为读取结构的写法（见上节）。
 - 两个读取器的 Markdown 只经共用的 `formatResearchMarkdown`，因此 18 的 `inert()` 对它们的字段同样成立。`tests/research.test.ts` 的一致性测试新增两个字段：时间点位置（B 站字幕条目）和带实验性标记的来源名。两个读取器的注入测试另外核对各自的来源链接（`https://www.bilibili.com/video/<BV号>/?p=1`、`https://www.skland.com/article?id=<帖子号>`）在 Markdown 里保持可点。
 - 合并后逐个运行一次：`npm run typecheck` 通过；`tests/research.test.ts` 7 项、`tests/nga.test.ts` 13 项、`tests/nga-cli.test.ts` 3 项、`tests/research-scenarios.test.ts` 1 项、`tests/bilibili.test.ts` 12 项、`tests/skland-community.test.ts` 9 项、`tests/community-cli.test.ts` 3 项、`tests/community-scenarios.test.ts` 1 项，全部通过。
+
+第一轮独立审查（有条件通过，P2 一项、P3 三项，协调者全部接受）后的修复：
+
+- 先合入 18 的最终头 `ef902a1`（只有文档：审查记录和工单状态），`docs/issues/INDEX.md` 的自动区冲突按「18 已完成、19 进行中」处理后重跑 `node scripts/tracker.ts --write`。
+- P2：只改记录和说明，不改代码。验收第 1、4 条的森空岛部分改记「未交付」；README、宿主说明、maa-help、maa-account、maa-core 的 SKILL 和接口说明都改为「森空岛社区帖子入口目前只会如实报告读不到」，不再写成可用的读取能力；上面新增「需要维护者决定」。
+- P3 缺字段：B 站字幕文件有行却一行都认不出、森空岛 `textSlice` 有片段却没有一个带文字时，原来报为完整读取并缓存 24 小时；现在记为 `incomplete`（`data-unrecognized`），不缓存。
+- P3 受阻时丢掉旧字幕：字幕页的各个受阻分支原来登记了旧缓存却没有把它交给结果；现在每个分支都把 `log.offer` 的返回值交给结果，风控后旧视频和旧字幕一起返回、都标过期，视频条目也不再自相矛盾地写「没有读到字幕」。
+- P3 分 P 上限：去掉没有登记的 `maxPart` 1000。分 P 号与 18 的页码一样只要求是正的安全整数，链接里的 `p` 也一样；视频信息里大于 1000 的分 P 不再被丢掉。
+
+先失败的证据：新增或改动的测试先运行，`tests/bilibili.test.ts` 15 项中 4 项失败（校验表因 `maxPart` 拒绝 `p=12345`；第 1001 个分 P 被拒为 `request-invalid`；认不出的字幕文件报成 `fresh`；风控后没有返回旧字幕），`tests/skland-community.test.ts` 10 项中 1 项失败（认不出的正文报成 `fresh`）。修复后逐个运行一次：`npm run typecheck` 通过；`tests/bilibili.test.ts` 15 项、`tests/skland-community.test.ts` 10 项通过。改了说明文字后另跑的文件见下一段。
+
+说明文字改动后逐个运行一次：`tests/community-cli.test.ts` 3 项（含「每个提到 B 站的入口都标实验性」）、`tests/help-installation.test.ts` 6 项、`tests/account-installation.test.ts` 2 项、`tests/metadata.test.ts` 1 项、`tests/community-scenarios.test.ts` 1 项，全部通过；`node scripts/tracker.ts`、`inspectMetadata`、`node scripts/privacy.ts .` 都无错误、无发现。没有运行完整门禁，没有访问森空岛、B 站或 NGA。
 
 ## 未验证
 

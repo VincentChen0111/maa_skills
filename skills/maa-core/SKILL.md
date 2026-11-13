@@ -23,7 +23,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/stage-jobs.ts` | 查询明确关卡的作业、逐成员核对，准备已批准的地图批次 | [关卡作业接口](../maa-daily/references/stage-jobs.md) |
 | `scripts/training-time.ts`、`scripts/training-plan.ts` | 查询已授权目标的助手/时长，记录训练并逐阶段安排原生单次定时 | [训练接口](references/training.md) |
 | `scripts/nga.ts`、`scripts/research.ts`、`scripts/research-transport.ts` | NGA 只读检索与读帖；调研共用的引用结果格式、缓存、跨进程限速与风控停止、按平台的传输 | [社区调研接口](references/research.md) |
-| `scripts/skland-community.ts`、`scripts/bilibili.ts`、`scripts/research-fetch.ts` | 森空岛社区公开帖子只读读取（不用账号凭据）；B 站视频信息与字幕只读读取（实验性）；两者共用的受闸门请求 | [社区调研接口](references/research.md) |
+| `scripts/skland-community.ts`、`scripts/bilibili.ts`、`scripts/research-fetch.ts` | 森空岛社区公开帖子只读入口（不用账号凭据；站点目前要求官方客户端签名，所以只会报告读不到）；B 站视频信息与字幕只读读取（实验性）；两者共用的受闸门请求 | [社区调研接口](references/research.md) |
 
 调用方的约定：
 
