@@ -7,6 +7,7 @@ import { readSettings, settingsHome } from './preferences.ts';
 import type { CheckResult } from './doctor.ts';
 import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
+import { DownloadError, downloadStatus, executeDownload, installDownload, planDownload, type DownloadContext } from './setup-download.ts';
 export { discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 
 export type SetupContext = { home?: string; maaDirectory?: string };
@@ -52,9 +53,9 @@ export async function checkSetup(context: SetupContext = {}, versionReader: MaaV
     'maa-version-not-fully-verified': 'This MAA version is not fully verified by this repository; setup may continue.', 'maa-version-verified': 'This MAA version has source and device verification records.',
   };
   const repairs: Record<string, string> = {
-    'use-windows-gui': 'Use an existing Windows MAA GUI installation.', 'official-maa-installation': 'Choose an existing MAA GUI directory or use the official installation instructions; no download is performed.',
+    'use-windows-gui': 'Use an existing Windows MAA GUI installation.', 'official-maa-installation': 'Choose an existing MAA GUI directory, or review the official download plan from setup plan; nothing is downloaded until you confirm that plan.',
     'inspect-maa-configuration': 'Inspect or initialize the current configuration in the MAA GUI.', 'select-cn-client-in-maa': 'Check the selected client in the MAA GUI; use a CN profile.',
-    'official-node-24-installation': 'Use the official Node download page and select version 24.x.', 'set-preferences': 'Save the first-run choices using the shared preferences script.',
+    'official-node-24-installation': 'Install Node 24.x from the official Node download page; setup plan can show the official installer, downloaded only after you confirm that plan.', 'set-preferences': 'Save the first-run choices using the shared preferences script.',
     'inspect-settings': 'Preserve config.json in the selected settings home, then restore a known-good copy or repair its JSON, schema and access permissions; rerun check before saving preferences or creating directories.',
     'prepare-private-directory': 'Run setup prepare after saving the selected private directory.', 'read-version-verification': 'Read the packaged version record and retain the unverified warning; no upgrade is required.',
   };
@@ -96,14 +97,68 @@ export async function prepareSetup(context: SetupContext = {}, versionReader: Ma
   const settings = await readSettings(home);
   await mkdir(settings.privateDirectory, { recursive: true });
   const result = await checkSetup(context, versionReader);
-  const temporary = join(settings.privateDirectory, `.setup-${randomUUID()}.tmp`);
-  await writeFile(temporary, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  await rename(temporary, join(settings.privateDirectory, 'setup-environment.json'));
+  await writeEnvironmentRecord(settings.privateDirectory, result);
   return result;
+}
+async function writeEnvironmentRecord(privateDirectory: string, result: unknown) {
+  const temporary = join(privateDirectory, `.setup-${randomUUID()}.tmp`);
+  await writeFile(temporary, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  await rename(temporary, join(privateDirectory, 'setup-environment.json'));
 }
 
 export async function applySetupConnection(request: SetupWriteRequest, context: ConnectionContext = {}, adb?: AdbBoundary, maa?: MaaProcess) {
   return executeSetupConfigWrite(request, context, adb, maa);
+}
+
+export type SetupDownloadContext = SetupContext & DownloadContext & { nodeVersion?: string };
+/**
+ * Shows the official plan for one missing program. A program that the fresh check already finds is not
+ * planned again; a verified earlier download is reported instead of a new plan. Nothing is written.
+ */
+export async function planSetupDownload(request: unknown, context: SetupDownloadContext = {}) {
+  const program = request && typeof request === 'object' ? (request as Record<string, unknown>).program : undefined;
+  if (program === 'node' && checkRuntime(process.platform, context.nodeVersion ?? process.versions.node).node24) return { status: 'not-needed', program, reason: 'already-installed' };
+  if (program === 'maa') {
+    const state = await checkSetup({ ...(context.home ? { home: context.home } : {}), ...(context.maaDirectory ? { maaDirectory: context.maaDirectory } : {}) }, async () => null);
+    if (state.checks.find(item => item.id === 'maa')!.reason !== 'maa-gui-missing') return { status: 'not-needed', program, reason: 'already-installed' };
+  }
+  return planDownload(request, context);
+}
+/** Downloads only the plan named by a confirmation given for that plan; see setup-download.ts. */
+export async function downloadSetupProgram(request: unknown, context: DownloadContext = {}) { return executeDownload(request, context); }
+export async function setupDownloadStatus(context: DownloadContext = {}) { return downloadStatus(context); }
+export async function installSetupDownload(request: unknown, context: DownloadContext = {}) { return installDownload(request, context); }
+
+const connectionReasons = new Set(['maa-directory-unset', 'cn-client-required', 'candidate-input-invalid', 'too-many-adb-candidates', 'too-many-connection-candidates']);
+/**
+ * Final recheck after installation: Node, MAA and settings by the fresh check, adb and the connection by
+ * discovery and, for a selected candidate, the adb transport test. Complete only when nothing is pending.
+ */
+export async function recheckSetup(request: Partial<ConnectionSelection> = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary) {
+  const home = resolve(context.home ?? settingsHome());
+  if (!await isFile(join(home, 'config.json'))) throw new Error('set-preferences-first');
+  const settings = await readSettings(home);
+  const result = await checkSetup(context, versionReader);
+  const downloads = (await downloadStatus({ home })).items;
+  let connection: Record<string, unknown>;
+  if (!['maa', 'server', 'settings'].every(id => result.checks.find(item => item.id === id)?.status === 'normal')) connection = { status: 'not-checked', reason: 'maa-check-required' };
+  else try {
+    const found = await discoverSetupConnections(context, adb);
+    if (request.discoveryRevision === undefined) {
+      connection = { status: found.candidates.length ? 'selection-required' : 'no-candidate', adbCount: found.adbCount, failedAdb: found.failedAdb,
+        candidates: found.candidates.length, discoveryRevision: found.discoveryRevision };
+    } else {
+      const tested = await testSetupConnection({ discoveryRevision: request.discoveryRevision, ...(request.candidate ? { candidate: request.candidate } : {}) }, context, adb);
+      connection = { status: tested.status === 'connected' ? 'connected' : tested.status === 'failed' ? 'failed' : 'rejected', reason: tested.reason };
+    }
+  } catch (error) {
+    connection = { status: 'unavailable', reason: error instanceof Error && connectionReasons.has(error.message) ? error.message : 'connection-check-failed' };
+  }
+  const pending = [...result.checks.filter(item => item.status === 'error').map(item => item.id), ...(connection.status === 'connected' ? [] : ['connection'])];
+  const record = { ...result, exitCode: pending.length ? 1 : 0, downloads, connection, complete: pending.length === 0, pending };
+  await mkdir(settings.privateDirectory, { recursive: true });
+  await writeEnvironmentRecord(settings.privateDirectory, record);
+  return record;
 }
 
 const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
@@ -115,20 +170,36 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   };
   try {
     const args = process.argv.slice(2); const action = args[0];
-    if (!['check', 'prepare', 'discover', 'test', 'apply'].includes(action ?? '') || args.length > 2 || args.length === 2 && args[1] !== '--json') throw new Error('request-invalid');
+    const downloadActions: Record<string, string[]> = { plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
+      install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'] };
+    if (!['check', 'prepare', 'discover', 'test', 'apply', ...Object.keys(downloadActions)].includes(action ?? '') || args.length > 2 || args.length === 2 && args[1] !== '--json') throw new Error('request-invalid');
     let text = ''; for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 65536) throw new Error('request-invalid'); }
     let body: Record<string, unknown>;
     try { body = object(JSON.parse(text || '{}')); } catch { throw new Error('request-invalid'); }
     const allowed = action === 'check' ? ['maaDirectory'] : action === 'prepare' ? [] : action === 'discover' ? ['adbPaths', 'addresses']
-      : action === 'test' ? ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'] : ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'];
+      : action === 'test' ? ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'] : Object.hasOwn(downloadActions, action!) ? downloadActions[action!]!
+      : ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'];
     if (Object.keys(body).some(key => !allowed.includes(key)) || body.maaDirectory !== undefined && (typeof body.maaDirectory !== 'string' || !isAbsolute(body.maaDirectory))) throw new Error('request-invalid');
-    if (action !== 'check' && !checkRuntime().node24) throw new Error('node-24-required');
+    // Planning and downloading Node itself, and reading download status, must work on the wrong Node major.
+    const fixesNode = action === 'downloads' || (action === 'plan' || action === 'download') && body.program === 'node';
+    if (action !== 'check' && !fixesNode && !checkRuntime().node24) throw new Error('node-24-required');
     const context: ConnectionContext = { ...(typeof body.maaDirectory === 'string' ? { maaDirectory: body.maaDirectory } : {}),
       ...(body.adbPaths !== undefined ? { adbPaths: body.adbPaths as string[] } : {}), ...(body.addresses !== undefined ? { addresses: body.addresses as string[] } : {}) };
     let result;
     if (action === 'check' || action === 'prepare') {
       result = action === 'check' ? await checkSetup(context) : await prepareSetup(context);
       process.exitCode = result.exitCode;
+    } else if (action === 'downloads') {
+      result = await setupDownloadStatus();
+    } else if (action === 'plan' || action === 'download' || action === 'install' || action === 'recheck') {
+      if (!checkRuntime().windows) throw new Error('windows-required');
+      if (action === 'recheck') {
+        const { adbPaths: _adbPaths, addresses: _addresses, ...selection } = body;
+        result = await recheckSetup(selection as Partial<ConnectionSelection>, context); process.exitCode = result.exitCode;
+      } else {
+        result = action === 'plan' ? await planSetupDownload(body) : action === 'download' ? await downloadSetupProgram(body) : await installSetupDownload(body);
+        process.exitCode = ['planned', 'not-needed', 'already-downloaded', 'downloaded', 'extracted', 'already-extracted', 'user-steps'].includes(result.status) ? 0 : 1;
+      }
     } else {
       if (!checkRuntime().windows) throw new Error('windows-required');
       if (action === 'discover') { result = await discoverSetupConnections(context); process.exitCode = result.candidates.length ? 0 : 1; }
@@ -141,7 +212,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     emit(result);
   } catch (error) {
     const safe = new Set(['request-invalid', 'set-preferences-first', 'node-24-required', 'windows-required', 'maa-directory-unset', 'candidate-input-invalid', 'too-many-adb-candidates', 'too-many-connection-candidates', 'cn-client-required']);
-    const reason = error instanceof Error && safe.has(error.message) ? error.message : 'setup-check-required';
+    // Download reasons are fixed codes chosen by setup-download.ts; no path, address or response text.
+    const reason = error instanceof DownloadError || error instanceof Error && safe.has(error.message) ? (error as Error).message : 'setup-check-required';
     emit({ status: reason === 'setup-check-required' ? 'unexpected-failure' : 'rejected', reason }); process.exitCode = reason === 'setup-check-required' ? 2 : 1;
   }
 }
