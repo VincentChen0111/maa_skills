@@ -22,13 +22,13 @@ const noise = (text: string) => `[${at()}][TRC][Px4242][Tx17] ${text}`;
 const chain = (name: string, taskid: number, end: 'TaskChainCompleted' | 'TaskChainError' | 'TaskChainStopped', before: string[] = []) =>
   [callback('TaskChainStart', { taskchain: name, taskid }), ...before, callback(end, { taskchain: name, taskid })];
 
-async function fixture(t: { after(fn: () => Promise<unknown>): void }, lines: string[]) {
+async function fixture(t: { after(fn: () => Promise<unknown>): void }, lines: string[], adbPath = 'adb/synthetic-adb.exe') {
   const root = await mkdtemp(join(tmpdir(), 'maa-doctor-analysis-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home'), maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
   await mkdir(join(maaDirectory, 'config'), { recursive: true }); await mkdir(join(maaDirectory, 'debug/interface'), { recursive: true }); await mkdir(privateDirectory);
   await writeFile(join(maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: profile, Configurations: { [profile]: { TaskQueue: [], Gui: { RuntimeSettings: { ClientType: 'Official' },
-    ConnectSettings: { AdbPath: 'adb/synthetic-adb.exe', Address: '127.0.0.1:16384' } } } } }));
+    ConnectSettings: { AdbPath: adbPath, Address: '127.0.0.1:16384' } } } } }));
   await mkdir(join(maaDirectory, 'adb')); await writeFile(join(maaDirectory, 'adb/synthetic-adb.exe'), 'synthetic');
   await writeFile(join(maaDirectory, 'MAA.exe'), 'synthetic executable placeholder');
   await writeFile(join(maaDirectory, 'debug/asst.log'), lines.join('\r\n') + '\r\n');
@@ -102,10 +102,19 @@ test('environment failures report cause, evidence and current state; the model c
     assert.deepEqual(result.nextSteps, ['verify-current-state', 'retry-within-approval', 'next-approved-alternative', 'stop-and-tell-user']);
     assert.equal(result.decidedBy, 'model');
     assert.equal(result.referral.state, 'not-applicable');
-    assert.deepEqual(result.currentState, { connection: 'device-not-listed', maa: 'running' });
+    // adb does not list a network address nobody has connected to; that is reported as such, never as "emulator off".
+    assert.deepEqual(result.currentState, { connection: 'device-not-connected', maa: 'running' });
     assert.ok(result.evidence.length > 0);
-    assert.doesNotMatch(JSON.stringify(result), /handoff|attempt|count/i);
+    assert.doesNotMatch(JSON.stringify(result), /handoff|attempt|count|emulator-off|not-running-emulator/i);
   });
+});
+
+test('the current-state connection check never runs a configured program that is not adb', async (t) => {
+  const f = await fixture(t, [callback('ConnectionInfo', { what: 'Disconnect', why: 'synthetic' })], 'MAA.exe');
+  const calls: string[] = [];
+  const result = await runAnalysis(f.context, {}, f.maa, { ...boundaries, adb: { run: async (executable: string) => { calls.push(executable); return { exitCode: 0, stdout: '' }; } } });
+  assert.deepEqual(calls, []);
+  assert.equal(result.currentState.connection, 'adb-path-unrecognized');
 });
 
 test('recognition failures are referred only after resolution, connection and an obscured screen are ruled out', async (t) => {

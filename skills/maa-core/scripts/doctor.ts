@@ -31,8 +31,8 @@ export async function executeRepairs(request: RepairRequest, maa: MaaProcess) {
 
 const connectionChecks: Record<ConnectionState, [CheckResult['status'], string]> = {
   'device-online': ['normal', 'inspect-connection-in-maa'], 'device-offline': ['error', 'restart-emulator-and-adb'],
-  'device-unauthorized': ['error', 'authorize-adb'], 'device-not-listed': ['warning', 'start-emulator'],
-  'adb-unavailable': ['warning', 'connect-through-setup'], 'adb-missing': ['error', 'connect-through-setup'],
+  'device-unauthorized': ['error', 'authorize-adb'], 'device-not-listed': ['warning', 'start-emulator'], 'device-not-connected': ['warning', 'test-connection-through-setup'],
+  'adb-unavailable': ['warning', 'connect-through-setup'], 'adb-missing': ['error', 'connect-through-setup'], 'adb-path-unrecognized': ['warning', 'connect-through-setup'],
   'connection-not-configured': ['warning', 'connect-through-setup'], 'connection-unreadable': ['warning', 'inspect-maa-configuration'],
 };
 const defaultSkillsRoot = () => resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');

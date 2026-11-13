@@ -12,7 +12,7 @@ import { checkSetup } from '../skills/maa-core/scripts/setup.ts';
 import { checkGroups, skillRepairChannels } from '../skills/maa-core/scripts/checks.ts';
 import { assessMaaVersion } from '../skills/maa-core/scripts/maa-version.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
-import type { AdbBoundary } from '../skills/maa-core/scripts/setup-connection.ts';
+import { discoverSetupConnections, isAdbExecutablePath, type AdbBoundary } from '../skills/maa-core/scripts/setup-connection.ts';
 
 const coreDirectory = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
 const windows = process.platform === 'win32';
@@ -96,21 +96,51 @@ test('the packaged empty verification record is stated as empty, not as a failed
 });
 
 test('connection checks read adb state without connecting or printing the address', async (t) => {
-  const cases: [string, string | null, string, string, string][] = [
-    ['online', 'device', 'normal', 'device-online', 'inspect-connection-in-maa'],
-    ['offline', 'offline', 'error', 'device-offline', 'restart-emulator-and-adb'],
-    ['unauthorized', 'unauthorized', 'error', 'device-unauthorized', 'authorize-adb'],
-    ['not-listed', null, 'warning', 'device-not-listed', 'start-emulator'],
+  const cases: [string, string, string, string, string, string][] = [
+    ['online', '127.0.0.1:16384', '127.0.0.1:16384\tdevice', 'normal', 'device-online', 'inspect-connection-in-maa'],
+    ['offline', '127.0.0.1:16384', '127.0.0.1:16384\toffline', 'error', 'device-offline', 'restart-emulator-and-adb'],
+    ['unauthorized', '127.0.0.1:16384', '127.0.0.1:16384\tunauthorized', 'error', 'device-unauthorized', 'authorize-adb'],
+    // adb lists a network address only after something connects to it, so absence says nothing about the emulator.
+    ['network address not connected', '127.0.0.1:16384', 'emulator-5554\tdevice', 'warning', 'device-not-connected', 'test-connection-through-setup'],
+    ['console port listed under its emulator serial', '127.0.0.1:5555', 'emulator-5554\tdevice', 'normal', 'device-online', 'inspect-connection-in-maa'],
+    ['emulator serial not listed', 'emulator-5556', 'emulator-5554\tdevice', 'warning', 'device-not-listed', 'start-emulator'],
   ];
-  for (const [name, state, status, reason, repair] of cases) await t.test(name, async (t) => {
-    const f = await fixture(t, { connect: { AdbPath: 'adb/synthetic-adb.exe', Address: '127.0.0.1:16384', AutoDetect: false } });
+  for (const [name, address, listing, status, reason, repair] of cases) await t.test(name, async (t) => {
+    const f = await fixture(t, { connect: { AdbPath: 'adb/synthetic-adb.exe', Address: address, AutoDetect: false } });
     await mkdir(join(f.maaDirectory, 'adb')); await writeFile(join(f.maaDirectory, 'adb/synthetic-adb.exe'), 'synthetic');
     const calls: string[][] = [];
-    const adb: AdbBoundary = { run: async (_executable, args) => { calls.push(args); return { exitCode: 0, stdout: `List of devices attached\n${state ? `127.0.0.1:16384\t${state}\n` : 'emulator-5554\tdevice\n'}` }; } };
+    const adb: AdbBoundary = { run: async (_executable, args) => { calls.push(args); return { exitCode: 0, stdout: `List of devices attached\n${listing}\n` }; } };
     const result = await runChecks(f.context, f.maa, { ...quiet, adb });
     assert.deepEqual(calls, [['devices']]);
     assert.deepEqual([row(result, 'connection').status, row(result, 'connection').reason, row(result, 'connection').repair.id], [status, reason, repair]);
-    assert.doesNotMatch(JSON.stringify(result) + await readFile(join(f.privateDirectory, 'doctor-latest.json'), 'utf8'), /16384|127\.0\.0\.1|emulator-5554|synthetic-adb/);
+    if (reason === 'device-not-connected') {
+      assert.match(row(result, 'connection').message, /not currently connected/);
+      assert.doesNotMatch(row(result, 'connection').message, /not be running|not running/);
+    }
+    assert.doesNotMatch(JSON.stringify(result) + await readFile(join(f.privateDirectory, 'doctor-latest.json'), 'utf8'), /16384|127\.0\.0\.1|emulator-555|synthetic-adb/);
+  });
+  await t.test('a configured path that is not an adb executable is never run', async (t) => {
+    for (const name of ['MAA.exe', 'HD-Player.exe', 'adb.exe.bak']) {
+      const f = await fixture(t, { connect: { AdbPath: name, Address: '127.0.0.1:16384' } });
+      if (name !== 'MAA.exe') await writeFile(join(f.maaDirectory, name), 'synthetic program that must not run');
+      const calls: string[] = [];
+      const adb: AdbBoundary = { run: async (executable) => { calls.push(executable); return { exitCode: 0, stdout: 'List of devices attached\n127.0.0.1:16384\tdevice\n' }; } };
+      const result = await runChecks(f.context, f.maa, { ...quiet, adb });
+      assert.deepEqual(calls, [], `${name} is not executed`);
+      assert.deepEqual([row(result, 'connection').status, row(result, 'connection').reason, row(result, 'connection').repair.channel], ['warning', 'adb-path-unrecognized', 'setup.ts discover|test|apply']);
+      assert.doesNotMatch(JSON.stringify(result), /HD-Player|adb\.exe\.bak/);
+    }
+  });
+  await t.test('setup discovery and doctor share one adb executable predicate', async (t) => {
+    const f = await fixture(t, { connect: { AdbPath: 'HD-Player.exe', Address: '127.0.0.1:16384' } });
+    await writeFile(join(f.maaDirectory, 'HD-Player.exe'), 'synthetic program that must not run');
+    const calls: string[] = [];
+    const adb: AdbBoundary = { run: async (executable) => { calls.push(executable); return { exitCode: 0, stdout: 'List of devices attached\n' }; } };
+    await discoverSetupConnections({ home: f.home, maaDirectory: f.maaDirectory }, adb);
+    await discoverSetupConnections({ home: f.home, maaDirectory: f.maaDirectory, adbPaths: [join(f.maaDirectory, 'HD-Player.exe')] }, adb);
+    assert.equal(calls.some(executable => /HD-Player/i.test(executable)), false);
+    for (const [path, accepted] of [['adb.exe', true], ['vbox_adb.exe', true], ['HD-Adb.exe', true], ['MAA.exe', false], ['HD-Player.exe', false], ['adb.exe.bak', false], ['adb', false]] as const)
+      assert.equal(isAdbExecutablePath(join(f.maaDirectory, path)), accepted, path);
   });
   await t.test('missing adb and unconfigured connections route to the setup channel', async (t) => {
     const missing = await fixture(t, { connect: { AdbPath: 'adb/absent-adb.exe', Address: '127.0.0.1:16384' } });

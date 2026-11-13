@@ -30,10 +30,40 @@ export async function currentConfiguration(directory: string) {
   const profile = object(profiles[config.Current]);
   return { config, profile, gui: object(profile.Gui), profileIndex: Object.keys(profiles).indexOf(config.Current) };
 }
-export type ConnectionState = 'device-online' | 'device-offline' | 'device-unauthorized' | 'device-not-listed' | 'adb-unavailable' | 'adb-missing' | 'connection-not-configured' | 'connection-unreadable';
+/**
+ * The one rule for what may ever be run as adb, shared by setup discovery and doctor: the file name
+ * must be an `…adb….exe` name. A configured MAA.exe, emulator player or any other program is never run.
+ */
+export function isAdbExecutablePath(path: unknown): path is string {
+  return typeof path === 'string' && !!path.trim() && !/[\0\r\n]/.test(path) && /adb[^/\\]*\.exe$/i.test(basename(path.replaceAll('\\', '/')));
+}
+/** Resolves a configured or discovered path to an existing adb executable; the real target must pass the same rule. */
+export async function resolveAdbExecutable(path: unknown, relativeTo: string): Promise<{ executable: string } | { reason: 'adb-path-unrecognized' | 'adb-missing' }> {
+  if (!isAdbExecutablePath(path)) return { reason: 'adb-path-unrecognized' };
+  const absolute = resolve(relativeTo, path);
+  if (!await isFile(absolute)) return { reason: 'adb-missing' };
+  const canonical = await realpath(absolute);
+  return isAdbExecutablePath(canonical) ? { executable: canonical } : { reason: 'adb-path-unrecognized' };
+}
+
+export type ConnectionState = 'device-online' | 'device-offline' | 'device-unauthorized' | 'device-not-listed' | 'device-not-connected' | 'adb-unavailable'
+  | 'adb-missing' | 'adb-path-unrecognized' | 'connection-not-configured' | 'connection-unreadable';
+/**
+ * Android adb (developer.android.com/tools/adb): the server finds local emulators by scanning odd ports 5555–5585
+ * and lists each as `emulator-<console port>`, the console port being the adb port minus one. Other network
+ * addresses appear only after something runs `adb connect`, so their absence says nothing about the emulator.
+ */
+function localAdbPort(value: string): number | null {
+  const loopback = /^(?:127\.0\.0\.1|localhost):(\d{1,5})$/.exec(value);
+  if (loopback) return Number(loopback[1]);
+  const serial = /^emulator-(\d{1,5})$/.exec(value);
+  return serial ? Number(serial[1]) + 1 : null;
+}
+const autoListed = (port: number | null) => port !== null && port >= 5555 && port <= 5585 && port % 2 === 1;
 /**
  * Doctor's read-only connection check: the current profile's adb path and address, then only `adb devices`.
- * It never runs `connect`, never selects or writes a connection and never returns the address or path.
+ * It never runs `connect`, never runs a program that is not adb, never selects or writes a connection and
+ * never returns the address or path.
  */
 export async function inspectConnection(maaDirectory: string, adb: AdbBoundary = systemAdb): Promise<ConnectionState> {
   let connect: Record<string, unknown>;
@@ -43,18 +73,18 @@ export async function inspectConnection(maaDirectory: string, adb: AdbBoundary =
   } catch { return 'connection-unreadable'; }
   const { AdbPath: adbPath, Address: address } = connect;
   if (typeof adbPath !== 'string' || !adbPath.trim() || typeof address !== 'string' || !address.trim()) return 'connection-not-configured';
-  if (/[\0\r\n]/.test(adbPath)) return 'adb-missing';
-  const executable = resolve(maaDirectory, adbPath);
-  if (!await isFile(executable)) return 'adb-missing';
-  const same = (listed: string) => listed === address || listed.replace(/^localhost:/, '127.0.0.1:') === address.replace(/^localhost:/, '127.0.0.1:');
+  const resolved = await resolveAdbExecutable(adbPath, maaDirectory);
+  if ('reason' in resolved) return resolved.reason;
+  const port = localAdbPort(address);
+  const same = (listed: string) => listed === address || port !== null && localAdbPort(listed) === port;
   try {
-    const result = await adb.run(executable, ['devices']);
+    const result = await adb.run(resolved.executable, ['devices']);
     if (result.exitCode !== 0) return 'adb-unavailable';
     for (const line of result.stdout.split(/\r?\n/)) {
       const match = /^(\S+)\s+(\S+)/.exec(line.trim());
       if (match && same(match[1]!)) return match[2] === 'device' ? 'device-online' : match[2] === 'unauthorized' ? 'device-unauthorized' : 'device-offline';
     }
-    return 'device-not-listed';
+    return autoListed(port) ? 'device-not-listed' : 'device-not-connected';
   } catch { return 'adb-unavailable'; }
 }
 type Candidate = { id: string; adbPath: string; address: string; sources: string[]; state: string };
@@ -70,11 +100,10 @@ async function discover(context: ConnectionContext, adb: AdbBoundary) {
   if (context.adbPaths?.some(path => !isAbsolute(path)) || context.addresses?.some(address => !localAddress(address))) throw new Error('candidate-input-invalid');
   const paths = new Map<string, string[]>();
   const addPath = async (path: unknown, source: string, relativeTo?: string) => {
-    if (typeof path !== 'string' || !path.trim() || !/adb[^/\\]*\.exe$/i.test(basename(path))) return;
-    if (!isAbsolute(path) && !relativeTo) return;
-    const absolute = resolve(relativeTo ?? directory, path);
-    if (!await isFile(absolute)) return;
-    const canonical = await realpath(absolute);
+    if (!isAdbExecutablePath(path) || !isAbsolute(path) && !relativeTo) return;
+    const resolved = await resolveAdbExecutable(path, relativeTo ?? directory);
+    if ('reason' in resolved) return;
+    const canonical = resolved.executable;
     const previous = [...paths.keys()].find(key => process.platform === 'win32' ? key.toLowerCase() === canonical.toLowerCase() : key === canonical);
     const key = previous ?? canonical;
     paths.set(key, [...new Set([...(paths.get(key) ?? []), source])]);
