@@ -11,7 +11,7 @@
    {"operation":"<prepare 返回的 operation>","reference":"<用户这次的原话>"}
    ```
 
-   `start` 先记下两份日志的起点（字节偏移、大小、文件身份、末尾哈希），只有起点之后的行算这次运行。一批的第一次 `start` 还会搜 MAA 的 Core 日志（`debug/asst.log` 和轮转出的 `asst.bak.log`）：批准的作业文件只属于这次批准，日志里只要有提交或载入它们的行，这一批就可能已经跑过或正在跑，`start` 拒绝（`batch-may-have-run`）；日志够不到准备开始的时候也拒绝（`batch-evidence-incomplete`）。用户说已经点过开始时照样运行 `start`，多半会这样被拒绝：告诉用户这一批没法跟踪，请他自己看游戏，不重开、不重打。
+   `start` 先记下两份日志的起点（字节偏移、大小、文件身份、末尾哈希），只有起点之后的行算这次运行。一批的第一次 `start` 还会搜 MAA 的 Core 日志（`debug/asst.log` 和轮转出的 `asst.bak.log`）：准备开始之后（或时间读不出）有提交或载入这一批作业文件的行，这一批就可能已经跑过或正在跑，`start` 拒绝（`batch-may-have-run`）；准备之前的这类行（同一份报告的上一批、共用作业的另一批）不算；日志够不到准备开始的时候也拒绝（`batch-evidence-incomplete`）。用户说已经点过开始时照样运行 `start`，多半会这样被拒绝：告诉用户这一批没法跟踪，请他自己看游戏，不重开、不重打。
 3. `start` 拒绝时按原因处理：`batch-not-prepared`（没有完成的准备）、`prepared-list-changed`（MAA 里的作业列表和批准的不一致，取消勾选部分条目不算）、`job-file-changed`（作业文件变了）。这三种都先告诉用户，不自行重新准备。`finished-items-ticked` 见第 11 条。其余原因（例如 `batch-may-have-run`、`run-unresolved`、`untracked-chain`、`chain-without-start`、`chain-already-started`、`evidence-incomplete`、`outcome-unknown`、`retry-not-decided`）都表示这一批可能又打过、结果未知或没有可用的重试决定：停下告诉用户，不换个说法再试。
 
 ## 跟踪和报告
