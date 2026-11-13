@@ -15,6 +15,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/setup-download.ts` | 缺失程序的官方下载方案、经确认的单次下载与校验、下载状态和解压；由 setup 入口调用 | [接入接口](../maa-setup/references/setup.md) |
 | `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
+| `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |
 | `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
 | `scripts/operator-cost.ts` | 按快照和明确目标只读查询单干员逐级培养成本 | [成本接口](../maa-account/references/cost.md) |
@@ -28,4 +29,5 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 - 调用前读对应的接口说明，只通过脚本读写，不直接改它管理的文件。
 - 用户的文本作为数据经标准输入传给脚本，不拼进命令行。
 - 偏好不能授权源石、抽卡、礼包、付费、登录或设备操作。
+- 凭据输入只由用户本人在自己的终端运行；agent 只运行 `credentials.ts check`，不在对话里索取或复述凭据。
 - 本目录要和调用它的 skill 来自同一个版本。更新时所有 maa skill 一起重装，见 maa-help 的宿主说明。

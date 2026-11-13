@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readSettings, settingsHome } from './preferences.ts';
+import { inspectCredentials } from './credentials.ts';
 import type { CheckResult } from './doctor.ts';
 import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
@@ -85,6 +86,8 @@ export async function checkSetup(context: SetupContext = {}, versionReader: MaaV
     recordAvailable = true; sourceVerified = version !== null && record.sourceVerified.includes(version); deviceVerified = version !== null && record.deviceVerified.includes(version);
   } catch { /* Missing records cannot certify a version. */ }
   add('version', sourceVerified && deviceVerified ? 'normal' : 'warning', !recordAvailable ? 'verification-record-unavailable' : !version ? 'maa-version-unknown' : sourceVerified && deviceVerified ? 'maa-version-verified' : 'maa-version-not-fully-verified', 'read-version-verification');
+  // Shared with doctor: presence and known state only, never a value; an unknown private directory is not guessed.
+  checks.push(...(await inspectCredentials(settings ? settings.privateDirectory : null)).checks);
   return { checkedAt: new Date().toISOString(), exitCode: checks.some(item => item.status === 'error') ? 1 : 0, checks,
     language: settings?.language ?? null, needsLanguagePrompt: !!settings && !settings.languageAsked && settings.language === null,
     needsDirectoryPrompt: !!settings && !settingsPresent, version: { installed: version, recordAvailable, sourceVerified, deviceVerified } };
