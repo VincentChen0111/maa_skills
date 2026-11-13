@@ -59,10 +59,15 @@ test('each of the 15 gates passes for the consistent plan and fails for a synthe
       ['two alternate forms of one operator in one cycle', plan => { plan.plans[0]!.rooms.trading[0].operators = ['合成形态']; plan.plans[1]!.rooms.trading[0].operators = ['合成形态异']; }]],
     2: [['more operators than the room holds', plan => { plan.plans[0]!.rooms.manufacture[0].operators.push('合成记一'); }]],
     3: [['fewer plans than shifts', (_plan, ctx) => { ctx.shifts = 3; }], ['a facility missing from one plan', plan => { delete plan.plans[1]!.rooms.trading; }]],
-    4: [['continuous work beyond the mood cap', (_plan, ctx) => { ctx.mood = { 合成金一: { work: 2.5, rest: 3, basis: '合成假设' } }; }]],
+    4: [['continuous work beyond the mood cap', (_plan, ctx) => { ctx.mood = { 合成金一: { work: 2.5, rest: 3, basis: '合成假设' } }; }],
+      ['a Fiammetta target still drains past the cap between two swaps', (plan, ctx) => { plan.plans[0]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' };
+        fiammettaInDorms(plan); ctx.mood = { 合成控一: { work: 2.5, rest: 3, basis: '合成假设' } }; }]],
     5: [['an operator on duty in every shift', plan => { plan.plans[1]!.rooms.control[0].operators = ['合成控一']; plan.plans[1]!.rooms.dormitory[0].operators[1] = '合成控三'; }],
-      ['a Fiammetta target that drains faster than 2 per hour', (plan, ctx) => { plan.plans[1]!.rooms.control[0].operators = ['合成控一']; plan.plans[1]!.rooms.dormitory[0].operators[1] = '合成控三';
-        plan.plans[0]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' }; ctx.mood = { 合成控一: { work: 3, rest: 2, basis: '合成假设' } }; }]],
+      ['a Fiammetta target that drains faster than 2 per hour', (plan, ctx) => { onDutyWithFiammetta(plan, [0, 1]); ctx.mood = { 合成控一: { work: 3, rest: 2, basis: '合成假设' } }; }],
+      ['a target on duty in both shifts but swapped only once a day', (plan, ctx) => { onDutyWithFiammetta(plan, [0]); ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; }],
+      ['a target swapped every shift while Fiammetta is in no dormitory list', (plan, ctx) => { plan.plans[1]!.rooms.control[0].operators = ['合成控一'];
+        plan.plans[1]!.rooms.dormitory[0].operators[1] = '合成控三'; for (const index of [0, 1]) plan.plans[index]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' };
+        ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; }]],
     6: [['more resting operators than free beds', plan => { plan.plans[0]!.rooms.dormitory.push({ operators: ['合成控三'] }); }]],
     7: [['a combination member without the operator it depends on', (_plan, ctx) => { ctx.combos = [{ members: ['合成金一'], dependsOn: ['合成贸三'], basis: '合成假设' }]; }]],
     8: [['two mutually exclusive skills at the same time', (_plan, ctx) => { ctx.exclusions = [{ members: ['合成金一', '合成金二'], basis: '合成假设' }]; }]],
@@ -74,7 +79,8 @@ test('each of the 15 gates passes for the consistent plan and fails for a synthe
       ['a Fiammetta switch without a target', plan => { plan.plans[0]!.Fiammetta = { enable: true, target: '', order: 'pre' }; }]],
     12: [['a total that is not the sum of its parts', (_plan, ctx) => { ctx.efficiency = [{ plan: 0, room: 'manufacture[0]', base: 100, skill: 60, global: 5, total: 170, basis: '合成假设' }]; }]],
     14: [['an uncovered hour when the user is early', plan => { plan.plans[1]!.period = [['20:00', '23:59'], ['00:00', '07:00']]; }],
-      ['a mood margin that breaks one hour late', (_plan, ctx) => { ctx.mood = { 合成金一: { work: 1.9, rest: 3, basis: '合成假设' } }; }]],
+      ['a mood margin that breaks one hour late', (_plan, ctx) => { ctx.mood = { 合成金一: { work: 1.9, rest: 3, basis: '合成假设' } }; }],
+      ['an early run keeps the previous plan until the next change', (_plan, ctx) => { ctx.moodDefault = { work: 1.5, rest: 2, basis: '合成假设' }; }]],
     15: [['a claim that the plan is optimal', plan => { plan.title = '合成最优两班'; }]],
   };
   for (const [id, cases] of Object.entries(failing)) for (const [name, mutate] of cases) {
@@ -86,10 +92,25 @@ test('each of the 15 gates passes for the consistent plan and fails for a synthe
   const changed = checkPlanText(text, { ...context(), reexport: text.replace('白班', '早班') });
   assert.equal(gate(changed, 13).verdict, 'fail', 'gate 13: the delivered file differs from a deterministic re-export');
   assert.equal(gate(checked(undefined, { mood: { 合成金一: { work: 1.9, rest: 3, basis: '合成假设' } } }), 4).verdict, 'pass', 'gate 4 alone allows 22.8 of 24');
-  const fiammetta = checked((plan, ctx) => { plan.plans[1]!.rooms.control[0].operators = ['合成控一']; plan.plans[1]!.rooms.dormitory[0].operators[1] = '合成控三';
-    plan.plans[0]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' }; ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; });
-  assert.equal(gate(fiammetta, 5).verdict, 'pass', 'the Fiammetta target may stay on duty when it drains at most 2 per hour');
+  const early = checked(undefined, { moodDefault: { work: 1.5, rest: 2, basis: '合成假设' } });
+  assert.equal(gate(early, 4).verdict, 'pass', '18 of 24 per 12-hour shift holds on time');
+  assert.ok(gate(early, 14).evidence.some(entry => entry.includes('提前') && entry.includes('36')), JSON.stringify(gate(early, 14)));
+  const fiammetta = checked((plan, ctx) => { onDutyWithFiammetta(plan, [0, 1]); ctx.mood = { 合成控一: { work: 1.5, rest: 2, basis: '合成假设' } }; });
+  for (const id of [4, 5]) assert.equal(gate(fiammetta, id).verdict, 'pass', `gate ${id}: a target swapped at every change, with Fiammetta resting in between, may stay on duty: ${JSON.stringify(gate(fiammetta, id))}`);
+  // Four changes a day with two alternating plans: each stretch is 6 hours, not the 12 hours a plan holds in total.
+  const rotation = checked((plan, ctx) => { plan.plans[0]!.period = [['00:00', '06:00'], ['12:00', '18:00']]; plan.plans[1]!.period = [['06:00', '12:00'], ['18:00', '23:59']];
+    ctx.mood = { 合成金一: { work: 2.5, rest: 3, basis: '合成假设' } }; });
+  assert.equal(gate(rotation, 4).verdict, 'pass', JSON.stringify(gate(rotation, 4)));
 });
+/** Fiammetta rests in the dormitory in both shifts, in the bed the permanent resident 合成宿一 had. */
+function fiammettaInDorms(plan: Plan) { for (const index of [0, 1]) plan.plans[index]!.rooms.dormitory[0].operators[0] = '合成菲'; }
+/** 合成控一 stays in the control centre in both shifts; Fiammetta swaps with it at the start of the listed plans and rests in between. */
+function onDutyWithFiammetta(plan: Plan, swaps: number[]) {
+  plan.plans[1]!.rooms.control[0].operators = ['合成控一'];
+  plan.plans[1]!.rooms.dormitory[0].operators[1] = '合成控三';
+  fiammettaInDorms(plan);
+  for (const index of swaps) plan.plans[index]!.Fiammetta = { enable: true, target: '合成控一', order: 'pre' };
+}
 
 test('a gate that cannot be verified is listed separately and never counts as a pass', () => {
   const result = checked(undefined, { moodDefault: undefined, combos: undefined, exclusions: undefined, efficiency: undefined, snapshot: null });
@@ -200,6 +221,15 @@ test('unassigned rooms are filled from owned operators whose active skills match
   const unfilled = await generateBasePlan(input, { home, fetcher: planNetwork() });
   if (unfilled.status !== 'written') return assert.fail(JSON.stringify(unfilled));
   assert.deepEqual((unfilled.plan as Plan).plans[0]!.rooms.trading, [{ skip: true }], 'without fill an unassigned room keeps its operators');
+  // The first shift follows the last one around the cycle: whoever the proposal puts on duty last is not filled in first.
+  const cycle = planInput();
+  delete (cycle.shifts[0]!.rooms as Record<string, unknown>).trading;
+  cycle.shifts[1]!.rooms.trading = [['合成贸一']];
+  cycle.shifts[1]!.rooms.dormitory = [['合成宿一', '合成控一', '合成金一', '合成金二', '合成贸二']];
+  cycle.shifts[0]!.rooms.dormitory = [['合成宿一', '合成控二', '合成金三', '合成金四', '合成贸三']];
+  const first = await generateBasePlan({ ...cycle, fill: true }, { home, fetcher: planNetwork() });
+  if (first.status !== 'written') return assert.fail(JSON.stringify(first));
+  assert.deepEqual(first.fills, [{ plan: 0, room: 'trading[0]', operators: ['合成贸二'] }], '合成贸一 works the last shift, so the first shift does not take it');
 });
 
 test('a different layout and roster: three shifts and two factories with different products, filled only with skills that fit each product', async (t) => {
