@@ -66,7 +66,11 @@
 
 ## 门禁运行
 
-（完整离线入口的结果在提交前补记。）
+在提交 `d6f8e40`（本记录之前的最后一个代码提交）上运行，本机 Windows 11、Node 24：
+
+- `npm ci --ignore-scripts` 后 `npm run typecheck`：通过。
+- 单文件：`node --test tests/credentials.test.ts`（6 项通过）、`tests/setup.test.ts`、`tests/doctor.test.ts`、`tests/setup-scenarios.test.ts`、`tests/doctor-scenarios.test.ts`：全部通过。
+- `node scripts/check.ts`：退出码 0。396 项测试中 395 通过、0 失败、1 跳过（非 Windows 进程适配器不可用分支，本机为 Windows 时跳过）；tracker、隐私、元数据检查无问题；评分规则自检 7 条、14 份样例通过。已知的「关闭 MAA」超时偶发项本次没有出现。
 
 ## 设计默认值
 
