@@ -23,7 +23,7 @@ Blocked by: [06: doctor 核对并恢复遗留写入](06-doctor-lock-recovery.md)
 - 记录 MAA 报告的理智药用量；
 - 重试、换备选和重启共用唯一的重打判断 `rerunGate`。
 
-[独立审查](../reviews/2026-11-13-16-stage-run-tracking.md)共四轮（维护者 2026-11-14 同意开第四轮），没有未解决的意见。[验证记录](../stage-run-verification.md)写明实际运行的检查和未验证项：
+[独立审查](../reviews/2026-11-13-16-stage-run-tracking.md)共五轮（维护者 2026-11-14 同意本次任务可以超过三轮），没有未解决的 P1、P2，剩下的两条 P3 转 [Issue #65](https://github.com/VincentChen0111/maa_skills/issues/65)。[验证记录](../stage-run-verification.md)写明实际运行的检查和未验证项：
 - 真实 MAA 上的回调顺序和勾选写盘时机；
 - 真模型前后评测（留给 26）。
 
