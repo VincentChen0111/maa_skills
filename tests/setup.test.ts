@@ -307,8 +307,9 @@ test('setup and doctor report the same credential check; credential fixes stay w
     ['credential-nga', 'normal', 'credential-unset'], ['credential-skland', 'error', 'credential-expired'], ['credential-bilibili', 'normal', 'credential-unset']]);
   assert.equal(setup.exitCode, 1);
   const maa: MaaProcess = { inspect: async () => ({ running: false, ready: false, treeExited: true, idle: true }), close: async () => undefined, start: async () => undefined };
-  const doctor = await runChecks({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory }, maa);
-  assert.deepEqual(doctor.checks.filter(item => item.id.startsWith('credential-')), credentials, 'one shared check for setup and doctor');
+  const doctor = await runChecks({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, home: f.home }, maa,
+    { versionReader: async () => null, adb: { run: async () => ({ exitCode: 1, stdout: '' }) } });
+  assert.deepEqual(doctor.checks.filter(item => item.id.startsWith('credential-')).map(({ group: _group, ...item }) => item), credentials, 'one shared check for setup and doctor');
   assert.equal(doctor.exitCode, 1);
   const latest = await readFile(join(f.privateDirectory, 'doctor-latest.json'), 'utf8');
   for (const output of [JSON.stringify(setup), JSON.stringify(doctor), latest]) {

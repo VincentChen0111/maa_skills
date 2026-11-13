@@ -30,6 +30,33 @@ export async function currentConfiguration(directory: string) {
   const profile = object(profiles[config.Current]);
   return { config, profile, gui: object(profile.Gui), profileIndex: Object.keys(profiles).indexOf(config.Current) };
 }
+export type ConnectionState = 'device-online' | 'device-offline' | 'device-unauthorized' | 'device-not-listed' | 'adb-unavailable' | 'adb-missing' | 'connection-not-configured' | 'connection-unreadable';
+/**
+ * Doctor's read-only connection check: the current profile's adb path and address, then only `adb devices`.
+ * It never runs `connect`, never selects or writes a connection and never returns the address or path.
+ */
+export async function inspectConnection(maaDirectory: string, adb: AdbBoundary = systemAdb): Promise<ConnectionState> {
+  let connect: Record<string, unknown>;
+  try {
+    const current = await currentConfiguration(maaDirectory);
+    connect = current.gui.ConnectSettings === undefined ? {} : object(current.gui.ConnectSettings);
+  } catch { return 'connection-unreadable'; }
+  const { AdbPath: adbPath, Address: address } = connect;
+  if (typeof adbPath !== 'string' || !adbPath.trim() || typeof address !== 'string' || !address.trim()) return 'connection-not-configured';
+  if (/[\0\r\n]/.test(adbPath)) return 'adb-missing';
+  const executable = resolve(maaDirectory, adbPath);
+  if (!await isFile(executable)) return 'adb-missing';
+  const same = (listed: string) => listed === address || listed.replace(/^localhost:/, '127.0.0.1:') === address.replace(/^localhost:/, '127.0.0.1:');
+  try {
+    const result = await adb.run(executable, ['devices']);
+    if (result.exitCode !== 0) return 'adb-unavailable';
+    for (const line of result.stdout.split(/\r?\n/)) {
+      const match = /^(\S+)\s+(\S+)/.exec(line.trim());
+      if (match && same(match[1]!)) return match[2] === 'device' ? 'device-online' : match[2] === 'unauthorized' ? 'device-unauthorized' : 'device-offline';
+    }
+    return 'device-not-listed';
+  } catch { return 'adb-unavailable'; }
+}
 type Candidate = { id: string; adbPath: string; address: string; sources: string[]; state: string };
 async function discover(context: ConnectionContext, adb: AdbBoundary) {
   const settings = await readSettings(context.home);
