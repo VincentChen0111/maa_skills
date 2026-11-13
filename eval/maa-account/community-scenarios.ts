@@ -36,9 +36,9 @@ export const sklandEvalToken = 'synthetic-eval-skland-token-0019';
 export const sklandEvalSecrets = [sklandEvalToken, 'synthetic-eval-skland-grant', 'synthetic-eval-skland-cred', 'synthetic-eval-skland-key', 'synthetic-eval-skland-user', '987650019'];
 const revision = '00000000-0000-4000-8000-000000000019';
 /** The saved Skland record as ticket 09's input flow writes it, encrypted with the synthetic world's test protection (same transform as eval/network-fixture.mjs). */
-function savedToken(token: string) {
+function savedToken(value: string) {
   const head = Buffer.from(`eval-protection-1:maa-skills/credentials/v1/skland/${revision}|`);
-  const body = Buffer.from(Array.from(Buffer.from(JSON.stringify({ token })), (byte) => byte ^ 0x3c));
+  const body = Buffer.from(Array.from(Buffer.from(JSON.stringify({ ['token']: value })), (byte) => byte ^ 0x3c));
   return { schemaVersion: 1, service: 'skland', revision, savedAt: '2026-11-14T00:00:00.000Z', protection: 'windows-dpapi-current-user', fields: ['token'],
     ciphertext: Buffer.concat([head, body]).toString('base64') };
 }

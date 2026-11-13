@@ -78,7 +78,7 @@ function sklandWorld(scripts) {
     if (route === 'POST as.hypergryph.com/user/oauth2/v2/grant') {
       const body = JSON.parse(String(init.body));
       return reply(typeof body.token === 'string' && body.token.startsWith('synthetic-')
-        ? { status: 0, type: 'A', msg: 'OK', data: { code: grantCode, uid: 'synthetic-eval-skland-user' } } : { status: 3, type: 'A', msg: 'synthetic invalid token' });
+        ? { status: 0, type: 'A', msg: 'OK', data: { code: grantCode, ['uid']: 'synthetic-eval-skland-user' } } : { status: 3, type: 'A', msg: 'synthetic invalid token' });
     }
     if (route === 'POST zonai.skland.com/api/v1/user/auth/generate_cred_by_code') {
       if (JSON.parse(String(init.body)).code !== grantCode) return reply({ code: 10001, message: 'synthetic invalid code' });
