@@ -87,6 +87,7 @@ test('the auth preflight reports each category, keeps status output in memory an
   const key = await run('claude', { authStatus: { loggedIn: true, authMethod: 'api_key', apiKeySource: 'ANTHROPIC_API_KEY' } });
   assert.equal(key.category, 'api-key-in-environment'); assert.equal(key.started, 0, 'no model request after a failed status check');
   assert.equal((await run('claude', { authStatus: { loggedIn: true, authMethod: 'oauth_token' } })).detail, 'non-plan-credential');
+  assert.equal((await run('claude', { authStatus: { loggedIn: true, authMethod: 'api_key' } })).detail, 'api-key-login');
   assert.equal((await run('claude', { authStatus: { loggedIn: true, authMethod: 'claude.ai', loginExpiresAt: '2000-01-01T00:00:00.000Z' } })).category, 'login-expired');
   for (const [failure, category] of [['login-expired', 'login-expired'], ['not-logged-in', 'not-logged-in'], ['quota', 'quota-exhausted'], ['network', 'network-unavailable']]) {
     const result = await run('claude', { ...plan, failure });
@@ -97,7 +98,7 @@ test('the auth preflight reports each category, keeps status output in memory an
   const tooled = await run('claude', { ...plan, init: { tools: ['Read'] } });
   assert.equal(tooled.detail, 'tools-offered');
   assert.equal((await run('codex', { authStatus: 'Not logged in' })).category, 'not-logged-in');
-  assert.equal((await run('codex', { authStatus: 'API key configured - sk-synthetic***' })).category, 'api-key-in-environment');
+  assert.equal((await run('codex', { authStatus: 'API key configured - sk-synthetic***' })).detail, 'api-key-login', 'a key saved in the directory is not the plan login');
   const codex = await run('codex', { authStatus: 'Logged in using ChatGPT' });
   assert.equal(codex.status, 'pass'); assert.equal(codex.minimalRequest, 'not-supported'); assert.equal(codex.started, 0, 'Codex sends no tool-less request');
   assert.equal((await run('claude', {}, { auth: 'api-key' })).category, 'api-key-missing');

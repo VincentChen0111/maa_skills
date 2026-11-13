@@ -122,14 +122,17 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
         try { parsed = JSON.parse(status.stdout); } catch { return fail('other', 'status-output-unrecognized'); }
         const expiresAt = typeof parsed.loginExpiresAt === 'string' ? Date.parse(parsed.loginExpiresAt) : NaN;
         if (parsed.loggedIn !== true) { result.statusCommand = 'not-logged-in'; return fail('not-logged-in', 'maintainer-login-required'); }
-        if (parsed.apiKeySource || parsed.authMethod === 'api_key' || parsed.authMethod === 'api_key_helper') { result.statusCommand = 'api-key'; return fail('api-key-in-environment'); }
+        // An environment key outranks the login; a key saved in the directory is a login, but not the plan login.
+        if (parsed.apiKeySource) { result.statusCommand = 'api-key'; return fail('api-key-in-environment'); }
+        if (parsed.authMethod === 'api_key' || parsed.authMethod === 'api_key_helper') { result.statusCommand = 'api-key'; return fail('other', 'api-key-login'); }
         if (parsed.authMethod !== 'claude.ai') { result.statusCommand = 'other'; return fail('other', 'non-plan-credential'); }
         result.statusCommand = 'plan-login';
         if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return fail('login-expired', 'maintainer-login-required');
       } else {
         const text = `${status.stdout ?? ''}\n${status.stderr ?? ''}`;
         if (/Not logged in/i.test(text)) { result.statusCommand = 'not-logged-in'; return fail('not-logged-in', 'maintainer-login-required'); }
-        if (/API key/i.test(text)) { result.statusCommand = 'api-key'; return fail('api-key-in-environment'); }
+        // The child environment carries no key at this point, so a reported key is one saved in the directory.
+        if (/API key/i.test(text)) { result.statusCommand = 'api-key'; return fail('other', 'api-key-login'); }
         if (!/Logged in using ChatGPT/i.test(text) || status.status !== 0) { result.statusCommand = 'other'; return fail('other', 'non-plan-credential'); }
         result.statusCommand = 'plan-login';
       }
