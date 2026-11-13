@@ -21,7 +21,9 @@ channel('child_process').subscribe((message) => started.push(message));
 const refused = (error: unknown) => error instanceof Error && error.message === 'offline-test-real-network';
 
 test('the test guard refuses to start PowerShell through every child_process entry point; other programs still reach the layer below', async () => {
-  const windowsShell = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  // The research transport's own path on Windows; elsewhere the same file name under a stand-in folder.
+  const windowsShell = join(process.env.SystemRoot ?? 'Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const programFilesShell = join(process.env.ProgramFiles ?? 'Program Files', 'PowerShell', '7', 'pwsh.exe');
   const before = guard.refused.length;
   const attempts: [string, () => unknown][] = [
     ['spawn, Windows PowerShell by full path', () => spawn(windowsShell, ['-NoProfile', '-NonInteractive', '-Command', 'exit'])],
@@ -30,7 +32,7 @@ test('the test guard refuses to start PowerShell through every child_process ent
     ['execFile', () => execFile('pwsh.exe', ['-Command', 'exit'], () => undefined)],
     ['execFileSync', () => execFileSync(windowsShell, ['-Command', 'exit'])],
     ['exec', () => exec('powershell -NoProfile -Command exit', () => undefined)],
-    ['execSync, quoted path with spaces', () => execSync('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command exit')],
+    ['execSync, quoted path with spaces', () => execSync(`"${programFilesShell}" -Command exit`)],
     ['spawn with a shell', () => spawn('echo ok && pwsh -Command exit', { shell: true })],
     ['spawn of cmd running PowerShell', () => spawn('cmd.exe', ['/d', '/s', '/c', 'powershell -Command exit'])],
     ['fork with PowerShell as the runtime', () => fork('probe.mjs', [], { execPath: 'pwsh' })],
