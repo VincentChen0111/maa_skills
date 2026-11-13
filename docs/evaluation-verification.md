@@ -95,6 +95,22 @@
 
 更正：每边一个 skill 版本的检查来自最初的评测框架（`ecc7325`），不是在本工单的 `d19e891` 里引入的；`d19e891` 加入了多组批次和整批比较，问题从那时起才会出现。
 
+## 第四轮之后的修复（未经独立审查）
+
+第四轮独立审查报告一项 P2、一项 P3，协调者都接受。本节的修复（代码与测试在提交 `2a60443`，说明和登记在其后的文档提交）**没有经过独立审查**。P2 与第二、三轮的问题同属一类（产品派生的值进了场景身份，正当的前后比较被判为无法比较），按复发规则不再逐条补路径：场景身份仍只有 `scenarioIdentity` 一个所有者，一致性测试改为走完全部评测场景模块的运行时导入闭包，并列出全部产出方和使用方。
+
+| 项 | 修法 | 先红后绿的证据 |
+| --- | --- | --- |
+| P2 产品派生的世界数据仍进场景身份：`tests/fixtures/stage-data.ts` 在加载时调用产品的 `parseMaaSnapshot` 生成 7 个 `daily-stage-*` 场景的账号快照，改一个问题代码，7 个场景的身份全变，改快照解析的发布永远过不了评测门；原一致性测试只查 `eval/` 对 `skills/` 的直接导入 | 账号快照改为固定字面值（与修复前解析出的 JSON 逐字段相同，只用 `import type` 引用产品类型）；场景的含义和评分预期不变。一致性测试从场景目录 `scripts/eval-scenarios.ts` 和 `eval/` 下全部模块出发，沿运行时导入（不算 `import type`，含副作用导入、再导出和动态导入，评测装入时改名的替身文件按源文件算）走完闭包：解析不了的导入算失败；进入 `skills/` 的导入只能是允许名单上的三条（成本、缺口场景取 `operatorCostSources`、`craftingSources`，用于网络夹具地址，其中固定的数据提交由 `scenarioIdentity` 去掉）；闭包里的 26 个文件逐一列出；网络夹具地址去掉提交后的 9 个来源逐一写死，产品改了仓库或文件路径会先在这里失败 | `tests/eval-comparability.test.ts`：第一项的产品发布副本另把快照解析的问题代码 `'missing-' + field` 改成 `'absent-' + field`，全部场景身份不变；新增「运行时导入闭包」与「产出方与使用方清单」两项；经 `runScenario` 实际运行的场景加上 `daily-stage-exact-scope`。修复前（`cd6e1e8` 的代码只换测试，`.tmp/logs/r4-red-p2.log`）6 项中 4 项失败：第一项报 `daily-stage-exact-scope: a product-only release keeps the scenario`；闭包一项在允许名单之外多出 `tests/fixtures/stage-data.ts -> skills/maa-core/scripts/account-snapshot.ts { parseMaaSnapshot }`；清单一项报替身文件清单不存在；`runScenario` 一项报 `daily-stage-exact-scope: a product-only release is another scenario`。另用会话临时脚本在修复前后各打印一次全部 57 个场景定义的身份，逐一相同 |
+| P3 批次中途改了待测 skill 检测不到：载荷指纹只在批次开始时算一次、只在续跑时核对，半批跑旧版、半批跑新版仍标记完成，比较照样通过 | `runBatch` 在每个场景开始之前、每次运行之后和标记完成之前重算载荷指纹；变了就以 `fingerprint-mismatch` 停批（`aborted`，不标记完成），与变化重叠的那次运行在清单里记 `fingerprint-mismatch`、不计入完成；改回原载荷后可以续跑。每条 `run.json` 带所在批次的 `payloadFingerprint`；`compareRuns`（唯一所有者）要求每条记录都有它，一边多于一个就 `incomparable`，不管记录是怎么凑到一起的 | `tests/eval-comparability.test.ts` 新增「批次中途改 skill」：宿主替身在第一个场景运行时真的改了待测 `SKILL.md`，批次停在 `fingerprint-mismatch`，第二个场景没有启动，没有可比较的记录，带着改动续跑被拒绝；改回后续跑完成，两条记录都带批次的载荷指纹。「全部使用方」一项加上混合批次：每个场景单独看都通过，总体 `incomparable`，`compare` 退出码为 1。`tests/evaluation.test.ts` 新增审查员的对照（同组两个场景，之后一边 v1、v2 两个载荷）为 `incomparable`，基线一边混合也是 `incomparable`，缺载荷指纹的记录也是。修复前：`.tmp/logs/r4-red-p3-evaluation.log` 报 `half the after side ran another candidate`（`actual: 'pass', expected: 'incomparable'`）；`.tmp/logs/r4-red-p3-comparability.log` 中批次中途一项报 `actual: 'complete', expected: 'aborted'`，混合批次报 `actual: 'pass', expected: 'incomparable'` |
+
+这一轮的实现选择（不改变产品限制的记在这里，带限制的规则已登记在规格两张表）：
+- 与载荷变化重叠的那次运行不计入完成：它装入的是哪一版无法确定，失败时关闭（规格「默认值及其来源」）。
+- 缺载荷指纹的记录无法比较，与其他必填字段一样（同上）。本提交之前的记录本来就不可比：运行器源码改了，场景摘要随之改变。
+- 导入闭包的根是场景目录和 `eval/` 下全部模块，不把 `tests/fixtures` 全部当根：只有场景用到的夹具会进入场景身份，产品单元测试自己的夹具仍可以运行产品代码；闭包里的夹具文件逐一列出，新加的会让测试失败。
+- `import { type A } from` 仍算运行时导入，因为模块照样会被加载；允许名单按「导入方 -> 产品模块 { 导入的名字 }」列出，同一个模块多导入一个名字也算新导入。
+- 评测装入的替身文件清单从运行器里导出为 `scenarioHarnessFiles`，测试核对它与 `scripts/eval-fixture.ts` 实际装入的文件一致。
+
 ## 本次运行的命令
 
 在提交 `9efdf75` 上（Windows，Node 24）：
@@ -141,6 +157,27 @@
 | `node --test tests/eval-network.test.ts` | 3 项通过 |
 | `node --test tests/eval-run.test.ts` | 3 项通过 |
 | `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+第四轮之后的修复（提交 `2a60443`，Windows，Node 24；未经独立审查），按负载规则一次一个：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test tests/eval-comparability.test.ts`（`cd6e1e8` 的代码，只换 P2 部分的测试） | 6 项中 4 项失败，`.tmp/logs/r4-red-p2.log` |
+| `node --test tests/evaluation.test.ts`（快照已改字面值，P3 未实现） | 8 项中 1 项失败，`.tmp/logs/r4-red-p3-evaluation.log` |
+| `node --test tests/eval-comparability.test.ts`（同上） | 7 项中 3 项失败（清单、混合批次、批次中途改 skill），`.tmp/logs/r4-red-p3-comparability.log` |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过，约 5.2 秒 |
+| `node --test tests/evaluation.test.ts` | 8 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 3 项通过 |
+| `node --test tests/eval-network.test.ts` | 3 项通过 |
+| `node --test tests/stage-scenarios.test.ts` | 4 项通过 |
+| `node --test tests/stage-jobs-regressions.test.ts` | 11 项通过 |
+| `node --test tests/stage-demo.test.ts` | 1 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 3 项通过 |
+| `node scripts/privacy.ts` | 无发现 |
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。
