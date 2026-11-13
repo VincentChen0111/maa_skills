@@ -72,7 +72,8 @@ export const runRequest = { stages: [{ stageId: 'synthetic_01', code: 'SYN-1', d
 export const runJobs = () => [stageJob(1), stageJob(2), { ...stageJob(4), content: { ...stageJob(4).content, stage_name: 'synthetic_02' } }];
 export type PreparedBatch = { root: string; maaDirectory: string; privateDirectory: string; operation: string; reportHash: string; files: string[];
   state: MaaState; maa: MaaProcess; core(lines: string[]): Promise<void>; gui(lines: string[]): Promise<void>; dispose(): Promise<void> };
-export async function preparedBatch(): Promise<PreparedBatch> {
+/** `syn1Loops` changes how many times SYN-1 is approved (default 2, as above); the list is SYN-1 that many times, then SYN-2. */
+export async function preparedBatch(syn1Loops = 2): Promise<PreparedBatch> {
   const root = await mkdtemp(join(tmpdir(), 'maa-stage-run-'));
   try {
     const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
@@ -82,16 +83,17 @@ export async function preparedBatch(): Promise<PreparedBatch> {
     const older = -30 * 86400;
     await writeFile(join(maaDirectory, 'debug/asst.log'), `${core(older, 'TaskChainError', { taskchain: 'Copilot', taskid: 9 })}\n`);
     await writeFile(join(maaDirectory, 'debug/gui.log'), `${gui(older, '任务出错: 自动战斗', 'ERR')}\n`);
-    const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, runRequest, runJobs());
+    const request = { ...runRequest, stages: runRequest.stages.map(stage => stage.stageId === 'synthetic_01' ? { ...stage, loops: syn1Loops } : stage) };
+    const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, request, runJobs());
     const state: MaaState = { running: false, treeExited: true, idle: true, ready: false };
     const maa: MaaProcess = { inspect: async () => ({ ...state }), close: async () => { Object.assign(state, { running: false, treeExited: true, ready: false }); },
       start: async () => { Object.assign(state, { running: true, treeExited: false, ready: true }); } };
     const approval = { reportHash: report.hash, reference: '合成用户批准 SYN-1 两次、SYN-2 一次，备选各一份', map: 'synthetic_map',
-      selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: 2 }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }] };
+      selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: syn1Loops }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }] };
     const result = await prepareStageJobs({ report, approval, snapshot, maaDirectory, privateDirectory, profile: 0, host: 'codex', closedConfirmed: true,
       expectedRevision: (await inspectConfiguration(maaDirectory)).revision }, maa);
     if (result.status !== 'complete') throw new Error('fixture-prepare-failed');
-    const files = [1, 1, 4].map(id => approvedJobFile(privateDirectory, report.hash, id));
+    const files = [...Array<number>(syn1Loops).fill(1), 4].map(id => approvedJobFile(privateDirectory, report.hash, id));
     const append = (file: string) => async (lines: string[]) => { await appendFile(join(maaDirectory, 'debug', file), lines.map(line => line + '\n').join('')); };
     return { root, maaDirectory, privateDirectory, operation: result.operation, reportHash: report.hash, files, state, maa,
       core: append('asst.log'), gui: append('gui.log'), dispose: () => rm(root, { recursive: true, force: true }) };

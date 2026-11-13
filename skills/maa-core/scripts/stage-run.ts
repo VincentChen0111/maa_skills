@@ -1,23 +1,25 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { MaaProcess } from './maa-config.ts';
+import { executeConfigWrite, type MaaProcess } from './maa-config.ts';
 import { runChecks } from './doctor.ts';
 import { captureLogCursor, logFiles, readLogSince, type LogCursor, type LogName } from './maa-log-window.ts';
-import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
+import { approvedJobEntries, approvedJobList, approvedJobStages, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { applyCoreLines, applyGap, applyGuiLines, applyProcess, applyUserReport, deriveRun, emptyBatchEvidence, emptyRunState, fileKey, rerunGate,
-  scanBatchLines, scanBeforeTracking, type BatchView, type Decision, type DecisionRecord, type RunList, type RunState, type RunView,
-  type Verification } from './stage-run-state.ts';
+  scanBatchLines, scanBeforeTracking, stageCandidates, switchTarget, type BatchView, type Decision, type DecisionRecord, type RunList, type RunState, type RunView,
+  type SwitchState, type SwitchView, type Verification } from './stage-run-state.ts';
 import { readSettings } from './preferences.ts';
 
 /**
  * Tracks one prepared copilot batch from the user's start signal to a result. Read-only towards MAA: it reads the
  * configuration summary and MAA's own logs, inspects the process, and never starts, stops, clicks or rewrites anything.
- * The run record in `<private>/stage-runs/<runId>.json` is the seam for ticket 17 (approved alternates):
- * `readStageRun`, `summarizeStageRun`, `stageRunOutcome` and the `StageRunRecord` type.
+ * The one exception is `switch` (ticket 17): after `rerunGate` allows it, it writes the next approved alternate into the
+ * job list through the unified writer (`executeConfigWrite`), which closes, writes and reopens MAA; the user still clicks
+ * start. The run record in `<private>/stage-runs/<runId>.json` and the switch ledger in `<private>/stage-runs/switches/`
+ * are read with `readStageRun`, `summarizeStageRun`, `stageRunOutcome` and the `StageRunRecord` type.
  */
 export type StageRunRecord = {
   version: 1; runId: string; createdAt: string; reference: string; retryOf: string | null;
@@ -51,7 +53,9 @@ async function preparedBatch(privateDirectory: string, operation: string) {
     && item.path[0] === 'Configurations' && item.path[2] === 'Copilot' && item.path[3] === 'TaskList');
   const profileName = Array.isArray(change?.path) ? change.path[1] : undefined;
   if (!done || !pending || !Array.isArray(plan.entries) || typeof profileName !== 'string') fail('batch-not-prepared');
-  return { plan, profileName: profileName as string, preparedAt: typeof done.startedAt === 'string' ? done.startedAt : '' };
+  const authorization = object(pending.authorization);
+  return { plan, profileName: profileName as string, preparedAt: typeof done.startedAt === 'string' ? done.startedAt : '',
+    approval: { source: authorization.source === 'approved-report' ? 'approved-report' as const : 'current-request' as const, reference: typeof authorization.reference === 'string' ? authorization.reference : '' } };
 }
 type ListItem = { Name?: unknown; FilePath?: unknown; CopilotId?: unknown; IsRaid?: unknown; Index?: unknown; IsNavNameOverride?: unknown; IsChecked?: unknown };
 async function listCheck(maaDirectory: string, privateDirectory: string, plan: ApprovedJobPlan, profileName: string) {
@@ -117,6 +121,56 @@ async function operationRecords(privateDirectory: string, operation: string): Pr
   try { names = (await readdir(join(privateDirectory, 'stage-runs'))).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)); } catch { /* none yet */ }
   return (await Promise.all(names.map(name => readStageRun(privateDirectory, name.slice(0, -5))))).filter(record => record.batch.operation === operation);
 }
+
+/**
+ * Ticket 17's candidate-use ledger: one file per switch key in `<private>/stage-runs/switches/`. The key names the batch
+ * operation, the run, the stage and the candidate pair, so a repeated request finds the record it already made.
+ */
+export type SwitchRecord = { version: 1; key: string; operation: string; runId: string; stageId: string; from: number; to: number; trigger: 'job-failure' | 'environment';
+  input: string; continuation: { stageId: string; job: number; runs: number }[]; reason: string; state: SwitchState; owner: { pid: number; at: string };
+  createdAt: string; updatedAt: string; write: { operation: string | null; status: string; reason: string | null } | null;
+  attempts: { at: string; input: string; status: string; reason: string | null }[]; conflicts: { at: string; input: string }[] };
+const switchDirectory = (privateDirectory: string) => join(privateDirectory, 'stage-runs', 'switches');
+const switchFile = (privateDirectory: string, key: string) => /^[a-f0-9]{64}$/.test(key) ? join(switchDirectory(privateDirectory), `${key}.json`) : fail('switch-key-invalid');
+export const switchKey = (operation: string, runId: string, stageId: string, from: number, to: number) =>
+  createHash('sha256').update(['maa-skills-switch', operation, runId, stageId, String(from), String(to)].join('\n')).digest('hex');
+/** A switch left `writing` by a process that is gone was interrupted: its write outcome is unknown and is never resumed. */
+function settleSwitch(record: SwitchRecord): boolean {
+  if (record.state !== 'writing' || alive(record.owner.pid)) return false;
+  record.state = 'interrupted'; record.updatedAt = new Date().toISOString();
+  return true;
+}
+async function readSwitch(privateDirectory: string, key: string): Promise<SwitchRecord | null> {
+  let content: string;
+  try { content = await readFile(switchFile(privateDirectory, key), 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+  const value = JSON.parse(content) as SwitchRecord;
+  if (value.version !== 1 || value.key !== key) fail('switch-record-invalid');
+  return value;
+}
+async function saveSwitch(privateDirectory: string, record: SwitchRecord, create = false) {
+  await mkdir(switchDirectory(privateDirectory), { recursive: true });
+  const file = switchFile(privateDirectory, record.key), bytes = JSON.stringify(record, null, 2) + '\n';
+  if (create) { const handle = await open(file, 'wx', 0o600); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } return; }
+  const temporary = join(switchDirectory(privateDirectory), `${record.key}.${randomUUID()}.tmp`);
+  await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' });
+  await rename(temporary, file);
+}
+/** The batch's switches as the gate sees them. An unreadable ledger file blocks every batch: its owner cannot be told. */
+async function batchSwitches(privateDirectory: string, operation: string): Promise<SwitchView[]> {
+  let names: string[] = [];
+  try { names = (await readdir(switchDirectory(privateDirectory))).filter(name => /^[a-f0-9]{64}\.json$/.test(name)); } catch { return []; }
+  const views: SwitchView[] = [];
+  for (const name of names) {
+    const record = await readSwitch(privateDirectory, name.slice(0, -5)).catch(() => null);
+    if (!record) { views.push({ key: name.slice(0, -5), runId: '', stageId: '', from: 0, to: 0, trigger: 'job-failure', state: 'unknown', operation: null, started: false }); continue; }
+    if (record.operation !== operation) continue;
+    settleSwitch(record);
+    const target = record.state === 'prepared' ? record.write?.operation ?? null : null;
+    views.push({ key: record.key, runId: record.runId, stageId: record.stageId, from: record.from, to: record.to, trigger: record.trigger, state: record.state,
+      operation: target, started: !!target && (await operationRecords(privateDirectory, target)).length > 0 });
+  }
+  return views;
+}
 async function fileLines(path: string): Promise<string[]> {
   const lines: string[] = [];
   try {
@@ -136,6 +190,7 @@ async function batchViewFor(maaDirectory: string, privateDirectory: string, oper
   const records = (await operationRecords(privateDirectory, operation)).filter(record => record.runId !== current?.runId);
   if (current) records.push(current);
   records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const switches = await batchSwitches(privateDirectory, operation);
   try {
     const evidence = emptyBatchEvidence(), { plan, profileName, preparedAt } = await preparedBatch(privateDirectory, operation);
     const first = records[0];
@@ -150,8 +205,8 @@ async function batchViewFor(maaDirectory: string, privateDirectory: string, oper
       evidence.beforeTracking = mentioned ? 'batch-may-have-run' : !Number.isFinite(since) || Number.isFinite(earliest) && earliest > since ? 'batch-evidence-incomplete' : null;
     }
     evidence.ticks = (await listCheck(maaDirectory, privateDirectory, plan, profileName)).ticks;
-    return { records: records.map(view), evidence };
-  } catch { return { records: records.map(view), evidence: null }; }
+    return { records: records.map(view), evidence, switches };
+  } catch { return { records: records.map(view), evidence: null, switches }; }
 }
 /** The batch as `rerunGate` sees it, for the run's operation (read-only). */
 export async function loadBatchView(paths: Paths, runId: string): Promise<{ batch: BatchView }> {
@@ -200,12 +255,13 @@ export function summarizeStageRun(record: StageRunRecord, batch: BatchView | nul
     userReports: record.userReports, verifications: record.verifications, decisions: record.decisions, processExitCode: record.processExitCode,
     quietSeconds: Math.max(0, Math.floor((now.getTime() - Date.parse(record.lastActivityAt)) / 1000)) };
 }
-/** For ticket 17: what MAA proved per stage and which decisions the record allows. Switching itself is not done here. */
+/** What MAA proved per stage, which decisions the record allows, each stage's current and next approved candidate, and its switch. */
 export function stageRunOutcome(record: StageRunRecord, batch: BatchView | null = null) {
   const summary = summarizeStageRun(record, batch);
   return { runId: record.runId, operation: record.batch.operation, execution: summary.execution, allowedDecisions: summary.allowedDecisions,
-    lastDecision: record.decisions.at(-1) ?? null, medicine: summary.medicine,
-    stages: record.batch.stages.map((stage, index) => ({ ...stage, result: summary.stages[index]!.result, stageCheck: summary.stages[index]!.stageCheck })) };
+    lastDecision: record.decisions.at(-1) ?? null, medicine: summary.medicine, switch: summary.switch,
+    stages: record.batch.stages.map((stage, index) => ({ ...stage, result: summary.stages[index]!.result, stageCheck: summary.stages[index]!.stageCheck,
+      job: summary.alternates[index]!.job, next: summary.alternates[index]!.next })) };
 }
 
 export async function startStageRun(input: Paths & { operation: string; reference: string; retryOf?: string }) {
@@ -231,14 +287,11 @@ export async function startStageRun(input: Paths & { operation: string; referenc
 async function createRun(input: Paths, operation: string, reference: string, retryOf: string | null, plan: ApprovedJobPlan,
   check: { profile: number; result: 'matches' | 'subset' }, anchors: Record<LogName, LogCursor>) {
   const createdAt = new Date().toISOString();
-  const expanded = approvedJobList(plan, input.privateDirectory);
-  const list: RunList = expanded.map(item => {
-    const entry = plan.entries.find(value => value.primary.id === item.CopilotId && value.code === item.Name)!;
-    return { index: item.Index, stageId: entry.stageId, code: entry.code, jobId: item.CopilotId, fileKey: fileKey(item.FilePath) };
-  });
+  const list: RunList = approvedJobEntries(plan, input.privateDirectory).map(({ stageId, job, item }) =>
+    ({ index: item.Index, stageId, code: item.Name, jobId: job, fileKey: fileKey(item.FilePath) }));
   const record: StageRunRecord = { version: 1, runId: randomUUID(), createdAt, reference, retryOf,
     batch: { operation, reportHash: plan.reportHash, map: plan.map, profile: check.profile, listCheck: check.result,
-      stages: plan.entries.map(entry => ({ stageId: entry.stageId, code: entry.code, loops: entry.loops, primary: entry.primary.id, alternates: entry.alternates.map(job => job.id) })), list },
+      stages: approvedJobStages(plan).map(stage => ({ stageId: stage.stageId, code: stage.code, loops: stage.loops, primary: stage.primary, alternates: stage.alternates })), list },
     anchors, cursors: structuredClone(anchors), state: emptyRunState(), userReports: [], screenshots: [], verifications: [], decisions: [],
     lastObservedAt: null, lastActivityAt: createdAt, processExitCode: null };
   await save(input.privateDirectory, record, true);
@@ -373,24 +426,91 @@ export async function recordStageProgress(input: { privateDirectory: string; maa
   });
 }
 
+function switchSummary(record: SwitchRecord, repeated: boolean) {
+  const next = record.state === 'prepared' ? 'start-alternate' : record.state === 'rejected' ? 'retry-switch' : 'verify';
+  return { key: record.key, state: record.state, stageId: record.stageId, from: record.from, to: record.to, trigger: record.trigger, runs: record.continuation,
+    operation: record.state === 'prepared' ? record.write?.operation ?? null : null, start: 'user' as const, next, repeated, unknown: unknownState,
+    write: record.write && { status: record.write.status, reason: record.write.reason }, conflicts: record.conflicts.length };
+}
+/**
+ * Ticket 17: carries out a recorded `switch-alternate` decision. The stage's next approved candidate replaces its job for
+ * the runs it still has, the other stages keep theirs, and the list is written only through the unified writer with the
+ * batch's own approval (no new medicine, stone or other setting). MAA v6.21.4 has no native way to go on with another job
+ * after a failure (docs/stage-alternates-sources.md), so the user clicks start; `start` with the returned operation first.
+ * Idempotent per key: the same key and input return the existing record; a different input is refused and both digests
+ * stay in the record. Only a write the writer refused before writing may be requested again.
+ */
+export async function switchStageRun(input: { privateDirectory: string; maaDirectory?: string; runId: string; stageId: string; expectedRevision: string; host: 'codex' | 'claude';
+  closedConfirmed?: boolean }, maa: MaaProcess) {
+  const stageId = text(input.stageId, 64, 'stage-invalid');
+  if (typeof input.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(input.expectedRevision)) fail('revision-required');
+  if (!['codex', 'claude'].includes(input.host) || input.closedConfirmed !== undefined && typeof input.closedConfirmed !== 'boolean') fail('request-invalid');
+  return withJudgedRun(input, async (record, batch, maaDirectory) => {
+    const current = view(record);
+    const candidate = stageCandidates(current).find(item => item.stageId === stageId) ?? fail('stage-invalid');
+    if (candidate.job === null || candidate.next === null) fail('alternates-exhausted');
+    const key = switchKey(record.batch.operation, record.runId, stageId, candidate.job, candidate.next);
+    const target = switchTarget(current, batch), continuation = 'reason' in target ? null : target.continuation;
+    const digest = createHash('sha256').update(JSON.stringify({ runId: record.runId, stageId, from: candidate.job, to: candidate.next, continuation,
+      expectedRevision: input.expectedRevision })).digest('hex');
+    const now = () => new Date().toISOString();
+    const existing = await readSwitch(input.privateDirectory, key);
+    if (existing && existing.state !== 'rejected') {
+      if (settleSwitch(existing)) await saveSwitch(input.privateDirectory, existing);
+      if (existing.input === digest) return switchSummary(existing, true);
+      existing.conflicts.push({ at: now(), input: digest });
+      await saveSwitch(input.privateDirectory, existing);
+      fail('idempotency-conflict');
+    }
+    const gate = rerunGate(batch, { kind: 'switch', runId: record.runId, stageId });
+    if (!gate.allowed || 'reason' in target) fail(gate.allowed ? 'no-stage-to-switch' : gate.reason);
+    const { plan, approval } = await preparedBatch(input.privateDirectory, record.batch.operation);
+    if (!approval.reference.trim()) fail('batch-not-prepared');
+    const next: ApprovedJobPlan = { reportHash: plan.reportHash, map: plan.map, entries: plan.entries,
+      continuation: { from: { operation: record.batch.operation, runId: record.runId, key }, stages: target.continuation } };
+    const list = approvedJobList(next, input.privateDirectory);
+    const entry: SwitchRecord = { version: 1, key, operation: record.batch.operation, runId: record.runId, stageId, from: target.from, to: target.to, trigger: target.trigger,
+      input: digest, continuation: target.continuation, reason: record.decisions.at(-1)!.reason, state: 'writing', owner: { pid: process.pid, at: now() },
+      createdAt: existing?.createdAt ?? now(), updatedAt: now(), write: null, attempts: existing?.attempts ?? [], conflicts: existing?.conflicts ?? [] };
+    await saveSwitch(input.privateDirectory, entry, !existing);
+    let result: { status: string; operation?: string; reason?: string | null };
+    try {
+      result = await executeConfigWrite({ maaDirectory, privateDirectory: input.privateDirectory, host: input.host, expectedRevision: input.expectedRevision,
+        closedConfirmed: input.closedConfirmed, authorization: { source: approval.source, reference: approval.reference, jobPlan: next },
+        changes: [{ path: ['Configurations', record.batch.profile, 'Copilot', 'TaskList'], value: list }, { path: ['Configurations', record.batch.profile, 'Copilot', 'EnableUserAdditional'], value: false }] }, maa);
+    } catch { result = { status: 'unknown', reason: 'reconciliation-required' }; }
+    entry.state = result.status === 'complete' ? 'prepared' : result.status === 'unknown' ? 'unknown' : 'rejected';
+    entry.write = { operation: result.operation ?? null, status: result.status, reason: result.reason ?? null };
+    entry.attempts.push({ at: now(), input: digest, status: result.status, reason: result.reason ?? null });
+    entry.updatedAt = now();
+    await saveSwitch(input.privateDirectory, entry);
+    return switchSummary(entry, false);
+  });
+}
+
 const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   const known = /^[a-z][a-z-]{2,48}$/;
   try {
     const action = process.argv[2];
-    if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'progress', 'read'].includes(action!)) fail('action-invalid');
+    if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'progress', 'switch', 'read'].includes(action!)) fail('action-invalid');
     let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 65536) fail('input-too-large'); }
     const input = object(JSON.parse(raw || '{}'));
     const allowed: Record<string, string[]> = { start: ['operation', 'reference', 'retryOf'], observe: ['runId', 'waitSeconds', 'userReport', 'processExitCode'],
-      verify: ['runId'], decide: ['runId', 'decision', 'reason'], progress: ['runId', 'reference', 'stages'], read: ['runId'] };
+      verify: ['runId'], decide: ['runId', 'decision', 'reason'], progress: ['runId', 'reference', 'stages'], switch: ['runId', 'stageId', 'expectedRevision', 'host', 'closedConfirmed'],
+      read: ['runId'] };
     if (Object.keys(input).some(key => !allowed[action!]!.includes(key))) fail('request-invalid');
     const settings = await readSettings();
     const paths = { maaDirectory: settings.maaDirectory ?? fail('maa-directory-unset'), privateDirectory: settings.privateDirectory };
     let boundary: MaaProcess | undefined;
     const get = async () => boundary ??= (await import('./maa-process.ts')).createMaaProcess(paths.maaDirectory);
-    const maa: MaaProcess = { inspect: async () => (await get()).inspect(), close: async () => fail('close-not-allowed'), start: async () => fail('start-not-allowed') };
+    /** Only `switch` may close and reopen MAA, and only inside the unified writer; tracking never does. */
+    const writer = action === 'switch';
+    const maa: MaaProcess = { inspect: async () => (await get()).inspect(), close: async () => writer ? (await get()).close() : fail('close-not-allowed'),
+      start: async () => writer ? (await get()).start() : fail('start-not-allowed') };
     let result: unknown;
-    if (action === 'start') result = await startStageRun({ ...paths, ...input } as Parameters<typeof startStageRun>[0]);
+    if (action === 'switch') result = await switchStageRun({ ...paths, ...input } as Parameters<typeof switchStageRun>[0], maa);
+    else if (action === 'start') result = await startStageRun({ ...paths, ...input } as Parameters<typeof startStageRun>[0]);
     else if (action === 'observe') result = await observeStageRun({ ...paths, ...input } as Parameters<typeof observeStageRun>[0], maa);
     else if (action === 'verify') result = await verifyStageRun({ ...paths, runId: input.runId as string }, maa);
     else if (action === 'decide') result = await decideStageRun({ ...paths, ...input } as Parameters<typeof decideStageRun>[0]);
