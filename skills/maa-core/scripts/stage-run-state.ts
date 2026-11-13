@@ -15,7 +15,8 @@ export type Decision = 'retry-within-approval' | 'switch-alternate' | 'stop-and-
 export type Evidence = { at: string; message: string; what?: string; subtask?: string; task?: string };
 export type FindingKind = 'stage-result' | 'subtask-error' | 'environment' | 'medicine' | 'takeover' | 'evidence-gap' | 'gui-marker' | 'chain-end' | 'start-failure' | 'list-mismatch';
 export type Finding = Evidence & { id: string; kind: FindingKind; index?: number; terminal?: BusinessResult; detail?: string };
-export type Attempt = { index: number; at: string; file: 'approved' | 'other' | 'unknown'; result: BusinessResult; evidence: Evidence | null;
+export type ProgressStatement = { at: string; quote: string; stages: { stageId: string; completedRuns: number }[] };
+export type Attempt = { index: number; at: string; file: 'approved' | 'other' | 'unknown'; result: BusinessResult; evidence: Evidence | null; note?: string;
   flags: { battle: boolean; endOfAction: boolean; missionFailed: boolean; threeStar: boolean; waitExceeded: boolean; sanityPopup: boolean; environment: boolean };
   drops: { stageId: string; stageCode: string; stars: number | null }[] };
 export type EnvironmentEvent = Evidence & { category: EnvironmentCategory; transient: boolean; recordedAt: string };
@@ -36,6 +37,10 @@ export type RunState = {
   rotated: boolean;
   startFailure: Evidence | null;
   processGone: Evidence | null;
+  /** Set when the model stops a run whose task chain never started; such a record reads no further log lines. */
+  closed: { at: string; reason: 'closed-before-start' } | null;
+  /** The user's own statements of how far each stage got, used only to settle unknown outcomes. */
+  progress: ProgressStatement[];
 };
 export type Verification = { at: string; clear: boolean; process: { running: boolean; idle: boolean } | null; preparedList: 'matches' | 'subset' | 'changed' | 'unreadable';
   checks: CheckResult[]; unknown: string[]; accountSnapshotReadAt: string | null };
@@ -50,7 +55,8 @@ const word = (value: unknown) => typeof value === 'string' && /^[A-Za-z][\w@.#-]
 
 export function emptyRunState(): RunState {
   return { chain: null, submission: null, medicineToggle: null, listMode: null, attempts: [], medicine: { events: [], unreadable: 0, confirmPending: false }, environment: [], findings: [],
-    gui: { errors: [], completions: [], schedule: [], durationLimits: [], chainStarts: [] }, takeover: null, gaps: [], rotated: false, startFailure: null, processGone: null };
+    gui: { errors: [], completions: [], schedule: [], durationLimits: [], chainStarts: [] }, takeover: null, gaps: [], rotated: false, startFailure: null, processGone: null,
+    closed: null, progress: [] };
 }
 function addFinding(state: RunState, key: string, finding: Omit<Finding, 'id'>) {
   const id = hash(`${finding.kind}\n${key}`).slice(0, 24);
@@ -69,6 +75,7 @@ const guiErrorMarkers = ['任务出错: ', '战斗出错', '未选择作业', '�
 const scheduleMarkers = ['Scheduled start: Timer Index:', 'Scheduled configuration change: Timer Index:', 'Not idle, Stop and CloseDown'];
 /** GUI text only bounds the run and adds context; the error check runs before the completion check. */
 export function applyGuiLines(state: RunState, lines: string[]) {
+  if (state.closed) return;
   for (const line of lines) {
     const match = /^\[([^\]]+)\]\[([A-Z]{3})\](.*)$/.exec(line);
     if (!match) continue;
@@ -122,6 +129,7 @@ function setResult(state: RunState, attempt: Attempt, result: BusinessResult, ev
 
 /** Applies Core log lines that follow the run's cursor, in order. */
 export function applyCoreLines(state: RunState, list: RunList, lines: string[], recordedAt: string) {
+  if (state.closed) return;
   for (const line of lines) {
     const entry = parseCoreLogLine(line);
     if (!entry) continue;
@@ -237,12 +245,23 @@ export function applyCoreLines(state: RunState, list: RunList, lines: string[], 
 }
 
 export function applyProcess(state: RunState, running: boolean, at: string, recordedAt: string) {
-  if (running || !state.chain || terminal(state) || state.processGone || state.takeover) return;
+  if (running || state.closed || !state.chain || terminal(state) || state.processGone || state.takeover) return;
   state.processGone = { at, message: 'maa-process-exited' };
   addEnvironment(state, `process\n${at}`, { at, message: 'maa-process-exited', category: 'maa', transient: false }, recordedAt);
 }
+/**
+ * A user's report of manual play or a manual login is an environment failure even when it arrives after MAA already
+ * ended the attempt: copilot shows a kicked session as a wait timeout or a failed battle, so the last counted attempt's
+ * job-type result becomes unknown, with the reason kept on the attempt. A proven 3-star success stays.
+ */
 export function applyUserReport(state: RunState, kind: 'manual-play' | 'manual-login', at: string) {
   addEnvironment(state, `user\n${kind}\n${at}`, { at, message: 'user-report', category: kind, transient: false }, at);
+  const takeoverAt = state.takeover ? time(state.takeover.at) : NaN;
+  const last = state.attempts.filter(item => !state.takeover || Number.isFinite(takeoverAt) && time(item.at) < takeoverAt).at(-1);
+  if (!last || last.result === 'success') return;
+  last.flags.environment = true;
+  if (jobFailure.has(last.result)) last.result = 'unknown';
+  last.note = `user-report:${kind}`;
 }
 
 const diagnosis: Record<EnvironmentCategory, { reason: string; repair: string }> = {
@@ -260,7 +279,11 @@ export function environmentDiagnosis(category: EnvironmentCategory): CheckResult
 }
 
 export type StageEntry = { stageId: string; code: string; loops: number };
-export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], verifications: Verification[], decisions: DecisionRecord[]) {
+export type RunView = { runId: string; createdAt: string; retryOf: string | null; state: RunState; list: RunList; stages: StageEntry[];
+  verifications: Verification[]; decisions: DecisionRecord[] };
+
+function assessRun(view: RunView) {
+  const { state, list, stages, verifications } = view;
   const end = terminal(state), takeoverAt = state.takeover ? time(state.takeover.at) : NaN;
   const counted = state.attempts.filter(item => !state.takeover || Number.isFinite(takeoverAt) && time(item.at) < takeoverAt);
   const endAt = end ? time(end.at) : NaN;
@@ -270,7 +293,8 @@ export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], 
   const durationLimit = state.gui.durationLimits.some(inWindow);
   const listMismatch = counted.some(item => item.file !== 'approved') || state.listMode === false;
   let execution: Execution, reason: string;
-  if (state.takeover) [execution, reason] = ['unknown', 'taken-over'];
+  if (state.closed && !state.chain) [execution, reason] = ['unknown', 'closed-before-start'];
+  else if (state.takeover) [execution, reason] = ['unknown', 'taken-over'];
   else if (state.gaps.length) [execution, reason] = ['unknown', 'evidence-incomplete'];
   else if (listMismatch) [execution, reason] = ['unknown', 'list-mismatch'];
   else if (end?.message === 'TaskChainCompleted') [execution, reason] = verdict === 'error' ? ['unknown', 'gui-error-conflict'] : ['completed', 'TaskChainCompleted'];
@@ -285,6 +309,7 @@ export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], 
     if (item.result === 'not-evaluated' && item === last && end?.message === 'TaskChainStopped' && durationLimit && !item.flags.environment && !state.takeover) return 'timeout';
     return item.result === 'not-evaluated' && ended ? 'unknown' : item.result;
   };
+  const stageOf = (index: number) => list.find(item => item.index === index)?.stageId;
   const stageResults = stages.map(stage => {
     const indexes = list.filter(item => item.stageId === stage.stageId).map(item => item.index);
     const attempts = counted.filter(item => indexes.includes(item.index));
@@ -297,7 +322,7 @@ export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], 
     const stageCheck: StageCheck = drops.some(drop => !matches(drop)) ? 'mismatch' : drops.length ? 'match'
       : !attempts.length && ended && !state.takeover && !state.gaps.length && state.chain ? 'not-fought' : 'unknown';
     return { stageId: stage.stageId, code: stage.code, loops: stage.loops, result, stageCheck,
-      attempts: attempts.map(item => ({ index: item.index, result: finalResult(item), evidence: item.evidence })) };
+      attempts: attempts.map(item => ({ index: item.index, result: finalResult(item), evidence: item.evidence, ...(item.note ? { note: item.note } : {}) })) };
   });
   const sum = state.medicine.events.reduce((total, event) => total + event.count, 0);
   const count: number | 'unknown' = state.gaps.length || state.takeover || state.medicine.unreadable || state.medicine.confirmPending ? 'unknown' : sum;
@@ -306,18 +331,64 @@ export function deriveRun(state: RunState, list: RunList, stages: StageEntry[], 
   const blocking = state.environment.filter(item => !item.transient);
   const lastEnvironment = blocking.at(-1)?.recordedAt, verification = verifications.at(-1);
   const verified = !!lastEnvironment && !!verification && verification.at >= lastEnvironment && verification.clear;
-  const blocked = !!state.takeover || state.gaps.length > 0 || listMismatch || medicine.unapproved !== false || (!!state.chain && state.medicineToggle !== false)
-    || !!state.startFailure || reason === 'gui-error-conflict';
-  let allowedDecisions: Decision[] = [];
-  if (ended) {
-    if (blocked) allowedDecisions = ['stop-and-tell-user'];
-    else if (blocking.length) allowedDecisions = verified ? ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user'] : ['stop-and-tell-user'];
-    else if (stageResults.some(stage => stage.result === 'failed' || stage.result === 'not-three-star')) allowedDecisions = ['switch-alternate', 'stop-and-tell-user'];
-    else allowedDecisions = ['stop-and-tell-user'];
+  const hardBlock = state.takeover ? 'taken-over' : state.gaps.length ? 'evidence-incomplete' : listMismatch ? 'list-mismatch'
+    : medicine.unapproved === true ? 'medicine-used' : medicine.unapproved === 'unknown' ? 'medicine-unknown'
+    : state.chain && state.medicineToggle !== false ? 'medicine-toggle' : state.startFailure ? 'start-failure' : reason === 'gui-error-conflict' ? 'gui-error-conflict' : null;
+  const stated = new Set(state.progress.flatMap(statement => statement.stages.map(stage => stage.stageId)));
+  /** An unknown outcome may have spent sanity or finished the stage once the attempt entered battle or reached settlement. */
+  const unresolved = counted.filter(item => finalResult(item) === 'unknown' && (item.flags.battle || item.flags.endOfAction) && !stated.has(stageOf(item.index) ?? ''))
+    .map(item => item.index);
+  return { execution, reason, ended, stageResults, medicine, verdict, guiErrors, blocking, verified, verification, hardBlock, unresolved,
+    chainStarted: !!state.chain, jobFailureSeen: stageResults.some(stage => stage.result === 'failed' || stage.result === 'not-three-star') };
+}
+
+export type RerunRequest = { kind: 'decide'; runId: string; decision: Decision } | { kind: 'start'; retryOf: string | null };
+export type GateResult = { allowed: boolean; reason: string };
+const allow = (reason: string): GateResult => ({ allowed: true, reason });
+const deny = (reason: string): GateResult => ({ allowed: false, reason });
+function judge(assessment: ReturnType<typeof assessRun>, decision: Decision): GateResult {
+  if (!assessment.ended) return decision === 'stop-and-tell-user' && !assessment.chainStarted ? allow('close-before-start') : deny('tracking');
+  if (decision === 'stop-and-tell-user') return allow('stop');
+  if (assessment.hardBlock) return deny(assessment.hardBlock);
+  if (assessment.unresolved.length) return deny('outcome-unknown');
+  const environment = assessment.blocking.length > 0;
+  if (decision === 'retry-within-approval') return environment && assessment.verified ? allow('environment-verified') : deny(environment ? 'not-verified' : 'no-environment-failure');
+  return assessment.jobFailureSeen ? allow('maa-reported-failure') : environment && assessment.verified ? allow('environment-verified') : deny('no-reported-failure');
+}
+/**
+ * The one owner of "may this batch be fought again". Every entry point asks it: the decisions offered in a summary,
+ * `decide`, and `start` with or without `retryOf`. A retry or alternate needs every unknown attempt to have stayed out of
+ * battle (or the user to have stated the stage progress); a new start without `retryOf` needs no record of the batch to
+ * have started a task chain and none to be still tracking; a retry needs the recorded decision, the gate still open for
+ * that record, and no later record that started a chain.
+ */
+export function rerunGate(views: RunView[], request: RerunRequest): GateResult {
+  if (request.kind === 'decide') {
+    const view = views.find(item => item.runId === request.runId);
+    return view ? judge(assessRun(view), request.decision) : deny('run-not-found');
   }
-  const next = blocking.length && !verified ? 'verify' : !ended ? 'keep-observing' : blocking.length && verified && !decisions.some(item => item.at >= verification!.at) ? 'decide' : 'report';
-  return { execution, executionReason: reason, stages: stageResults, medicine, allowedDecisions, next,
-    gui: { verdict, errors: guiErrors.map(marker => marker.marker) },
+  const assessed = views.map(view => ({ view, assessment: assessRun(view) }));
+  if (assessed.some(item => !item.assessment.ended)) return deny('run-unresolved');
+  if (request.retryOf === null) return assessed.some(item => item.assessment.chainStarted) ? deny('run-unresolved') : allow('no-earlier-chain');
+  const previous = assessed.find(item => item.view.runId === request.retryOf);
+  if (!previous || previous.view.decisions.at(-1)?.decision !== 'retry-within-approval' || !judge(previous.assessment, 'retry-within-approval').allowed) return deny('retry-not-decided');
+  if (assessed.some(item => item !== previous && item.assessment.chainStarted && item.view.createdAt >= previous.view.createdAt)) return deny('run-unresolved');
+  return allow('retry-decided');
+}
+
+const decisionOrder: Decision[] = ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user'];
+export function deriveRun(view: RunView) {
+  const assessment = assessRun(view), { state } = view;
+  const allowedDecisions = decisionOrder.filter(decision => judge(assessment, decision).allowed);
+  const latestInput = [assessment.verification?.at, state.progress.at(-1)?.at].filter((value): value is string => !!value).sort().at(-1);
+  const next = assessment.reason === 'closed-before-start' ? 'report'
+    : assessment.blocking.length && !assessment.verified ? 'verify'
+    : !assessment.ended ? 'keep-observing'
+    : !assessment.hardBlock && assessment.unresolved.length ? 'ask-progress'
+    : allowedDecisions.includes('retry-within-approval') && !view.decisions.some(item => !latestInput || item.at >= latestInput) ? 'decide' : 'report';
+  return { execution: assessment.execution, executionReason: assessment.reason, stages: assessment.stageResults, medicine: assessment.medicine, allowedDecisions, next,
+    unresolvedAttempts: assessment.unresolved, progress: state.progress,
+    gui: { verdict: assessment.verdict, errors: assessment.guiErrors.map(marker => marker.marker) },
     evidence: { complete: !state.gaps.length && !state.takeover, gaps: state.gaps.map(gap => ({ log: gap.log, reason: gap.reason })), rotated: state.rotated },
     environment: state.environment.map(item => ({ at: item.at, category: item.category, message: item.message, what: item.what, transient: item.transient, diagnosis: environmentDiagnosis(item.category) })),
     takeover: state.takeover };

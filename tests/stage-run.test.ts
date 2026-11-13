@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { observeStageRun, readStageRun, startStageRun, verifyStageRun, decideStageRun, summarizeStageRun } from '../skills/maa-core/scripts/stage-run.ts';
+import { observeStageRun, readStageRun, recordStageProgress, startStageRun, verifyStageRun, decideStageRun, summarizeStageRun } from '../skills/maa-core/scripts/stage-run.ts';
 import { attempt, chainEnd, connection, copilotStart, core, drops, gui, medicineConfirm, medicineUsed, offlinePopup, preparedBatch, syntheticAdb, syntheticDevice, type PreparedBatch }
   from './fixtures/stage-run-data.ts';
 
@@ -86,7 +86,7 @@ test('silence or a quiet log is not failure; a run duration limit with a stop is
   assert.equal(manual.execution, 'unknown'); assert.deepEqual(results(manual)[0], ['SYN-1', 'unknown', ['unknown']]);
 });
 
-test('disconnect is an environment failure: not a stage failure, verified before the model may retry within approval', async t => {
+test('disconnect mid-battle is an environment failure: not a stage failure; verified, then retry only after the user states the progress', async t => {
   const { batch, runId, observe } = await tracked(t);
   await batch.core([...copilotStart(0, { files: batch.files }), ...attempt(10, 0, batch.files[0]!, 'open', [connection(20, 'Reconnecting'), connection(40, 'Disconnect')]),
     ...chainEnd(41, 'TaskChainError')]);
@@ -99,12 +99,16 @@ test('disconnect is an environment failure: not a stage failure, verified before
   const verified = await verifyStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, runId }, batch.maa);
   assert.equal(verified.verification.clear, true); assert.equal(verified.verification.preparedList, 'matches');
   assert.deepEqual(verified.verification.unknown, ['sanity', 'medicine-inventory', 'originium', 'stage-progress']);
-  assert.deepEqual(verified.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']); assert.equal(verified.next, 'decide');
-  const decided = await decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '连接已恢复，原批准范围内由用户再点开始' });
+  assert.deepEqual(verified.allowedDecisions, ['stop-and-tell-user'], 'the interrupted attempt was in battle; its outcome is unknown');
+  assert.equal(verified.next, 'ask-progress');
+  await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
+  const stated = await recordStageProgress({ privateDirectory: batch.privateDirectory, runId, reference: '合成用户：断连那一把没打完，SYN-1 一次都没完成', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] });
+  assert.deepEqual(stated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']); assert.equal(stated.next, 'decide');
+  const decided = await decideStageRun({ privateDirectory: batch.privateDirectory, runId, decision: 'retry-within-approval', reason: '连接已恢复，用户说明没有完成，原批准范围内由用户再点开始' });
   assert.equal(decided.decisions.at(-1)!.decision, 'retry-within-approval');
   const retry = await startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '合成用户：重新点开始', retryOf: runId });
   assert.equal(retry.retryOf, runId);
-  await assert.rejects(startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '再来', retryOf: retry.runId }), /retry-not-decided/);
+  await assert.rejects(startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '再来', retryOf: retry.runId }), /retry-not-decided|run-unresolved/);
 });
 
 test('a manual session kicking MAA off, or the user saying they are playing, is an environment failure and approval-time state is not reused', async t => {

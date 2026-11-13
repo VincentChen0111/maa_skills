@@ -41,7 +41,7 @@ test('a waiting observer returns as soon as MAA reports a failure instead of wai
   const summary = await observeStageRun({ ...paths, runId, waitSeconds: 20 }, batch.maa);
   assert.ok(Date.now() - started < 15000, 'returned before the wait window');
   assert.ok(summary.newFindings.some(item => item.kind === 'stage-result' && item.terminal === 'not-three-star'));
-  await assert.rejects(observeStageRun({ ...paths, runId, waitSeconds: 601 }, batch.maa), /wait-invalid/);
+  await assert.rejects(observeStageRun({ ...paths, runId, waitSeconds: 91 }, batch.maa), /wait-invalid/);
   const outcome = stageRunOutcome(await readStageRun(batch.privateDirectory, runId));
   assert.deepEqual(outcome.stages.map(stage => [stage.code, stage.primary, stage.alternates, stage.result]), [['SYN-1', 1, [2], 'not-three-star'], ['SYN-2', 4, [], 'not-evaluated']]);
   assert.equal(outcome.operation, batch.operation); assert.equal(outcome.lastDecision, null);

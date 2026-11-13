@@ -6,8 +6,8 @@ import type { MaaProcess } from './maa-config.ts';
 import { runChecks } from './doctor.ts';
 import { captureLogCursor, readLogSince, type LogCursor, type LogName } from './maa-log-window.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
-import { applyCoreLines, applyGap, applyGuiLines, applyProcess, applyUserReport, deriveRun, emptyRunState, fileKey,
-  type Decision, type DecisionRecord, type RunList, type RunState, type Verification } from './stage-run-state.ts';
+import { applyCoreLines, applyGap, applyGuiLines, applyProcess, applyUserReport, deriveRun, emptyRunState, fileKey, rerunGate,
+  type Decision, type DecisionRecord, type RunList, type RunState, type RunView, type Verification } from './stage-run-state.ts';
 import { readSettings } from './preferences.ts';
 
 /**
@@ -28,7 +28,7 @@ export type StageRunRecord = {
 type Paths = { maaDirectory: string; privateDirectory: string };
 const unknownState = ['sanity', 'medicine-inventory', 'originium', 'stage-progress'];
 const decisions: Decision[] = ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user'];
-const maxWaitSeconds = 600, maxScreenshots = 20;
+const maxWaitSeconds = 90, maxScreenshots = 20;
 function fail(code: string): never { throw new Error(code); }
 const text = (value: unknown, max: number, code: string) => typeof value === 'string' && value.trim() && value.length <= max ? value : fail(code);
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -78,24 +78,52 @@ async function save(privateDirectory: string, record: StageRunRecord, create = f
   await rename(temporary, file);
 }
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
-/** One writer per run record: a second concurrent observer would count the same log lines twice. */
-async function withRun<T>(privateDirectory: string, runId: string, work: (record: StageRunRecord) => Promise<T>): Promise<T> {
-  const file = runFile(privateDirectory, runId), lock = `${file.slice(0, -5)}.lock`;
+/** Exclusive lock file; a lock left by a process that has exited is taken over. */
+async function withLock<T>(lock: string, busy: string, work: () => Promise<T>): Promise<T> {
+  await mkdir(join(lock, '..'), { recursive: true });
   let handle;
   for (let attempt = 0; attempt < 2 && !handle; attempt++) {
     try { handle = await open(lock, 'wx', 0o600); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const holder = Number(object(JSON.parse(await readFile(lock, 'utf8').catch(() => '{}'))).pid);
-      if (Number.isSafeInteger(holder) && holder > 0 && alive(holder)) fail('run-busy');
+      if (Number.isSafeInteger(holder) && holder > 0 && alive(holder)) fail(busy);
       await unlink(lock).catch(() => undefined);
     }
   }
-  if (!handle) return fail('run-busy');
+  if (!handle) return fail(busy);
   try {
     await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); await handle.close(); handle = undefined;
-    return await work(await readStageRun(privateDirectory, runId));
+    return await work();
   } finally { if (handle) await handle.close(); await unlink(lock).catch(() => undefined); }
+}
+/** One writer per run record: a second concurrent observer would count the same log lines twice. */
+async function withRun<T>(privateDirectory: string, runId: string, work: (record: StageRunRecord) => Promise<T>): Promise<T> {
+  const file = runFile(privateDirectory, runId);
+  return withLock(`${file.slice(0, -5)}.lock`, 'run-busy', async () => work(await readStageRun(privateDirectory, runId)));
+}
+const view = (record: StageRunRecord): RunView => ({ runId: record.runId, createdAt: record.createdAt, retryOf: record.retryOf, state: record.state,
+  list: record.batch.list, stages: record.batch.stages, verifications: record.verifications, decisions: record.decisions });
+async function operationRecords(privateDirectory: string, operation: string): Promise<StageRunRecord[]> {
+  let names: string[] = [];
+  try { names = (await readdir(join(privateDirectory, 'stage-runs'))).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)); } catch { /* none yet */ }
+  return (await Promise.all(names.map(name => readStageRun(privateDirectory, name.slice(0, -5))))).filter(record => record.batch.operation === operation);
+}
+/** Reads the log lines that arrived since the record's cursors; the process state is applied when a boundary is given. */
+async function refresh(record: StageRunRecord, maaDirectory: string, maa?: Pick<MaaProcess, 'inspect'>) {
+  const now = new Date().toISOString();
+  let activity = false;
+  for (const log of ['gui', 'asst'] as const) {
+    const read = await readLogSince(maaDirectory, log, record.cursors[log]);
+    if (read.gap) applyGap(record.state, log, read.gap, now);
+    if (read.rotated) record.state.rotated = true;
+    if (read.lines.length) activity = true;
+    if (log === 'gui') applyGuiLines(record.state, read.lines); else applyCoreLines(record.state, record.batch.list, read.lines, now);
+    record.cursors[log] = read.cursor;
+  }
+  if (activity) record.lastActivityAt = now;
+  if (maa) try { applyProcess(record.state, (await maa.inspect()).running, now, now); } catch { /* An unreadable process state proves nothing. */ }
+  record.lastObservedAt = now;
 }
 
 export async function readStageRun(privateDirectory: string, runId?: string): Promise<StageRunRecord> {
@@ -113,7 +141,7 @@ export async function readStageRun(privateDirectory: string, runId?: string): Pr
 }
 
 export function summarizeStageRun(record: StageRunRecord, now = new Date()) {
-  const derived = deriveRun(record.state, record.batch.list, record.batch.stages, record.verifications, record.decisions);
+  const derived = deriveRun(view(record));
   return { runId: record.runId, createdAt: record.createdAt, reference: record.reference, retryOf: record.retryOf,
     batch: { operation: record.batch.operation, reportHash: record.batch.reportHash, map: record.batch.map,
       stages: record.batch.stages.map(stage => ({ stageId: stage.stageId, code: stage.code, loops: stage.loops })) },
@@ -137,14 +165,19 @@ export async function startStageRun(input: Paths & { operation: string; referenc
   await verifyApprovedJobFiles(plan, input.privateDirectory);
   const check = await listCheck(input.maaDirectory, input.privateDirectory, plan, profileName);
   if (check.result !== 'matches' && check.result !== 'subset') fail('prepared-list-changed');
-  if (input.retryOf !== undefined) {
-    const previous = await readStageRun(input.privateDirectory, text(input.retryOf, 36, 'run-id-invalid'));
-    let names: string[] = [];
-    try { names = (await readdir(join(input.privateDirectory, 'stage-runs'))).filter(name => name.endsWith('.json')); } catch { /* none */ }
-    const others = await Promise.all(names.map(name => readStageRun(input.privateDirectory, name.slice(0, -5)).catch(() => null)));
-    if (previous.batch.operation !== operation || previous.decisions.at(-1)?.decision !== 'retry-within-approval'
-      || others.some(other => other?.retryOf === previous.runId)) fail('retry-not-decided');
-  }
+  const retryOf = input.retryOf === undefined ? null : text(input.retryOf, 36, 'run-id-invalid');
+  return withLock(join(input.privateDirectory, 'stage-runs', `operation-${operation}.lock`), 'run-busy', async () => {
+    for (const earlier of await operationRecords(input.privateDirectory, operation)) {
+      if (summarizeStageRun(earlier).execution !== 'tracking') continue;
+      await withRun(input.privateDirectory, earlier.runId, async current => { await refresh(current, input.maaDirectory); await save(input.privateDirectory, current); });
+    }
+    const gate = rerunGate((await operationRecords(input.privateDirectory, operation)).map(view), { kind: 'start', retryOf });
+    if (!gate.allowed) fail(gate.reason);
+    return createRun(input, operation, reference, retryOf, plan, check);
+  });
+}
+async function createRun(input: Paths, operation: string, reference: string, retryOf: string | null, plan: ApprovedJobPlan,
+  check: { profile: number; result: 'matches' | 'subset' }) {
   const createdAt = new Date().toISOString();
   const anchors = { asst: await captureLogCursor(input.maaDirectory, 'asst'), gui: await captureLogCursor(input.maaDirectory, 'gui') };
   const expanded = approvedJobList(plan, input.privateDirectory);
@@ -152,7 +185,7 @@ export async function startStageRun(input: Paths & { operation: string; referenc
     const entry = plan.entries.find(value => value.primary.id === item.CopilotId && value.code === item.Name)!;
     return { index: item.Index, stageId: entry.stageId, code: entry.code, jobId: item.CopilotId, fileKey: fileKey(item.FilePath) };
   });
-  const record: StageRunRecord = { version: 1, runId: randomUUID(), createdAt, reference, retryOf: input.retryOf ?? null,
+  const record: StageRunRecord = { version: 1, runId: randomUUID(), createdAt, reference, retryOf,
     batch: { operation, reportHash: plan.reportHash, map: plan.map, profile: check.profile, listCheck: check.result,
       stages: plan.entries.map(entry => ({ stageId: entry.stageId, code: entry.code, loops: entry.loops, primary: entry.primary.id, alternates: entry.alternates.map(job => job.id) })), list },
     anchors, cursors: structuredClone(anchors), state: emptyRunState(), userReports: [], screenshots: [], verifications: [], decisions: [],
@@ -196,20 +229,8 @@ export async function observeStageRun(input: Paths & { runId: string; waitSecond
     }
     if (input.processExitCode !== undefined) record.processExitCode = input.processExitCode;
     for (;;) {
-      const now = new Date().toISOString();
-      let activity = false;
-      for (const log of ['gui', 'asst'] as const) {
-        const read = await readLogSince(input.maaDirectory, log, record.cursors[log]);
-        if (read.gap) applyGap(record.state, log, read.gap, now);
-        if (read.rotated) record.state.rotated = true;
-        if (read.lines.length) activity = true;
-        if (log === 'gui') applyGuiLines(record.state, read.lines); else applyCoreLines(record.state, record.batch.list, read.lines, now);
-        record.cursors[log] = read.cursor;
-      }
-      if (activity) record.lastActivityAt = now;
-      try { applyProcess(record.state, (await maa.inspect()).running, now, now); } catch { /* An unreadable process state proves nothing. */ }
-      record.lastObservedAt = now;
-      const derived = deriveRun(record.state, record.batch.list, record.batch.stages, record.verifications, record.decisions);
+      await refresh(record, input.maaDirectory, maa);
+      const derived = deriveRun(view(record));
       if (record.state.findings.some(finding => !finding.reported) || derived.execution !== 'tracking' || Date.now() >= deadline) break;
       await save(input.privateDirectory, record);
       await new Promise(done => setTimeout(done, Math.min(2000, Math.max(0, deadline - Date.now()))));
@@ -245,12 +266,45 @@ export async function verifyStageRun(input: Paths & { runId: string }, maa: MaaP
   });
 }
 
-export async function decideStageRun(input: { privateDirectory: string; runId: string; decision: Decision; reason: string }) {
+/**
+ * Records the model's decision after `rerunGate` allows it. Stopping a run that is still tracking is allowed only before
+ * its task chain starts; the logs are read first, and the closed record attributes no later lines.
+ */
+export async function decideStageRun(input: { privateDirectory: string; maaDirectory?: string; runId: string; decision: Decision; reason: string }) {
   if (!decisions.includes(input.decision)) fail('decision-invalid');
   const reason = text(input.reason, 500, 'reason-required');
   return withRun(input.privateDirectory, input.runId, async record => {
-    if (!summarizeStageRun(record).allowedDecisions.includes(input.decision)) fail('decision-not-allowed');
-    record.decisions.push({ at: new Date().toISOString(), decision: input.decision, reason });
+    if (summarizeStageRun(record).execution === 'tracking') {
+      if (!input.maaDirectory) fail('maa-directory-required');
+      await refresh(record, input.maaDirectory);
+    }
+    const tracking = summarizeStageRun(record).execution === 'tracking';
+    if (!rerunGate([view(record)], { kind: 'decide', runId: record.runId, decision: input.decision }).allowed) { await save(input.privateDirectory, record); fail('decision-not-allowed'); }
+    const at = new Date().toISOString();
+    if (tracking) record.state.closed = { at, reason: 'closed-before-start' };
+    record.decisions.push({ at, decision: input.decision, reason });
+    await save(input.privateDirectory, record);
+    return summarizeStageRun(record);
+  });
+}
+
+/**
+ * The user's own statement of how far each stage got after an unknown outcome. It is the only thing that settles an
+ * attempt that may have fought; it never changes what MAA reported, and the quote is kept with the record.
+ */
+export async function recordStageProgress(input: { privateDirectory: string; runId: string; reference: string; stages: { stageId: string; completedRuns: number }[] }) {
+  const quote = text(input.reference, 500, 'reference-required');
+  return withRun(input.privateDirectory, input.runId, async record => {
+    if (summarizeStageRun(record).execution === 'tracking') fail('run-tracking');
+    const stages = Array.isArray(input.stages) ? input.stages : [];
+    const seen = new Set<string>();
+    if (!stages.length || stages.some(item => {
+      const stage = record.batch.stages.find(value => value.stageId === item?.stageId);
+      const valid = !!stage && !seen.has(stage.stageId) && Number.isSafeInteger(item.completedRuns) && item.completedRuns >= 0 && item.completedRuns <= stage.loops;
+      if (stage) seen.add(stage.stageId);
+      return !valid;
+    })) fail('progress-invalid');
+    record.state.progress.push({ at: new Date().toISOString(), quote, stages: stages.map(item => ({ stageId: item.stageId, completedRuns: item.completedRuns })) });
     await save(input.privateDirectory, record);
     return summarizeStageRun(record);
   });
@@ -261,11 +315,11 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   const known = /^[a-z][a-z-]{2,48}$/;
   try {
     const action = process.argv[2];
-    if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'read'].includes(action!)) fail('action-invalid');
+    if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'progress', 'read'].includes(action!)) fail('action-invalid');
     let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 65536) fail('input-too-large'); }
     const input = object(JSON.parse(raw || '{}'));
     const allowed: Record<string, string[]> = { start: ['operation', 'reference', 'retryOf'], observe: ['runId', 'waitSeconds', 'userReport', 'processExitCode'],
-      verify: ['runId'], decide: ['runId', 'decision', 'reason'], read: ['runId'] };
+      verify: ['runId'], decide: ['runId', 'decision', 'reason'], progress: ['runId', 'reference', 'stages'], read: ['runId'] };
     if (Object.keys(input).some(key => !allowed[action!]!.includes(key))) fail('request-invalid');
     const settings = await readSettings();
     const paths = { maaDirectory: settings.maaDirectory ?? fail('maa-directory-unset'), privateDirectory: settings.privateDirectory };
@@ -276,7 +330,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     if (action === 'start') result = await startStageRun({ ...paths, ...input } as Parameters<typeof startStageRun>[0]);
     else if (action === 'observe') result = await observeStageRun({ ...paths, ...input } as Parameters<typeof observeStageRun>[0], maa);
     else if (action === 'verify') result = await verifyStageRun({ ...paths, runId: input.runId as string }, maa);
-    else if (action === 'decide') result = await decideStageRun({ privateDirectory: paths.privateDirectory, ...input } as Parameters<typeof decideStageRun>[0]);
+    else if (action === 'decide') result = await decideStageRun({ ...paths, ...input } as Parameters<typeof decideStageRun>[0]);
+    else if (action === 'progress') result = await recordStageProgress({ privateDirectory: paths.privateDirectory, ...input } as Parameters<typeof recordStageProgress>[0]);
     else result = summarizeStageRun(await readStageRun(paths.privateDirectory, input.runId === undefined ? undefined : text(input.runId, 36, 'run-id-invalid')));
     console.log(JSON.stringify({ ok: true, ...object(result) }));
   } catch (error) {
