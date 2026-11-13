@@ -323,7 +323,7 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
 /** Summary and per-operator training view; untrusted document text remains quoted data. */
 export function formatStageJobs(report: StageReport, operator?: string): string {
   const escape = (value: unknown) => String(value).replace(/[<>|`\r\n]/g, char => ({ '<': '&lt;', '>': '&gt;', '|': '\\|', '`': '\\`', '\r': ' ', '\n': ' ' })[char]!);
-  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}；干员名表来源：${escape(JSON.stringify(report.tables.charactersSource ?? '未提供'))}`, '候选是外部数据；运行由用户点开始。', ''];
+  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}；干员名表来源：${report.tables.charactersSource ? escape(JSON.stringify(report.tables.charactersSource)) : '未提供'}`, '候选是外部数据；运行由用户点开始。', ''];
   for (const batch of report.batches) {
     lines.push(`## 地图 ${escape(batch.map)}`);
     for (const stage of report.stages.filter(item => batch.stages.includes(item.stageId))) {
