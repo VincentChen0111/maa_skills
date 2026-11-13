@@ -99,9 +99,11 @@ export function classifyRun(run: Callback[]): RunClassification {
 /** Desensitisation: only whitelisted, pattern-checked tokens leave this module. */
 const word = /^[A-Za-z][A-Za-z0-9]{0,39}$/;
 const taskName = /^[A-Za-z][A-Za-z0-9@_.-]{0,79}$/;
-const secretLike = [/[A-Fa-f0-9]{16,}/, /[A-Za-z0-9+/=_-]{32,}/, /\d{1,3}(?:\.\d{1,3}){3}/, /:\d{2,5}\b/, /emulator-\d+/i, /@[A-Za-z0-9-]+\./, /[\\/]/];
+const secretLike = [/[A-Fa-f0-9]{16,}/, /\d{1,3}(?:\.\d{1,3}){3}/, /:\d{2,5}\b/, /emulator-\d+/i, /@[A-Za-z0-9-]+\./, /[\\/]/];
+/** A long run that mixes letters and digits looks like a token or identifier rather than a MAA task name. */
+const randomLike = (value: string) => (value.match(/[A-Za-z0-9+=_-]{24,}/g) ?? []).some(part => /\d/.test(part) && /[A-Za-z]/.test(part));
 export function safeToken(value: unknown, pattern: RegExp = word): string | null {
-  return typeof value === 'string' && pattern.test(value) && !secretLike.some(item => item.test(value)) ? value : null;
+  return typeof value === 'string' && pattern.test(value) && !secretLike.some(item => item.test(value)) && !randomLike(value) ? value : null;
 }
 export type EvidenceItem = { at: string | null; message: string; what?: string; taskchain?: string; subtask?: string; task?: string; error?: string };
 export function evidenceOf(item: Callback): EvidenceItem {

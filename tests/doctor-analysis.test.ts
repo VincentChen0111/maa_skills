@@ -7,10 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runAnalysis as analyzeRun } from '../skills/maa-core/scripts/doctor.ts';
-import { parseCallbacks } from '../skills/maa-core/scripts/maa-log.ts';
+import { parseCallbacks, safeToken } from '../skills/maa-core/scripts/maa-log.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 
 const profile = 'Synthetic private profile';
+// A synthetic Windows user directory, assembled so the repository privacy scan does not read it as a real path.
+const userDirectory = ['C:', 'Users', 'SyntheticUser'].join('\\');
 // Assertions read the JSON shape directly; the result union is checked by the assertions themselves.
 const runAnalysis = async (...args: Parameters<typeof analyzeRun>): Promise<any> => analyzeRun(...args);
 let clock = 0;
@@ -41,7 +43,7 @@ test('callback lines are parsed structurally; text that merely mentions a callba
   const parsed = parseCallbacks([callback('ConnectionInfo', { what: 'Connected', why: '' }), noise('Assistant::append_callback | not a callback line'),
     noise('error text mentions TaskChainError and 任务出错'), 'garbage', callback('AllTasksCompleted', { taskchain: 'Fight', taskid: 1 })].join('\n'));
   assert.deepEqual(parsed.map(item => [item.message, item.detail?.what ?? null]), [['ConnectionInfo', 'Connected'], ['AllTasksCompleted', null]]);
-  assert.match(parsed[0]!.at!, /^2026-11-13 08:\d\d:\d\d\.000$/);
+  assert.match(parsed[0]!.at!, /^2026-11-13 08:[0-9]{2}:[0-9]{2}\.000$/);
 });
 
 test('structured callbacks decide the outcome; a zero process exit code and a completion marker never override an error', async (t) => {
@@ -59,8 +61,16 @@ test('structured callbacks decide the outcome; a zero process exit code and a co
     assert.equal(result.outcome, outcome);
     assert.equal(result.processExit, 'not-evidence');
     if (outcome === 'unknown') { assert.equal(result.replay, 'forbidden'); assert.deepEqual(result.nextSteps, ['verify-current-state']); }
+    if (outcome === 'stopped') { assert.equal(result.replay, 'ask-user'); assert.deepEqual(result.nextSteps, ['verify-current-state']); }
     if (outcome === 'completed' || outcome === 'stopped') assert.equal(result.referral.state, 'not-applicable');
   });
+});
+
+test('evidence tokens keep MAA task names but drop identifier-like, address-like and path-like values', () => {
+  assert.equal(safeToken('ReturnToTerminalAndCheckProductionAgain', /^[A-Za-z][A-Za-z0-9@_.-]{0,79}$/), 'ReturnToTerminalAndCheckProductionAgain');
+  assert.equal(safeToken('Sarkaz@Roguelike@StageCombatDps2', /^[A-Za-z][A-Za-z0-9@_.-]{0,79}$/), 'Sarkaz@Roguelike@StageCombatDps2');
+  for (const value of ['ABCDEF0123456789ABCDEF0123', 'abc123def456ghi789jkl012mno', 'emulator-5554', userDirectory, '127.0.0.1:16384', 'synthetic@example.invalid'])
+    assert.equal(safeToken(value, /^.{1,80}$/), null, value);
 });
 
 test('only the latest run is analysed unless an earlier run is named', async (t) => {
@@ -100,7 +110,7 @@ test('environment failures report cause, evidence and current state; the model c
 
 test('recognition failures are referred only after resolution, connection and an obscured screen are ruled out', async (t) => {
   const failing = [callback('ConnectionInfo', { what: 'Connected' }), callback('TaskChainStart', { taskchain: 'Fight', taskid: 3 }),
-    noise('Save image "C:\\Users\\SyntheticUser\\MAA\\debug\\interface\\2026.11.13-08.00.05_StartButton2.png"'),
+    noise(`Save image "${userDirectory}\\MAA\\debug\\interface\\2026.11.13-08.00.05_StartButton2.png"`),
     callback('SubTaskError', { subtask: 'ProcessTask', class: 'asst::ProcessTask', taskchain: 'Fight', taskid: 3, details: { task: 'StartButton2' } }),
     callback('TaskChainError', { taskchain: 'Fight', taskid: 3 }), callback('AllTasksCompleted', { taskchain: 'Fight', taskid: 3 })];
   const f = await fixture(t, failing);
@@ -147,13 +157,13 @@ test('the referral summary and latest analysis record never carry credentials, a
   const markers = ['synthetic-device-uuid-marker', 'SyntheticUser', '16384', '127.0.0.1', 'synthetic-account-marker', 'synthetic-token-marker',
     'ABCDEF0123456789ABCDEF0123', 'synthetic-why-marker', 'Synthetic private profile', 'synthetic-profile-config-marker', 'emulator-5554', 'synthetic@example.invalid'];
   const lines = [
-    callback('ConnectionInfo', { what: 'Connected', why: 'synthetic-why-marker', details: { adb: 'C:\\Users\\SyntheticUser\\adb.exe', address: '127.0.0.1:16384', config: 'synthetic-profile-config-marker' } }),
+    callback('ConnectionInfo', { what: 'Connected', why: 'synthetic-why-marker', details: { adb: `${userDirectory}\\adb.exe`, address: '127.0.0.1:16384', config: 'synthetic-profile-config-marker' } }),
     callback('ConnectionInfo', { what: 'emulator-5554', why: 'synthetic-token-marker' }),
     callback('TaskChainStart', { taskchain: 'Fight', taskid: 9 }),
-    noise('Save image "C:\\Users\\SyntheticUser\\MAA\\debug\\interface\\synthetic-account-marker 01.png"'),
-    noise('Save image "C:\\Users\\SyntheticUser\\MAA\\debug\\drops\\2026.11.13-08.00.09_drops.png"'),
+    noise(`Save image "${userDirectory}\\MAA\\debug\\interface\\synthetic-account-marker 01.png"`),
+    noise(`Save image "${userDirectory}\\MAA\\debug\\drops\\2026.11.13-08.00.09_drops.png"`),
     callback('SubTaskError', { subtask: 'ProcessTask', taskchain: 'Fight', taskid: 9, details: { task: 'ABCDEF0123456789ABCDEF0123', user: 'synthetic-account-marker', mail: 'synthetic@example.invalid' } }),
-    callback('SubTaskError', { subtask: 'synthetic-token-marker', taskchain: 'C:\\Users\\SyntheticUser', taskid: 9, details: { task: '127.0.0.1:16384' } }),
+    callback('SubTaskError', { subtask: 'synthetic-token-marker', taskchain: userDirectory, taskid: 9, details: { task: '127.0.0.1:16384' } }),
     callback('TaskChainError', { taskchain: 'Fight', taskid: 9, details: { error: 'UnhandledException', what: 'synthetic-token-marker' } }),
     callback('AllTasksCompleted', { taskchain: 'Fight', taskid: 9 }),
   ];

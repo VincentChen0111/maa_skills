@@ -151,7 +151,8 @@ export async function runAnalysis(context: CheckContext, input: AnalyzeInput, ma
     { id: 'interface-obscured', state: input.interfaceUnobscured ? 'ruled-out' : 'needs-user-confirmation' }] : [];
   const nextSteps = outcome === 'unknown' || outcome === 'stopped' ? ['verify-current-state'] : outcome === 'completed' ? []
     : environment ? ['verify-current-state', 'retry-within-approval', 'next-approved-alternative', 'stop-and-tell-user'] : ['verify-current-state', 'stop-and-tell-user'];
-  const replay = outcome === 'unknown' ? 'forbidden' : outcome === 'failed' ? 'within-existing-approval' : 'not-needed';
+  // Unknown results are only verified; a stopped run is restarted only on the user's request.
+  const replay = outcome === 'unknown' ? 'forbidden' : outcome === 'failed' ? 'within-existing-approval' : outcome === 'stopped' ? 'ask-user' : 'not-needed';
 
   let referral: Record<string, unknown> = { state: 'not-applicable' };
   const ready = async (judgement: string, confidence: 'high' | 'medium' | 'low', chain: string[]) => {
