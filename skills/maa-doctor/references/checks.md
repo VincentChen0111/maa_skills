@@ -1,8 +1,25 @@
 # 检查与恢复接口
 
-共享入口是相邻 `../../maa-core/scripts/doctor.ts`。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒；1 存在错误、修法拒绝或结果未知；2 意外失败。错误不回显配置、路径、原始异常或批准文本。
+共享入口是相邻 `../../maa-core/scripts/doctor.ts`，动作为 `check [--json] [--online]`、`analyze [--json]` 和 `repair [--json]`。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒（`analyze` 为运行已完成）；1 存在错误、修法拒绝、输入被拒或结果未知（`analyze` 为失败、停止或未知）；2 意外失败。错误不回显配置、路径、原始异常或批准文本。
 
-`check` 返回 `checkedAt`、`exitCode`、`checks` 和 `recovery`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`status`（normal/warning/error）、`reason` 和 `repair`（id、executor 为 skill/user、description）。setup 可以复用导出的 `runChecks(context, maa)`；本接口不替 setup 推定下载或人工操作授权。
+`check` 返回 `checkedAt`、`exitCode`、`checks`、`recovery`、`version` 和 `skills`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`group`、`status`（normal/warning/error）、`reason`、`repair`（id、executor 为 skill/user、description；执行者为 skill 时另有 `channel`，即执行它的现有脚本入口），新增各项另有 `message` 一句说明和可选的 `details`（只含字段种类、文件名或 skill 名）。setup 和 doctor 共用 `maa-core/scripts/checks.ts` 的原因与修法表，安装组与 `setup.ts check` 是同一个函数（`inspectInstallation`）；导出的 `runChecks(context, maa)` 的 context 需要 `home`（设置目录）。本接口不替 setup 推定下载或人工操作授权。
+
+## 八组检查
+
+| group | 检查 | 内容 |
+| --- | --- | --- |
+| installation | `platform`、`maa`、`server`、`node`、`settings`、`private-directory`、`version` | 与 setup 相同。`version` 读 MAA.exe 的产品版本并对照随包核实记录：记录缺失、为空（`verification-record-empty`）、版本未知或未完全核实都只是提醒，不阻止使用 |
+| connection | `connection` | 读当前配置的 adb 路径和地址，只运行 `adb devices`（adb 服务没在运行时 adb 会自行启动它，与 setup 的发现相同）：在线正常；离线、未授权为错误；不在列表里、adb 无法运行、未配置为提醒。不连接、不选择、不写入，不输出地址或路径 |
+| configuration | `configuration`、`configuration-fields`、`remote-control` | 能否解析；本项目写入的任务开关、理智药和定时字段的类型与范围（只给字段种类）；MAA 远程控制是否已配置 |
+| write-lock | `write-lock` | 遗留写入核对，规则见下文 |
+| credentials | `credential-nga`、`credential-skland`、`credential-bilibili` | 见下一段 |
+| private-files | `private-files` | 私有目录顶层由本项目保存的记录能否解析，以及中断写入留下的临时文件；不修改、不删除 |
+| skill-version | `skill-version` | 安装的 maa-core 版本；只有加 `--online` 才只读访问 GitHub 公开接口查最新正式发布（10 秒超时），查不到为提醒 |
+| skill-links | `skill-links` | 宿主 skill 目录里已安装的 maa_skills 目录（含目录联接）能否解析、有没有 SKILL.md；按宿主调用的路径检查，不跟随联接，也不修改宿主目录 |
+
+`remote-control` 只报告已配置或未配置：任何一个配置的 `Gui.RemoteControl.RemoteControlGetTaskEndpointUri` 非空即为已配置（提醒），因为固定版本的 MAA 会轮询该端点，远端可以下发包括抽卡在内的任务，且不经过本项目的写入器。修法执行者是用户：在 MAA 设置里决定是否保留。写入器不管理这些字段，doctor 不提供自动修法，也不输出端点或身份标识。
+
+执行者为 skill 的修法只经 `channel` 所列的现有入口执行：`doctor.ts repair`（遗留写入的两个修法）、`setup.ts prepare`（私有目录骨架）、`preferences.ts set`（首次设置，需要用户给出的选择）、`setup.ts discover|test|apply`（maa-setup 的连接流程，`apply` 仍需它自己的批准原话和关闭确认）、`doctor.ts check --online`（只读查询发布）。doctor 没有第二套写入逻辑。
 
 `checks` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 setup 及 `credentials.ts check` 是同一个函数（`inspectCredentials`）。这三项另有 `message` 一句说明，`reason` 是 `credential-<状态>` 代码；人类可读输出显示 `message`。检查只读、不解密、不联网，最近记录里也只有状态。它们的修法执行者都是用户：`repair` 的批准列表含 `enter-credential`、`verify-by-use`、`replace-credential` 或 `reenter-credential` 时整体拒绝，返回 `user-manual-repair`，不执行同一请求里的其他修法。状态和修法见 [凭据接口](../../maa-core/references/credentials.md)。
 
@@ -35,3 +52,20 @@ MAA 已关闭时，用户确认自己没有在操作后添加 `closedConfirmed: 
 setup 连接事务也使用同一单配置证据格式，skill 标记为 maa-setup。恢复限于原记录的连接字段，允许恢复 MAA 原有的空／相对 adb 路径及空地址；setup 正常接入仍只选真实存在的 adb 与已测试的本机地址。恢复不重放 adb 连接测试或原安装请求。
 
 损坏/缺失配置、字段外漂移、部分写入、缺备份、最新备份归属不一致或修改时间并列、超过 1000 项历史变更、未知记录或附带其他资源的事务均不自动恢复。MAA 已关闭且配置已生效时，重开是否成功仍未知，不能仅据字段一致就清锁；可在用户点名批准恢复后按关闭确认规则恢复，或由用户先处理 MAA 再重新诊断。
+
+## 运行分析与转介
+
+`analyze` 只读 MAA 目录下 `debug/asst.log` 的最后 8 MiB，按结构化回调把日志分成若干次运行，分析最近一次；标准输入 JSON 可以带：
+
+```json
+{ "run": 1, "processExitCode": 0, "interfaceUnobscured": true, "conclusion": "emulator-compatibility" }
+```
+
+- `run`：1–20，1 是最近一次。
+- `processExitCode`：用户或宿主看到的 MAA 退出码，只回显为 `processExit: "not-evidence"`，不参与判断。
+- `interfaceUnobscured`：仅在用户当次确认游戏画面没有被遮挡后传 `true`。
+- `conclusion`：`maa-defect`、`emulator-compatibility` 或 `game-update-not-adapted`，仅在查明当前状态后仍认定原因在本项目范围外时传；不能跳过识别失败的本机检查。
+
+返回 `analyzedAt`、`outcome`（completed/failed/stopped/unknown）、`run`、`window`（日志时间段）、`taskchains`、`evidence`（白名单字段：时间、消息名、`what`、任务链、子任务、`task` 名、异常类型）、`classification`（`category`、`environment`、`cause`）、`currentState`（`connection` 同 `check`，`maa` 为 running/not-running/unknown）、`localChecks`、`nextSteps`、`decidedBy`（总是 model）、`replay`（未知时 forbidden，失败时 within-existing-approval，停止时 ask-user，完成时 not-needed）、`screenshots`（相对 MAA 目录）、`missingEvidence` 和 `referral`。结果原子保存到私有目录 `doctor-analysis-latest.json`。
+
+`referral.state` 为 `not-applicable`、`pending`（`remaining` 列出未完成的本机检查）或 `ready`；`ready` 时带 `summary`（`overview`、`keyEvidence`、`rootCause`、`confidence`、`missingEvidence`）和 `entries`（MAA 常见问题、连接说明、issue 列表、日志压缩包的生成位置）。类别、排查顺序和何时转介见 [排查与转介对照](triage.md)。
