@@ -2,6 +2,23 @@
 
 工单 [17](issues/17-approved-alternate-jobs.md)。实现分支 `claude/17-approved-alternates`，叠在 16 的分支头 `15c3aeb` 上（16 基于 origin/main `4a1fd26`；16 第三轮之后的修复 `de645a9`、`3df4f85` 还没有独立审查）。本页只记录作者实际运行过的检查和未验证项，不代替独立审查、真实模型评测或实机验收。MAA 事实见[换备选来源](stage-alternates-sources.md)和[运行跟踪来源](stage-run-sources.md)。
 
+工单 17 的进度行和[工单索引](issues/INDEX.md)保持「未开始」：本分支是叠在 16 上构建的，而 16 还是进行中，tracker 不允许阻塞项未完成的票记为进行中（否则报 `unfinished-dependency 16`，离线入口失败）。16 记为已完成、合并进来之后，再把 17 改为进行中并运行 `node scripts/tracker.ts --write`。
+
+## 独立审查第 1 轮后的修复（2026-11-13）
+
+第 1 轮结论不通过（P1 1、P3 1），协调者复核后两条都接受。
+
+- **P1（安全）**：换备选的剩余次数原来用 `max(这一批证明的三星次数, 用户最近一次说明)`，两者取较大者，没有相加。用户的说明只算到说明那时为止，之后的重试里新证明的三星没有加上，所以会少算已打完、多写备选次数。换上的条目全部勾选，MAA 只在三星时自己取消勾选，挡不住多出来的条目。审查员的离线复现：SYN-1 批准 3 次，第 1 次结果未知、用户说明打完 1 次；重试时三星 1 次，下一项 MAA 报告失败；换备选写了 2 次，合计 4 次三星对 3 次批准。
+  - 修复：一个计数、一个负责者。`stage-run-state.ts` 的 `stageRuns(batch).done` 定义为：用户最近一次说明的次数，加上那次说明之后新开始的记录（`createdAt` 晚于说明时间）里回调证明的三星次数，且不少于这一批回调证明的三星总数。换备选的剩余次数（`switchTarget`）和带 `retryOf` 开始时的勾选上限都只用它。
+  - 同时在 `rerunGate` 的 `progress` 里加一条：这一批还有记录在跟踪时拒绝记录说明（`run-unresolved`）。否则说明之前已经开始、之后才证明的三星，既不在说明里，也不算「说明之后新开始的」。
+  - **这也改了 16 的规则**，请协调者告知维护者：16 重试时的勾选上限原来是「批准次数减 max(用户说明, 回调证明打完的次数)」，现在用上面的算法；16 的 `progress` 新增「还有记录在跟踪时拒绝」。在 16 原来能走到的重试路径里，带失败或未三星的记录本来就不能重试，到过结算画面又结果未知的必须先有用户说明，所以不再把失败计入打完不会放宽勾选上限。规格正文「日常操作」两条、「规则来源」16 一行、「默认值及其来源」16 和 17 两行，以及 `references/stage-run.md` 第 10、11、16 条同步改正；17 一行里错误的理由「只会少打、不会多打」已删除。
+  - 测试：
+    - `tests/stage-run-alternates.test.ts`「runs done add a statement and the 3-star runs proven after it: the alternate gets only the runs left」：审查员的场景，换备选只写 1 次。
+    - `tests/stage-run-rerun-gate.test.ts`「runs done = the latest statement plus 3-star runs proven after it, for both the switch and the retry start (ticket 17 review)」：两个消费者各一个子测试。换备选只写 1 次；重试时 SYN-1 仍勾选 2 项（只剩 1 次）被拒（`finished-items-ticked`），取消勾选后放行。
+    - 同文件「a progress statement is refused while a later run of the batch is still tracking」。
+  - 先失败：三项在修复前都失败。换备选写 2 次；重试时 2 项勾选被放行；跟踪中的说明被接受。审查员的复现脚本在修复后通过，SYN-1 只写 1 项。
+- **P3**：17 记为进行中而 16 仍是进行中，tracker 报 `unfinished-dependency 16`，离线入口失败。修复：进度行和索引改回「未开始」，见上一段；`node scripts/tracker.ts --write` 之后无错误。
+
 ## 交付内容
 
 - `skills/maa-core/scripts/stage-job-plan.ts`：作业计划可以带 `continuation`（这一批从哪条运行换来、每关的当前作业和剩下的次数）。`approvedJobStages`、`approvedJobEntries` 和 `approvedJobList` 是把批准计划展开成 MAA 作业列表的唯一一处：只认这一关批准过的主作业和备选，次数不超过批准次数。统一写入器、`start` 的列表核对和运行记录都调用它。
@@ -95,7 +112,7 @@
 - `npm ci --ignore-scripts`：通过。
 - `npm run typecheck`：每次改代码后运行，最后一次通过。
 - 单个测试文件，最后一轮的结果见文末「最后一轮」。
-- `node scripts/tracker.ts`：只报一项错误 `17-approved-alternate-jobs.md: unfinished-dependency 16`。原因是 17 已经是进行中，而它的阻塞项 16 还没完成；`--write` 遇到这项错误会拒绝写入，所以索引里 17 那一行按 `--write` 会生成的内容手工改成「进行中」，之后不再报索引过期。16 记为已完成后，这项错误自然消失。
+- `node scripts/tracker.ts`：第 1 轮之前报 `unfinished-dependency 16`（当时 17 记为进行中）。第 1 轮修复把进度改回「未开始」，`node scripts/tracker.ts --write` 之后无错误，`ready` 为 08、09、16、27、28、29、30。
 - 隐私与元数据检查：用 `scripts/privacy.ts` 的 `inspectPrivacy` 和 `scripts/metadata.ts` 的 `inspectMetadata` 单独运行，都没有发现。
 
 ## 实现选择（不是产品限制）
@@ -144,3 +161,11 @@
 - 用到作业计划展开或统一写入器的测试：`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`maa-config` 59/59、`setup-integration` 5/5、`training-integration` 2/2、`daily-evaluation` 5/5。
 
 没有运行 `tests/maa-process.test.ts`：它覆盖的进程适配器本票没有改。
+
+第 1 轮修复后，逐个运行，全部通过：
+- `npm run typecheck`；
+- `stage-run-rerun-gate` 16/16（含两个子测试）、`stage-run-alternates` 10/10、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1、`stage-alternate-scenarios` 1/1；
+- 审查员的复现脚本 1/1（只读导入本工作树）；
+- `node scripts/tracker.ts` 无错误；`inspectPrivacy`、`inspectMetadata` 无发现。
+
+修复只改了 `stage-run-state.ts` 和 `tests/fixtures/stage-run-data.ts`（`preparedBatch` 加了可选的 SYN-1 次数，默认值不变），所以作业准备和写入器的测试没有重跑。
