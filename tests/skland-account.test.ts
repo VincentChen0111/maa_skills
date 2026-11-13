@@ -10,7 +10,7 @@ import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { inspectCredentials, saveCredential } from '../skills/maa-core/scripts/credentials.ts';
 import type { Protector } from '../skills/maa-core/scripts/credential-protection.ts';
 import { parseMaaSnapshot, type AccountSnapshot } from '../skills/maa-core/scripts/account-snapshot.ts';
-import { readSklandAccount, sklandSnapshot, compareAccountSnapshots, type SklandFetch } from '../skills/maa-core/scripts/skland-account.ts';
+import { readSklandAccount, sklandSnapshot, compareAccountSnapshots, runSklandRead, sklandVerdicts, type SklandFetch, type SnapshotDomain } from '../skills/maa-core/scripts/skland-account.ts';
 import { calculateOperatorCost } from '../skills/maa-core/scripts/operator-cost.ts';
 import { queryBaseSkills } from '../skills/maa-core/scripts/base-query.ts';
 import { sklandSecrets, sklandInfo, sklandCultivate, sklandBinding, sklandBindingEntry } from './fixtures/skland-data.ts';
@@ -149,7 +149,9 @@ test('the base keeps rooms, stationed operators and raw mood with its own time; 
   for (const key of ['recruit', 'avatar', 'secretary', 'nickName', 'skinId', 'ap', 'mainStageProgress']) assert.equal(text.includes(`"${key}"`), false, key);
   const info = sklandInfo(); delete (info as Record<string, unknown>).building;
   const missing = sklandSnapshot({ info, cultivate: sklandCultivate() }, readAt);
-  assert.equal(missing.base, null); assert.deepEqual(missing.coverage.base, { status: 'missing', issues: ['not-returned'] });
+  assert.equal(missing.base, null); assert.deepEqual(missing.coverage.base, { status: 'invalid', issues: ['not-returned'] }, 'a code-0 reply without the base is an invalid reply');
+  const unbuilt: Record<string, unknown> = sklandInfo(); for (const key of ['meeting', 'hire', 'training']) delete (unbuilt.building as Record<string, unknown>)[key];
+  assert.equal(sklandSnapshot({ info: unbuilt, cultivate: sklandCultivate() }, readAt).coverage.base.status, 'complete', 'optional rooms may be absent when not built');
 });
 
 test('a missing credential stops before any request and never pretends there is new data', async (t) => {
@@ -304,12 +306,11 @@ test('inspect reads without saving; failures exit non-zero with an actionable co
   assert.deepEqual(JSON.parse(await readFile(missing.traceFile, 'utf8')), []);
 });
 
-test('a read with a failed domain never replaces an existing Skland snapshot; only a first snapshot may be partial', async (t) => {
+test('the import CLI wires the read verdict: a read with a domain not read never replaces the existing snapshot; only a first snapshot may be partial', async (t) => {
   const noBuilding: Record<string, unknown> = sklandInfo(); delete noBuilding.building;
   const partialReads: [Record<string, unknown[]>, string, string, string][] = [
-    [{ cultivate: ['network'] }, 'inventory', 'network-failed', 'retry-later'], [{ info: [{ data: noBuilding }] }, 'base', 'not-returned', 'retry-later'],
-    [{ cultivate: [{ http: 429 }] }, 'inventory', 'service-error', 'retry-later'], [{ cultivate: [{ code: 10001 }] }, 'inventory', 'service-error', 'retry-later'],
-    [{ cultivate: [{ data: { itemList: [] } }] }, 'inventory', 'invalid-cultivate', 'report-issue'],
+    [{ cultivate: ['network'] }, 'inventory', 'network-failed', 'retry-later'], [{ info: [{ data: noBuilding }] }, 'base', 'not-returned', 'report-issue'],
+    [{ cultivate: [{ data: { ...sklandCultivate(), items: [] } }] }, 'inventory', 'empty-response', 'report-issue'],
   ];
   const f = await fixture(t);
   assert.equal(runCli(f, 'import', {}).code, 0);
@@ -333,6 +334,82 @@ test('a read with a failed domain never replaces an existing Skland snapshot; on
   assert.deepEqual(saved.coverage.inventory, { status: 'unavailable', issues: ['network-failed'] });
   assert.deepEqual(saved.items, {}); assert.equal(saved.lmd, null); assert.equal(saved.operators.length, 2);
   assert.match(output.summary, /这是第一份森空岛快照/);
+});
+
+// Conformance: every producer path of each domain against every consumer of the one read verdict.
+test('conformance: every producer of operators, inventory and base against every consumer of the read verdict', async (t) => {
+  type Steps = Record<string, unknown[]>;
+  const info = (change: (value: Record<string, any>) => void): Steps => { const value: Record<string, any> = sklandInfo(); change(value); return { info: [{ data: value }] }; };
+  const cultivate = (change: (value: Record<string, any>) => void): Steps => { const value: Record<string, any> = sklandCultivate(); change(value); return { cultivate: [{ data: value }] }; };
+  type Expected = { error: string; repair: string } | { failed: SnapshotDomain[]; repair: string | undefined; first: Partial<Record<SnapshotDomain, string>> };
+  const infoRequest: [string, Steps, Expected][] = [
+    ['request failure', { info: ['network'] }, { error: 'network-failed', repair: 'retry-later' }],
+    ['non-zero code', { info: [{ code: 10001 }] }, { error: 'service-error', repair: 'retry-later' }],
+    ['429', { info: [{ http: 429 }] }, { error: 'service-error', repair: 'retry-later' }],
+  ];
+  const producers: [string, Steps, Expected][] = [
+    ...infoRequest.map(([name, steps, expected]) => [`operators: ${name}`, steps, expected] as [string, Steps, Expected]),
+    ['operators: invalid structure', info(v => { v.chars = 'broken'; }), { error: 'response-invalid', repair: 'report-issue' }],
+    ['operators: field renamed one level down', info(v => { for (const op of v.chars) { op.evolve = op.evolvePhase; delete op.evolvePhase; } }),
+      { failed: ['operators'], repair: 'report-issue', first: { operators: 'partial' } }],
+    ['operators: domain missing', info(v => { v.charList = v.chars; delete v.chars; }), { error: 'response-invalid', repair: 'report-issue' }],
+    ['operators: empty list (repro emptyChars)', info(v => { v.chars = []; }), { error: 'response-invalid', repair: 'report-issue' }],
+    ['inventory: request failure', { cultivate: ['network'] }, { failed: ['inventory'], repair: 'retry-later', first: { inventory: 'unavailable' } }],
+    ['inventory: non-zero code', { cultivate: [{ code: 10001 }] }, { failed: ['inventory'], repair: 'retry-later', first: { inventory: 'unavailable' } }],
+    ['inventory: 429', { cultivate: [{ http: 429 }] }, { failed: ['inventory'], repair: 'retry-later', first: { inventory: 'unavailable' } }],
+    ['inventory: invalid structure', cultivate(v => { v.items = 'x'; }), { failed: ['inventory'], repair: 'report-issue', first: { inventory: 'invalid' } }],
+    ['inventory: field renamed one level down', cultivate(v => { v.items = v.items.map((item: Record<string, unknown>) => ({ id: item.id, amount: item.count })); }),
+      { failed: ['inventory'], repair: 'report-issue', first: { inventory: 'invalid' } }],
+    ['inventory: domain missing', cultivate(v => { v.itemList = v.items; delete v.items; }), { failed: ['inventory'], repair: 'report-issue', first: { inventory: 'invalid' } }],
+    ['inventory: empty list (repro emptyItems)', cultivate(v => { v.items = []; }), { failed: ['inventory'], repair: 'report-issue', first: { inventory: 'invalid' } }],
+    // The base comes from the same player info request as the operators.
+    ...infoRequest.map(([name, steps, expected]) => [`base: ${name}`, steps, expected] as [string, Steps, Expected]),
+    ['base: invalid structure', info(v => { v.building = []; }), { failed: ['base'], repair: 'report-issue', first: { base: 'invalid' } }],
+    ['base: field renamed one level down', info(v => { v.building.manufactureRooms = v.building.manufactures; delete v.building.manufactures; }),
+      { failed: ['base'], repair: 'report-issue', first: { base: 'partial' } }],
+    ['base: domain missing (repro buildingRenamed)', info(v => { v.buildingInfo = v.building; delete v.building; }), { failed: ['base'], repair: 'report-issue', first: { base: 'invalid' } }],
+    ['base: empty (repro buildingRoomsRenamed)', info(v => { v.building = { controlRoom: {}, powerRooms: [] }; }), { failed: ['base'], repair: 'report-issue', first: { base: 'invalid' } }],
+    ['two domains: report-issue outranks retry-later', { ...info(v => { delete v.building; }), cultivate: ['network'] },
+      { failed: ['inventory', 'base'], repair: 'report-issue', first: { inventory: 'unavailable', base: 'invalid' } }],
+    ['normal', {}, { failed: [], repair: undefined, first: {} }],
+  ];
+  // The clock also signs requests, so each run only shifts it by whole seconds to get distinct read times.
+  const shift = { '2026-11-13T01:00:00.000Z': 0, '2026-11-13T02:00:00.000Z': 2000, '2026-11-13T03:00:00.000Z': 4000 } as Record<string, number>;
+  const run = async (f: { privateDirectory: string }, steps: Steps, at: string) => runSklandRead('import', { privateDirectory: f.privateDirectory, language: 'zh-CN',
+    fetcher: doubles.createSklandDouble({ steps }).fetch, protector, now: () => new Date(Date.now() + shift[at]!) });
+  for (const [name, steps, expected] of producers) {
+    // Consumers with an existing snapshot: the keep/replace decision under the lock, saved, failedDomains, repair, summary.
+    const f = await fixture(t);
+    const file = join(f.privateDirectory, 'account-snapshot-skland.json');
+    assert.equal((await run(f, {}, '2026-11-13T01:00:00.000Z')).body.saved, true, name);
+    const before = await readFile(file);
+    const kept = await run(f, steps, '2026-11-13T02:00:00.000Z');
+    const notRead = 'error' in expected || expected.failed.length > 0;
+    assert.equal((await readFile(file)).equals(before), notRead, `${name}: existing snapshot bytes ${notRead ? 'unchanged' : 'replaced'}`);
+    assert.equal(kept.body.repair, expected.repair, `${name}: repair`);
+    if ('error' in expected) {
+      assert.equal(kept.exitCode, 1, name); assert.equal(kept.body.error, expected.error, name); assert.equal(kept.body.saved, false, name);
+      assert.match(kept.summary, /没有读到新的账号数据/, name);
+    } else {
+      assert.equal(kept.exitCode, 0, name); assert.equal(kept.body.saved, !notRead, `${name}: saved`); assert.deepEqual(kept.body.failedDomains, expected.failed, `${name}: failedDomains`);
+      if (notRead) assert.match(kept.summary, /已有的森空岛快照保持不变/, name); else assert.doesNotMatch(kept.summary, /不完整/, name);
+    }
+    // Consumer without an existing snapshot: only a first snapshot may be partial, with coverage from the same verdict.
+    const fresh = await fixture(t);
+    const freshFile = join(fresh.privateDirectory, 'account-snapshot-skland.json');
+    const first = await run(fresh, steps, '2026-11-13T03:00:00.000Z');
+    if ('error' in expected) { await assert.rejects(readFile(freshFile), `${name}: nothing written`); continue; }
+    assert.equal(first.body.saved, true, name);
+    const saved = JSON.parse(await readFile(freshFile, 'utf8')) as AccountSnapshot;
+    assert.deepEqual(saved.coverage, first.body.coverage, `${name}: written coverage is the reported coverage`);
+    for (const domain of ['operators', 'inventory', 'base'] as const) {
+      const verdict = sklandVerdicts(saved).find(item => item.domain === domain)!;
+      assert.equal(verdict.read, !expected.failed.includes(domain), `${name}: ${domain} verdict over the written snapshot`);
+      assert.equal(saved.coverage[domain].status, expected.first[domain] ?? 'complete', `${name}: ${domain} written status`);
+      if (!verdict.usable) assert.deepEqual(domain === 'operators' ? saved.operators : domain === 'inventory' ? saved.items : saved.base, domain === 'operators' ? [] : domain === 'inventory' ? {} : null);
+    }
+    if (expected.failed.length) assert.match(first.summary, /这是第一份森空岛快照/, name);
+  }
 });
 
 test('the same synthetic account through MAA and Skland is readable by the same tool, and compare shows conflicts with times without merging', async (t) => {

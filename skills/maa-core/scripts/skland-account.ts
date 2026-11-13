@@ -151,7 +151,7 @@ export async function readSklandAccount(options: { privateDirectory: string; fet
     const query = `uid=${encodeURIComponent(chosenRole(binding))}`;
     const info = await session.get(skland.info, query);
     // Player info without the checked operator structure means the interface changed: no usable read.
-    if (operators(isObject(info) ? info : {}).coverage.status === 'invalid') throw new ReadFailure('response-invalid');
+    if (!domainVerdict('operators', operators(isObject(info) ? info : {}).coverage).usable) throw new ReadFailure('response-invalid');
     let cultivate: unknown; let cultivateIssue: Issue | undefined;
     try { cultivate = await session.get(skland.cultivate, query); }
     catch (error) {
@@ -171,8 +171,9 @@ export async function readSklandAccount(options: { privateDirectory: string; fet
 
 type Parts = { info: unknown; cultivate?: unknown; cultivateIssue?: Issue };
 const noSource = (): Coverage => ({ status: 'unavailable', issues: ['no-source'] });
+/** A code-0 reply that yields no entries is an invalid reply, not an empty account. */
 function finish(issues: Set<string>, empty: boolean): Coverage {
-  if (empty) issues.add('empty-response');
+  if (empty) return { status: 'invalid', issues: [...issues, 'empty-response'] };
   return { status: issues.size ? 'partial' : 'complete', issues: [...issues] };
 }
 /** Integer field: absent is unknown (`missing-*`), out of range is unknown (`invalid-*`); offset converts 0-based counts. */
@@ -228,10 +229,12 @@ function operators(info: Record<string, unknown>): { operators: Operator[]; cove
   } catch { return { operators: [], coverage: { status: 'invalid', issues: ['invalid-player-info'] } }; }
 }
 
-const rooms: [string, BaseRoom['type'], boolean][] = [['control', 'control', true], ['powers', 'power', false], ['manufactures', 'manufacture', false],
-  ['tradings', 'trading', false], ['dormitories', 'dormitory', false], ['meeting', 'meeting', true], ['hire', 'hire', true], ['training', 'training', true]];
+// [key, type, single room, may be absent when not built]: nonebot-plugin-skland declares meeting, hire and training optional.
+const rooms: [string, BaseRoom['type'], boolean, boolean][] = [['control', 'control', true, false], ['powers', 'power', false, false],
+  ['manufactures', 'manufacture', false, false], ['tradings', 'trading', false, false], ['dormitories', 'dormitory', false, false],
+  ['meeting', 'meeting', true, true], ['hire', 'hire', true, true], ['training', 'training', true, true]];
 function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; coverage: Coverage } {
-  if (info.building === undefined || info.building === null) return { base: null, coverage: { status: 'missing', issues: ['not-returned'] } };
+  if (info.building === undefined || info.building === null) return { base: null, coverage: { status: 'invalid', issues: ['not-returned'] } };
   try {
     const building = object(info.building); const issues = new Set<string>(); const result: BaseRoom[] = [];
     const stationed = (raw: unknown, role?: 'trainee' | 'trainer'): BaseOperator => {
@@ -239,9 +242,9 @@ function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; c
       return { id: identifier(entry.charId), ...(role ? { role } : {}), moodRaw: field(entry.ap, 'mood', 0, fullMood, issues), moodAt: utcSeconds(entry.lastApAddTime, issues) };
     };
     const list = (value: unknown): unknown[] => { if (!Array.isArray(value)) throw new Error('list-required'); return value; };
-    for (const [key, type, single] of rooms) {
+    for (const [key, type, single, optional] of rooms) {
       const value = building[key];
-      if (value === undefined) { issues.add(`missing-${type}`); continue; }
+      if (value === undefined) { if (!optional) issues.add(`missing-${type}`); continue; }
       if (value === null && single) continue;
       for (const raw of single ? [value] : list(value)) {
         const room = object(raw);
@@ -285,18 +288,46 @@ export function sklandSnapshot(parts: Parts, readAt: string): AccountSnapshot {
   if (new Date(readAt).toISOString() !== readAt) throw new Error('invalid-read-time');
   const info = isObject(parts.info) ? parts.info : {};
   const operatorPart = operators(info), basePart = base(info), inventoryPart = inventory(parts);
-  return { version: 1, source: 'skland', readAt, operators: operatorPart.operators, items: inventoryPart.items,
+  const snapshot: AccountSnapshot = { version: 1, source: 'skland', readAt, operators: operatorPart.operators, items: inventoryPart.items,
     lmd: inventoryPart.items['4001'] ?? null, base: basePart.base, sourceTimes: { operators: null, inventory: null },
     coverage: { operators: operatorPart.coverage, inventory: inventoryPart.coverage, base: basePart.coverage,
       medicine: noSource(), vouchers: noSource(), stageClears: noSource() } };
+  // The written coverage follows the same verdict: a domain that is not usable keeps no data and never claims complete or partial.
+  for (const verdict of sklandVerdicts(snapshot)) {
+    if (verdict.usable) continue;
+    const coverage = snapshot.coverage[verdict.domain];
+    if (coverage.status === 'complete' || coverage.status === 'partial') coverage.status = 'invalid';
+    if (verdict.domain === 'operators') snapshot.operators = [];
+    else if (verdict.domain === 'inventory') { snapshot.items = {}; snapshot.lmd = null; }
+    else snapshot.base = null;
+  }
+  return snapshot;
 }
+
+export type Repair = 'retry-later' | 'check-system-time' | 'reenter-credential' | 'report-issue';
+export type DomainVerdict = { domain: SnapshotDomain; read: boolean; usable: boolean; repair: Repair | null };
+const requestRepairs: Record<string, Repair> = { 'network-failed': 'retry-later', 'service-error': 'retry-later',
+  'signature-rejected': 'check-system-time', 'credential-rejected': 'reenter-credential' };
 /**
- * Domains this read did not obtain, because the request failed (`unavailable`), the reply did not have the
- * checked structure (`invalid`) or the domain was not returned (`missing`). Such a read never replaces an
- * existing Skland snapshot; it may only become the first one, with the reasons kept in `coverage`.
+ * The one rule for whether a Skland domain was read. `read`: complete, with no reason code at all, so it may
+ * replace an existing snapshot. `usable`: it has entries in the checked structure (a first snapshot may keep
+ * them as partial). Anything else is not read: a failed request (`unavailable`, repair by its cause) or a
+ * code-0 reply that is invalid, empty, missing the domain or missing fields (repair `report-issue`).
+ * Its consumers: the player-info gate, the keep/replace decision under the write lock, `saved`,
+ * `failedDomains`, `repair`, the summary text and the coverage written by `sklandSnapshot`.
  */
-export function incompleteDomains(snapshot: AccountSnapshot): SnapshotDomain[] {
-  return (['operators', 'inventory', 'base'] as const).filter(domain => !['complete', 'partial'].includes(snapshot.coverage[domain].status));
+export function domainVerdict(domain: SnapshotDomain, coverage: Coverage): DomainVerdict {
+  const read = coverage.status === 'complete' && !coverage.issues.length;
+  const usable = (coverage.status === 'complete' || coverage.status === 'partial') && !coverage.issues.includes('empty-response');
+  const request = coverage.status === 'unavailable' ? requestRepairs[coverage.issues[0] ?? ''] ?? 'retry-later' : undefined;
+  return { domain, read, usable, repair: read ? null : request ?? 'report-issue' };
+}
+export function sklandVerdicts(snapshot: AccountSnapshot): DomainVerdict[] {
+  return (['operators', 'inventory', 'base'] as const).map(domain => domainVerdict(domain, snapshot.coverage[domain]));
+}
+/** One repair for the whole read: a credential refusal first, then an interface change, then the clock, then a retry. */
+export function sklandRepair(verdicts: DomainVerdict[]): Repair | null {
+  return (['reenter-credential', 'report-issue', 'check-system-time', 'retry-later'] as const).find(repair => verdicts.some(item => item.repair === repair)) ?? null;
 }
 
 // ---- comparing MAA and Skland snapshots ------------------------------------------------------------
@@ -351,8 +382,12 @@ const zh = (language: string) => language.toLowerCase().startsWith('zh');
 const repairs: Record<SklandFailure, string> = { 'credential-unset': 'enter-credential', 'credential-unreadable': 'reenter-credential', 'credential-expired': 'reenter-credential',
   'windows-required': 'use-windows', 'protection-failed': 'retry-later', 'network-failed': 'retry-later', 'service-error': 'retry-later',
   'signature-rejected': 'check-system-time', 'response-invalid': 'report-issue', 'binding-missing': 'bind-role-in-skland', 'binding-ambiguous': 'set-default-role-in-skland' };
-/** A partial read: a domain whose reply had the wrong structure points to an interface change; a failed request to a retry. */
-const partialRepair = (snapshot: AccountSnapshot) => incompleteDomains(snapshot).some(domain => snapshot.coverage[domain].status === 'invalid') ? 'report-issue' : 'retry-later';
+const repairText: Record<Repair, [string, string]> = {
+  'retry-later': ['请稍后再试。', 'Try again later.'],
+  'report-issue': ['回复格式和已核对的不一致，接口可能已经变化，请报告问题。', 'A reply did not have the checked format; the interface may have changed, so please report it.'],
+  'check-system-time': ['请检查电脑的系统时间和时区；时间正确仍失败时请报告问题。', 'Check the computer\'s clock and time zone; if they are correct and it still fails, please report it.'],
+  'reenter-credential': ['请重新粘贴 token。', 'Paste a new token.'],
+};
 const disclosureText = (language: string) => zh(language)
   ? ['请注意：', '1. 截至 2026-11-13，没有找到鹰角网络对第三方调用森空岛接口的公开表态。', '2. 森空岛数据比游戏内实际状态滞后多久没有测过；读取时间不等于游戏内的数据时间。']
   : ['Please note:', '1. As of 2026-11-13, we found no public statement from Hypergryph about third parties calling the Skland API.',
@@ -384,7 +419,8 @@ export function formatSklandFailure(failure: SklandFailure, language = 'zh-CN'):
 }
 export function formatSklandSummary(snapshot: AccountSnapshot, credential: CredentialReport, language = 'zh-CN', save?: 'saved' | 'first' | 'kept'): string {
   const z = zh(language), c = snapshot.coverage;
-  const failed = incompleteDomains(snapshot).map(domain => z ? { operators: '干员', inventory: '仓库', base: '基建' }[domain] : domain).join(z ? '、' : ', ');
+  const verdicts = sklandVerdicts(snapshot), repair = sklandRepair(verdicts);
+  const failed = verdicts.filter(item => !item.read).map(item => z ? { operators: '干员', inventory: '仓库', base: '基建' }[item.domain] : item.domain).join(z ? '、' : ', ');
   const unknown = z ? '未知' : 'unknown';
   const lines = z ? ['# 森空岛账号快照', '', '来源：森空岛（只读；不保存账号标识）', '', `读取时间：${snapshot.readAt}（本次从森空岛读取的时间，不是游戏内的数据时间）`, '',
     `- 干员：${c.operators.status} (${snapshot.operators.length})`, '- 技能等级、专精和模组：来自森空岛；没有返回的保持未知',
@@ -399,9 +435,7 @@ export function formatSklandSummary(snapshot: AccountSnapshot, credential: Crede
   const partial = (['operators', 'inventory', 'base'] as const).filter(key => c[key].issues.length).map(key => `${key}: ${c[key].issues.join(', ')}`);
   if (partial.length) lines.push('', (z ? '缺失或未采用：' : 'Missing or not used: ') + partial.join('; '));
   if (failed) {
-    const retry = partialRepair(snapshot) === 'report-issue'
-      ? (z ? '回复格式和已核对的不一致，接口可能已经变化，请报告问题。' : 'A reply did not have the checked format; the interface may have changed, so please report it.')
-      : (z ? '请稍后再试。' : 'Try again later.');
+    const retry = repair ? repairText[repair][z ? 0 : 1] : '';
     lines.push('', save === 'kept'
       ? (z ? `本次读取不完整（没有读到：${failed}），已有的森空岛快照保持不变，这次结果没有保存。${retry}` : `This read is incomplete (not read: ${failed}). The existing Skland snapshot is unchanged and this result was not saved. ${retry}`)
       : save === 'first'
@@ -440,6 +474,36 @@ class KeepExisting extends Error {}
 async function present(path: string): Promise<boolean> {
   try { await stat(path); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ENOENT'; }
 }
+/**
+ * One `inspect` or `import`: the read, the keep-or-replace decision under the shared write lock and the
+ * reported body. Exit code 0 means the read produced a snapshot (check `saved` and `failedDomains`).
+ */
+export async function runSklandRead(action: 'inspect' | 'import', options: { privateDirectory: string; language: string; fetcher?: SklandFetch; protector?: Protector; now?: () => Date }):
+  Promise<{ exitCode: 0 | 1; body: Record<string, unknown>; summary: string }> {
+  const { privateDirectory, language } = options;
+  const result = await readSklandAccount({ privateDirectory, ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+    ...(options.protector ? { protector: options.protector } : {}), ...(options.now ? { now: options.now } : {}) });
+  if (result.status !== 'ok') {
+    const summary = formatSklandFailure(result.status, language);
+    return { exitCode: 1, body: { ok: false, saved: false, error: result.status, credential: result.credential, repair: repairs[result.status], summary }, summary };
+  }
+  const snapshot = result.snapshot, verdicts = sklandVerdicts(snapshot), failedDomains = verdicts.filter(item => !item.read).map(item => item.domain);
+  const repair = sklandRepair(verdicts);
+  let save: 'saved' | 'first' | 'kept' | undefined;
+  if (action === 'import') {
+    // Decided under the shared write lock: a read with a domain not read may only become the first Skland snapshot.
+    const target = join(privateDirectory, snapshotFiles.skland);
+    await saveAccountSnapshot(privateDirectory, snapshotFiles.skland, async () => {
+      if (failedDomains.length && await present(target)) { save = 'kept'; throw new KeepExisting(); }
+      save = failedDomains.length ? 'first' : 'saved';
+      return snapshot;
+    }).catch(error => { if (!(error instanceof KeepExisting)) throw error; });
+  }
+  const summary = formatSklandSummary(snapshot, result.credential, language, save);
+  return { exitCode: 0, summary, body: { ok: true, saved: save === 'saved' || save === 'first', source: 'skland', readAt: snapshot.readAt, coverage: snapshot.coverage,
+    failedDomains, ...(repair ? { repair } : {}), operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd,
+    baseRoomCount: snapshot.base?.rooms.length ?? 0, credential: result.credential, disclosures: sklandDisclosures, summary } };
+}
 function request(value: unknown, action: string): Request {
   const input = object(value);
   const allowed = action === 'compare' ? ['currentLanguage', 'format', 'maaFile', 'sklandFile'] : ['currentLanguage', 'format'];
@@ -473,27 +537,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         if (input.format === 'markdown') process.stdout.write(summary); else console.log(JSON.stringify({ ok: true, comparison, summary }));
       }
     } else {
-      const result = await readSklandAccount({ privateDirectory: settings.privateDirectory });
-      if (result.status !== 'ok') fail({ error: result.status, credential: result.credential, repair: repairs[result.status], summary: formatSklandFailure(result.status, language) });
-      else {
-        const snapshot = result.snapshot, failedDomains = incompleteDomains(snapshot);
-        let save: 'saved' | 'first' | 'kept' | undefined;
-        if (action === 'import') {
-          // Decided under the shared write lock: an incomplete read may only become the first Skland snapshot.
-          const target = join(settings.privateDirectory, snapshotFiles.skland);
-          await saveAccountSnapshot(settings.privateDirectory, snapshotFiles.skland, async () => {
-            if (failedDomains.length && await present(target)) { save = 'kept'; throw new KeepExisting(); }
-            save = failedDomains.length ? 'first' : 'saved';
-            return snapshot;
-          }).catch(error => { if (!(error instanceof KeepExisting)) throw error; });
-        }
-        const summary = formatSklandSummary(snapshot, result.credential, language, save);
-        if (input.format === 'markdown') process.stdout.write(summary);
-        else console.log(JSON.stringify({ ok: true, saved: save === 'saved' || save === 'first', source: 'skland', readAt: snapshot.readAt, coverage: snapshot.coverage,
-          failedDomains, ...(failedDomains.length ? { repair: partialRepair(snapshot) } : {}),
-          operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd, baseRoomCount: snapshot.base?.rooms.length ?? 0,
-          credential: result.credential, disclosures: sklandDisclosures, summary }));
-      }
+      const outcome = await runSklandRead(action as 'inspect' | 'import', { privateDirectory: settings.privateDirectory, language });
+      if (outcome.exitCode !== 0) fail(outcome.body);
+      else if (input.format === 'markdown') process.stdout.write(outcome.summary);
+      else console.log(JSON.stringify(outcome.body));
     }
   } catch (error) {
     fail({ error: (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required' });
