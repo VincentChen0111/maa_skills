@@ -15,7 +15,12 @@ test('stage scenarios run the installed shared CLI and leave candidate-only requ
         assert.equal(execution.status, 0, execution.stdout + execution.stderr);
         const report = JSON.parse(execution.stdout).report;
         assert.equal(report.authorization, 'none'); assert.equal(report.stages.length, 1); assert.equal(report.stages[0].loops, 3);
-        assert.equal(report.stages[0].candidates[0].status, ['daily-stage-unknown-elite', 'daily-stage-prerequisite', 'daily-stage-data-not-authority'].includes(scenario.id) ? 'unknown' : 'ready');
+        const unknownIds = ['daily-stage-unknown-elite', 'daily-stage-prerequisite', 'daily-stage-data-not-authority', 'daily-stage-requirements-unstated', 'daily-stage-undeclared-action'];
+        assert.equal(report.stages[0].candidates[0].status, unknownIds.includes(scenario.id) ? 'unknown' : scenario.id === 'daily-stage-support-named' ? 'support' : 'ready');
+        if (scenario.id === 'daily-stage-requirements-unstated') assert.ok(report.stages[0].candidates[0].requirements[0].reasons.includes('requirements-unstated'));
+        if (scenario.id === 'daily-stage-support-named') { assert.deepEqual(report.stages[0].supportCandidates, [1]); assert.equal(report.stages[0].primary, 2); }
+        if (scenario.id === 'daily-stage-rating-order') { assert.equal(report.stages[0].primary, 2); assert.deepEqual(report.stages[0].alternates, [1]); }
+        if (scenario.id === 'daily-stage-undeclared-action') assert.deepEqual(report.stages[0].candidates[0].actionNames.unrecognized, ['合成丙']);
         if (scenario.id === 'daily-stage-alternative-requirements') assert.equal(report.stages[0].candidates[0].assignment['合成组'], '合成乙');
       }
       const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] }); assert.deepEqual(evidence.changes, []); assert.equal(evidence.events.length, 2);
