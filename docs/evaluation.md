@@ -110,7 +110,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 
 另带 `--permission-prompts none` 和 `--allowedTools`（只为免批准，不限制工具），并设 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`。每次运行都核对 `system/init`：工具清单必须等于预期，MCP 服务器、命令、skill、插件为空，子代理只限内置名字，套餐登录时 `apiKeySource` 为 `none`；出现清单之外的项就记 `isolation-unverified`，不当作基线。
 
-已知限制：Claude Code 的命令沙箱不支持原生 Windows。固定版本在未登录探测里提示「Windows sandbox is not active」，命令不经沙箱执行，所以「场景允许的命令读不到登录目录」只能靠读保护检查实测；`node *` 这样的命令本来读得了任意文件，读保护检查在原生 Windows 上很可能不通过，届时 Claude 一侧不用套餐登录运行，交回维护者决定（例如改在 WSL2 运行）。维护者的决定： 2026-11-14 在协调者列出的四个选择里选了 (a)，原话「do a) first.」：先只在原生 Windows 上跑 Codex，Claude 的真模型评测暂缓，等有能隔离命令的环境（另建虚拟机或 WSL2）。
+已知限制：Claude Code 的命令沙箱不支持原生 Windows。固定版本在未登录探测里提示「Windows sandbox is not active」，命令不经沙箱执行，所以「场景允许的命令读不到登录目录」只能靠读保护检查实测；`node *` 这样的命令本来读得了任意文件，读保护检查在原生 Windows 上很可能不通过，届时 Claude 一侧不用套餐登录运行，交回维护者决定（例如改在 WSL2 运行）。维护者 2026-11-14 在协调者列出的四个选择里选了 (a)（原话「do a) first.」）：先只在原生 Windows 上跑 Codex，Claude 的真模型评测暂缓，等有能隔离命令的环境（另建虚拟机或 WSL2）。
 
 ## Codex 一侧
 
