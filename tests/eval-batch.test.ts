@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { compareBatches, readManifest, runBatch } from '../scripts/eval-batch.ts';
+import { compareBatches, readManifest, runBatch, runnerSources } from '../scripts/eval-batch.ts';
+import { scenarioHashSources } from '../scripts/eval-run.ts';
 import { entryId, scenarioCatalog, scenarioGroups, selectScenarios } from '../scripts/eval-scenarios.ts';
 import type { RunRecord } from '../scripts/evaluation.ts';
 import { accountScenarios } from '../eval/maa-account/scenarios.ts';
@@ -173,4 +174,24 @@ test('the batch CLI lists scenarios and refuses incomplete arguments; eval-run k
   assert.equal(result.status, 'unverified'); assert.equal(result.reason, 'host-unavailable');
   const manifest = await readManifest(join(root, result.batch));
   assert.equal(manifest.abort?.stage, 'auth-preflight');
+});
+
+test('every local module the grader and the run load is in both the scenario hash and the runner fingerprint', async () => {
+  // Static imports, followed transitively; the dynamic import of the batch module is only the command-line entry of eval-run.
+  const closure = new Set<string>();
+  const visit = async (file: string) => {
+    if (closure.has(file)) return;
+    closure.add(file);
+    const text = await readFile(join(repository, file), 'utf8');
+    for (const match of text.matchAll(/^\s*(?:import|export)\b[^;]*?\sfrom\s+'(\.{1,2}\/[^']+)'/gm)) {
+      await visit(relative(repository, join(repository, file, '..', match[1]!)).replaceAll('\\', '/'));
+    }
+  };
+  await visit('scripts/evaluation.ts'); await visit('scripts/eval-run.ts');
+  const hashed = scenarioHashSources.map((file) => relative(repository, join(repository, 'scripts', file)).replaceAll('\\', '/'));
+  for (const file of closure) {
+    assert.ok(hashed.includes(file), `${file} is in the scenario hash`);
+    assert.ok(runnerSources.includes(file), `${file} is in the runner fingerprint`);
+  }
+  assert.ok(closure.has('scripts/eval-transaction.ts'));
 });

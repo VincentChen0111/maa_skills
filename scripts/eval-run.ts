@@ -18,6 +18,9 @@ const scenarios: Record<ScenarioName, string> = {
 };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+/** Every local module the run and the grader load (relative to this file); each one's text is part of the scenario hash. */
+export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts',
+  '../skills/maa-core/scripts/preferences.ts'];
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.
@@ -96,7 +99,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     // The runner owns this interval; scenario fields and model events cannot supply it.
     if (executionWindow) evidence.executionWindow = executionWindow;
     const source = async (file: string) => readFile(new URL(file, import.meta.url), 'utf8');
-    const [evaluator, collector, runner, dailyEvaluator, hostAdapter, authModule] = await Promise.all(['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts'].map(source));
+    const sources = Object.fromEntries(await Promise.all(scenarioHashSources.map(async (file) => [file, await source(file)] as const)));
     const skill = JSON.stringify([...fixture.original].filter(([file]) => file.startsWith('.agents/skills/')));
     let graded = grade({ ...fixture.policy, secrets }, evidence);
     if (!transcript.completed && reason === 'completed') reason = 'incomplete-transcript';
@@ -106,7 +109,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     const record: RunRecord = {
       id: randomUUID(), host: options.host, hostVersion: version.available ? version.version : 'unavailable', model: options.model,
       scenario: options.reviewBrief ? 'independent-review-smoke' : custom?.id ?? options.scenario as ScenarioName,
-      scenarioHash: digest(JSON.stringify({ prompt, evaluator, collector, runner, dailyEvaluator, hostAdapter, authModule, observer: fixture.original.get('.eval-node-observer.mjs')?.toString(),
+      scenarioHash: digest(JSON.stringify({ prompt, sources, observer: fixture.original.get('.eval-node-observer.mjs')?.toString(),
         dailyObserver: fixture.original.get('.eval-daily-observer.mjs')?.toString(), maaBoundary: fixture.original.get('.eval-maa-process.mjs')?.toString(),
         setupBoundary: fixture.original.get('.eval-setup-boundary.mjs')?.toString(),
         networkLoader: fixture.original.get('.eval-network-fixture.mjs')?.toString(), networkFixtures: custom?.networkFixtures,
