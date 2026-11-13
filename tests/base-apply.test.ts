@@ -8,21 +8,26 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { applyBasePlan, checkBaseApply } from '../skills/maa-core/scripts/base-apply.ts';
 import { executeConfigWrite, inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
-import { approveBaseReportItems, draftBaseReport } from '../skills/maa-core/scripts/base-report.ts';
+import { approveBaseReportItems, draftBaseReport, type BaseContent } from '../skills/maa-core/scripts/base-report.ts';
 import { loadAdviceReport, recordReviewSkip, saveAdviceReport } from '../skills/maa-core/scripts/advice-report.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import { applyHome, goals, infrastConfig, type ApplyHome } from './fixtures/base-apply-data.ts';
 import { nameTable, planInput, planSnapshot, planTables } from './fixtures/base-plan-data.ts';
 
 // Ticket 23: applying an approved base plan. Real temporary homes and the real report, plan and configuration tools;
 // only the MAA process is replaced (it records calls). No device, adb or game is involved in any test.
 const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
-/** onClose / onStart run inside the fake GUI's close and start: something else touching the private directory meanwhile. */
-function fakeMaa(options: { startFails?: boolean; closeFails?: boolean; onClose?: () => Promise<unknown>; onStart?: () => Promise<unknown> } = {}) {
+/**
+ * onClose / onStart run inside the fake GUI's close and start: something else touching the private directory meanwhile.
+ * `version` is the MAA.exe metadata boundary (ticket 25's version stamp); without it the version is unknown.
+ */
+function fakeMaa(options: { startFails?: boolean; closeFails?: boolean; onClose?: () => Promise<unknown>; onStart?: () => Promise<unknown>; version?: () => Promise<string | null> } = {}) {
   let running = true; const calls: string[] = [];
   const maa: MaaProcess = {
     inspect: async () => { calls.push('inspect'); return { running, treeExited: !running, idle: true, ready: running }; },
     close: async () => { calls.push('close'); if (options.closeFails) throw new Error('synthetic close failure'); await options.onClose?.(); running = false; },
     start: async () => { calls.push('start'); if (options.startFails) throw new Error('synthetic restart failure'); await options.onStart?.(); running = true; },
+    ...options.version ? { version: options.version } : {},
   };
   return { maa, calls };
 }
@@ -112,6 +117,40 @@ test('report → approval → check → safe write → read-back: only the custo
   const again = fakeMaa();
   assert.equal((await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), again.maa, { home: h.home })).status, 'unchanged');
   assert.deepEqual(again.calls, []);
+});
+
+// Ticket 25: check and apply report the MAA and verification-record versions the approved report recorded against the
+// current ones, with the field and values stage jobs and training use. A difference is reported, never refused.
+test('check and apply report the version difference from the approved report (same, changed, unknown, unrecorded) and never refuse for it', async (t) => {
+  const { recordVersion } = await readVerificationRecord();
+  const stamp = (maaVersion: string | null) => ({ maaVersion, recordVersion });
+  const h = await home(t, { version: '6.22.0' });
+  const checkWith = (reference: string, version: () => Promise<string | null>) =>
+    checkBaseApply({ reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home, versionReader: version });
+  assert.deepEqual(((await loadAdviceReport(h.home, 'base', h.reportHash)).content as BaseContent).versions, stamp('6.22.0'), 'the approved report carries the stamp');
+  const same = await checkWith(h.reference, async () => '6.22.0');
+  assert.equal(same.status, 'ready', JSON.stringify(same.reasons));
+  assert.deepEqual(same.versions, { state: 'same', recorded: stamp('6.22.0'), current: stamp('6.22.0'), changed: [] });
+  // MAA upgraded after the approval: reported, and the write still goes ahead.
+  const upgraded = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), fakeMaa({ version: async () => '6.22.1' }).maa, { home: h.home });
+  assert.equal(upgraded.status, 'complete', JSON.stringify(upgraded));
+  assert.deepEqual(upgraded.versions, { state: 'changed', recorded: stamp('6.22.0'), current: stamp('6.22.1'), changed: ['maaVersion'] });
+  assert.deepEqual((await records(join(h.home, 'daily-pending.jsonl'))).at(-1).versions, stamp('6.22.1'), 'the pending record stamps the version read at the write');
+  // Unreadable now: unknown, never a refusal.
+  const unreadable = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }),
+    fakeMaa({ version: async () => { throw new Error('synthetic unreadable version'); } }).maa, { home: h.home });
+  assert.equal(unreadable.status, 'unchanged', JSON.stringify(unreadable));
+  assert.deepEqual(unreadable.versions, { state: 'unknown', recorded: stamp('6.22.0'), current: stamp(null), changed: [] });
+  // A report approved before ticket 25 has no stamp: unrecorded, not an error.
+  const legacy = await crafted(h, content => { delete content.versions; });
+  const old = await checkWith(legacy, async () => '6.22.0');
+  assert.equal(old.status, 'ready', JSON.stringify(old.reasons));
+  assert.deepEqual(old.versions, { state: 'unrecorded', recorded: null, current: stamp('6.22.0'), changed: [] });
+  const oldApply = await applyBasePlan(await request(h, { reference: legacy, decision: accept(['maa-timers']) }), fakeMaa({ version: async () => '6.22.0' }).maa, { home: h.home });
+  assert.equal(oldApply.status, 'unchanged', JSON.stringify(oldApply)); assert.equal(oldApply.versions?.state, 'unrecorded');
+  // A reference that resolves to no approved report has no recorded versions to compare.
+  const missing = await checkBaseApply({ reference: `base/${'0'.repeat(64)}#P1`, profile: 0, task: 1 }, { home: h.home, versionReader: async () => '6.22.0' });
+  assert.equal(missing.status, 'refused'); assert.equal(missing.versions, null);
 });
 
 test('nothing unapproved runs: a missing approval, another report version and an edited report are refused before any write', async (t) => {

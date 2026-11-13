@@ -29,8 +29,8 @@ export interface MaaProcess {
   start(): Promise<void>;
   version?(): Promise<string | null>;
 }
-/** The version stamp written into a pending record or plan, read through the process boundary. */
-export function versionStampOf(maaDirectory: string, maa: MaaProcess): Promise<MaaVersionStamp> {
+/** The version stamp written into a pending record or plan, read through the process boundary; no MAA directory reads as unknown. */
+export function versionStampOf(maaDirectory: string | null | undefined, maa: MaaProcess): Promise<MaaVersionStamp> {
   return readVersionStamp(maaDirectory, maa.version ? () => maa.version!() : undefined);
 }
 type RecordValue = Record<string, unknown>;

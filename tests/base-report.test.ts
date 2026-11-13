@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { draftBaseReport, formatBaseReportMarkdown, formatBaseReportBody, changedReportResults, resultProducers, approveBaseReportItems, baseReportFreshness,
   type BaseContent } from '../skills/maa-core/scripts/base-report.ts';
 import { loadAdviceReport, recordReview, recordReviewSkip, writeReviewBrief, resolveApprovedItem } from '../skills/maa-core/scripts/advice-report.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import { planInput, planHome, planNetwork, planSnapshot, planTables } from './fixtures/base-plan-data.ts';
 
 // Synthetic layout, roster, skills and MAA name table only. The network is the only replaced boundary.
@@ -33,6 +34,28 @@ test('a draft writes the plan in the private directory, keeps facts and inferenc
     '每天换班 2 次', '## 数据新鲜度（生成时）', '账号快照：新鲜', '## 未建模', 'maa-account 不写 MAA 配置、不执行排班', '总体推断：两班轮换']) assert.ok(markdown.includes(text), text);
   assert.ok(!markdown.includes('不执行培养'), 'the shared banner speaks about the base plan, not cultivation');
   assert.deepEqual(await readdir(join(home, 'maa'), { recursive: true }), maaBefore, 'no MAA file changes');
+});
+
+// Ticket 25: the report records the MAA version and the verification-record version read when it is generated. The
+// MAA.exe metadata reader is the replaced boundary; no real PowerShell runs.
+test('the report stamps the MAA and verification-record versions read at generation; an unreadable version is null, never guessed', async (t) => {
+  const home = await planHome(); t.after(() => rm(home, { recursive: true, force: true }));
+  const { recordVersion } = await readVerificationRecord();
+  assert.ok(recordVersion !== null && recordVersion >= 1, 'the packaged record carries its own version');
+  const absent = await draftBaseReport(draft(), { home, fetcher: planNetwork(), versionReader: async () => { throw new Error('must not run without MAA.exe'); } });
+  if (absent.status !== 'saved') return assert.fail(JSON.stringify(absent));
+  assert.deepEqual(absent.state.content.versions, { maaVersion: null, recordVersion }, 'no MAA.exe: the version is unknown and the reader is not run');
+  await writeFile(join(home, 'maa', 'MAA.exe'), 'synthetic executable placeholder');
+  const reads: string[] = [];
+  const read = await draftBaseReport(draft(), { home, fetcher: planNetwork(), versionReader: async directory => { reads.push(directory); return '6.22.0'; } });
+  if (read.status !== 'saved') return assert.fail(JSON.stringify(read));
+  assert.deepEqual(read.state.content.versions, { maaVersion: '6.22.0', recordVersion });
+  assert.deepEqual(reads, [join(home, 'maa')], 'the configured MAA directory is read once');
+  const unreadable = await draftBaseReport(draft(), { home, fetcher: planNetwork(), versionReader: async () => { throw new Error('synthetic unreadable version'); } });
+  if (unreadable.status !== 'saved') return assert.fail(JSON.stringify(unreadable));
+  assert.deepEqual(unreadable.state.content.versions, { maaVersion: null, recordVersion });
+  // The stamp is part of the immutable report version: the approval binds it, and editing it later breaks the hash.
+  assert.deepEqual(((await loadAdviceReport(home, 'base', read.reportHash)).content as BaseContent).versions, { maaVersion: '6.22.0', recordVersion });
 });
 
 test('without stated goals the draft asks first; an assumption is saved only as a labelled assumption', async (t) => {
@@ -119,7 +142,10 @@ test('conformance: every re-read or recomputed producer lists real changes only,
   }
   // Every top-level content key is a producer's result, the agent's input (changedFields) or version metadata.
   assert.deepEqual(Object.keys(base).sort(), ['assumptions', 'check', 'createdAt', 'goals', 'input', 'items', 'kind', 'maaProtocol', 'operators', 'plan', 'revisionOf',
-    'schemaVersion', 'snapshot', 'sources', 'summary']);
+    'schemaVersion', 'snapshot', 'sources', 'summary', 'versions']);
+  // The MAA and record versions read at generation are version metadata like createdAt: a correction drafted after MAA
+  // was upgraded did not change a result (applying reports the version difference instead).
+  assert.deepEqual(changedReportResults(base, { ...structuredClone(base), versions: { maaVersion: '6.22.1', recordVersion: 99 } }), []);
 });
 
 test('freshness is fresh, stale or unknown; a stale check is re-run and the old result is not used as proof', async (t) => {
