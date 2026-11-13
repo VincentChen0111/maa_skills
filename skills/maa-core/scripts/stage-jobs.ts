@@ -12,7 +12,12 @@ type Status = 'ready' | 'blocked' | 'unknown';
 export type StageRequest = { stages: { stageId: string; code: string; difficulty: 'normal' | 'raid'; loops: number }[];
   completions?: Record<string, 'PASS' | 'COMPLETE'>; completionEvidence?: string; maaVersion: string;
   documentChecks?: { jobId: number; contentHash: string; satisfied: boolean; reference: string }[] };
-export type Job = { id: number; content: ObjectValue; source: { url: string; readAt: string; sha256?: string } };
+type SourceRecord = { url: string; readAt: string; sha256?: string };
+/** Rating counts as the copilot site's query summary reports them; the summary is fresher than the cached detail view. */
+export type JobRating = { like: number; dislike: number; notEnoughRating: boolean; ratingLevel?: number; ratingRatio?: number; source: SourceRecord };
+export type Job = { id: number; content: ObjectValue; source: SourceRecord; rating?: JobRating };
+export type CandidateRating = { flag: 'ok' | 'low' | 'not-enough' | 'unknown'; like?: number; dislike?: number; votes?: number; notEnoughRating?: boolean;
+  likeRatio?: number; requiredRatio?: number; ratingLevel?: number | null; ratingRatio?: number | null; source?: SourceRecord | null };
 type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean };
 export type StageReport = ReturnType<typeof matchStageJobs>;
 export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number }[] };
@@ -52,6 +57,26 @@ function versionMet(current: unknown, required: unknown): boolean {
   }
   return true;
 }
+// Design default (ticket 29, 2026-11-13): the required like ratio rises with votes, 65% at 5 votes to a cap of 85% at
+// 100 votes, after the vote-dependent idea in MAA-PRTS (MIT). It is applied only when the site says the rating is enough.
+const requiredLikeRatio = (votes: number) => votes < 5 ? 0 : Math.min(0.85, 0.65 + 0.2 * Math.log(votes / 5) / Math.log(20));
+const round4 = (value: number) => Number(value.toFixed(4));
+/** Ratings order and annotate candidates only; they never change status, requirement checks or authorization. */
+function rateJob(job: Job): CandidateRating {
+  const rating = job.rating as unknown;
+  if (!rating || typeof rating !== 'object' || Array.isArray(rating)) return { flag: 'unknown' };
+  const { like, dislike, notEnoughRating, ratingLevel, ratingRatio, source } = rating as ObjectValue;
+  if (!Number.isSafeInteger(like) || like < 0 || !Number.isSafeInteger(dislike) || dislike < 0 || typeof notEnoughRating !== 'boolean') return { flag: 'unknown' };
+  const votes = like + dislike;
+  const base = { like, dislike, votes, notEnoughRating, ratingLevel: Number.isSafeInteger(ratingLevel) ? ratingLevel : null,
+    ratingRatio: typeof ratingRatio === 'number' && Number.isFinite(ratingRatio) ? ratingRatio : null,
+    source: source && typeof source === 'object' && typeof source.url === 'string' && typeof source.readAt === 'string' ? structuredClone(source) as SourceRecord : null };
+  if (notEnoughRating) return { ...base, flag: 'not-enough' };
+  if (!votes) return { ...base, flag: 'unknown' };
+  const required = requiredLikeRatio(votes);
+  return { ...base, likeRatio: round4(like / votes), requiredRatio: round4(required), flag: like / votes < required ? 'low' : 'ok' };
+}
+const ratingTier = (rating: CandidateRating) => rating.flag === 'ok' ? 0 : rating.flag === 'low' ? 2 : 1;
 function effectiveRequirements(oper: ObjectValue): ObjectValue {
   const required = structuredClone(object(oper.requirements ?? {}));
   const skill = oper.skill === 2 || oper.skill === 3 ? oper.skill - 1 : 0;
@@ -175,9 +200,11 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       }
       return { id: job.id, status: reasons.some(reason => ['map-mismatch', 'difficulty-mismatch', 'full-job-required', 'unsupported-job-type'].includes(reason)) ? 'blocked' as Status : status(checks), reasons, source: job.source,
         requirements: operators.requirements, assignment: operators.assignment, content: structuredClone(content), hash: digest(content),
-        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null };
+        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job) };
     });
-    const ready = candidates.filter(candidate => candidate.status === 'ready');
+    // Candidates keep the API order as evidence; suggestions demote not-enough/unknown and then low ratings, stably.
+    const ready = candidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.status === 'ready')
+      .sort((a, b) => ratingTier(a.candidate.rating) - ratingTier(b.candidate.rating) || a.index - b.index).map(({ candidate }) => candidate);
     return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id) };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
@@ -206,7 +233,7 @@ async function publicResponse(url: string, fetcher: typeof fetch) {
   return { data: object(result.data), source: { url, readAt: new Date().toISOString(), sha256: createHash('sha256').update(body).digest('hex') } };
 }
 
-/** Bounded public GET queries; no credentials, redirects, ratings or submissions. */
+/** Bounded public GET queries; no credentials, redirects, rating votes or submissions. Ratings are only read. */
 export async function collectStageJobs(snapshot: unknown, tables: unknown, request: StageRequest, fetcher: typeof fetch = fetch) {
   matchStageJobs(snapshot, tables, request, []); // Validate the entire scope before making a network request.
   const jobs: Job[] = [], seen = new Set<number>(), search: SearchCoverage[] = [];
@@ -215,16 +242,19 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
     let next = true, page = 1;
     for (; next && page <= 3; page++) {
       const url = `https://prts.maa.plus/copilot/query?${new URLSearchParams({ page: String(page), limit: '20', level_keyword: keyword, language: 'cn' })}`;
-      const { data } = await publicResponse(url, fetcher);
+      const response = await publicResponse(url, fetcher), data = response.data;
       if (!Array.isArray(data.data) || data.data.length > 20 || typeof data.has_next !== 'boolean') throw new Error('job-query-invalid');
       next = data.has_next;
       for (const entry of data.data) {
-        const id = Number(object(entry).id);
+        const summary = object(entry), id = Number(summary.id);
         if (!Number.isSafeInteger(id) || id < 1) throw new Error('job-id-invalid');
         if (seen.has(id)) continue; seen.add(id);
         const result = await publicResponse(`https://prts.maa.plus/copilot/get/${id}`, fetcher);
         if (Number(result.data.id) !== id || typeof result.data.content !== 'string') throw new Error('job-detail-invalid');
-        jobs.push({ id, content: object(JSON.parse(result.data.content)), source: result.source });
+        // The detail endpoint serves an in-process cached copy; rating counts come from the fresher query summary.
+        const rating = ['like', 'dislike', 'not_enough_rating'].some(key => Object.hasOwn(summary, key)) ? { like: summary.like, dislike: summary.dislike,
+          notEnoughRating: summary.not_enough_rating, ratingLevel: summary.rating_level, ratingRatio: summary.rating_ratio, source: response.source } as JobRating : undefined;
+        jobs.push({ id, content: object(JSON.parse(result.data.content)), source: result.source, ...(rating ? { rating } : {}) });
       }
     }
     search.push({ stageId: stage.stageId, mode: 'online', pages: page - 1, truncated: next });
@@ -246,6 +276,11 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
         lines.push(`  - 原文指纹：${candidate.hash}；执行指纹：${candidate.execution?.hash ?? '待核'}；执行分配：${escape(JSON.stringify(candidate.assignment))}`);
+        const rating = candidate.rating, percent = (value?: number) => `${Math.round((value ?? 0) * 100)}%`;
+        lines.push(rating.flag === 'unknown' && rating.like === undefined ? '  - 评分：未知（排在评分正常的作业之后）'
+          : rating.flag === 'not-enough' ? `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}；作业站标记评分不足，排在评分正常的作业之后`
+          : rating.flag === 'unknown' ? `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}；评分未知（排在评分正常的作业之后）`
+          : `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}（好评率 ${percent(rating.likeRatio)}，所需 ${percent(rating.requiredRatio)}）；${rating.flag === 'low' ? '好评率低，排在后面' : '评分正常'}`);
         for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) lines.push(`  - ${escape(row.name)}（${escape(row.group)}，S${escape(row.skill)}）：${row.status}；要求 ${escape(JSON.stringify(row.required))}${digest(row.required) !== digest(row.effectiveRequired) ? `；规范化 ${escape(JSON.stringify(row.effectiveRequired))}` : ''}${row.reasons.includes('requirements-unstated') ? '；要求未写明，待核' : ''}；当前精英 ${row.actual?.elite ?? '未知'} / 等级 ${row.actual?.level ?? '未知'}；${row.reasons.join(', ')}`);
       }
     }
