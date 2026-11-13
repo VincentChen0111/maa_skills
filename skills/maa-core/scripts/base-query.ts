@@ -145,10 +145,12 @@ export function queryBaseSkills(input: unknown, tables: BaseTables, query: BaseQ
   return { operators: matching, warnings, snapshotReadAt: snapshot.readAt, limits: [...limits], crossCheck, source: { mode: 'supplied', files: [] } };
 }
 
+/** The fixed game mirror commit; the base plan tool (ticket 22) reads its tables from the same pin. */
+export const baseGameSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff' } as const;
 /** Fetch only the fixed public tables; no game data is bundled, cached or written. */
 export async function queryPublicBaseSkills(snapshot: unknown, query: BaseQuery, fetcher: typeof fetch = fetch): Promise<BaseResult> {
   accountInput(snapshot);
-  const game = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff' };
+  const game = baseGameSource;
   const [characters, building, crossCheck] = await Promise.allSettled([
     readPublicJson({ ...game, file: 'zh_CN/gamedata/excel/character_table.json' }, fetcher),
     readPublicJson({ ...game, file: 'zh_CN/gamedata/excel/building_data.json' }, fetcher),
