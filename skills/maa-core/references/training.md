@@ -35,4 +35,4 @@
 
 计划记录、材料核对和实际事件保存在私有 `training-plans`，含每档历史和去重摘要。记录锁遗留或配置事务未知时，先保留现场交给核对；自动重放和自动删锁均不提供。训练自定义文件以内容 hash 命名，统一事务在持锁且关停后安装，记录原先缺失/一致状态与 manifest，GUI 备份、关停后漂移检查和重开读回都覆盖引用。失败不声称跨文件原子成功；恢复工具若不认识训练 manifest 必须留 unknown。
 
-训练、关卡作业和理智药是不同的批准范围；分别调用对应入口，不能在同一配置事务混合 `trainingPlan`、`jobPlan` 或 `medicineCount`。
+训练、关卡作业和理智药、碎石数量是不同的批准范围；分别调用对应入口，不能在同一配置事务混合 `trainingPlan`、`jobPlan`、`medicineCount` 或 `stoneCount`。临期药的当次批准 `expiringMedicine` 可以随计划一起提交：专精定时会运行到开着临期药的 Fight 任务时，没有它就以 `training-expiring-grant-required` 拒绝，请用户一起批准临期药或先关掉；运行到开着碎石的 Fight 任务时以 `training-stone-enabled` 拒绝，先经当次请求关掉碎石。

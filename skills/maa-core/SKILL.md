@@ -14,6 +14,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/setup-connection.ts` | setup 与统一 writer 共用的候选选择及复测；由 setup 入口调用 | [接入接口](../maa-setup/references/setup.md) |
 | `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
+| `scripts/consumption-grant.ts` | 唯一判定一次授权能放开哪些理智药、碎石和临期药设置，给出静态原因码 | 由配置事务、doctor 恢复和评分规则调用，说明见 maa-daily 的配置事务接口 |
 | `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
 | `scripts/operator-cost.ts` | 按快照和明确目标只读查询单干员逐级培养成本 | [成本接口](../maa-account/references/cost.md) |
@@ -26,5 +27,5 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 
 - 调用前读对应的接口说明，只通过脚本读写，不直接改它管理的文件。
 - 用户的文本作为数据经标准输入传给脚本，不拼进命令行。
-- 偏好不能授权源石、抽卡、礼包、付费、登录或设备操作。
+- 偏好和已批准的报告条目不能代替理智药、碎石（用源石恢复理智）和临期药的当次批准；这三项只在用户当次批准后经共享配置写入器写入，由 `scripts/consumption-grant.ts` 的同一谓词判定。抽卡、礼包、付费、登录、碎石以外的源石用途和设备操作，任何偏好或批准都不能授权。
 - 本目录要和调用它的 skill 来自同一个版本。更新时所有 maa skill 一起重装，见 maa-help 的宿主说明。

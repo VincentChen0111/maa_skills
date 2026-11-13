@@ -662,9 +662,9 @@ async function consumptionFixture(t: Parameters<typeof fixture>[0], tasks: Recor
   let running = false; let processCalls = 0;
   const maa: MaaProcess = { inspect: async () => { processCalls++; return { running, treeExited: !running, idle: true, ready: running }; },
     close: async () => { running = false; }, start: async () => { running = true; } };
-  const write = (authorization: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[], source = 'current-request') =>
+  const write = (grant: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[], source = 'current-request') =>
     executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
-      authorization: { source, reference: 'synthetic approval', ...authorization } as never, changes }, maa);
+      authorization: { source, reference: 'synthetic approval', ...grant } as never, changes }, maa);
   const saved = async () => JSON.parse(await readFile(f.file, 'utf8')).Configurations['Synthetic profile'].TaskQueue as Record<string, unknown>[];
   return { ...f, write, saved, processCalls: () => processCalls };
 }

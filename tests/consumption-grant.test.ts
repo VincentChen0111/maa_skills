@@ -34,10 +34,10 @@ async function maaFixture(t: { after(fn: () => Promise<unknown>): void }, value:
   return { root, maaDirectory, privateDirectory, file, maa, processCalls: () => processCalls };
 }
 type Fixture = Awaited<ReturnType<typeof maaFixture>>;
-async function write(f: Fixture, authorization: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[]) {
+async function write(f: Fixture, grant: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[]) {
   const expectedRevision = (await inspectConfiguration(f.maaDirectory)).revision;
   return executeConfigWrite({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, expectedRevision,
-    authorization: { source: 'current-request', reference: 'synthetic approval', ...authorization } as never, changes }, f.maa);
+    authorization: { source: 'current-request', reference: 'synthetic approval', ...grant } as never, changes }, f.maa);
 }
 const task = (path: number, field: string) => ['Configurations', 0, 'TaskQueue', path, field];
 const stoneOn = (index: number, count: number) => [

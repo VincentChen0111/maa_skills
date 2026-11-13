@@ -54,3 +54,13 @@ doctor 真实基线与正向恢复语义，以及本次受影响 help/daily/core
 修后 `.tmp/06-r2-model-evidence/frozen-models-XfJS76` 新增 30 条实际调用，冻结框架仍为 c0b916、payload 为 67af7f8；15 次 Codex 401、15 次 Claude 未登录，无完成事件、无 runner 失败，全部 unverified。doctor 10 对、daily 14 对、core 6 对与已留存旧批次的模型/CLI/场景和框架指纹一致，比较仍 unverified；help 目录未变，沿用旧 c0b916 实际 6 对，不冒称修后重跑。两批共 92 份原始记录由 R2 独立重算 evidenceHash、normalizeHost、grade 与执行窗口，冻结文件与对应 Git 源核对。所有模型 fixture 已清理、相关 CLI 残留 0。
 
 本票单独列明的实现交付条件已经满足；doctor 成功模型基线、正向恢复语义及受影响 help/daily/core 分数不降继续阻塞 26。真实 MAA/模拟器/游戏、真实账号和跨版本升级仍未验证。最终验收记录只改文档，不改固定产品/skill/评测框架；原生仓库全量文件字节结论仅针对实际安装的 67af7f8。
+
+## 27 碎石与临期药的恢复
+
+2026-11-14，工单 27 的作者验证，未经独立审查。规则见 [daily 验证记录](daily-verification.md)「27 批准后的碎石与临期药」。
+
+- 待执行记录的授权除 `source`、`reference`、`medicineCount` 外，接受 `stoneCount` 和 `expiringMedicine`，取值由同一个谓词严格校验；未知字段、超出 32 位范围或非整数的数量、天数不在 1–30、活动项不是布尔值、多出字段，以及来源是已批准报告却带消耗授权的记录，都让证据保持未知，两种修法都不可用。用例在 `tests/doctor.test.ts` 的「unknown or malformed transaction metadata never permits either recovery action」。
+- `doctor.ts repair` 的输入字段白名单加入 `stoneCount`、`expiringMedicine`，其他键仍以 `request-invalid` 拒绝（同一文件的 CLI 用例）。
+- 恢复只用修复请求自己带的授权：取值无效时在加互斥锁之前以谓词的原因码拒绝；恢复会重新打开碎石时，没有当次的 `stoneCount` 就由写入器以 `stone-grant-required` 拒绝，配置和保留的锁不变，原事务里的授权不复用。用例在 `tests/consumption-grant.test.ts` 的 `doctor-recovery` 两项。
+
+真实 MAA 上的恢复和真模型的 doctor 场景未验证，留给工单 26。
