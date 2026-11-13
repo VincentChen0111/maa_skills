@@ -112,7 +112,7 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 
 `tests/stage-scenarios.test.ts` 在两种安装布局实际调用共享 CLI，覆盖原有六个和新增四个场景（`daily-stage-requirements-unstated`、`daily-stage-support-named`、`daily-stage-rating-order`、`daily-stage-undeclared-action`），并核对新增场景的状态、单列和排序。
 
-实际运行（本机 Windows，Node 24）：`npm run typecheck` 通过；单文件 `tests/stage-jobs-matching.test.ts` 11/11、`stage-jobs.test.ts` 6/6、`stage-jobs-regressions.test.ts` 11/11、`stage-scenarios.test.ts` 1/1、`stage-demo.test.ts` 1/1、`maa-config.test.ts` 59/59、`doctor.test.ts` 74/74、`doctor-scenarios.test.ts` 6/6 通过。完整离线入口 `node scripts/check.ts`（输出 `.tmp/29/check-1.txt`）退出 0：394 项，393 通过、0 失败、1 跳过（非 Windows 适配器在本平台不适用），tracker、privacy、metadata 无错误，评分自检 7 rules / 14 samples 通过。
+实际运行（本机 Windows，Node 24）：`npm run typecheck` 通过；单文件 `tests/stage-jobs-matching.test.ts` 11/11、`stage-jobs.test.ts` 6/6、`stage-jobs-regressions.test.ts` 11/11、`stage-scenarios.test.ts` 1/1、`stage-demo.test.ts` 1/1、`maa-config.test.ts` 59/59、`doctor.test.ts` 74/74、`doctor-scenarios.test.ts` 6/6 通过。完整离线入口 `node scripts/check.ts` 在文档提交前（`.tmp/29/check-1.txt`）退出 0：394 项，393 通过、0 失败、1 跳过（非 Windows 适配器在本平台不适用），tracker、privacy、metadata 无错误，评分自检 7 rules / 14 samples 通过。最终提交上第一次完整运行（`check-final.txt`）有 1 项失败：`tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI …」在第一次关闭合成 GUI 时报 `maa-close-timeout`。该文件单独重跑三次：通过、通过、失败（同一步骤，同一错误，用时 36.9 秒）；从基点 `4a1fd26` 导出的副本单独运行三次全部通过。失败的步骤只调用 `maa-process.ts` 关闭合成窗口，本分支没有改这个文件和这个测试，本机同时有其他构建在跑；按已知的关闭超时问题记录，未进一步定位。随后在同一提交上第二次完整运行（`check-final-2.txt`）退出 0：394 项，393 通过、0 失败、1 跳过，tracker、privacy、metadata 无错误，评分自检通过。
 
 ### 报告结构变化（供 16、17 合并时对照）
 
