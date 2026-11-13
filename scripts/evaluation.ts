@@ -169,6 +169,12 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
 export type RunRecord = {
   id: string; host: Host; hostVersion: string; model: string; scenario: string; scenarioHash: string;
   skillVersion: string; evidenceHash: string; grade: Grade; rerunOf?: string;
+  /** Runner's category for the run; every value other than `completed` grades `unverified`. */
+  reason?: string; auth?: 'plan' | 'api-key' | 'host-double';
+  /** Set when the host was `eval/host-double.mjs`: such a record is never a model baseline and never compared. */
+  double?: boolean;
+  /** Model ids and token counts exactly as the host reported them; `unknown` when it reported none. */
+  reportedModel?: string[] | 'unknown'; usage?: Record<string, number> | 'unknown'; durationMs?: number;
 };
 export type Comparison = { status: 'baseline' | 'pass' | 'needs-reruns' | 'regression' | 'unstable' | 'unverified' | 'incomparable'; rerun: string[] };
 const identity = (run: RunRecord) => `${run.host}:${run.scenario}`;
@@ -178,7 +184,7 @@ const sameScenario = (a: RunRecord, b: RunRecord) => identity(a) === identity(b)
 export function compareRuns(before: RunRecord[], after: RunRecord[], reruns: RunRecord[] = []): Comparison {
   const result = (status: Comparison['status'], rerun: string[] = []): Comparison => ({ status, rerun });
   const all = [...before, ...after, ...reruns];
-  if (!after.length || new Set(all.map((run) => run.id)).size !== all.length ||
+  if (!after.length || all.some((run) => run.double === true) || new Set(all.map((run) => run.id)).size !== all.length ||
     all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash) ||
     new Set(before.map(identity)).size !== before.length || new Set(after.map(identity)).size !== after.length ||
     new Set(before.map((run) => run.skillVersion)).size > 1 || new Set(after.map((run) => run.skillVersion)).size > 1) return result('incomparable');

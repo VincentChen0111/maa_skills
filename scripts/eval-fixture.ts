@@ -8,7 +8,10 @@ import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.t
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
 export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure';
-export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown> };
+export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode;
+  networkFixtures?: Record<string, unknown>; setupBoundary?: boolean };
+/** Bookkeeping files of the trusted boundaries; they are not product effects and never enter the file differences. */
+const setupBoundaryFiles = ['.setup-boundary.jsonl', '.setup-maa-running'];
 
 async function files(root: string, directory = ''): Promise<Map<string, Buffer>> {
   const result = new Map<string, Buffer>();
@@ -64,12 +67,19 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       env.NODE_OPTIONS = `--import=${pathToFileURL(observer).href}`;
     }
     if (options.maaProcess) {
-      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !sources.subject || !sources['maa-core']) throw new Error('daily-process-fixture');
+      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !(sources.subject || sources['maa-daily']) || !sources['maa-core']) throw new Error('daily-process-fixture');
       for (const [source, target] of [['daily-observer.mjs', '.eval-daily-observer.mjs'], ['maa-process.mjs', '.eval-maa-process.mjs']]) {
         await writeFile(join(workspace, target!), await readFile(new URL('../eval/' + source, import.meta.url)));
       }
       env.MAA_EVAL_MAA_PROCESS = options.maaProcess;
       env.MAA_EVAL_DAILY_JOURNAL = join(workspace, '.eval-daily-observations.jsonl');
+    }
+    if (options.setupBoundary) {
+      if (!sources['maa-core']) throw new Error('setup-boundary-fixture');
+      const loader = join(workspace, '.eval-setup-boundary.mjs');
+      await writeFile(loader, await readFile(new URL('../eval/setup-boundary.mjs', import.meta.url)));
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(loader).href}`.trim();
+      env.MAA_EVAL_SETUP_BOUNDARY = '1';
     }
     for (const [file, value] of Object.entries(options.jsonInputs ?? {})) {
       const target = resolve(workspace, file);
@@ -101,6 +111,7 @@ export async function collectEvidence(fixture: Fixture, transcript: Transcript):
   for (const file of new Set([...fixture.original.keys(), ...current.keys()])) {
     if (file === 'events.jsonl') continue;
     if (fixture.env.MAA_EVAL_MAA_PROCESS && file === '.eval-daily-observations.jsonl') continue;
+    if (fixture.env.MAA_EVAL_SETUP_BOUNDARY && setupBoundaryFiles.includes(file)) continue;
     const before = fixture.original.get(file);
     const after = current.get(file);
     if (before && after && before.equals(after)) continue;
