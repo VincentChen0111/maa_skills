@@ -32,18 +32,35 @@ export const officialSources = {
     downloadPrefix: 'https://dl.google.com/android/repository/', hosts: ['dl.google.com'], terms: 'https://developer.android.com/studio/terms' },
 } as const;
 /**
- * Fully supported emulators from MAA's Windows emulator page; downloads must stay on the vendor's official domain
- * (`domains`, subdomains included) or on exact official download hosts (`hosts`, no subdomains).
+ * One recorded official download chain, verified read-only (HEAD, no redirect following) and listed in
+ * docs/setup-sources.md: the start address the vendor's official page uses, then the host of every redirect hop
+ * in order, the last one serving the file. An empty `hops` means the start address serves the file itself.
  */
-export const emulatorVendors: Record<string, { name: string; officialPage: string; domains: string[]; hosts?: string[] }> = {
-  // MuMu's download button calls its download API, which redirects to NetEase's file host; see docs/setup-sources.md.
-  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'], hosts: ['mumu.nie.netease.com', 'a11.gdl.netease.com'] },
-  ldplayer: { name: '雷电模拟器', officialPage: 'https://www.ldmnq.com/', domains: ['ldmnq.com'] },
-  'bluestacks-cn': { name: '蓝叠模拟器 5', officialPage: 'https://www.bluestacks.cn/', domains: ['bluestacks.cn'] },
-  bluestacks: { name: '蓝叠模拟器 5 国际版', officialPage: 'https://www.bluestacks.com/tw/index.html', domains: ['bluestacks.com'] },
-  nox: { name: '夜神模拟器', officialPage: 'https://www.yeshen.com/', domains: ['yeshen.com'] },
-  memu: { name: '逍遥模拟器', officialPage: 'https://www.xyaz.cn/', domains: ['xyaz.cn'] },
+export type DownloadChain = { start: string; hops: string[] };
+/**
+ * The single source of truth for emulator downloads: fully supported emulators from MAA's Windows emulator page.
+ * Every plan, HEAD and download hop is checked only against this table: the vendor's official site `domains`
+ * (subdomains included) and the exact hosts of its recorded `chains` (no subdomains).
+ */
+export const emulatorVendors: Record<string, { name: string; officialPage: string; domains: string[]; chains: DownloadChain[] }> = {
+  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'],
+    chains: [{ start: 'https://mumu.nie.netease.com/api/dl/win', hops: ['a11.gdl.netease.com'] }] },
+  ldplayer: { name: '雷电模拟器', officialPage: 'https://www.ldmnq.com/', domains: ['ldmnq.com'],
+    chains: [{ start: 'https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe', hops: [] }, { start: 'https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe', hops: [] }] },
+  'bluestacks-cn': { name: '蓝叠模拟器 5', officialPage: 'https://www.bluestacks.cn/', domains: ['bluestacks.cn'],
+    chains: [{ start: 'https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe', hops: [] }] },
+  bluestacks: { name: '蓝叠模拟器 5 国际版', officialPage: 'https://www.bluestacks.com/tw/index.html', domains: ['bluestacks.com'],
+    chains: [{ start: 'https://cloud.bluestacks.com/api/getdownloadnow?platform=win', hops: ['ak-build.bluestacks.com'] }] },
+  nox: { name: '夜神模拟器', officialPage: 'https://www.yeshen.com/', domains: ['yeshen.com'],
+    chains: ['win_64?formal', 'win_64_9?formal'].map(path => ({ start: `https://www.yeshen.com/cn/download/fullPackage/${path}`, hops: ['res06.bignox.com'] }))
+      .concat({ start: 'https://www.yeshen.com/cn/download/fullPackage?formal', hops: ['res06.bignox.com'] }) },
+  memu: { name: '逍遥模拟器', officialPage: 'https://www.xyaz.cn/', domains: ['xyaz.cn'],
+    chains: [{ start: 'https://www.xyaz.cn/download.php?file_name=XYAZ-Installer', hops: ['download.microvirt.com'] }] },
 };
+/** Exact hosts a vendor's downloads may touch besides its official site domains: start and hop hosts of its chains. */
+export function vendorHosts(vendor: { chains: DownloadChain[] }) {
+  return [...new Set(vendor.chains.flatMap(chain => [new URL(chain.start).hostname, ...chain.hops]))];
+}
 
 // Limits registered in docs/spec.md (默认值及其来源, 08 rows).
 const indexLimit = 8 * 1024 * 1024;
@@ -192,9 +209,9 @@ async function resolveEmulator(fetcher: Fetcher, vendorId: unknown, link: unknow
   if (typeof vendorId !== 'string' || !Object.hasOwn(emulatorVendors, vendorId)) return fail('emulator-vendor-unsupported');
   const vendor = emulatorVendors[vendorId]!;
   const url = parseUrl(link);
-  if (!allowedHost(url, vendor.hosts ?? [], vendor.domains)) fail('unofficial-source');
+  if (!allowedHost(url, vendorHosts(vendor), vendor.domains)) fail('unofficial-source');
   if (typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/.test(version)) fail('version-required');
-  const { response, url: final } = await request(fetcher, url.href, 'HEAD', candidate => allowedHost(candidate, vendor.hosts ?? [], vendor.domains), AbortSignal.timeout(requestTimeoutMs));
+  const { response, url: final } = await request(fetcher, url.href, 'HEAD', candidate => allowedHost(candidate, vendorHosts(vendor), vendor.domains), AbortSignal.timeout(requestTimeoutMs));
   await response.body?.cancel().catch(() => undefined);
   if (response.status === 404) fail('release-file-missing');
   let fromPath: string | undefined;
@@ -373,7 +390,7 @@ async function transfer(release: Release, partial: string, context: DownloadCont
   const controller = new AbortController();
   const inactivity = context.inactivityMs ?? 60_000;
   let timer = setTimeout(() => controller.abort(), inactivity);
-  const hosts = release.program === 'emulator' ? emulatorVendors[release.vendor!]!.hosts ?? [] : officialSources[release.program].hosts;
+  const hosts = release.program === 'emulator' ? vendorHosts(emulatorVendors[release.vendor!]!) : officialSources[release.program].hosts;
   const domains = release.program === 'emulator' ? emulatorVendors[release.vendor!]!.domains : [];
   try {
     const { response } = await request(fetcher, release.url, 'GET', url => allowedHost(url, hosts, domains), controller.signal);
