@@ -202,6 +202,16 @@ test('Codex read protection first proves enforcement without a model, then passe
   }
 });
 
+test('the enforcement probe keeps its own per-read timeout: --timeout-ms changes only the model call', async () => {
+  // With the batch's timeout at 1 ms the model call cannot finish, yet both probe reads still complete and the probe holds.
+  const directory = await login();
+  const result = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, executableArgs: [double, await script({ host: 'codex', steps: [] })],
+    loginDirectory: directory, timeoutMs: 1 });
+  assert.deepEqual(result.enforcementProbe, { sentinel: 'denied', control: 'ok' });
+  assert.equal(result.status, 'fail', 'the model call itself timed out');
+  assert.deepEqual(await readdir(directory), ['synthetic-login.json']);
+});
+
 test('the daily host directories are never the host configuration, never copied and never echoed into records', async () => {
   const marker = 'synthetic-daily-credential-marker';
   for (const [directory, file] of [['.claude', '.credentials.json'], ['.codex', 'auth.json']] as const) {

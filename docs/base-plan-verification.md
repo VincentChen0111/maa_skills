@@ -133,7 +133,7 @@
 | 11 数据新鲜度三态，判定条件写进记录，旧结果不当证明 | P「freshness is fresh」；R「freshness is fresh」；本页「数据新鲜度」 |
 | 12 只写私有目录，路径越界拒绝，原子替换，保留不认识的字段 | P「the plan file path is confined」 |
 | 验证方式：每项验收门一份通过、一份不通过的样例 | P「each of the 15 gates」（第 13 项的不通过样例在同一测试末尾） |
-| 评测：新功能的场景 | `eval/maa-account/base-report-scenarios.ts` 三个场景、`eval/base-plan-observer.ts`；S 离线运行并评分。没有改 `scripts/eval-*.ts` 和 `scripts/evaluation.ts`（工单 28） |
+| 评测：新功能的场景 | `eval/maa-account/base-report-scenarios.ts` 三个场景、`eval/base-plan-observer.ts`；S 离线运行并评分。没有改 `scripts/eval-*.ts` 和 `scripts/evaluation.ts`（工单 28）。2026-11-14 补记：28 把两个观察器接入运行器，本次运行的批准记录按场景声明的 `approvals` 评分（`base-report-skip-approve` 声明 `[["P1"]]`，其余两个声明不批准；见 `docs/evaluation-verification.md`「第六轮审查修复」） |
 
 ## 实际运行的检查（本机，2026-11-13）
 

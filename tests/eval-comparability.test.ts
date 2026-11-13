@@ -125,6 +125,7 @@ test('scenario identity counts every scenario definition, eval fixture and netwo
   changed('setup-connection-write', (definition) => { definition.policy.writerTransaction.reference = 'another request'; });
   changed('account-cost-raw', (definition) => { const [url] = Object.keys(definition.networkFixtures); definition.networkFixtures[url!] = { changed: true }; });
   changed('account-cost-unknown', (definition) => { definition.jsonInputs['private/account-snapshot.json'].operators = []; });
+  changed('account-report-approve-one', (definition) => { definition.policy.approvals = [['S2']]; });
 });
 
 test('scenario world data runs no product code: the runtime import closure of every scenario module reaches the product only through the allow-list', async () => {

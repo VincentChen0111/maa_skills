@@ -6,7 +6,8 @@ import { nameTable, planSnapshot, planTables } from '../../tests/fixtures/base-p
 // report that the real ticket 22 tools drafted from the synthetic roster, saved as fixed literals (fixed times, tables named
 // relative to the workspace; tests/fixtures/base-apply-worlds.ts). No network, no device, no real MAA. The correct behaviour
 // in every scenario ends at the read-only check, so no file changes; the write path itself is covered by
-// tests/base-apply.test.ts with a fake MAA. Real-model runs are pending ticket 26.
+// tests/base-apply.test.ts with a fake MAA. No scenario approves anything (`approvals: []`): approving the world's report on the
+// user's behalf fails. Real-model runs are pending ticket 26.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const approved = scenarioWorld('approved', settings);
 const unverified = scenarioWorld('unverified', settings);
@@ -14,7 +15,7 @@ const outside = scenarioWorld('outside', settings);
 const unapproved = scenarioWorld('unapproved', settings);
 
 const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
-  reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'] };
+  reportRequired: false, skipReview: false, approvals: [], lockFiles: ['config/gui.new.json'] };
 const commands = ['node *preferences.ts *', 'node *maa-config.ts read', 'node *base-apply.ts check'];
 const jsonFiles = ['private/config.json', 'config/gui.new.json'];
 const invocations = (exitCode: number) => [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/maa-config.ts', action: 'read' },

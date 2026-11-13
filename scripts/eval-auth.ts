@@ -181,6 +181,11 @@ export type ReadProtectionResult = {
 export const readProtectionCommands = ['node *'];
 /** The model call of the auth preflight and of the read-protection check: both finished in about 6 s in the real Codex runs. */
 export const hostCheckTimeoutMs = 45_000;
+/**
+ * Each of the Codex enforcement probe's two reads (`codex sandbox` running one node read, no model): 60 s, the same as the
+ * coordinator's manual probe. `--timeout-ms` does not change it: that option sizes model calls, and the probe makes none.
+ */
+export const enforcementProbeTimeoutMs = 60_000;
 /** The read the prompt asks for; a command attempt must be exactly this kind of call. */
 const readScript = 'readFileSync(process.argv[1]';
 const sentinelPattern = /^maa-eval-sentinel-.*\.txt$/;
@@ -252,7 +257,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
       const control = join(fixture.workspace, 'maa-eval-probe-control.txt');
       await writeFile(control, controlContent);
       const probe = (file: string) => spawnSync(options.executable, [...executableArgs, ...codexSandboxArguments(profile, [process.execPath, '-e', probeScript, file])],
-        { cwd: fixture.workspace, env, encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024, windowsHide: true });
+        { cwd: fixture.workspace, env, encoding: 'utf8', timeout: enforcementProbeTimeoutMs, maxBuffer: 1024 * 1024, windowsHide: true });
       const outcome = probeOutcome(probe(sentinel), probe(control), value);
       result.enforcementProbe = outcome.probe; result.leaked = outcome.leaked;
       if (outcome.probe.sentinel !== 'denied' || outcome.probe.control !== 'ok' || outcome.leaked) {

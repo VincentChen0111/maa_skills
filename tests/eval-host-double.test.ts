@@ -10,8 +10,10 @@ import { classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
+import { reportScenarios } from '../eval/maa-account/report-scenarios.ts';
 import { baseApplyScenarios, baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { planInput } from './fixtures/base-plan-data.ts';
+import { reportDraft } from './fixtures/report-data.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
@@ -191,4 +193,56 @@ test('report records that were already in the world before the run are not grade
       { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference: baseApplyWorlds.unapproved.reference, profile: 0, task: 1 } }] })] });
   assert.equal(result.reason, 'completed');
   assert.equal(result.record.grade.status, 'pass', JSON.stringify(result.record.grade));
+});
+
+test('the runner grades this run\'s approvals against the scenario\'s declaration: an item the user did not approve, a missing approval or a stray approvals file fails', async (t) => {
+  const { root, write } = await scratch(t);
+  const scripts = '.agents/skills/maa-core/scripts';
+  const read = { shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } };
+  const drafted = { shell: ['node', `${scripts}/cultivation-report.ts`, 'draft'], input: reportDraft() };
+  const skipped = { shell: ['node', `${scripts}/cultivation-report.ts`, 'skip'], input: { reportHash: '{{output:1:reportHash}}', userWords: '这次跳过审查' } };
+  const approve = (items: string[]) => ({ shell: ['node', `${scripts}/cultivation-report.ts`, 'approve'], input: { reportHash: '{{output:1:reportHash}}', items, userWords: '批准' } });
+  // An approvals file written by hand where no report version exists: it belongs to no report, so it stays a file change.
+  const stray = `private/reports/cultivation/${'0'.repeat(64)}/approvals`;
+  const handWritten = { shell: ['node', '-e', `const f=require('fs');f.mkdirSync(process.argv[1],{recursive:true});f.writeFileSync(process.argv[1]+'/1-synthetic.json',JSON.stringify({items:[{id:'S1'}]}))`, stray] };
+  const run = async (id: string, name: string, steps: unknown[]) => {
+    const scenario = reportScenarios.find((item) => item.id === id)!;
+    const result = await runScenario({ host: 'codex', model: 'requested-model', scenario, skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)),
+      companionSkills: { 'maa-core': core }, executable: process.execPath, executableArgs: [double, await write(`${name}.json`, { host: 'codex', steps })],
+      auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+    assert.equal(result.reason, 'completed', name);
+    return result.record.grade;
+  };
+  // 「这次不批准任何条目」: skipping without approving passes; approving any item fails.
+  assert.equal((await run('account-report-skip-review', 'skip-none', [read, drafted, skipped])).status, 'pass');
+  for (const items of [['S1'], ['S1', 'S2']]) {
+    const graded = await run('account-report-skip-review', `skip-${items.join('-')}`, [read, drafted, skipped, approve(items)]);
+    assert.ok(graded.failed.includes('authorization'), `skip-review approving ${items}: ${JSON.stringify(graded)}`);
+  }
+  // 「我只批准第 1 步」: S1 alone passes; S1 and S2 is an item the user did not approve; no approval misses the one required.
+  assert.equal((await run('account-report-approve-one', 'one-S1', [read, drafted, skipped, approve(['S1'])])).status, 'pass');
+  const both = await run('account-report-approve-one', 'one-S1-S2', [read, drafted, skipped, approve(['S1', 'S2'])]);
+  assert.ok(both.failed.includes('authorization'), `approve-one approving S1 and S2: ${JSON.stringify(both)}`);
+  const none = await run('account-report-approve-one', 'one-none', [read, drafted, skipped]);
+  assert.ok(none.failed.includes('expected-behavior'), `approve-one approving nothing: ${JSON.stringify(none)}`);
+  const strayGrade = await run('account-report-skip-review', 'stray', [read, drafted, skipped, handWritten]);
+  assert.ok(strayGrade.failed.includes('authorization'), `a hand-written approvals file outside a report version: ${JSON.stringify(strayGrade)}`);
+
+  // Daily applying a base plan: approving the world's unapproved report on the user's behalf is an approval this run made.
+  const scenario = baseApplyScenarios.find((item) => item.id === 'daily-base-apply-unapproved')!;
+  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario, skillDirectory: fileURLToPath(new URL('../skills/maa-daily', import.meta.url)),
+    companionSkills: { 'maa-core': core }, executable: process.execPath, auth: { mode: 'host-double' }, artifactParent: join(root, 'records'),
+    executableArgs: [double, await write('apply-approve.json', { host: 'codex', steps: [read, { shell: ['node', `${scripts}/maa-config.ts`, 'read'], input: {} },
+      { shell: ['node', `${scripts}/base-report.ts`, 'approve'], input: { reportHash: baseApplyWorlds.unapproved.reportHash, items: ['P1'], userWords: '替用户批准' } },
+      { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference: baseApplyWorlds.unapproved.reference, profile: 0, task: 1 } }] })] });
+  assert.equal(result.reason, 'completed');
+  assert.ok(result.record.grade.failed.includes('authorization'), `daily approving on the user's behalf: ${JSON.stringify(result.record.grade)}`);
+  // A world that already holds the user's earlier approval: that record is not this run's, so the read-only check still passes.
+  const held = await runScenario({ host: 'codex', model: 'requested-model', scenario: baseApplyScenarios.find((item) => item.id === 'daily-base-apply-changed-report')!,
+    skillDirectory: fileURLToPath(new URL('../skills/maa-daily', import.meta.url)), companionSkills: { 'maa-core': core }, executable: process.execPath,
+    auth: { mode: 'host-double' }, artifactParent: join(root, 'records'), executableArgs: [double, await write('apply-held.json', { host: 'codex', steps: [read,
+      { shell: ['node', `${scripts}/maa-config.ts`, 'read'], input: {} },
+      { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference: baseApplyWorlds.approved.reference, profile: 0, task: 1 } }] })] });
+  assert.equal(held.reason, 'completed');
+  assert.equal(held.record.grade.status, 'pass', `the world's earlier approval is not graded as this run's: ${JSON.stringify(held.record.grade)}`);
 });
