@@ -12,6 +12,10 @@ import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts'
 import { inspectCredentials, recordCredentialOutcome, saveCredential } from '../skills/maa-core/scripts/credentials.ts';
 import type { Protector } from '../skills/maa-core/scripts/credential-protection.ts';
 import { randomUUID } from 'node:crypto';
+import './fixtures/maa-version-guard.ts';
+
+// MAA.exe's product version is a system boundary; the guard fails this file if the real reader is reached.
+const unknownVersion = async () => null;
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-setup-')));
@@ -29,18 +33,18 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
 
 test('setup checks fresh settings without creating them and repeats only its own environment record', async (t) => {
   const f = await fixture(t);
-  const fresh = await checkSetup({ home: f.home, maaDirectory: f.maaDirectory });
+  const fresh = await checkSetup({ home: f.home, maaDirectory: f.maaDirectory }, unknownVersion);
   assert.equal(fresh.needsLanguagePrompt, true); assert.equal(fresh.needsDirectoryPrompt, true);
   await assert.rejects(readdir(f.home), { code: 'ENOENT' });
   await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
   const beforeSettings = await readFile(join(f.home, 'config.json'));
-  const result = await prepareSetup({ home: f.home });
+  const result = await prepareSetup({ home: f.home }, unknownVersion);
   assert.equal(result.needsLanguagePrompt, false); assert.equal(result.needsDirectoryPrompt, false);
   assert.equal(result.language, 'en');
   assert.deepEqual(result.checks.map(item => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version', 'credential-nga', 'credential-skland', 'credential-bilibili']);
   assert.equal(result.checks.every(item => item.repair.description !== item.repair.id), true, 'each check supplies an actionable explanation');
   await writeFile(join(f.privateDirectory, 'account-snapshot.json'), 'synthetic existing snapshot');
-  await prepareSetup({ home: f.home });
+  await prepareSetup({ home: f.home }, unknownVersion);
   assert.deepEqual(await readFile(join(f.home, 'config.json')), beforeSettings);
   assert.equal(await readFile(join(f.privateDirectory, 'account-snapshot.json'), 'utf8'), 'synthetic existing snapshot');
   assert.deepEqual((await readdir(f.privateDirectory)).sort(), ['account-snapshot.json', 'setup-environment.json']);
@@ -81,7 +85,7 @@ test('setup connection writes use the unified transaction, require closed confir
   const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:5555\tdevice\n' : args.at(-1) === 'get-state' ? 'device' : 'connected' }) };
   let running = false; const actions: string[] = [];
   const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
-    close: async () => { actions.push('close'); running = false; }, start: async () => { actions.push('start'); running = true; } };
+    close: async () => { actions.push('close'); running = false; }, start: async () => { actions.push('start'); running = true; }, version: unknownVersion };
   const found = await discoverSetupConnections({ home: f.home }, adb);
   const request = { discoveryRevision: found.discoveryRevision, host: 'codex' as const, reference: 'synthetic installation request' };
   const original = await readFile(f.configFile);
@@ -130,7 +134,7 @@ test('explicit local candidates narrow discovery and reject remote addresses and
   await assert.rejects(discoverSetupConnections({ home: f.home, addresses: ['192.0.2.1:5555'] }, adb), /candidate-input-invalid/);
   await assert.rejects(discoverSetupConnections({ home: f.home, adbPaths: ['relative-adb.exe'] }, adb), /candidate-input-invalid/);
   assert.equal((await discoverSetupConnections({ home: f.home, adbPaths: [process.execPath] }, adb)).adbCount, 0);
-  assert.equal((await checkSetup({ home: f.home })).needsLanguagePrompt, false, 'declining language once must not prompt again');
+  assert.equal((await checkSetup({ home: f.home }, unknownVersion)).needsLanguagePrompt, false, 'declining language once must not prompt again');
   Reflect.set(f.config.Configurations['Synthetic private name'].Gui.RuntimeSettings, 'ClientType', ['Official']);
   await writeFile(f.configFile, JSON.stringify(f.config));
   await assert.rejects(discoverSetupConnections({ home: f.home }, adb), /cn-client-required/);
@@ -166,7 +170,7 @@ test('connection mutation rejects stale evidence and live locks; failed restart 
     let running = mode === 'profile-changed-on-close'; const actions: string[] = [];
     const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
       close: async () => { actions.push('close'); running = false; if (mode === 'profile-changed-on-close') await writeFile(f.configFile, JSON.stringify({ ...f.config, Current: 'Changed synthetic profile' })); },
-      start: async () => { actions.push('start'); if (mode !== 'restart-failed') running = true; } };
+      start: async () => { actions.push('start'); if (mode !== 'restart-failed') running = true; }, version: unknownVersion };
     const found = await discoverSetupConnections({ home: f.home }, adb);
     const request = { discoveryRevision: found.discoveryRevision, host: 'codex' as const, reference: 'synthetic installation request', closedConfirmed: true };
     const lockFile = join(f.maaDirectory, 'config/.maa-skills.lock');
@@ -185,7 +189,7 @@ test('connection mutation rejects stale evidence and live locks; failed restart 
       const lock = JSON.parse(await readFile(lockFile, 'utf8')); lock.pid = 2147483647; await writeFile(lockFile, JSON.stringify(lock));
       const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl'); const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim()); pending.pid = lock.pid;
       await writeFile(pendingFile, JSON.stringify(pending) + '\n');
-      const checked = await runChecks(f, maa);
+      const checked = await runChecks(f, maa, { versionReader: unknownVersion });
       assert.equal(checked.recovery.canRestore, true, JSON.stringify(checked.recovery));
       const working: MaaProcess = { ...maa, start: async () => { running = true; } };
       const repaired = await executeRepairs({ ...f, host: 'codex', approved: ['restore-config'], reference: 'synthetic restore request', evidenceRevision: checked.recovery.evidenceRevision, closedConfirmed: true }, working);
@@ -203,7 +207,7 @@ test('unchanged connections still report active, stale and unreadable transactio
     const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? '127.0.0.1:5555 device\n' : args.at(-1) === 'get-state' ? 'device' : 'connected' }) };
     let running = false; let starts = 0;
     const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; },
-      start: async () => { starts++; if (mode !== 'restart-failed') running = true; } };
+      start: async () => { starts++; if (mode !== 'restart-failed') running = true; }, version: unknownVersion };
     const context = { home: f.home, adbPaths: [adbPath], addresses: ['127.0.0.1:5555'] };
     const initial = await discoverSetupConnections(context, adb);
     const request = { host: 'codex' as const, reference: 'synthetic install', closedConfirmed: true, discoveryRevision: initial.discoveryRevision };

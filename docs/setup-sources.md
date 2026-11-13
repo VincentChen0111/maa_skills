@@ -18,4 +18,4 @@ MAA 固定 [v6.21.4 / 52d0b2acaca116585b02e1e6a9da303460f81a24](https://github.c
 
 官方安装入口已查看 [MAA 安装文档](https://docs.maa.plus/zh-cn/manual/install.html)、[Windows 模拟器支持](https://docs.maa.plus/zh-cn/manual/device/windows.html)、[Node 下载](https://nodejs.org/en/download)。Node 按仓库约束选择 24.x，而不是网页默认主版本。本票不下载发行包；首次错误链接 `manual/initialization.html` 访问失败，已改为文档导航实际给出的 `manual/install.html`。
 
-以上是局部接口来源事实，不是全部依赖自动指纹核对，也不是任何完整版本「源码已核／实机已核」。随包 [验证版本记录](../skills/maa-core/references/verified-versions.json) 的两个列表因此均为空。
+以上是局部接口来源事实，不是全部依赖自动指纹核对，也不是任何完整版本「源码已核／实机已核」。07 交付时随包 [验证版本记录](../skills/maa-core/references/verified-versions.json) 的两个列表因此均为空；2026-11-13 起它由工单 25 的依赖条目生成，见 [MAA 版本跟踪的来源](maa-version-sources.md)。

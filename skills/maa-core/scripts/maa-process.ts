@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import type { MaaProcess, MaaState } from './maa-config.ts';
+import { readMaaVersion } from './maa-version.ts';
 
 export type ProcessIdentity = {
   pid: number; parentPid: number; name: string; executable: string | null; startedAt: number;
@@ -146,6 +147,7 @@ export function createMaaProcess(maaDirectory: string, options: ProcessOptions =
   };
   return {
     inspect: async () => { try { return await inspectState(); } catch (error) { throw safeError(error); } },
+    version: () => readMaaVersion(maaDirectory),
     close: async () => {
       const deadline = Date.now() + closeTimeoutMs;
       const signal = AbortSignal.timeout(closeTimeoutMs);

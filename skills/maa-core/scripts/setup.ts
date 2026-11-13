@@ -5,12 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
 import { blockingChecks, libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
-import { assessMaaVersion, readMaaVersion, readVerificationRecord, type MaaVersionReader } from './maa-version.ts';
+import { assessMaaVersion, readMaaVersion, readVerificationRecord, versionRepair, type MaaVersionReader } from './maa-version.ts';
 import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 export { discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 
-export type SetupContext = { home?: string; maaDirectory?: string };
+/** `verificationRecord` defaults to the packaged record; tests point it at a real temporary record file. */
+export type SetupContext = { home?: string; maaDirectory?: string; verificationRecord?: string };
 export { readMaaVersion, type MaaVersionReader } from './maa-version.ts';
 export function checkRuntime(platform = process.platform, nodeVersion = process.versions.node) {
   return { windows: platform === 'win32', node24: /^24\./.test(nodeVersion) };
@@ -50,8 +51,8 @@ export async function inspectInstallation(context: SetupContext = {}, versionRea
   add('private-directory', privatePresent ? 'normal' : 'error', !settings ? 'private-directory-unverified' : privatePresent ? 'private-directory-present' : 'private-directory-missing', settings ? 'prepare-private-directory' : 'inspect-settings');
   let installed: string | null = null;
   if (directory && executable) try { installed = await versionReader(directory); } catch { /* Unknown versions only warn. */ }
-  const version = assessMaaVersion(installed, await readVerificationRecord());
-  add('version', version.status, version.reason, 'read-version-verification');
+  const version = assessMaaVersion(installed, await readVerificationRecord(context.verificationRecord));
+  add('version', version.status, version.reason, versionRepair(version.reason));
   return { checks, settings: settings ?? null, settingsPresent, version: version.evidence };
 }
 

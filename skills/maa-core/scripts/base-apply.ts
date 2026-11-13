@@ -13,7 +13,8 @@ import { resolveApprovedItem } from './advice-report.ts';
 import { readPrivateFile, type GateResult, type Freshness, type PlanInputs } from './base-plan.ts';
 import { baseApplyRecheck, reportPlanText, type BaseContent } from './base-report.ts';
 import { baseReferencePattern, buildBaseChanges, inspectBaseAsset, loadBaseAsset, type BaseAsset, type BaseDecision, type BasePlanGrant } from './base-config.ts';
-import { executeConfigWrite, inspectConfigWriteLock, inspectConfiguration, type Change, type MaaProcess } from './maa-config.ts';
+import { executeConfigWrite, inspectConfigWriteLock, inspectConfiguration, versionStampOf, type Change, type MaaProcess } from './maa-config.ts';
+import { compareVersionStamp, readMaaVersion, readVersionStamp, type MaaVersionReader, type MaaVersionStamp, type VersionDrift } from './maa-version.ts';
 
 type ObjectValue = Record<string, unknown>;
 const isObject = (value: unknown): value is ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -22,11 +23,14 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const code = (error: unknown) => error instanceof Error && /^(base|plan|report|maa|configuration|public-data)-[A-Za-z0-9:,_-]+$/.test(error.message) ? error.message : 'base-apply-check-failed';
 const hm = (hour: unknown, minute: unknown) => Number.isInteger(hour) && Number.isInteger(minute) ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}` : '??:??';
 
-export type Options = { home?: string; fetcher?: typeof fetch };
+/** `versionReader` is the MAA.exe metadata boundary for `check`; `apply` reads through the MAA process boundary instead. */
+export type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 export type Unverified = { id: string; evidence: string[] };
 export type ApplyCheck = {
   status: 'ready' | 'needs-decision' | 'refused'; reasons: string[]; reference: string;
   review: 'reviewed' | 'unreviewed' | null; approvedAt: string | null;
+  /** Ticket 25: the versions the approved report recorded against the current ones; reported only, never a reason. Null without a readable report. */
+  versions: VersionDrift | null;
   plan: { file: string; sha256: string; original: 'matching' | 'missing' | 'changed' | 'outside' | 'invalid'; applied: string } | null;
   freshness: Record<keyof PlanInputs | 'check', Freshness> | null;
   check: { applicable: boolean; errors: string[]; warnings: string[]; gates: GateResult[] } | null;
@@ -76,10 +80,10 @@ async function copyState(asset: BaseAsset, privateDirectory: string): Promise<'a
   catch (error) { if (error instanceof Error && error.message === 'base-plan-copy-changed') return 'changed'; throw error; }
 }
 
-async function inspect(value: unknown, options: Options, keys: string[]): Promise<Internal> {
+async function inspect(value: unknown, options: Options, keys: string[], currentVersions: (maaDirectory: string | null) => Promise<MaaVersionStamp>): Promise<Internal> {
   const input = parseInput(value, keys);
   const settings = await readSettings(options.home);
-  const result: ApplyCheck = { status: 'refused', reasons: [], reference: input.reference, review: null, approvedAt: null, plan: null, freshness: null, check: null,
+  const result: ApplyCheck = { status: 'refused', reasons: [], reference: input.reference, review: null, approvedAt: null, versions: null, plan: null, freshness: null, check: null,
     unverified: [], decision: null, configuration: null };
   const internal: Internal = { result, privateDirectory: settings.privateDirectory };
   const refuse = (reason: string) => { result.reasons.push(reason); return internal; };
@@ -89,6 +93,9 @@ async function inspect(value: unknown, options: Options, keys: string[]): Promis
   try { resolved = await resolveApprovedItem(settings.privateDirectory, input.reference); } catch (error) { return refuse(code(error)); }
   const content = resolved.state.content as BaseContent, scope = object(resolved.item.scope);
   result.review = resolved.approval.reviewStatus; result.approvedAt = resolved.approval.approvedAt;
+  // The MAA and record versions the report recorded at drafting against those read now (unrecorded for a report from
+  // before ticket 25). Same field and states as stage jobs and training; a difference is never a refusal reason.
+  result.versions = compareVersionStamp(content.versions, await currentVersions(settings.maaDirectory));
   const reportItem = content.items.find(entry => entry.id === resolved.item.id);
   if (!reportItem || JSON.stringify(reportItem.scope) !== JSON.stringify(resolved.item.scope)) return refuse('base-approval-scope-mismatch');
   if (scope.applicable !== true) result.reasons.push('base-plan-not-applicable');
@@ -150,7 +157,7 @@ async function inspect(value: unknown, options: Options, keys: string[]): Promis
 
 /** Read-only: what applying would do now, or why it cannot. */
 export async function checkBaseApply(value: unknown, options: Options = {}): Promise<ApplyCheck> {
-  return (await inspect(value, options, checkKeys)).result;
+  return (await inspect(value, options, checkKeys, directory => readVersionStamp(directory, options.versionReader ?? readMaaVersion))).result;
 }
 
 /**
@@ -162,9 +169,10 @@ export async function applyBasePlan(value: unknown, maa: MaaProcess, options: Op
   const input = object(value);
   if (!['codex', 'claude'].includes(String(input.host)) || typeof input.expectedRevision !== 'string'
     || input.closedConfirmed !== undefined && typeof input.closedConfirmed !== 'boolean') throw new Error('base-apply-input-invalid');
-  const internal = await inspect(value, options, applyKeys), checked = internal.result;
+  const internal = await inspect(value, options, applyKeys, directory => versionStampOf(directory, maa)), checked = internal.result;
+  // Every result carries `versions` (reported, never a refusal), as stage jobs and training do.
   const summary = { review: checked.review, plan: checked.plan, unverified: checked.unverified, decision: checked.decision && { unverified: checked.decision.unverified },
-    notes: checked.configuration?.notes ?? [] };
+    notes: checked.configuration?.notes ?? [], versions: checked.versions };
   if (checked.status !== 'ready' || !internal.grant || !internal.changes || !internal.asset || !internal.maaDirectory)
     return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: checked.status === 'needs-decision' ? 'base-unverified-decision-required' : checked.reasons[0] ?? 'base-apply-check-failed',
       reasons: checked.reasons, check: checked.check, ...summary };
@@ -204,7 +212,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
-      const result = await applyBasePlan(input, { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start() });
+      const result = await applyBasePlan(input, { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       process.stdout.write(JSON.stringify({ ok: result.status === 'complete' || result.status === 'unchanged', ...result }));
       if (result.status !== 'complete' && result.status !== 'unchanged') process.exitCode = 1;
     }

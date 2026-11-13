@@ -9,6 +9,7 @@ import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runAnalysis as analyzeRun } from '../skills/maa-core/scripts/doctor.ts';
 import { parseCallbacks, safeToken } from '../skills/maa-core/scripts/maa-log.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
 const profile = 'Synthetic private profile';
 // A synthetic Windows user directory, assembled so the repository privacy scan does not read it as a real path.
@@ -184,8 +185,8 @@ test('the referral summary and latest analysis record never carry credentials, a
   assert.deepEqual(result.referral.summary.keyEvidence.screenshots, ['debug/drops/2026.11.13-08.00.09_drops.png']);
   const env = { ...process.env, MAA_SKILLS_HOME: f.home, USERPROFILE: f.root, HOME: f.root };
   const cli = fileURLToPath(new URL('../skills/maa-core/scripts/doctor.ts', import.meta.url));
-  const json = spawnSync(process.execPath, [cli, 'analyze', '--json'], { env, input: JSON.stringify({ interfaceUnobscured: true }), encoding: 'utf8', windowsHide: true });
-  const human = spawnSync(process.execPath, [cli, 'analyze'], { env, input: JSON.stringify({ interfaceUnobscured: true }), encoding: 'utf8', windowsHide: true });
+  const json = spawnSync(process.execPath, ['--import', versionDoublePreload, cli, 'analyze', '--json'], { env, input: JSON.stringify({ interfaceUnobscured: true }), encoding: 'utf8', windowsHide: true });
+  const human = spawnSync(process.execPath, ['--import', versionDoublePreload, cli, 'analyze'], { env, input: JSON.stringify({ interfaceUnobscured: true }), encoding: 'utf8', windowsHide: true });
   assert.equal(json.status, 1, json.stdout + json.stderr); assert.equal(human.status, 1); assert.equal(JSON.parse(json.stdout).outcome, 'failed');
   const record = await readFile(join(f.privateDirectory, 'doctor-analysis-latest.json'), 'utf8');
   for (const output of [JSON.stringify(result), json.stdout, human.stdout, record]) for (const marker of markers) assert.ok(!output.includes(marker), `${marker} leaked`);
@@ -196,7 +197,7 @@ test('doctor analyze CLI validates its input, keeps 0/1/2 exit codes and records
   const f = await fixture(t, [...chain('Fight', 1, 'TaskChainCompleted'), callback('AllTasksCompleted', { taskchain: 'Fight', taskid: 1 })]);
   const env = { ...process.env, MAA_SKILLS_HOME: f.home, USERPROFILE: f.root, HOME: f.root };
   const cli = fileURLToPath(new URL('../skills/maa-core/scripts/doctor.ts', import.meta.url));
-  const invoke = (input: string) => spawnSync(process.execPath, [cli, 'analyze', '--json'], { env, input, encoding: 'utf8', windowsHide: true });
+  const invoke = (input: string) => spawnSync(process.execPath, ['--import', versionDoublePreload, cli, 'analyze', '--json'], { env, input, encoding: 'utf8', windowsHide: true });
   const ok = invoke('{}'); assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   assert.deepEqual(JSON.parse(await readFile(join(f.privateDirectory, 'doctor-analysis-latest.json'), 'utf8')), JSON.parse(ok.stdout));
   for (const input of ['{"run":0}', '{"run":21}', '{"conclusion":"anything"}', '{"interfaceUnobscured":"yes"}', '{"unknown":true}', '[]', '{']) {

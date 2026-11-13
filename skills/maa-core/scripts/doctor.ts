@@ -14,8 +14,11 @@ import { classifyRun, evidenceOf, parseCallbacks, runsNewestFirst, safeToken, sa
 export { githubReleaseLookup, type ReleaseLookup } from './doctor-checks.ts';
 
 export type CheckResult = LibraryCheckResult;
-/** `home` is the settings home; `skillsRoot` is the directory holding maa-core as the host invoked it. */
-export type CheckContext = { maaDirectory: string; privateDirectory: string; home: string; skillsRoot?: string };
+/**
+ * `home` is the settings home; `skillsRoot` is the directory holding maa-core as the host invoked it;
+ * `verificationRecord` defaults to the packaged MAA verification record.
+ */
+export type CheckContext = { maaDirectory: string; privateDirectory: string; home: string; skillsRoot?: string; verificationRecord?: string };
 /** Substituted only at system boundaries: MAA.exe metadata, adb, and the release lookup network call. */
 export type CheckBoundaries = { versionReader?: MaaVersionReader; adb?: AdbBoundary; releases?: ReleaseLookup };
 
@@ -40,7 +43,8 @@ async function writeRecord(privateDirectory: string, name: string, value: unknow
 
 /** Shared setup/doctor check interface over the eight groups. Read-only apart from the most recent redacted record. */
 export async function runChecks(context: CheckContext, maa: MaaProcess, boundaries: CheckBoundaries = {}) {
-  const installation = await inspectInstallation({ home: context.home, maaDirectory: context.maaDirectory }, boundaries.versionReader ?? readMaaVersion);
+  const installation = await inspectInstallation({ home: context.home, maaDirectory: context.maaDirectory,
+    ...(context.verificationRecord === undefined ? {} : { verificationRecord: context.verificationRecord }) }, boundaries.versionReader ?? readMaaVersion);
   const checks: (CheckResult & { message?: string; details?: string[] })[] = [...installation.checks];
   const connection = await inspectConnection(context.maaDirectory, boundaries.adb);
   checks.push(connectionCheck(connection));
@@ -212,7 +216,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       else {
         let boundary: MaaProcess | undefined;
         const get = async () => boundary ??= (await import('./maa-process.ts')).createMaaProcess(settings.maaDirectory!);
-        const maa: MaaProcess = { inspect: async () => (await get()).inspect(), close: async () => (await get()).close(), start: async () => (await get()).start() };
+        const maa: MaaProcess = { inspect: async () => (await get()).inspect(), close: async () => (await get()).close(), start: async () => (await get()).start(),
+          version: async () => (await get()).version!() };
         // The skills root as the host invoked it, so directory links are inspected rather than followed.
         const context = { maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory, home, skillsRoot: resolve(dirname(resolve(process.argv[1]!)), '..', '..') };
         const readInput = async (empty: unknown) => {

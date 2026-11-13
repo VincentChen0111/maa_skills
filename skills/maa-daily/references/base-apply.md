@@ -25,6 +25,7 @@
    - `rejected`：按 `reason` 说明，什么都没写。
    - `unknown`：保留锁、备份和记录，交给 maa-doctor 先只读核对；不删锁，不重试，不重放。maa-doctor 目前不能自动恢复基建这类附加文件的写入，只能报告证据，由用户核对后决定。
 7. `configuration.notes` 里有 `infrast-task-disabled`（这个基建任务没勾选，MAA 不会运行它）时告诉用户；是否改由用户在 MAA 里决定，不顺手修改。周计划里有几天不运行不是提示，而是未核实项 `maa-weekly-schedule`（见下文）。
+8. `check` 和 `apply` 的结果都带 `versions`：比较批准的报告生成时读到的 MAA 版本和核实记录版本与现在的值，`state` 为 same、changed（`changed` 列出变了的项）、unknown（某一边读不出）或 unrecorded（旧报告没有记录）；引用找不到报告时为 null。changed 时告诉用户报告生成之后 MAA 或核实记录换了版本；这只是提醒，不阻止应用，未核实的版本同样只提醒。
 
 ## 拒绝原因
 

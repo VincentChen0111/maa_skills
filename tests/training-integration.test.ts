@@ -8,6 +8,7 @@ import { executeConfigWrite, inspectConfiguration, inspectConfigRecovery, execut
 import { approvedJobFile, approvedJobSourceFile, approvedJobList, type ApprovedJobPlan } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { buildTrainingChanges } from '../skills/maa-core/scripts/training-config.ts';
 import { configFixture, trainingGrant } from './fixtures/training-runtime.ts';
+import './fixtures/maa-version-guard.ts';
 
 test('job, training and medicine grants cannot be combined in the shared writer', async t => {
   const f = await configFixture(t);

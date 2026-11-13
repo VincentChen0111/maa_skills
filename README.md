@@ -8,6 +8,8 @@ MAA skills for Arknights CN on Windows, designed for Codex and Claude Code. Work
 
 双宿主运行器、离线评分样例与固定版本比较见[行为评测](docs/evaluation.md)。本机缺少隔离认证或宿主的项目标记为未验证，不代表模型基线已通过。
 
+本仓库依赖的 MAA 行为登记在[依赖条目](docs/maa-dependencies.json)，每天由 GitHub Action 对照 MAA 新版本的源码指纹（[来源与做法](docs/maa-version-sources.md)）。`node scripts/maa-version-check.ts notes` 输出当前的源码已核和实机已核版本，setup 和 doctor 按随包核实记录提醒；未核实的版本照常可用。
+
 ## 致谢
 
 - [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)：图形界面版及其识别、任务和定时机制。
