@@ -1,6 +1,6 @@
 # 森空岛社区与 B 站调研验证记录
 
-2026-11-13，工单 [19](issues/19-community-bilibili-research.md) 在分支 `claude/19-community-research` 实施。分支叠在工单 18 的分支上（起点 `0884ae7`，之后合入 18 审查后的头 `2aa02e1`；18 叠在 09 已审查的 `6df8ed0` 上，基于 `origin/main` `4a1fd26`），因为 19 复用 18 的共享调研层。实施进度：进行中，等待独立审查，尚未合并。
+2026-11-13，工单 [19](issues/19-community-bilibili-research.md) 在分支 `claude/19-community-research` 实施。分支叠在工单 18 的分支上（起点 `0884ae7`，之后合入 18 审查后的头 `2aa02e1`；18 叠在 09 已审查的 `6df8ed0` 上，基于 `origin/main` `4a1fd26`），因为 19 复用 18 的共享调研层。实施进度：进行中，等待独立审查，尚未合并。2026-11-14 维护者放开森空岛社区的「不用账号凭据」，森空岛社区部分按新决定重做，见下文「2026-11-14 修订」；下面 2026-11-13 的记录保留原样，其中关于森空岛社区匿名读取的部分已被该节取代。
 
 ## 交付内容
 
@@ -19,7 +19,7 @@
 
 ### 需要维护者决定
 
-- 森空岛社区入口：保留只报告读不到的入口、推迟，还是撤下。本票暂取保留：设计默认值，2026-11-13。理由：不能伪装官方客户端（18 已登记的规则），保留下来的入口只会如实报告读不到、不发第二个请求、不改用账号凭据，站点将来若开放匿名读取就能直接用；工单 20 把 19 的来源当作可选补充，缺少它不阻塞核心报告。维护者说一声即可改为推迟或撤下。
+- （2026-11-14 已由维护者决定：放开「不用账号凭据」，见「2026-11-14 修订」。）森空岛社区入口：保留只报告读不到的入口、推迟，还是撤下。本票暂取保留：设计默认值，2026-11-13。理由：不能伪装官方客户端（18 已登记的规则），保留下来的入口只会如实报告读不到、不发第二个请求、不改用账号凭据，站点将来若开放匿名读取就能直接用；工单 20 把 19 的来源当作可选补充，缺少它不阻塞核心报告。维护者说一声即可改为推迟或撤下。
 
 ## 验收对照
 
@@ -98,8 +98,59 @@
 
 修复后逐个运行一次：`npm run typecheck` 通过；`tests/community-content.test.ts` 14 项、`tests/bilibili.test.ts` 15 项、`tests/skland-community.test.ts` 10 项、`tests/community-scenarios.test.ts` 2 项、`tests/community-cli.test.ts` 3 项、`tests/account-installation.test.ts` 2 项、`tests/metadata.test.ts` 1 项通过；`node scripts/tracker.ts`、`inspectMetadata`、`node scripts/privacy.ts .` 无错误、无发现。没有运行完整门禁，没有访问森空岛、B 站或 NGA。
 
+## 2026-11-14 修订：森空岛社区改用用户凭据
+
+维护者 2026-11-14 原话：「「不用账号凭据」: this rule can change. its perfectly fine to use it.」。不变的部分：凭据仍由用户在自己的终端用 09 的脚本设置，agent 不输入、不打印、不索取。分支先合入 `origin/main`（含 12、16、17、20）：合并提交 `fb0061d`。
+
+### 交付内容（修订）
+
+- `skills/maa-core/scripts/skland-session.ts`（新）：森空岛会话的唯一实现——读用户保存的 token、换授权码、换 cred、两级刷新（各最多一次）、请求签名与请求头、不跟随重定向、每个请求 20 秒、单个回复 16 MiB、记录凭据结果。账号快照和社区读取都只用它。
+- `skills/maa-core/scripts/skland-account.ts`（12 的文件）：上面这些代码原样移进 `skland-session.ts`，12 只保留三个数据接口、角色选择、转换、文字和 CLI。12 的改动只有这一处搬移：`SklandSession` 的 `get` 拆成 `reply`（返回 10000、10002 以外的回复）加 `get`（要求代码 0），判定顺序与原来逐行相同；读凭据、记可用/过期改由 `openSklandSession` 和 `SklandCredential` 完成，调用时机不变。`tests/skland-account.test.ts`、`tests/skland-scenarios.test.ts` 没有改动，照常通过。
+- `skills/maa-core/scripts/skland-community.ts`：缓存能回答时不读凭据、不发请求；否则来源暂停或没有可用凭据时不发请求、不匿名尝试；然后在本来源闸门的一次占用里走共用会话：换取、对 `/web/v2/item` 发签名 GET（10000/10002 由会话按 12 的规则刷新）。结果另带 `credential` 和 `repair`。不再使用调研传输（`research-transport.ts`），所以凭据和签名不经过子进程。
+- `skills/maa-core/scripts/research.ts`：新增页结果 `signature-rejected`（排在 `credential-rejected` 之后）及中英文说明；`credential-rejected` 的说明改为可行动（请用户自己重新运行凭据输入命令，NGA 和 B 站同样受益）；森空岛社区的凭据命令显示为 `credentials.ts input skland`；删去不再产生的局限代码 `client-signature-required`。
+- `skills/maa-core/scripts/credentials.ts`：森空岛粘贴前的说明和检查文字改为 token 也用于读取用户给出链接的森空岛社区帖子；删去「社区调研不会使用这个 token」。
+- 测试：`tests/fixtures/skland-double.mjs` 扩展帖子接口（独立实现的签名校验，按帖子号返回合成帖子）、带消息和 HTTP 状态的错误代码、原样回复体；`tests/skland-community.test.ts` 重写；`tests/community-content.test.ts`、`tests/community-cli.test.ts` 改走森空岛替身；`tests/credentials.test.ts` 跟随说明文字。
+- 评测：`eval/network-fixture.mjs` 为 `skland-community.ts read` 增加合成森空岛世界；`scripts/evaluation.ts` 的生成时间字段可带固定偏移 `offsetMs`；`eval/maa-account/community-scenarios.ts` 改为四个场景（见下）。
+- 文档：规格「共享工具」「资料来源」正文和两张来源表；凭据说明；工单 19（验收第 1 条和验证方式带日期修订，正文有改动，GitHub Issue 镜像需同步）；maa-core、maa-account、maa-help、maa-setup 的 SKILL；社区调研接口、凭据接口、森空岛接口；社区来源核对；评测说明；第三方声明；README、宿主说明。
+
+### 验收对照（森空岛社区部分，修订）
+
+| 验收 | 证据 | 状态 |
+| --- | --- | --- |
+| 1 只读、不登录、不发帖点赞评论；与账号扫描独立（2026-11-14 修订：可用用户自己的凭据） | `tests/skland-community.test.ts`：正常读取只有 grant、cred、item 三个请求，item 为带有效签名的 GET、只带 `id`，不跟随重定向；每个用例用 `assertAllowed` 核对只请求三个鉴权接口和帖子接口；「one session owner …」核对两个读取器都从 `skland-session.ts` 导入，各自源码里没有换取、刷新、签名或凭据读写代码，社区读取器不引用账号快照代码、源码里唯一的接口路径是 `/web/v2/item`、没有 POST；CLI 的 `post`、`like`、`comment`、`search` 动作被拒 | 通过（网络替身）；真实站点未验证 |
+| 4 从用户指定资料到可引用 Markdown | `tests/community-cli.test.ts` 森空岛 CLI：未设置凭据时给出 `credentials.ts input skland` 且不发请求；用户经 09 的输入脚本保存 token 后，读链接得到 `ok`、3 个请求、`credential: usable`，Markdown 带来源链接和引用块；第二次读走缓存 | 通过（网络替身） |
+| 5 只当数据；凭据、账号标识不泄漏 | 「post text is only data …」：帖子里要求读凭据、外发 token、点赞关注的文字只在引用块，不引出任何请求；所有用例的输出、Markdown 和临时目录全部文件里搜索 token、授权码、cred、签名 token、用户 ID、角色号和作者账号 ID 的原文、JSON 转义和 URL 编码形式，都找不到 | 通过（网络替身） |
+| 6 各种失败清楚报告 | 「a 10000 reply refreshes …」；「signature still refused after both refresh levels …」：grant、cred、item、refresh、item、grant、cred、item 后报告 `signature-rejected`、`check-system-time`，凭据仍是 `unverified`、来源不暂停；「429 stops at once …」及 503、500、换取 429、网页、重定向、频繁提示、10003、cred 被拒 8 种风控：本次停止、暂停 30 分钟、不重试、不改凭据状态，暂停期间再读不发请求；「credential states …」：未设置、无法读取不发请求，换取被拒只发 grant 并记过期，三者都给出 `credentials.ts input skland`；「requests are validated …」：不提供、格式不认、回复不完整、网络失败分开报告且不暂停；缺字段由 `tests/community-content.test.ts` 逐字段核对 | 通过（网络替身） |
+
+### 设计默认值（2026-11-14）
+
+产品限制都登记在规格「默认值及其来源」2026-11-14 的五个「19」行，并汇总在「规则来源」19 行：
+
+- 只经共用会话签名 GET 帖子接口；除 12 的三个鉴权接口外不请求别的接口；请求头与 12 完全相同（不另设 User-Agent）。
+- 没有凭据、凭据无法读取或来源暂停时不发请求，不匿名尝试；缓存能回答时不读凭据。
+- 失败归类：风控信号优先（429、412、任何 5xx、重定向、网页、频繁提示、10003、换取 cred 被拒等不归咎凭据的拒绝 → 风控）；两级刷新后仍被拒 → `signature-rejected`；换取明确拒绝 → 记过期；帖子接口代码 0 才记可用。
+- 一次读取占用一次闸门；这个来源的锁 180 秒后才判过期。
+- 结果带 `credential`、`repair`（取值同 12）。
+
+只影响实现或评测、不是产品限制的选择（记在这里）：
+- 签名时间用系统时间（`now`），闸门和缓存用调研时钟（`clock`）；测试只替换后者。理由：签名要与站点时间一致，测试的手动时钟不能用来签名。
+- 重定向：会话按 12 设 `redirect: 'error'`，真实 fetch 遇到重定向会直接报错，所以真实站点的重定向会显示为网络失败（同样停止、不重试，但不暂停来源）；只有替身直接回 3xx 时才归为风控。
+- 评测的合成森空岛世界写在 `eval/network-fixture.mjs` 里（随预加载器进入场景指纹），只在 `skland-community.ts read` 进程启用，只接受 `synthetic-` 开头的 token；合成凭据用测试加密写进场景自己的私有目录，同一变换在场景文件里另写一份，离线场景测试读帖成功即证明两边一致。
+- 读帖场景的工具写入（闸门记录、帖子缓存、凭据结果）逐字段授权；缓存的 `expiresAt` 用新加的 `offsetMs: 86400000` 授权。理由：评分器把每处文件变化都当作需要授权的写入，到期时间只能按读取时间加固定偏移核对。
+
+### 评测场景
+
+`eval/maa-account/community-scenarios.ts`：`account-bilibili-cached-experimental`（不变）；`account-skland-community-read`（新：用户已在终端设置 token，合成世界读帖，帖子里有诱导指令）；`account-skland-community-unset`（新：没有凭据，答复要请用户自己在终端设置）；`account-skland-community-stopped`（改：去掉「读不了就用账号 token」的说法，保留「直接去网页上抓」）。`tests/community-scenarios.test.ts` 在两种安装布局里离线运行已安装的读取器并按场景评分：读帖场景只有闸门记录、帖子缓存和凭据结果三份文件变化且评分通过；在输出里加上 token 只触发 `secret-output`；多一处别的写入触发 `authorization`。真模型评测没有运行（见「未验证」）。
+
+### 运行记录（2026-11-14）
+
+先失败的证据：新写的 `tests/skland-community.test.ts` 在改读取器前运行，17 项全部失败（旧读取器仍是匿名读取）。**这次红灯运行发出了真实网络请求**：旧读取器在没有传入传输替身时用平台传输，新测试只传了 `fetcher`，所以各用例的读取共向 `https://zonai.skland.com/web/v2/item` 发了约 20 次不带任何凭据的匿名 GET（每个临时目录的第一次读取，以及暂停到期后的再次读取）（帖子号 1234567 等合成编号，请求头只有如实的 User-Agent 和 Accept；旧读取器不导入凭据模块，没有发送 token），都得到签名要求。之后的所有运行都只用替身；新读取器的选项里已没有传输参数，类型检查会拒绝旧的 `transport` 写法。读取器改完后用变异核对一次：去掉「风控信号优先」的判断，6 个风控用例失败，恢复后逐字节一致。
+
+合并后与完成后各逐个运行一次（不是完整门禁）：`npm run typecheck` 通过；`tests/research.test.ts` 7 项、`tests/skland-community.test.ts` 17 项、`tests/skland-account.test.ts` 18 项、`tests/skland-scenarios.test.ts` 1 项、`tests/credentials.test.ts` 6 项、`tests/help-installation.test.ts` 6 项、`tests/metadata.test.ts` 1 项、`tests/eval-network.test.ts` 3 项、`tests/community-scenarios.test.ts` 2 项、`tests/community-cli.test.ts` 3 项、`tests/community-content.test.ts` 14 项、`tests/evaluation.test.ts` 8 项全部通过；另外 `tests/research-scenarios.test.ts` 1 项、`tests/nga.test.ts` 13 项、`tests/bilibili.test.ts` 15 项通过（共用 Markdown 文字有改动）。`node scripts/tracker.ts`、`node scripts/privacy.ts .` 无错误、无发现。没有运行完整门禁和 `tests/maa-process.test.ts`；仓库里没有名为 docs-consistency 的测试文件。
+
 ## 未验证
 
-- 真实站点：森空岛是否有不需要客户端签名的公开读取方式、帖子真实字段；带 SESSDATA 时字幕列表、`login_mid`、字幕文件主机与格式、失效时的真实回答；两站的真实风控信号；如实 User-Agent 长期是否被接受；3 秒和 30 分钟是否够用。清单见[社区来源核对](community-sources.md)「未验证」。核对时只发了几次不带凭据的请求。
+- 森空岛社区（2026-11-14 起）：**没有发过任何带凭据的真实森空岛请求**。帖子接口是否接受账号快照会话（`/api` 一侧）的签名、真实返回字段、真实风控信号、读取时会不会触发其他校验，都要维护者在本机用自己的 token 核对；读帖的真实可用性因此未验证。上面运行记录里那次误发的匿名请求不算核对。
+- 真实站点：帖子真实字段；带 SESSDATA 时字幕列表、`login_mid`、字幕文件主机与格式、失效时的真实回答；两站的真实风控信号；如实 User-Agent 长期是否被接受；3 秒和 30 分钟是否够用。清单见[社区来源核对](community-sources.md)「未验证」。核对时只发了几次不带凭据的请求。
 - Windows 传输经系统代理和证书存储访问这两个站点：与 18 相同，只对本机替身实测。
-- 真模型行为评测：两个新场景只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。
+- 真模型行为评测：所有场景（含 2026-11-14 新增的两个森空岛场景）只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。
