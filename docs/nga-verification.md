@@ -54,7 +54,15 @@
 
 ## 门禁运行
 
-（见下一次提交补记。）
+在提交 `e4db611` 上运行，本机 Windows 11、Node 24：
+
+- `npm run typecheck`：通过。
+- `node scripts/check.ts`：退出码 1。424 项测试中 421 通过、1 失败、2 跳过（非 Windows 分支）。唯一失败是 `tests/maa-process.test.ts` 的「Windows launches and normally closes a temporary GUI and completes a CLI configuration transaction」，报 `maa-start-timeout`。本次新增的 6 个测试文件全部通过。
+- 因测试失败，`check.ts` 没有继续运行后面几项，所以另外单独运行：`node scripts/tracker.ts` 无错误；`node scripts/privacy.ts .` 无发现；元数据（`inspectMetadata`）无错误；`node scripts/eval-selftest.ts` 通过（7 条规则、14 份样例）。
+- 失败项按规则单独重跑 `node --test tests/maa-process.test.ts` 三次：三次都是 16 项中 14 通过、1 失败、1 跳过，失败的都是同一项（第 1、3 次报 `maa-close-timeout`，第 2 次报 `maa-start-timeout`）。
+- 对照：用 `git archive` 导出基点 `6df8ed0`（09 的头，不含本票改动）到临时目录，同样单独运行三次：三次也都是 14 通过、1 失败，同一项失败（`maa-start-timeout`、`maa-close-timeout`、`maa-start-timeout`）。本票没有改动 `maa-process.ts`、`maa-config.ts` 或该测试。结论：这是本机启动和关闭合成 GUI 进程的环境问题，在基点上同样稳定复现，与本票无关。按规则这不是「偶发」：它在本机单独运行时每次都失败。
+
+之后只给 `tests/nga-cli.test.ts` 的三项加了 180 秒测试超时（防止子进程卡住时测试无限等待），单独重跑 3 项通过。
 
 ## 未验证
 

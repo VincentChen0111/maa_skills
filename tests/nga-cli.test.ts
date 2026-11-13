@@ -55,7 +55,7 @@ async function everything(directory: string): Promise<string> {
 
 const thread = (tid: number) => threadPayload({ tid, title: `合成帖 ${tid}`, users: { 101: '合成作者甲' }, posts: [{ floor: 0, author: 101, text: '建议先专精二技能。' }] });
 
-test('two CLI processes share one cross-process gate: their requests are spaced by the minimum interval', async (t) => {
+test('two CLI processes share one cross-process gate: their requests are spaced by the minimum interval', { timeout: 180_000 }, async (t) => {
   const f = await setup(t);
   await f.routes({ '/read.php?tid=7&page=1&__output=8': { status: 200, payload: thread(7) }, '/read.php?tid=8&page=1&__output=8': { status: 200, payload: thread(8) } });
   const [first, second] = await Promise.all([cli(f, 'read', { thread: 7 }), cli(f, 'read', { thread: 8 })]);
@@ -79,7 +79,7 @@ test('two CLI processes share one cross-process gate: their requests are spaced 
   assert.equal((await everything(join(f.privateDirectory, 'research'))).includes(f.passport), false, 'cache and gate files hold no credential data');
 });
 
-test('a risk-control stop recorded by one CLI run holds for the next run; nothing is sent until it ends', async (t) => {
+test('a risk-control stop recorded by one CLI run holds for the next run; nothing is sent until it ends', { timeout: 180_000 }, async (t) => {
   const f = await setup(t, 'en');
   await f.routes({ '/read.php?tid=7&page=1&__output=8': { status: 503, body: '<html>busy</html>' } });
   const first = await cli(f, 'read', { thread: 7, pages: [1, 2] });
@@ -94,7 +94,7 @@ test('a risk-control stop recorded by one CLI run holds for the next run; nothin
   assert.equal(status.stopped, true); assert.equal(status.stopReason, 'risk-control'); assert.equal(status.credential, 'unverified');
 });
 
-test('the CLI rejects malformed input with a fixed code and reports a login rejection without the value', async (t) => {
+test('the CLI rejects malformed input with a fixed code and reports a login rejection without the value', { timeout: 180_000 }, async (t) => {
   const f = await setup(t);
   for (const request of [{ thread: 'https://evil.example/read.php?tid=1' }, { keyword: '合成', format: 'html' }, { thread: 7, cookie: 'x' }]) {
     const run = await cli(f, 'read', request);
