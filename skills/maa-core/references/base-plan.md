@@ -28,7 +28,7 @@
 ```
 
 - `layout`：用户说的布局，按 MAA 扩充协议的写法，`type` 取 `control`、`manufacture`、`trading`、`power`、`meeting`、`hire`、`dormitory`、`processing`、`training`、`recycle`，`level` 是房间等级；制造站和贸易站可以写当前产物 `product`（`Battle Record`、`Pure Gold`、`Originium Shard`、`Dualchip`；`LMD`、`Orundum`）。同类房间的顺序就是排班里的顺序和无人机的间号。账号快照里没有基建布局（MAA 识别不提供），所以布局由用户说，缺了就先问。
-- `shifts`：每个班次一个计划。`period` 写 `hh:mm-hh:mm` 或 MAA 的 `[["hh:mm","hh:mm"]]`；跨天的会拆成两段（`22:00-06:00` 写成 `22:00–23:59` 和 `00:00–06:00`）。每个班次都必须有时间段。`rooms` 里每间房是名字数组或 `{operators, sort}`；`null` 表示这间房跳过；没写的房间不安排，`fill: true` 时由工具按快照顺序填入有该房间生效技能、这个班次没用到、上一班也没上班（最后一班还要避开第一班，班次排成一圈）的已持有干员（不比较收益）。训练室不在这里安排。
+- `shifts`：每个班次一个计划。`period` 写 `hh:mm-hh:mm` 或 MAA 的 `[["hh:mm","hh:mm"]]`；跨天的会拆成两段（`22:00-06:00` 写成 `22:00–23:59` 和 `00:00–06:00`）。每个班次都必须有时间段。`rooms` 里每间房是名字数组或 `{operators, sort}`；`null` 表示这间房跳过；没写的房间不安排，`fill: true` 时由工具按快照顺序填入有该房间生效技能、这个班次没用到、相邻的前后两班也没上班（班次排成一圈，第一班也避开最后一班已安排的人）的已持有干员（不比较收益）。训练室不在这里安排。
 - `fiammetta`：`{target, order}`；`drones`：`{room, index, order}`。
 - `mood`、`moodDefault`：每小时净消耗（上班）和每小时恢复（在宿舍），带依据；`combos`：`{members, dependsOn?, basis}`；`exclusions`：`{members, basis}`；`efficiency`：每间房每个计划的基础、技能、全局三部分，带依据、条件和未建模部分。这些都是推断；没给时对应的验收门是「未核实」，不是通过。
 - `tolerance`：早晚上线的容差，小时，默认 1。
@@ -46,6 +46,7 @@
 - `gates`：15 项验收门，每项 `pass`、`fail` 或 `unverified` 加证据；清单见工单 22，判定条件见仓库里的 `docs/base-plan-verification.md`。
 - `unverified`：未核实的验收门（`gate-N`）和不能核对的规则（如 `names:maa-directory-unset`、`ownership`）。未核实不算通过，由用户决定是否仍然应用。
 - `applicable`：没有错误、没有不通过的验收门才是 `true`。
+- 心情按一条时间线算：所有计划的时间段排成 24 小时一圈，每次换班各算连续时长；菲亚梅塔的互换只有在她在宿舍名单里、已恢复满心情时才发生；提前运行时 MAA 仍选上一班的计划，这次不换班。所以写时间段时，想容忍提前上线就把每一班的开始提前容差时长。
 - 心情上限、床位、容量和菲亚梅塔的恢复量都从固定游戏表读取；名表读用户本机 MAA 目录下的 `resource/battle_data.json`。
 
 ## 导出函数
