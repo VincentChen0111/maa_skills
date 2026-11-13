@@ -26,7 +26,7 @@
 
 - `keyword`：1–50 个字符，不能含控制字符；连续空白合并为一个空格。
 - `forum`：`arknights`（默认，只搜明日方舟版块）或 `all`（全站）。
-- `pages`：1–3，默认 1。检索结果只有标题，引用观点前要先读帖。
+- `pages`：读前几页，正整数，默认 1。没有页数上限；每一页都是一次请求，按下面的间隔依次发出。检索结果只有标题，引用观点前要先读帖。
 
 `node <maa-core>/scripts/nga.ts read`，标准输入：
 
@@ -35,10 +35,12 @@
 ```
 
 - `thread`：帖子号，或 `bbs.nga.cn`、`ngabbs.com`、`nga.178.com`、`bbs.ngacn.cc` 的 `read.php?tid=` 链接；只取 `tid`，链接里的其他参数不用，请求总是发到 `https://bbs.nga.cn`。
-- `pages`：要读的页码，1–5 个，不重复，每个 1–1000；默认 `[1]`。每页约 20 楼，结果里 `meta.totalPages` 是按楼层数推算的总页数（未知为 `null`）。
+- `pages`：要读的页码列表，每个是正整数、不重复；默认 `[1]`。没有个数或页码上限，长帖的后面几页也可以读；每页一次请求，按下面的间隔依次发出，所以页数多时要等得久。每页约 20 楼，结果里 `meta.totalPages` 是按楼层数推算的总页数（未知为 `null`）。
+- `thread` 的帖子号和页码只校验为正整数。
 
 两个命令共有：
 
+- 标准输入的 JSON 最多 64 KiB。
 - `fresh: true`：即使缓存未过期也重新请求（仍受限速和风控停止约束）；`cacheOnly: true`：只用缓存，一个请求也不发。两者不能同时为真。
 - `format`：`json`（默认，输出 `{ "ok": true, "result": … }`）或 `markdown`（按设置语言输出中文或英文的引用摘要，其他语言由 agent 翻译）。
 - 退出码：0 表示 `status` 为 `ok`；1 表示其他状态（结果照常输出）或请求不合法（`{ "ok": false, "error": "request-invalid" }`）；2 表示意外失败（`research-failed`）。错误只有固定代码，不带响应原文或请求头。
@@ -93,8 +95,9 @@
 | 同一来源两次请求的最小间隔（跨进程） | 3 秒 |
 | 风控后整个来源暂停 | 30 分钟 |
 | 缓存有效期 | 检索 6 小时，帖子页 24 小时 |
-| 每次运行的请求上限 | 检索最多 3 页，读帖最多 5 页 |
 | 单次请求 | 20 秒内完成，响应最多 4 MiB，不跟随重定向，不重试 |
+| 每次运行的页数 | 不设上限；请求数由上面的间隔、遇风控立即停止和暂停约束 |
+| 输入 | 检索关键词最多 50 个字符；CLI 标准输入最多 64 KiB |
 | 等待闸门 | 最多 150 秒；占用超过 120 秒或持有进程已退出的锁视为遗留，自动接管 |
 | 摘录 | 每楼缓存最多 4000 字，输出摘录最多 600 字 |
 
@@ -117,6 +120,6 @@ import { platformTransport } from '../../maa-core/scripts/research-transport.ts'
 ```
 
 - `searchNga(request, { privateDirectory, transport?, protector?, clock? })`、`readNgaThread(…)`：返回上面的 `ResearchResult`；请求不合法时抛 `request-invalid`，不读不发。`transport`、`protector`、`clock` 只供测试替换网络、加密边界和时间。
-- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。工具构造的链接和时间保持可用；帖子文字放在引用块里，去掉隐藏/方向控制字符，转义 Markdown 与 HTML，链接改写为 `hxxps[:]//` 形式。
+- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。工具构造的链接和时间保持可用；帖子文字放在引用块里，去掉隐藏/方向控制字符，转义 Markdown 与 HTML；抓取文字里的链接、裸 `www.` 域名和邮箱地址都改写成不会自动成链的形式（`hxxps[:]//`、`ftp[:]//`、`www[.]`、`[@]`），标题、作者名同样处理。
 - 新来源（工单 19）复用：`researchDirectory(privateDirectory, '<来源>')` 定位目录；`cacheKey` / `getCached` / `putCached` 做缓存；每个网络请求包在 `withResearchGate(directory, limits, clock, perform)` 里，`perform` 返回 `{ value, stop?: 'risk-control' }` 即可记下停止；用 `summarizePages` 汇总状态，按上面的字段产出 `ResearchResult`（实验性来源设 `experimental: true`）；传输用 `platformTransport()`，不要在失败后换另一种传输。新增来源的限制要在规格两张来源表登记。
 - 建议报告（工单 20）引用 `items[]` 时保留 `author`（或「匿名/未知」）、`publishedAt`（或「未知」）、`url` 加 `location`、`reliability` 和 `limitations`；`excerpt` 是事实摘录，报告里的推断要与它分开写。
