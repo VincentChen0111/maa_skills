@@ -49,4 +49,6 @@ export const pinnedStages: Record<string, Record<string, any>> = {
   "main_10-01": {"stageId":"main_10-01","code":"10-2","levelId":"Obt/Main/level_main_10-01","zoneId":"main_10","difficulty":"NORMAL","diffGroup":"NORMAL","unlockCondition":[{"stageId":"main_09-17","completeState":"PASS"},{"stageId":"st_10-01","completeState":"PASS"}]},
   "tough_10-01": {"stageId":"tough_10-01","code":"10-2","levelId":"Obt/Main/level_tough_10-01","zoneId":"main_10","difficulty":"NORMAL","diffGroup":"TOUGH","unlockCondition":[{"stageId":"main_09-17","completeState":"PASS"},{"stageId":"st_10-01","completeState":"PASS"}]},
   "easy_10-01": {"stageId":"easy_10-01","code":"10-2","levelId":"Obt/Main/level_easy_10-01","zoneId":"main_10","difficulty":"NORMAL","diffGroup":"EASY","unlockCondition":[{"stageId":"easy_09-17","completeState":"PASS"},{"stageId":"st_10-01","completeState":"PASS"}]},
+  "act21side_03_m1": {"stageId":"act21side_03_m1","code":"IS-QT","levelId":"Activities/ACT21side/Mission/level_act21side_03_m","zoneId":"act21sre_zone1","difficulty":"NORMAL","diffGroup":"NONE","unlockCondition":[]},
+  "act21side_03_m2": {"stageId":"act21side_03_m2","code":"IS-QT","levelId":"Activities/ACT21side/Mission/level_act21side_03_m","zoneId":"act21sre_zone1","difficulty":"NORMAL","diffGroup":"NONE","unlockCondition":[]},
 };

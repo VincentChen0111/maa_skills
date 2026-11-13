@@ -196,21 +196,26 @@ function scanActionNames(content: ObjectValue, professions: Map<string, Set<stri
 
 export type StageMatch = 'this-stage' | 'same-map-unprovable' | 'other-stage' | 'unknown';
 type StageIndex = Map<string, [string, ObjectValue][]>;
-// MAA v6.21.4 resolves a job's stage_name by exact equality with a level's stageId, code, levelId or name (Tile LevelKey),
-// takes the first match in its own data order, and list mode navigates to that level's code. levelId tails never match.
+// MAA v6.21.4 resolves a job's stage_name by exact, case-sensitive equality with a level's stageId, code, levelId or name
+// (Tile LevelKey), takes the first match in its own data order, and list mode navigates to that level's code. Its map data
+// (Arknights-Tile-Pos overview.json) stores levelIds in lowercase, so the table's mixed-case levelId is indexed lowercased:
+// a job naming the mixed-case spelling is not found by MAA either. levelId tails never match.
 function indexStages(stages: ObjectValue): StageIndex {
   const index: StageIndex = new Map();
   for (const [key, value] of Object.entries(stages)) {
     if (!value || typeof value !== 'object') continue;
-    for (const field of new Set([value.stageId, value.code, value.levelId, value.name])) if (typeof field === 'string' && field) index.set(field, [...(index.get(field) ?? []), [key, value]]);
+    const levelId = typeof value.levelId === 'string' ? value.levelId.toLowerCase() : value.levelId;
+    for (const field of new Set([value.stageId, value.code, levelId, value.name])) if (typeof field === 'string' && field) index.set(field, [...(index.get(field) ?? []), [key, value]]);
   }
   return index;
 }
 const twinDifficulties = ['NORMAL', 'FOUR_STAR'];
 /**
  * The single owner of "does this job's stage_name mean the selected stage?". this-stage: every level it names is the
- * selected stage or its normal/raid twin (same levelId, code and difficulty group; the job's difficulty bit decides).
- * same-map-unprovable: it names the same map in another difficulty group or mode (e.g. #s). other-stage: every level it
+ * selected stage or its normal/raid twin (same levelId, code and difficulty group, the other of NORMAL/FOUR_STAR; the job's
+ * difficulty bit decides). Two stages of the same difficulty on one levelId (e.g. mission _m1/_m2) are not twins.
+ * same-map-unprovable: it names the same map but not this stage or its twin (another group, a mode such as #s, or a
+ * same-difficulty sibling). other-stage: every level it
  * names is a different map. unknown: no level, or a mix MAA's own lookup order would decide. Only other-stage can mean
  * "no job for this stage"; nothing but this-stage can become ready.
  */
@@ -218,7 +223,7 @@ export function resolveJobStage(stages: unknown, stageName: unknown, selectedVal
   const selected = object(selectedValue), group = (value: ObjectValue) => value.diffGroup ?? 'NONE';
   const entries = typeof stageName === 'string' && stageName ? index.get(stageName) ?? [] : [];
   const kinds = new Set<StageMatch>(entries.map(([, entry]) => entry.stageId === selected.stageId || entry.levelId === selected.levelId && entry.code === selected.code
-    && group(entry) === group(selected) && twinDifficulties.includes(entry.difficulty) && twinDifficulties.includes(selected.difficulty) ? 'this-stage'
+    && group(entry) === group(selected) && entry.difficulty !== selected.difficulty && twinDifficulties.includes(entry.difficulty) && twinDifficulties.includes(selected.difficulty) ? 'this-stage'
     : entry.levelId === selected.levelId ? 'same-map-unprovable' : 'other-stage'));
   const kind: StageMatch = !kinds.size ? 'unknown' : kinds.size === 1 ? [...kinds][0]! : kinds.has('other-stage') ? 'unknown' : 'same-map-unprovable';
   return { kind, matches: entries.map(([key]) => key) };

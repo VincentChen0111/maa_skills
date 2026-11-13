@@ -34,23 +34,31 @@ test('stage identity conformance on pinned table cases: MAA resolves stage_name 
     const normal = `main_09-${String(index).padStart(2, '0')}`, raid = `${normal}#f#`;
     assert.equal(resolve(normal, raid), 'this-stage', raid); assert.equal(resolve(raid, raid), 'this-stage');
     assert.equal(resolve(raid, normal), 'this-stage'); assert.equal(resolve(normal, normal), 'this-stage');
-    assert.equal(resolve(all[normal]!.levelId, raid), 'this-stage'); assert.equal(resolve(all[normal]!.code, raid), 'this-stage');
+    // MAA's map data stores levelIds in lowercase and compares case-sensitively; the table's mixed-case levelId is not found.
+    assert.equal(resolve(all[normal]!.levelId.toLowerCase(), raid), 'this-stage'); assert.equal(resolve(all[normal]!.levelId, raid), 'unknown');
+    assert.equal(resolve(all[normal]!.code, raid), 'this-stage');
   }
   // act50side_ex01/ex02 have swapped levelIds; a job named after the other stageId is another stage, never this one.
   assert.equal(resolve('act50side_ex02', 'act50side_ex01'), 'other-stage');
   assert.equal(resolve('act50side_ex02', 'act50side_ex01#f#'), 'other-stage');
   assert.equal(resolve('act50side_ex01', 'act50side_ex02'), 'other-stage');
   assert.equal(resolve('act50side_ex01', 'act50side_ex01'), 'this-stage');
-  assert.equal(resolve('Activities/act50side/level_act50side_ex02', 'act50side_ex01'), 'this-stage');
+  assert.equal(resolve('activities/act50side/level_act50side_ex02', 'act50side_ex01'), 'this-stage');
+  assert.equal(resolve('Activities/act50side/level_act50side_ex02', 'act50side_ex01'), 'unknown');
   assert.equal(resolve('TD-EX-1', 'act50side_ex01#f#'), 'this-stage');
   // A NONE stage named only by its levelId tail: MAA does not match tails, so it cannot be proven.
   assert.equal(resolve('training_1', 'tr_01'), 'unknown');
-  assert.equal(resolve('tr_01', 'tr_01'), 'this-stage'); assert.equal(resolve('Obt/Training/level_training_1', 'tr_01'), 'this-stage');
+  assert.equal(resolve('tr_01', 'tr_01'), 'this-stage'); assert.equal(resolve('obt/training/level_training_1', 'tr_01'), 'this-stage');
+  assert.equal(resolve('Obt/Training/level_training_1', 'tr_01'), 'unknown');
   // An ordinary NONE normal/raid pair.
   assert.equal(resolve('main_01-07', 'main_01-07#f#'), 'this-stage'); assert.equal(resolve('main_01-07#f#', 'main_01-07'), 'this-stage');
   // #s shares the map but has no copilot difficulty bit: same map, unprovable.
   assert.equal(resolve('main_17-01#s', 'main_17-01'), 'same-map-unprovable');
-  assert.equal(resolve('Obt/Main/level_main_17-01', 'main_17-01'), 'same-map-unprovable');
+  assert.equal(resolve('obt/main/level_main_17-01', 'main_17-01'), 'same-map-unprovable');
+  // Same difficulty, same code and group on one levelId (mission _m1/_m2): not a normal/raid twin, so unprovable.
+  assert.equal(resolve('act21side_03_m2', 'act21side_03_m1'), 'same-map-unprovable'); assert.equal(resolve('act21side_03_m1', 'act21side_03_m2'), 'same-map-unprovable');
+  assert.equal(resolve('IS-QT', 'act21side_03_m1'), 'same-map-unprovable'); assert.equal(resolve('activities/act21side/mission/level_act21side_03_m', 'act21side_03_m1'), 'same-map-unprovable');
+  assert.equal(resolve('act21side_03_m1', 'act21side_03_m1'), 'this-stage');
   assert.equal(resolve('main_17-01', 'main_17-01'), 'this-stage');
   // Shared codes across difficulty groups are ambiguous; another group's own stageId is another map.
   assert.equal(resolve('10-2', 'main_10-01'), 'unknown');
