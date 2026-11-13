@@ -199,7 +199,9 @@ async function resolveEmulator(fetcher: Fetcher, vendorId: unknown, link: unknow
   if (response.status === 404) fail('release-file-missing');
   let fromPath: string | undefined;
   try { fromPath = decodeURIComponent(new URL(final).pathname.split('/').pop() ?? ''); } catch { fromPath = undefined; }
-  const fileName = safeFileName(response.ok ? dispositionName(response.headers.get('content-disposition')) : undefined) ?? safeFileName(fromPath);
+  // The final path name comes first: it is part of the official address and stays the same between the plan and the
+  // download, while some vendors (MuMu) put a fresh random name in Content-Disposition on every request.
+  const fileName = safeFileName(fromPath) ?? safeFileName(response.ok ? dispositionName(response.headers.get('content-disposition')) : undefined);
   if (!fileName) return fail('file-name-unknown');
   return { program: 'emulator', vendor: vendorId, fileName, version: version as string, versionSource: 'official-page-stated', url: url.href,
     officialPage: vendor.officialPage, publisher: vendor.name, size: response.ok ? contentLength(response) : null, checksum: null, terms: null };

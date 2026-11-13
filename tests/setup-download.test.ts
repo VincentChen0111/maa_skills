@@ -267,22 +267,39 @@ test('emulator plans accept only the vendor\'s official domain and report an unk
   assert.equal(done.status, 'downloaded'); assert.equal(done.checksumVerified, false);
   assert.deepEqual((done.next as { id: string }[]).map(step => step.id), ['run-emulator-installer', 'emulator-first-run', 'game-client', 'connect-adb', 'recheck']);
   assert.equal((await installSetupDownload({ planId: plan.planId }, { home: f.home })).status, 'user-steps');
+  // Only when the official address carries no installer name does the server's Content-Disposition name it.
+  const unnamed = network({ 'https://lddl01.ldmnq.com/get?id=1': { headers: { 'content-disposition': 'attachment; filename="ldplayer-named.exe"' } } });
+  const named = await planSetupDownload({ program: 'emulator', vendor: 'ldplayer', url: 'https://lddl01.ldmnq.com/get?id=1', version: '9.1.40' }, { home: f.home, fetch: unnamed.fetch }) as Record<string, any>;
+  assert.equal(named.fileName, 'ldplayer-named.exe');
 });
 
 test('MuMu downloads follow its official download API to the official file host only; other NetEase hosts are refused', async t => {
   const f = await fixture(t); const bytes = Buffer.from('synthetic MuMu installer');
   const api = 'https://mumu.nie.netease.com/api/dl/win';
-  const file = 'https://a11.gdl.netease.com/MuMu_9.0.1_synthetic_zh-Hans_1.exe?n=MuMu_9.0.1_synthetic.exe&key1=synthetic&key2=synthetic';
-  const net = network({ [api]: { status: 302, headers: { location: file } }, [file]: { body: bytes, headers: { 'content-length': String(bytes.length) } } });
-  const context = { home: f.home, fetch: net.fetch };
-  const plan = await planSetupDownload({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1' }, context) as Record<string, any>;
-  assert.deepEqual([plan.status, plan.fileName, plan.size, plan.officialPage], ['planned', 'MuMu_9.0.1_synthetic_zh-Hans_1.exe', bytes.length, 'https://mumu.163.com/']);
-  const done = await downloadSetupProgram({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1', planId: plan.planId, fingerprint: plan.fingerprint,
-    reference: 'Download the MuMu installer' }, context);
-  assert.equal(done.status, 'downloaded');
-  assert.deepEqual(net.binaryCalls().map(call => call.url), [api, file]);
-  const direct = await planSetupDownload({ program: 'emulator', vendor: 'mumu', url: file, version: '9.0.1' }, context) as Record<string, any>;
-  assert.equal(direct.status, 'planned', 'the address shown in the browser download list is accepted too');
+  const fileHost = 'https://a11.gdl.netease.com/MuMu_9.0.1_apinochannel_zh-Hans_1794.exe';
+  // Like the real servers: every API call issues a fresh `n=` and signature, and the file host answers every
+  // request with a different Content-Disposition name. Only the file path stays the same.
+  let issued = 0; const requests: { url: string; method: string }[] = [];
+  const fetch: Fetcher = async (url, init) => {
+    const method = init.method ?? 'GET'; requests.push({ url, method }); assert.equal(init.redirect, 'manual');
+    issued++;
+    if (url === api) return new Response(null, { status: 302, headers: { location: `${fileHost}?n=MuMu_9.0.1_${issued}rnd.exe&key1=k${issued}&key2=k${issued}` } });
+    if (url.split('?')[0] === fileHost) return new Response(method === 'HEAD' ? null : new Uint8Array(bytes),
+      { status: 200, headers: { 'content-length': String(bytes.length), 'content-disposition': `attachment; filename="MuMu_9.0.1_${issued}cd.exe"` } });
+    throw new TypeError('synthetic network: unlisted address');
+  };
+  const context = { home: f.home, fetch };
+  const fromBrowserList = `${fileHost}?n=MuMu_9.0.1_0rnd.exe&key1=k0&key2=k0`;
+  for (const start of [api, fromBrowserList]) {
+    const plan = await planSetupDownload({ program: 'emulator', vendor: 'mumu', url: start, version: '9.0.1' }, context) as Record<string, any>;
+    assert.deepEqual([plan.status, plan.fileName, plan.size, plan.officialPage], ['planned', 'MuMu_9.0.1_apinochannel_zh-Hans_1794.exe', bytes.length, 'https://mumu.163.com/']);
+    const done = await downloadSetupProgram({ program: 'emulator', vendor: 'mumu', url: start, version: '9.0.1', planId: plan.planId, fingerprint: plan.fingerprint,
+      reference: 'Download the MuMu installer' }, context);
+    assert.equal(done.status, 'downloaded', `one confirmation is enough when starting from ${start}`);
+    assert.equal(done.fileName, 'MuMu_9.0.1_apinochannel_zh-Hans_1794.exe');
+    assert.equal(await readFile(join(f.privateDirectory, 'downloads', done.fileName as string), 'utf8'), bytes.toString());
+  }
+  assert.equal(requests.filter(call => call.method === 'GET' && call.url.startsWith(fileHost)).length, 2);
   const elsewhere = network({ [api]: { status: 302, headers: { location: 'https://cdn.netease.com/MuMu_9.0.1.exe' } }, 'https://cdn.netease.com/MuMu_9.0.1.exe': { body: bytes } });
   await assert.rejects(planSetupDownload({ program: 'emulator', vendor: 'mumu', url: api, version: '9.0.1' }, { home: f.home, fetch: elsewhere.fetch }), { message: 'unofficial-source' });
   assert.equal(elsewhere.calls.some(call => call.url.includes('cdn.netease.com')), false);
