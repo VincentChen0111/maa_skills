@@ -378,6 +378,13 @@ export async function readPrivateFile(privateDirectory: string, target: unknown)
 /** Atomic replace inside the private directory; a path that leaves it, also through a link, is refused before writing. */
 export async function writePlanFile(privateDirectory: string, target: unknown, text: string): Promise<{ file: string; relative: string }> {
   const root = await realpath(resolve(privateDirectory)), file = planPath(root, target);
+  // Nothing is created until the nearest existing ancestor is known to lie inside the private directory.
+  for (let existing = dirname(file); ; existing = dirname(existing)) {
+    const real = await realpath(existing).catch(() => null);
+    if (real === null) continue;
+    if (real !== root && !inside(root, real)) throw new Error('plan-path-outside-private');
+    break;
+  }
   await mkdir(dirname(file), { recursive: true });
   const parent = await realpath(dirname(file));
   if (!inside(root, join(parent, basename(file)))) throw new Error('plan-path-outside-private');

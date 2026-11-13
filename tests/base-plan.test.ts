@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -165,6 +165,11 @@ test('the plan file path is confined to the private directory; a base file keeps
   for (const target of ['../outside.json', join(tmpdir(), 'outside.json'), 'base-plans/../../outside.json', 'base-plans/plan.txt']) {
     await assert.rejects(generateBasePlan({ ...planInput(), target }, { home, fetcher: planNetwork() }), /plan-path-outside-private|plan-path-invalid/, target);
   }
+  // A link inside the private directory that leads outside it is refused before anything is created there.
+  const outside = await mkdtemp(join(tmpdir(), 'maa-base-outside-')); t.after(() => rm(outside, { recursive: true, force: true }));
+  await symlink(outside, join(home, 'linked'), 'junction');
+  await assert.rejects(generateBasePlan({ ...planInput(), target: 'linked/new/plan.json' }, { home, fetcher: planNetwork() }), /plan-path-outside-private/);
+  assert.deepEqual(await readdir(outside), [], 'no directory or file appears outside the private directory');
   await mkdir(join(home, 'base-plans'), { recursive: true });
   const base = JSON.parse(baseText()) as Plan;
   Object.assign(base, { author: '合成作者', Plans: [], layout: [{ type: 'control', level: 1 }] });

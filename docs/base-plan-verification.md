@@ -81,7 +81,7 @@
 
 ## 写排班文件
 
-只写私有目录里的路径：路径解析后（包括经过链接）落在私有目录之外就拒绝（`plan-path-outside-private`），只接受 `.json`（`plan-path-invalid`）；先写同目录的临时文件再改名替换；默认文件名带内容哈希（`base-plans/plan-<前 16 位>.json`）。在已有排班文件上修改时（`base`，也必须在私有目录里），MAA 协议里的字段由本工具重写，其他字段（包括扩充协议的 `layout`、`operators`、`metadata`）原样保留，大小写写错的已知键去掉并列出。检查也只读私有目录里的排班文件。
+只写私有目录里的路径：路径解析后（包括经过链接）落在私有目录之外就拒绝（`plan-path-outside-private`），拒绝前不在私有目录外创建任何目录，只接受 `.json`（`plan-path-invalid`）；先写同目录的临时文件再改名替换；默认文件名带内容哈希（`base-plans/plan-<前 16 位>.json`）。在已有排班文件上修改时（`base`，也必须在私有目录里），MAA 协议里的字段由本工具重写，其他字段（包括扩充协议的 `layout`、`operators`、`metadata`）原样保留，大小写写错的已知键去掉并列出。检查也只读私有目录里的排班文件。
 
 ## 参考项目（只对照思路，没有复制代码或数据）
 
@@ -109,7 +109,7 @@
 
 - `npm ci --ignore-scripts`：通过。
 - `npm run typecheck`：通过。
-- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。再加「同名两个游戏 ID」一条：在旧实现上运行失败（没有按快照取持有的形态，ID 为空），改后 12/12 通过。
+- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。再加「同名两个游戏 ID」一条：在旧实现上运行失败（没有按快照取持有的形态，ID 为空），改后 12/12 通过。路径一条加了「私有目录里的链接指向外面」：旧实现先建目录再核对，外面留下一个空目录，测试失败；改成先核对最近的已有上级目录后通过，仍是 12/12。
 - `node --test tests/base-report.test.ts`：7/7 通过。
 - `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。
 - 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
