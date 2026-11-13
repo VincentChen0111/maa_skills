@@ -1,19 +1,18 @@
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
-import type { CheckResult } from './doctor.ts';
+import { blockingChecks, libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
+import { assessMaaVersion, readMaaVersion, readVerificationRecord, type MaaVersionReader } from './maa-version.ts';
 import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 import { DownloadError, downloadStatus, executeDownload, installDownload, planDownload, type DownloadContext } from './setup-download.ts';
 export { discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 
 export type SetupContext = { home?: string; maaDirectory?: string };
-/** Observes the installed MAA binary metadata without launching it. */
-export type MaaVersionReader = (maaDirectory: string) => Promise<string | null>;
+export { readMaaVersion, type MaaVersionReader } from './maa-version.ts';
 export function checkRuntime(platform = process.platform, nodeVersion = process.versions.node) {
   return { windows: platform === 'win32', node24: /^24\./.test(nodeVersion) };
 }
@@ -23,45 +22,20 @@ function object(value: unknown): Record<string, unknown> {
 }
 async function isFile(path: string) { try { return (await stat(path)).isFile(); } catch { return false; } }
 async function isDirectory(path: string) { try { return (await stat(path)).isDirectory(); } catch { return false; } }
-export const readMaaVersion: MaaVersionReader = async directory => {
-  if (process.platform !== 'win32' || !process.env.SystemRoot) return null;
-  const shell = join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const code = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Diagnostics.FileVersionInfo]::GetVersionInfo($env:MAA_SETUP_BINARY).ProductVersion";
-  return new Promise(resolveResult => execFile(shell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')],
-    { env: { ...process.env, MAA_SETUP_BINARY: join(directory, 'MAA.exe') }, windowsHide: true, timeout: 5000, maxBuffer: 4096 },
-    (error, stdout) => { const version = stdout.trim(); resolveResult(!error && /^v?\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(version) ? version.replace(/^v/, '') : null); }));
-};
 
-/** Read-only: does not create settings, directories, or a diagnostic record. */
-export async function checkSetup(context: SetupContext = {}, versionReader: MaaVersionReader = readMaaVersion) {
+/**
+ * The installation check group shared by setup and doctor: Windows, MAA GUI and configuration, CN client,
+ * Node 24, settings, private directory and MAA version. Read-only: it creates no settings, directory or record.
+ */
+export async function inspectInstallation(context: SetupContext = {}, versionReader: MaaVersionReader = readMaaVersion) {
   const home = resolve(context.home ?? settingsHome()); const runtime = checkRuntime();
   let settings;
   try { settings = await readSettings(home); } catch { /* Preserve unreadable settings; independent checks still run. */ }
   const directory = context.maaDirectory ?? settings?.maaDirectory ?? null;
   if (directory !== null && (typeof directory !== 'string' || !isAbsolute(directory))) throw new Error('maa-directory-invalid');
   const settingsPresent = await isFile(join(home, 'config.json'));
-  const checks: (CheckResult & { message: string })[] = [];
-  const messages: Record<string, string> = {
-    windows: 'The host is Windows.', 'windows-required': 'This workflow requires Windows.',
-    'maa-gui-missing': 'The selected MAA GUI executable is missing.', 'maa-configuration-unreadable': 'The current MAA GUI configuration could not be read.', 'maa-gui-present': 'The MAA GUI executable and current configuration are present.',
-    'cn-client': 'The current MAA profile selects a CN client.', 'client-unverified': 'The current client has not been verified.', 'unsupported-client': 'The current client is outside the CN scope.',
-    'node-24': 'Node 24 is running.', 'node-24-required': 'This workflow requires Node 24.',
-    'settings-readable': 'Existing settings were read.', 'settings-missing': 'Initial settings have not been saved.',
-    'settings-unreadable': 'Existing settings could not be read or validated; their original contents were preserved.',
-    'private-directory-unverified': 'The private directory cannot be determined until settings are repaired.',
-    'private-directory-present': 'The selected private directory exists.', 'private-directory-missing': 'The selected private directory is absent or not a directory.',
-    'verification-record-unavailable': 'The packaged verification record could not be read.', 'maa-version-unknown': 'The installed MAA version could not be identified.',
-    'maa-version-not-fully-verified': 'This MAA version is not fully verified by this repository; setup may continue.', 'maa-version-verified': 'This MAA version has source and device verification records.',
-  };
-  const repairs: Record<string, string> = {
-    'use-windows-gui': 'Use an existing Windows MAA GUI installation.', 'official-maa-installation': 'Choose an existing MAA GUI directory, or review the official download plan from setup plan; nothing is downloaded until you confirm that plan.',
-    'inspect-maa-configuration': 'Inspect or initialize the current configuration in the MAA GUI.', 'select-cn-client-in-maa': 'Check the selected client in the MAA GUI; use a CN profile.',
-    'official-node-24-installation': 'Install Node 24.x from the official Node download page; setup plan can show the official installer, downloaded only after you confirm that plan.', 'set-preferences': 'Save the first-run choices using the shared preferences script.',
-    'inspect-settings': 'Preserve config.json in the selected settings home, then restore a known-good copy or repair its JSON, schema and access permissions; rerun check before saving preferences or creating directories.',
-    'prepare-private-directory': 'Run setup prepare after saving the selected private directory.', 'read-version-verification': 'Read the packaged version record and retain the unverified warning; no upgrade is required.',
-  };
-  const add = (id: string, status: CheckResult['status'], reason: string, repair: string, executor: 'skill' | 'user' = 'user') =>
-    checks.push({ id, status, reason, message: messages[reason]!, repair: { id: repair, executor, description: repairs[repair]! } });
+  const checks: LibraryCheck[] = [];
+  const add = (id: string, status: CheckResult['status'], reason: string, repair: string) => checks.push(libraryCheck(id, status, reason, repair));
   add('platform', runtime.windows ? 'normal' : 'error', runtime.windows ? 'windows' : 'windows-required', 'use-windows-gui');
   const executable = directory !== null && await isFile(join(directory, 'MAA.exe'));
   let current;
@@ -72,25 +46,26 @@ export async function checkSetup(context: SetupContext = {}, versionReader: MaaV
   const supported = client === 'Official' || client === 'Bilibili';
   add('server', supported ? 'normal' : 'error', supported ? 'cn-client' : client === null || client === undefined ? 'client-unverified' : 'unsupported-client', 'select-cn-client-in-maa');
   add('node', runtime.node24 ? 'normal' : 'error', runtime.node24 ? 'node-24' : 'node-24-required', 'official-node-24-installation');
-  add('settings', settings && settingsPresent ? 'normal' : 'error', !settings ? 'settings-unreadable' : settingsPresent ? 'settings-readable' : 'settings-missing', settings ? 'set-preferences' : 'inspect-settings', settings ? 'skill' : 'user');
+  add('settings', settings && settingsPresent ? 'normal' : 'error', !settings ? 'settings-unreadable' : settingsPresent ? 'settings-readable' : 'settings-missing', settings ? 'set-preferences' : 'inspect-settings');
   const privatePresent = settings && await isDirectory(settings.privateDirectory);
-  add('private-directory', privatePresent ? 'normal' : 'error', !settings ? 'private-directory-unverified' : privatePresent ? 'private-directory-present' : 'private-directory-missing', settings ? 'prepare-private-directory' : 'inspect-settings', settings ? 'skill' : 'user');
-  let version: string | null = null;
-  if (directory && executable) try { version = await versionReader(directory); } catch { /* Unknown versions only warn. */ }
-  if (version !== null && !/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(version)) version = null;
-  let sourceVerified = false; let deviceVerified = false; let recordAvailable = false;
-  try {
-    const record = object(JSON.parse(await readFile(new URL('../references/verified-versions.json', import.meta.url), 'utf8')));
-    if (record.schemaVersion !== 1 || !Array.isArray(record.sourceVerified) || !Array.isArray(record.deviceVerified)
-      || [...record.sourceVerified, ...record.deviceVerified].some(value => typeof value !== 'string')) throw new Error('versions-invalid');
-    recordAvailable = true; sourceVerified = version !== null && record.sourceVerified.includes(version); deviceVerified = version !== null && record.deviceVerified.includes(version);
-  } catch { /* Missing records cannot certify a version. */ }
-  add('version', sourceVerified && deviceVerified ? 'normal' : 'warning', !recordAvailable ? 'verification-record-unavailable' : !version ? 'maa-version-unknown' : sourceVerified && deviceVerified ? 'maa-version-verified' : 'maa-version-not-fully-verified', 'read-version-verification');
+  add('private-directory', privatePresent ? 'normal' : 'error', !settings ? 'private-directory-unverified' : privatePresent ? 'private-directory-present' : 'private-directory-missing', settings ? 'prepare-private-directory' : 'inspect-settings');
+  let installed: string | null = null;
+  if (directory && executable) try { installed = await versionReader(directory); } catch { /* Unknown versions only warn. */ }
+  const version = assessMaaVersion(installed, await readVerificationRecord());
+  add('version', version.status, version.reason, 'read-version-verification');
+  return { checks, settings: settings ?? null, settingsPresent, version: version.evidence };
+}
+
+/** Read-only: does not create settings, directories, or a diagnostic record. */
+export async function checkSetup(context: SetupContext = {}, versionReader: MaaVersionReader = readMaaVersion) {
+  const installation = await inspectInstallation(context, versionReader);
+  const { settings } = installation;
+  const checks: (CheckResult & { message: string })[] = [...installation.checks];
   // Shared with doctor: presence and known state only, never a value; an unknown private directory is not guessed.
   checks.push(...(await inspectCredentials(settings ? settings.privateDirectory : null)).checks);
-  return { checkedAt: new Date().toISOString(), exitCode: checks.some(item => item.status === 'error') ? 1 : 0, checks,
+  return { checkedAt: new Date().toISOString(), exitCode: blockingChecks(checks, 'setup-exit').blocking.length ? 1 : 0, checks,
     language: settings?.language ?? null, needsLanguagePrompt: !!settings && !settings.languageAsked && settings.language === null,
-    needsDirectoryPrompt: !!settings && !settingsPresent, version: { installed: version, recordAvailable, sourceVerified, deviceVerified } };
+    needsDirectoryPrompt: !!settings && !installation.settingsPresent, version: installation.version };
 }
 
 /** Creates only the private directory and its redacted setup record, preserving all existing content. */

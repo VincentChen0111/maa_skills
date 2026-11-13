@@ -7,10 +7,16 @@ import { readSettings, settingsHome, startup } from './preferences.ts';
 // at cdeaa8fac12bdc1db5b4ea5c33fca358dc6cf43b. Copyright (c) 2026 nhyo.
 // Installed MIT license: ../LICENSE. Source details: THIRD_PARTY_NOTICES.md in the repository.
 export type Coverage = { status: 'complete' | 'partial' | 'pending' | 'missing' | 'invalid' | 'unavailable'; issues: string[] };
+/** `mastery` is keyed by skill slot ("1"-"3"), `modules` by module ID; null means unknown. MAA recognition leaves all three null. */
 export type Operator = { id: string; name: string; rarity: number | null; elite: number | null; level: number | null; potential: number | null;
-  skillLevel: null; mastery: null; modules: null };
-export type AccountSnapshot = { version: 1; source: 'maa'; readAt: string; operators: Operator[]; items: Record<string, number>; lmd: number | null; base: null;
-  sourceTimes: { operators: string | null; inventory: string | null }; coverage: { operators: Coverage; inventory: Coverage; base: Coverage } };
+  skillLevel: number | null; mastery: Record<string, number | null> | null; modules: Record<string, number | null> | null };
+/** Raw mood (0-8,640,000) as of `moodAt`; Skland reports it, MAA recognition does not provide a base layout. */
+export type BaseOperator = { id: string; role?: 'trainee' | 'trainer'; moodRaw: number | null; moodAt: string | null };
+export type BaseRoom = { type: 'control' | 'power' | 'manufacture' | 'trading' | 'dormitory' | 'meeting' | 'hire' | 'training'; slotId: string; level: number | null; operators: BaseOperator[] };
+export type AccountSnapshot = { version: 1; source: 'maa' | 'skland'; readAt: string; operators: Operator[]; items: Record<string, number>; lmd: number | null;
+  base: { rooms: BaseRoom[] } | null; sourceTimes: { operators: string | null; inventory: string | null };
+  coverage: { operators: Coverage; inventory: Coverage; base: Coverage; medicine?: Coverage; vouchers?: Coverage; stageClears?: Coverage } };
+export const snapshotFiles = { maa: 'account-snapshot.json', skland: 'account-snapshot-skland.json' } as const;
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object-required');
   return value as Record<string, unknown>;
@@ -136,17 +142,25 @@ export async function inspectMaaSnapshot(value: unknown, home = settingsHome()):
 }
 export async function importMaaSnapshot(value: unknown, home = settingsHome()): Promise<AccountSnapshot> {
   const { privateDirectory } = await readSettings(home);
+  return saveAccountSnapshot(privateDirectory, snapshotFiles.maa, () => inspectMaaSnapshot(value, home));
+}
+/**
+ * The one writer for account snapshots of every source: a shared exclusive lock (never taken over
+ * automatically; EEXIST means busy), a private temporary file and an atomic rename into the private directory.
+ */
+export async function saveAccountSnapshot(privateDirectory: string, fileName: (typeof snapshotFiles)[keyof typeof snapshotFiles],
+  produce: () => Promise<AccountSnapshot>): Promise<AccountSnapshot> {
   await mkdir(privateDirectory, { recursive: true });
   const lockFile = join(privateDirectory, '.account-snapshot.lock');
   const lock = await open(lockFile, 'wx', 0o600);
   const temporary = join(privateDirectory, `.account-snapshot-${randomUUID()}.tmp`);
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-    const snapshot = await inspectMaaSnapshot(value, home);
+    const snapshot = await produce();
     const file = await open(temporary, 'wx', 0o600);
     try { await file.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`); await file.sync(); }
     finally { await file.close(); }
-    await rename(temporary, join(privateDirectory, 'account-snapshot.json'));
+    await rename(temporary, join(privateDirectory, fileName));
     return snapshot;
   } finally {
     try { await unlink(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }

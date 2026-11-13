@@ -9,7 +9,8 @@ test('installed CLIs track a prepared batch from the user start signal to a per-
     whileRunning: { execution: 'tracking', next: 'keep-observing', stages: [['SYN-1', 'not-evaluated'], ['SYN-2', 'not-evaluated']] },
     final: { execution: 'failed', next: 'report', stages: [['SYN-1', 'success', 'unknown'], ['SYN-2', 'not-three-star', 'unknown']],
       reported: ['gui-marker', 'stage-result', 'chain-end'], medicine: { count: 0, approved: 0, unapproved: false, enabledAtStart: false, final: true },
-      allowedDecisions: ['switch-alternate', 'stop-and-tell-user'] },
+      /** SYN-2 was approved without alternates: they are exhausted, so the run stops and reports (ticket 17). */
+      allowedDecisions: ['stop-and-tell-user'] },
     processActions: ['reopen'], trackingProcessActions: [], actualGameRun: false,
   });
 });

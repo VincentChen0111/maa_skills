@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 const workspace = dirname(fileURLToPath(import.meta.url));
 let file;
 try { file = relative(workspace, realpathSync(process.argv[1])).replaceAll('\\', '/'); } catch {}
-if (/^\.(agents|claude)\/skills\/maa-core\/scripts\/(operator-cost|cultivation-gaps)\.ts$/.test(file ?? '') && process.argv[2] === 'query') {
+// Exactly these product entries and actions; the cultivation report draft loads the same pinned tables (ticket 20).
+const entries = { 'operator-cost': 'query', 'cultivation-gaps': 'query', 'cultivation-report': 'draft' };
+const entry = /^\.(agents|claude)\/skills\/maa-core\/scripts\/(operator-cost|cultivation-gaps|cultivation-report)\.ts$/.exec(file ?? '');
+if (entry && process.argv[2] === entries[entry[2]]) {
   const responses = JSON.parse(readFileSync(join(workspace, '.eval-network-responses.json'), 'utf8'));
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);

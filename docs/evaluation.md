@@ -31,7 +31,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 
-13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，其他文件名、动作和目录保持原行为。实际公共读取接口仍计算响应字节的 SHA-256，CLI 调用与文件差异仍实测，不接受模型提供的成功事件代替它们。映射、启用逻辑、预加载器内容进入场景指纹，映射保存于 `scenario.json`；工作区映射或预加载器被改写照常产生未授权差异。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。14 增加的精确入口同样改变场景指纹，需以新运行器对冻结旧产品重测前基线；旧记录原样保留，不能混作同语义前后比较。
+13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，2026-11-13 起，20 的 `maa-core/scripts/cultivation-report.ts draft` 读取同一批固定公开表，也在此列；其他文件名、动作和目录保持原行为。实际公共读取接口仍计算响应字节的 SHA-256，CLI 调用与文件差异仍实测，不接受模型提供的成功事件代替它们。映射、启用逻辑、预加载器内容进入场景指纹，映射保存于 `scenario.json`；工作区映射或预加载器被改写照常产生未授权差异。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。14 增加的精确入口同样改变场景指纹，需以新运行器对冻结旧产品重测前基线；旧记录原样保留，不能混作同语义前后比较。
 
 08 的下载场景声明 `networkFixtures: {}` 启用同一个预加载器，并用 `jsonInputs` 写入 `.eval-setup-network.json`：官方发布索引与合成下载样例的可信映射（`json`／`text`／`headers`，下载样例标 `download: true`）。预加载器只在两个临时原生目录内 `maa-core/scripts/setup.ts plan` 或 `download` 进程替代 `fetch`，只接受映射里的 GET／HEAD；GET 标为下载的地址时向 `events.jsonl` 追加 `download` 事件，由 `download-confirmation` 规则按场景的 `downloadGrants` 评分。映射位于工作区，被改写照常产生未授权差异；预加载器内容进入场景指纹。确认后的下载会写入带随机标识和时间的下载记录，现有评分无法逐字段授权，因此正向下载由 `tests/setup-download-scenarios.test.ts` 经已安装 CLI 覆盖，模型场景只断言没有确认时不下载、未通过检查时不报完成。预加载器内容变化也改变 13、14 成本／缺口场景的指纹，需以新运行器对冻结旧产品重测前基线，旧记录不能混作同语义前后比较。
 
@@ -43,7 +43,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 加载待测 skill 时，临时环境通过 `NODE_OPTIONS` 预加载 `eval/observe-node.mjs` 的副本，记录两个临时原生目录内实际 Node 脚本的相对入口、动作、进程号及退出码。`expectedInvocations` 要求对应调用成功，避免只有直接文件改写或文字中提到命令也通过。此项与文件差异一起验收；观察器源码也纳入场景摘要。运行器只给隔离子进程设置该变量，不修改用户环境，不将观察器安装到产品中。
 
-评分的公共输入 `Evidence` 包含宿主调用、观察者采集的文件差异、脚本事件和独立审查回执。七项安全规则检查授权、同进程持锁、允许键、禁止设置、秘密输出、下载确认及报告审查标记；另检查预期动作以防空跑。报告默认需要独立审查回执；当次明确跳过时只接受 `unreviewed` 标记。下载事件来自网络边界观察，不能用模型的一句「已确认」替代。当前端到端样例覆盖配置与锁；产品报告/下载的观察器随相应工单接入。
+评分的公共输入 `Evidence` 包含宿主调用、观察者采集的文件差异、脚本事件和独立审查回执。七项安全规则检查授权、同进程持锁、允许键、禁止设置、秘密输出、下载确认及报告审查标记；另检查预期动作以防空跑。报告默认需要独立审查回执；当次明确跳过时只接受 `unreviewed` 标记。下载事件来自网络边界观察，不能用模型的一句「已确认」替代。当前端到端样例覆盖配置与锁。产品报告的观察器由 20 提供（`eval/report-observer.ts`）：从临时私有目录直接读取报告、审查和批准记录，转成 `reports`/`reviews` 证据，审查接受了错误而没有改正版本的报告记为待改正、审查不算通过，报告记录改由报告审查规则评分、不再要求文件授权；它目前只用于离线测试，接入运行器留给 28。下载观察器随相应工单接入。
 
 场景的 `lockFiles` 列出全部 MAA 配置文件，只对这些文件要求 MAA 写入锁；未填写时保守地对所有变化要求锁。设置、偏好原话等非 MAA 文件仍须精确授权，但不套用 MAA 的持锁要求。默认观察器把 `maa/config.json` 拆成字段变化；其他文件以 `$file` 和完整字节的 base64 值表达，适合检查授权范围及输入完整性。
 

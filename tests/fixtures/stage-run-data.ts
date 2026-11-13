@@ -6,6 +6,7 @@ import { inspectConfiguration, type MaaProcess, type MaaState } from '../../skil
 import { approvedJobFile } from '../../skills/maa-core/scripts/stage-job-plan.ts';
 import { applyCoreLines, applyGap, applyGuiLines, emptyRunState, fileKey, type RunList, type Verification } from '../../skills/maa-core/scripts/stage-run-state.ts';
 import type { StageRunRecord } from '../../skills/maa-core/scripts/stage-run.ts';
+import type { CheckBoundaries } from '../../skills/maa-core/scripts/doctor.ts';
 import { stageSnapshot, stageTables, stageJob } from './stage-data.ts';
 
 /** Synthetic MaaCore / GUI log lines in the fixed v6.21.4 shapes. No real device, account or path is used. */
@@ -70,30 +71,46 @@ export const runTables = { stages: { ...stageTables.stages,
 export const runRequest = { stages: [{ stageId: 'synthetic_01', code: 'SYN-1', difficulty: 'normal' as const, loops: 2 }, { stageId: 'synthetic_02', code: 'SYN-2', difficulty: 'normal' as const, loops: 1 }],
   completions: { synthetic_00: 'PASS' as const }, completionEvidence: '合成用户本次确认前置通过', maaVersion: 'v6.21.4' };
 export const runJobs = () => [stageJob(1), stageJob(2), { ...stageJob(4), content: { ...stageJob(4).content, stage_name: 'synthetic_02' } }];
-export type PreparedBatch = { root: string; maaDirectory: string; privateDirectory: string; operation: string; reportHash: string; files: string[];
-  state: MaaState; maa: MaaProcess; core(lines: string[]): Promise<void>; gui(lines: string[]): Promise<void>; dispose(): Promise<void> };
-export async function preparedBatch(): Promise<PreparedBatch> {
+/** `adb devices` output listing the synthetic address in the given state. */
+export const adbListing = (state: 'device' | 'offline') => ({ run: async () => ({ exitCode: 0, stdout: `List of devices attached
+${syntheticAdb.address}	${state}
+` }) });
+/**
+ * `home` is the settings home (its config.json names the MAA and private directories). The MAA directory is a healthy
+ * CN installation: MAA.exe, a CN client and a configured adb that lists the device online. `boundaries` replaces only
+ * the system boundaries the shared checks touch: MAA.exe metadata and adb.
+ */
+export type PreparedBatch = { root: string; home: string; maaDirectory: string; privateDirectory: string; operation: string; reportHash: string; files: string[];
+  state: MaaState; maa: MaaProcess; boundaries: CheckBoundaries; core(lines: string[]): Promise<void>; gui(lines: string[]): Promise<void>; dispose(): Promise<void> };
+/** `syn1Loops` changes how many times SYN-1 is approved (default 2, as above); the list is SYN-1 that many times, then SYN-2. */
+export async function preparedBatch(syn1Loops = 2): Promise<PreparedBatch> {
   const root = await mkdtemp(join(tmpdir(), 'maa-stage-run-'));
   try {
     const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
     await mkdir(join(maaDirectory, 'config'), { recursive: true }); await mkdir(join(maaDirectory, 'debug'), { recursive: true });
-    await writeFile(join(maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { TaskQueue: [], Copilot: { TaskList: [], EnableUserAdditional: true } } }, Timers: { List: [] } }));
+    await writeFile(join(root, 'config.json'), JSON.stringify({ language: 'zh-CN', languageAsked: true, privateDirectory, maaDirectory, server: 'CN' }));
+    await writeFile(join(maaDirectory, 'MAA.exe'), 'synthetic, not an executable');
+    await writeFile(join(maaDirectory, syntheticAdb.adb), 'synthetic, not an executable');
+    const settings = { RuntimeSettings: { ClientType: 'Official' }, ConnectSettings: { AdbPath: syntheticAdb.adb, Address: syntheticAdb.address } };
+    await writeFile(join(maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { TaskQueue: [], Copilot: { TaskList: [], EnableUserAdditional: true }, Gui: settings } }, Timers: { List: [] } }));
     /** Older than the preparation whenever the tests run: the logs reach back before it, and these lines are never the batch's. */
     const older = -30 * 86400;
     await writeFile(join(maaDirectory, 'debug/asst.log'), `${core(older, 'TaskChainError', { taskchain: 'Copilot', taskid: 9 })}\n`);
     await writeFile(join(maaDirectory, 'debug/gui.log'), `${gui(older, '任务出错: 自动战斗', 'ERR')}\n`);
-    const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, runRequest, runJobs());
+    const request = { ...runRequest, stages: runRequest.stages.map(stage => stage.stageId === 'synthetic_01' ? { ...stage, loops: syn1Loops } : stage) };
+    const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, request, runJobs());
     const state: MaaState = { running: false, treeExited: true, idle: true, ready: false };
     const maa: MaaProcess = { inspect: async () => ({ ...state }), close: async () => { Object.assign(state, { running: false, treeExited: true, ready: false }); },
       start: async () => { Object.assign(state, { running: true, treeExited: false, ready: true }); } };
     const approval = { reportHash: report.hash, reference: '合成用户批准 SYN-1 两次、SYN-2 一次，备选各一份', map: 'synthetic_map',
-      selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: 2 }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }] };
+      selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: syn1Loops }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }] };
     const result = await prepareStageJobs({ report, approval, snapshot, maaDirectory, privateDirectory, profile: 0, host: 'codex', closedConfirmed: true,
       expectedRevision: (await inspectConfiguration(maaDirectory)).revision }, maa);
     if (result.status !== 'complete') throw new Error('fixture-prepare-failed');
-    const files = [1, 1, 4].map(id => approvedJobFile(privateDirectory, report.hash, id));
+    const files = [...Array<number>(syn1Loops).fill(1), 4].map(id => approvedJobFile(privateDirectory, report.hash, id));
     const append = (file: string) => async (lines: string[]) => { await appendFile(join(maaDirectory, 'debug', file), lines.map(line => line + '\n').join('')); };
-    return { root, maaDirectory, privateDirectory, operation: result.operation, reportHash: report.hash, files, state, maa,
+    return { root, home: root, maaDirectory, privateDirectory, operation: result.operation, reportHash: report.hash, files, state, maa,
+      boundaries: { versionReader: async () => '6.21.4', adb: adbListing('device') },
       core: append('asst.log'), gui: append('gui.log'), dispose: () => rm(root, { recursive: true, force: true }) };
   } catch (error) { await rm(root, { recursive: true, force: true }); throw error; }
 }
@@ -101,7 +118,7 @@ export async function preparedBatch(): Promise<PreparedBatch> {
 /** A finished run record built with the same pure classifier, for read-only behaviour scenarios (no logs needed). */
 export type SyntheticRunKind = 'not-three-star' | 'disconnect' | 'evidence-gap' | 'unapproved-medicine' | 'native-takeover' | 'ask-progress';
 /** A verification after the disconnect that found MAA running, the prepared list unchanged and every check passing. */
-const clearVerification: Verification = { at: '2026-11-13T02:12:00.000Z', process: { running: true, idle: true }, preparedList: 'matches', checks: [],
+const clearVerification: Verification = { at: '2026-11-13T02:12:00.000Z', process: { running: true, idle: true }, preparedList: 'matches', checks: [], blocking: [], notBlocking: [],
   unknown: ['sanity', 'medicine-inventory', 'originium', 'stage-progress'], accountSnapshotReadAt: null, clear: true };
 export function syntheticRunRecord(kind: SyntheticRunKind, runId: string): StageRunRecord {
   const files = ['jobs/synthetic-1.json', 'jobs/synthetic-1.json', 'jobs/synthetic-4.json'];
