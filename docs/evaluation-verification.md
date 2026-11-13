@@ -84,6 +84,17 @@
 | P2 场景摘要含产品脚本，只改产品的发布永远无法比较 | `scenarioHashSources` 去掉 `skills/maa-core/scripts/preferences.ts`；运行器指纹仍列出它。导入闭包测试改为：运行器模块必须在场景摘要里，`skills/` 下的模块必须不在，并且装入 skill 后出现在计入 skill 版本的文件里 | 新测试把 `scripts`、`eval`、`skills`、`tests/fixtures` 复制到临时目录，只给副本的 `preferences.ts` 加一行注释，两边各跑同一场景。修复前：场景摘要不同（测试报 `a product script is not part of the scenario`），闭包测试报 `preferences.ts stays out of the scenario hash`；修复后：摘要相同、skill 版本不同、`compareRuns` 为 `pass` |
 | P3 路径后紧跟中文、句号等字符时整个路径落盘（与第一轮 P2 同类，按复发规则处理） | 新模块 `scripts/eval-redact.ts` 是唯一的所有者：私有路径的清单和匹配规则都在这里，每份产物都经 `artifactWriter` 写出（`runScenario` 六个文件、读保护检查两个文件、批次清单；续跑按脱敏后的指纹比较）。去掉末尾边界；分隔符串改成按首字符唯一切分的记号，保证匹配是线性的；另认 JSON `\u` 转义、百分号编码、`\\?\` 前缀、大小写混合、realpath，以及任何评测临时目录的生成名（版本探测和读保护检查的临时目录也不会落盘）。原来 `eval-host.ts` 里的 `pathRedactor` 删掉 | `tests/eval-redact.test.ts` 三项：各种写法和相邻字符的单元用例；一致性用例让替身在版本、回复和标准错误里说出登录目录、home、仓库、自己的工作区和临时目录、哨兵，两个宿主各跑一批，逐一列出全部九份产物，每份都不得含唯一标记、并且都含 `<login-dir>`（证明路径确实到了这份产物、又被替换掉）；源码检查三个产出模块只经 `artifactWriter` 写产物（除哨兵和锁）。修复前（把新测试和新替身放进上一提交的导出副本里跑）：三项都失败，一致性用例报 `claude manifest.json names loginmarker…`；修复后三项通过，耗时约 1.3 秒 |
 
+## 第三轮审查后修复（未经审查）
+
+第三轮是最后一轮审查。协调者接受了两项 P2，本节的修复没有经过审查，除非维护者批准第四轮。两项属于同一类问题（一次正当的前后比较被判为 `incomparable`，必经的评测门永远过不去）；加上第二轮那一项，这是第三次出现，所以按复发规则处理：可比性只设一个所有者（`scripts/evaluation.ts`），再加一个一致性测试，列出所有产出方和使用方。
+
+| 项 | 修法 | 先红后绿的证据 |
+| --- | --- | --- |
+| P2-1 只挪动产品固定的数据提交，6 个成本和缺口场景的场景摘要就变了 | `scenarioIdentity` 统一计算场景摘要：网络夹具地址去掉固定提交并按来源排序，产品文件和产品派生的值不进。另修一处同类问题：原来摘要里用的是渲染后的策略，带着本次工作区的随机路径，`setup-connection-write` 每次运行都成了新场景；现在改用未渲染的场景定义 | `tests/eval-comparability.test.ts` 的第一项：遍历全部场景定义，在只挪动了两个固定提交、又改了一个产品脚本的副本里，每个场景的身份都不变；`eval/` 引用的产品模块逐一列出，新增引用会让测试失败；分别改一个场景的提示词、评分策略、网络夹具内容、评测夹具内容，只有这一个场景的身份变化。第二项：经 `runScenario` 实际运行 `core-language`、`account-cost-raw`、`setup-connection-write`，重复运行和在产品副本里运行都得到相同的场景摘要，skill 版本则不同。修复前（`.tmp/logs/r3-red.log`）：第一项因没有 `scenarioIdentity` 而失败；第二项报 `account-cost-raw: a product-only release is another scenario`、`setup-connection-write: a repeated run is another scenario`、`setup-connection-write: a product-only release is another scenario` |
+| P2-2 多组批次每边有多个 skill 版本，总被判为 `incomparable`，首次基线也一样 | `compareRuns` 改为逐场景判定再汇总（无法比较 > 未验证 > 需要重跑 > 回归 > 不稳定 > 通过）；skill 版本只要求同一场景的之后那次运行和它的重跑一致；基线分支不再受多版本影响。「一批是同一个候选」由续跑拒绝不同载荷来保证 | 第三项用合成记录覆盖全部使用方：三个不同组的场景，相同的两批，`compareRuns` 为 `pass`，首次运行为 `baseline`，`compareBatches` 总体和逐场景都是 `pass`，`compare` 退出码为 0；只改产品时为 `pass`；只改一个场景时，只有这个场景是 `incomparable`，总体也是 `incomparable`，退出码为 1；重跑批次是 `unstable`，换了 skill 版本的重跑是 `incomparable`。第四项：载荷相同可以续跑，改了 skill 文件的续跑报 `fingerprint-mismatch`。修复前第三项报 `actual: 'incomparable', expected: 'pass'`。`tests/evaluation.test.ts` 里原来的「每边一个候选版本」断言改为新规则：多组的首次运行为 `baseline`，前后比较为 `pass`，重跑换了 skill 版本为 `incomparable`，一个场景变了则整体为 `incomparable` |
+
+更正：每边一个 skill 版本的检查来自最初的评测框架（`ecc7325`），不是在本工单的 `d19e891` 里引入的；`d19e891` 加入了多组批次和整批比较，问题从那时起才会出现。
+
 ## 本次运行的命令
 
 在提交 `9efdf75` 上（Windows，Node 24）：
@@ -117,5 +128,19 @@
 | `node --test tests/eval-run.test.ts` | 3 项通过 |
 | 隐私、元数据检查（只调用检查函数） | 无错误 |
 | 完整离线入口 | 本轮没有跑，由协调者跑 |
+
+第三轮审查后修复（提交 `f3ba4ce`，Windows，Node 24；未经审查），按负载规则一次一个：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test tests/eval-comparability.test.ts`（修复前） | 4 项中 3 项失败，输出在 `.tmp/logs/r3-red.log` |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-comparability.test.ts` | 4 项通过，约 3.3 秒 |
+| `node --test tests/evaluation.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-network.test.ts` | 3 项通过 |
+| `node --test tests/eval-run.test.ts` | 3 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| 完整离线入口 | 没有跑，由协调者跑 |
 
 CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。
