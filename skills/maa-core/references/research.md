@@ -31,7 +31,7 @@
 
 - `keyword`：1–50 个字符，不能含控制字符；连续空白合并为一个空格。
 - `forum`：`arknights`（默认，只搜明日方舟版块）或 `all`（全站）。
-- `pages`：1–3，默认 1。检索结果只有标题，引用观点前要先读帖。
+- `pages`：读前几页，正整数，默认 1。没有页数上限；每一页都是一次请求，按下面的间隔依次发出。检索结果只有标题，引用观点前要先读帖。
 
 `node <maa-core>/scripts/nga.ts read`，标准输入：
 
@@ -40,10 +40,12 @@
 ```
 
 - `thread`：帖子号，或 `bbs.nga.cn`、`ngabbs.com`、`nga.178.com`、`bbs.ngacn.cc` 的 `read.php?tid=` 链接；只取 `tid`，链接里的其他参数不用，请求总是发到 `https://bbs.nga.cn`。
-- `pages`：要读的页码，1–5 个，不重复，每个 1–1000；默认 `[1]`。每页约 20 楼，结果里 `meta.totalPages` 是按楼层数推算的总页数（未知为 `null`）。
+- `pages`：要读的页码列表，每个是正整数、不重复；默认 `[1]`。没有个数或页码上限，长帖的后面几页也可以读；每页一次请求，按下面的间隔依次发出，所以页数多时要等得久。每页约 20 楼，结果里 `meta.totalPages` 是按楼层数推算的总页数（未知为 `null`）。
+- `thread` 的帖子号和页码只校验为正整数。
 
 两个命令共有：
 
+- 标准输入的 JSON 最多 64 KiB。
 - `fresh: true`：即使缓存未过期也重新请求（仍受限速和风控停止约束）；`cacheOnly: true`：只用缓存，一个请求也不发。两者不能同时为真。
 - `format`：`json`（默认，输出 `{ "ok": true, "result": … }`）或 `markdown`（按设置语言输出中文或英文的引用摘要，其他语言由 agent 翻译）。
 - 退出码：0 表示 `status` 为 `ok`；1 表示其他状态（结果照常输出）或请求不合法（`{ "ok": false, "error": "request-invalid" }`）；2 表示意外失败（`research-failed`）。错误只有固定代码，不带响应原文或请求头。
@@ -58,7 +60,7 @@
 { "post": "https://www.skland.com/article?id=1234567", "fresh": false, "cacheOnly": false, "format": "markdown" }
 ```
 
-- `post`：帖子号，或 `www.skland.com`、`skland.com` 的 `/article?id=` 链接；只取 `id`，请求总是发到 `https://zonai.skland.com/web/v2/item?id=<帖子号>`。每次运行只读这一帖，一个请求。
+- `post`：帖子号，或 `www.skland.com`、`skland.com` 的 `/article?id=` 链接；只取 `id`，请求总是发到 `https://zonai.skland.com/web/v2/item?id=<帖子号>`。读这一帖就是这一个请求。
 - 没有检索：森空岛的检索和帖子接口要求官方客户端的请求签名（见仓库里的 `docs/community-sources.md`），本工具不伪装官方客户端。用户给出帖子链接后再读。
 - 请求只带如实的 User-Agent 和 Accept，不带 Cookie、账号 token、`cred`、`sign`、`platform`、`timestamp` 或设备标识。森空岛要求签名时（HTTP 401，或代码 10000、10002、10003）记为 `risk-control`，`pages[].reason` 为 `signature-required`，结果局限带 `client-signature-required`，来源暂停 30 分钟；不重试，也不改用账号凭据。2026-11-13 核对时，匿名请求就得到这个回答，所以目前多半读不到内容，结果会如实这样说。
 - 结果条目：`kind` 为 `post`，`url` 为 `https://www.skland.com/article?id=<帖子号>`，作者是昵称（不存作者账号 ID），时间取发布时间 `publishedAtTs`，没有就写未知；正文按文字片段顺序拼接，局限代码 `text-order-approximate`；`meta.post` 为帖子号。
@@ -77,7 +79,7 @@ B 站支持是实验性的：接口随时可能变化或拒绝，结果、帮助
 - `video`（实验性入口）：`BV` 号、`av` 号，或 `www.bilibili.com`、`bilibili.com`、`m.bilibili.com` 的 `/video/<号>` 链接；只取视频号和 `p` 分 P 号。`b23.tv` 短链要跟随跳转，不接受：请用户在浏览器打开后复制完整链接。
 - `part`：分 P，1–1000，默认取链接里的 `p` 或 1。`subtitles`：默认 `true`。
 - 没有检索、没有专栏/动态：B 站检索要求请求签名和浏览器设备 Cookie，本工具不伪装浏览器，实验性入口只读用户给出的视频链接。
-- 每次运行最多三个请求，依次为：`https://api.bilibili.com/x/web-interface/view`（视频公开信息，不带任何凭据）；`https://api.bilibili.com/x/player/wbi/v2?bvid=&cid=`（字幕列表，只有这一个请求在 Cookie 请求头里带用户保存的 `SESSDATA`）；字幕列表给出的字幕文件地址（只接受 `aisubtitle.hdslb.com`、`i0`/`i1`/`i2.hdslb.com` 的 https 地址，不带凭据）。
+- 读一个分 P 依次发三个请求（这是读取的结构，不是上限）：`https://api.bilibili.com/x/web-interface/view`（视频公开信息，不带任何凭据）；`https://api.bilibili.com/x/player/wbi/v2?bvid=&cid=`（字幕列表，只有这一个请求在 Cookie 请求头里带用户保存的 `SESSDATA`）；字幕列表给出的字幕文件地址（只接受 `aisubtitle.hdslb.com`、`i0`/`i1`/`i2.hdslb.com` 的 https 地址，不带凭据）。
 - 没有设置 SESSDATA 时照常读视频信息，字幕页为 `credential-required`，条目带 `subtitles-not-read`。实验性的 B 站读取器只在 B 站回答 `-101`（账号未登录）时才记为过期；回答把这次请求当成未登录访客（`login_mid` 为 0）时字幕页为 `unavailable`、原因 `login-not-recognized`，不改凭据状态，提醒用户可以自己重新输入。B 站认出登录后才记为可用。
 - 结果条目：`kind` 为 `video`（标题、UP 主昵称、发布时间、简介摘录）或 `subtitle`（字幕分段，`location` 为 `{ label: "time", value: "mm:ss" }`，B 站自动生成的字幕带 `machine-subtitle`）；`url` 为 `https://www.bilibili.com/video/<BV号>/?p=<分P>`；`meta` 有 `bvid`、`aid`、`part`，视频另有 `parts`、`durationSeconds`，字幕另有 `language`、`startSeconds`。不存 UP 主账号 ID。结果的 `experimental` 为 `true`，`limitations` 总有 `experimental-source`，`notice` 附实验性说明。
 - `node <maa-core>/scripts/bilibili.ts status`：不联网、不解密，返回 `experimental: true`、`stopped`、`stoppedUntil`、`stopReason`、`lastRequestAt` 和凭据状态 `credential`。B 站命令的 JSON 输出（包括错误）都带 `"experimental": true`。
@@ -132,8 +134,9 @@ B 站支持是实验性的：接口随时可能变化或拒绝，结果、帮助
 | 同一来源两次请求的最小间隔（跨进程） | 3 秒 |
 | 风控后整个来源暂停 | 30 分钟 |
 | 缓存有效期 | NGA 检索 6 小时、帖子页 24 小时；森空岛帖子 24 小时；B 站（实验性）视频信息和字幕各 24 小时 |
-| 每次运行的请求上限 | NGA 检索最多 3 页、读帖最多 5 页；森空岛社区 1 个请求（一帖）；B 站（实验性）最多 3 个请求（视频信息、字幕列表、一个字幕文件） |
 | 单次请求 | 20 秒内完成，响应最多 4 MiB，不跟随重定向，不重试 |
+| 每次运行的页数 | 不设上限；请求数由上面的间隔、遇风控立即停止和暂停约束。森空岛社区读一帖就是一个请求；B 站（实验性）读一个分 P 依次是视频信息、字幕列表、所选字幕文件三个请求。这是读一帖、一个视频的结构，不是额外的上限 |
+| 输入 | 检索关键词最多 50 个字符；CLI 标准输入最多 64 KiB |
 | 等待闸门 | 最多 150 秒；占用超过 120 秒或持有进程已退出的锁视为遗留，自动接管 |
 | 摘录 | NGA 每楼、森空岛每帖缓存最多 4000 字；B 站（实验性）简介缓存最多 4000 字、字幕最多 8000 字；每条输出摘录最多 600 字 |
 
@@ -162,6 +165,6 @@ import { readBilibiliVideo, bilibiliStatus, bilibiliLimits } from '../../maa-cor
 - `readSklandPost({ post, fresh?, cacheOnly? }, { privateDirectory, transport?, clock? })`：森空岛社区，没有 `protector` 选项，因为它不碰凭据。`readBilibiliVideo({ video, part?, subtitles?, fresh?, cacheOnly? }, { privateDirectory, transport?, protector?, clock? })`：B 站（实验性）。两者都返回 `ResearchResult`，请求不合法时抛 `request-invalid`。
 
 - `searchNga(request, { privateDirectory, transport?, protector?, clock? })`、`readNgaThread(…)`：返回上面的 `ResearchResult`；请求不合法时抛 `request-invalid`，不读不发。`transport`、`protector`、`clock` 只供测试替换网络、加密边界和时间。
-- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。工具构造的链接和时间保持可用；帖子文字放在引用块里，去掉隐藏/方向控制字符，转义 Markdown 与 HTML，链接改写为 `hxxps[:]//` 形式。
+- `formatResearchMarkdown(result, 'zh' | 'en')`：引用摘要。帖子文字放在引用块里。只有模板文字和工具构造的普通 https 来源链接（`url`）原样输出并可点；`url` 不是普通 https 地址时也按下面的方式处理。其他所有值（来源名、页标签、标题、作者名、楼层、时间、可信度和局限代码、摘录）都经同一个函数处理：去掉隐藏/方向控制字符，转义 Markdown、HTML 和字符引用（`&`），并且不论前面是什么字符，把任意协议的 `://`、每个 `www.` 和每个 `@` 都改写（`hxxps[:]//`、`ftp[:]//`、`www[.]`、`[@]`），所以不会形成链接、图片、HTML 或自动链接。`tests/research.test.ts` 的一致性测试逐一列举这些触发形式、前置字符和字段。
 - 新来源复用（工单 19 的森空岛社区和 B 站（实验性）就是这样做的，共用部分在 `research-fetch.ts`）：`researchDirectory(privateDirectory, '<来源>')` 定位目录；`cacheKey` / `getCached` / `putCached` 做缓存；每个网络请求包在 `withResearchGate(directory, limits, clock, perform)` 里，`perform` 返回 `{ value, stop?: 'risk-control' }` 即可记下停止；用 `summarizePages` 汇总状态，按上面的字段产出 `ResearchResult`（实验性来源设 `experimental: true`）；传输用 `platformTransport()`，不要在失败后换另一种传输。新增来源的限制要在规格两张来源表登记。
 - 建议报告（工单 20）引用 `items[]` 时保留 `author`（或「匿名/未知」）、`publishedAt`（或「未知」）、`url` 加 `location`、`reliability` 和 `limitations`；`excerpt` 是事实摘录，报告里的推断要与它分开写。

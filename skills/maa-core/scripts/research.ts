@@ -182,12 +182,21 @@ export async function withResearchGate<T>(directory: string, limits: GateLimits,
 export function plainText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f​-‏‪-‮⁠-⁩﻿]/g, '');
 }
-/** Escapes untrusted text for Markdown: no links, HTML, fences or tables can form, and URLs are defanged. */
+/**
+ * The single owner of Markdown inertness for every text that did not come from the tool's own templates.
+ * No link, autolink, image, HTML, entity, fence or table can form: every `scheme://` (`hxxps[:]//`,
+ * `ftp[:]//`), every `www.` (`www[.]`) and every `@` (`[@]`) is rewritten whatever precedes it, and
+ * Markdown punctuation, `<`, `>` and `&` are backslash-escaped. tests/research.test.ts enumerates the
+ * triggers, preceding characters and fields this must hold for.
+ */
 function inert(value: string): string {
-  return plainText(value).replace(/\b(h)(ttps?)(:\/\/)/gi, (_all, h: string, rest: string) => `${h === 'H' ? 'HXX' : 'hxx'}${rest.slice(2)}[:]//`)
-    .replace(/[\\`*_[\]()<>|#!~]/g, (char) => `\\${char}`);
+  return plainText(value).replace(/(h)(ttps?)(:\/\/)/gi, (_all, h: string, rest: string) => `${h === 'H' ? 'HXX' : 'hxx'}${rest.slice(2)}[:]//`)
+    .replace(/:\/\//g, '[:]//').replace(/(www)\./gi, '$1[.]').replace(/@/g, '[@]')
+    .replace(/[\\`*_[\]()<>|#!~&]/g, (char) => `\\${char}`);
 }
 const inline = (value: string) => inert(value).replace(/\s+/g, ' ').trim();
+/** Only a plain https address stays a clickable citation link; anything else is rendered inert. */
+const citationLink = (url: string) => /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[A-Za-z0-9\-._~%/?=&+,:]*)?$/.test(url) ? url : inline(url);
 
 type Language = 'zh' | 'en';
 const words = {
@@ -227,9 +236,12 @@ const laterLimits: Record<Language, Record<string, string>> = {
     'machine-subtitle': 'subtitles generated automatically by Bilibili; may contain recognition errors', 'login-not-recognized': 'Bilibili did not treat this request as signed in, so subtitles were not read; the SESSDATA may have expired: run credentials.ts input bilibili yourself again',
     'client-signature-required': 'Skland requires the official client\'s request signature; this tool does not imitate the official client, so nothing was read', 'text-order-approximate': 'body joined from text fragments; paragraphs and layout may differ from the post' },
 };
-const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? laterLimits[language][code] ?? code).join(language === 'zh' ? '；' : '; ');
+const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? laterLimits[language][code] ?? inline(code)).join(language === 'zh' ? '；' : '; ');
 
-/** Cited Markdown for one result. Tool-built fields (links, times) stay usable; fetched text stays inert. */
+/**
+ * Cited Markdown for one result. Only the template words and a plain https citation link are emitted as
+ * is; every other value (names, titles, labels, times, codes, excerpts) goes through `inert`.
+ */
 export function formatResearchMarkdown(result: ResearchResult, language: Language): string {
   const w = { ...words[language], statuses: Object.fromEntries(Object.entries(words[language].statuses)
     .map(([key, text]) => [key, text.replaceAll('input nga', `input ${result.source}`)])) as Record<ResearchStatus, string> };
@@ -237,14 +249,14 @@ export function formatResearchMarkdown(result: ResearchResult, language: Languag
   const aside = (text: string) => language === 'zh' ? `（${text}）` : ` (${text})`;
   const comma = language === 'zh' ? '，' : ', ';
   const lines = [`# ${inline(result.sourceLabel)}${result.experimental ? aside(language === 'zh' ? '实验性' : 'experimental') : ''}`, '', `> ${w.notice}`, '',
-    `- ${w.status}${sep}${w.statuses[result.status]}${result.stoppedUntil ? aside(`${w.stoppedUntil} ${result.stoppedUntil}`) : ''}`,
-    `- ${w.requests}${sep}${result.requests}`, `- ${w.generated}${sep}${result.generatedAt}`,
+    `- ${w.status}${sep}${w.statuses[result.status]}${result.stoppedUntil ? aside(`${w.stoppedUntil} ${inline(result.stoppedUntil)}`) : ''}`,
+    `- ${w.requests}${sep}${result.requests}`, `- ${w.generated}${sep}${inline(result.generatedAt)}`,
     `- ${w.reliability}${sep}${describe([result.reliability.level], language)}`];
   if (result.limitations.length) lines.push(`- ${w.limitations}${sep}${describe(result.limitations, language)}`);
   for (const page of result.pages) {
     const served = page.served === 'network' ? w.network : page.served === 'cache' ? w.cached : page.served === 'stale-cache' ? w.stale : '-';
     const outcome = page.outcome === 'fresh' || page.outcome === 'cached' ? 'ok' : page.outcome;
-    lines.push(`  - ${inline(page.target)}${sep}${w.statuses[outcome]}${aside(`${served}${page.readAt ? `${comma}${w.read} ${page.readAt}` : ''}`)}`);
+    lines.push(`  - ${inline(page.target)}${sep}${w.statuses[outcome]}${aside(`${served}${page.readAt ? `${comma}${w.read} ${inline(page.readAt)}` : ''}`)}`);
   }
   lines.push('');
   if (!result.items.length) lines.push(w.none);
@@ -252,8 +264,8 @@ export function formatResearchMarkdown(result: ResearchResult, language: Languag
     const where = item.location ? ` ${w[item.location.label](inline(item.location.value))}` : '';
     const author = item.author !== null ? inline(item.author) : item.authorStatus === 'anonymous' ? w.anonymous : w.unknown;
     lines.push(`## ${index + 1}. ${item.title === null ? w.unknown : inline(item.title)}`, '',
-      `- ${w.source}${sep}${item.url}${where}`, `- ${w.author}${sep}${author}`, `- ${w.published}${sep}${item.publishedAt ?? w.unknown}`,
-      `- ${w.read}${sep}${item.readAt}${aside(item.stale ? w.stale : item.origin === 'cache' ? w.cached : w.network)}`,
+      `- ${w.source}${sep}${citationLink(item.url)}${where}`, `- ${w.author}${sep}${author}`, `- ${w.published}${sep}${item.publishedAt === null ? w.unknown : inline(item.publishedAt)}`,
+      `- ${w.read}${sep}${inline(item.readAt)}${aside(item.stale ? w.stale : item.origin === 'cache' ? w.cached : w.network)}`,
       `- ${w.reliability}${sep}${describe([item.reliability], language)}`);
     const limits = [...item.limitations, ...(item.stale && !item.limitations.includes('stale-cache') ? ['stale-cache'] : [])];
     if (limits.length) lines.push(`- ${w.limitations}${sep}${describe(limits, language)}`);

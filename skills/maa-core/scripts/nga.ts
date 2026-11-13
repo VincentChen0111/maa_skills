@@ -15,8 +15,8 @@ import { cacheKey, contentNotice, formatResearchMarkdown, getCached, plainText, 
  */
 export const ngaLimits = {
   minIntervalMs: 3_000, riskStopMs: 30 * 60_000, searchTtlMs: 6 * 3_600_000, threadTtlMs: 24 * 3_600_000,
-  maxSearchPages: 3, maxThreadPages: 5, maxThreadPage: 1_000, timeoutMs: 20_000, maxResponseBytes: 4 * 1024 * 1024,
-  lockStaleMs: 120_000, maxWaitMs: 150_000, keywordChars: 50, storedChars: 4_000, excerptChars: 600,
+  timeoutMs: 20_000, maxResponseBytes: 4 * 1024 * 1024, lockStaleMs: 120_000, maxWaitMs: 150_000,
+  keywordChars: 50, inputBytes: 64 * 1024, storedChars: 4_000, excerptChars: 600,
 } as const;
 export const ngaOrigin = 'https://bbs.nga.cn';
 /** The 明日方舟 board, read from NGA's public board list on 2026-11-13 (docs/nga-sources.md). */
@@ -35,6 +35,7 @@ const integer = (value: unknown): number | undefined => {
   const number = typeof value === 'string' && /^-?\d{1,15}$/.test(value) ? Number(value) : value;
   return typeof number === 'number' && Number.isSafeInteger(number) ? number : undefined;
 };
+const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 function mode(input: Record<string, unknown>) {
   for (const key of ['fresh', 'cacheOnly']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw invalid();
   if (input.fresh === true && input.cacheOnly === true) throw invalid();
@@ -47,22 +48,23 @@ function searchRequest(value: unknown) {
   const keyword = input.keyword.split(/\s+/).filter(Boolean).join(' ');
   if (!keyword || [...keyword].length > ngaLimits.keywordChars) throw invalid();
   if (input.forum !== undefined && input.forum !== 'arknights' && input.forum !== 'all') throw invalid();
-  const pages = input.pages === undefined ? 1 : integer(input.pages);
-  if (pages === undefined || typeof input.pages === 'string' || pages < 1 || pages > ngaLimits.maxSearchPages) throw invalid();
+  // No per-run page cap: the shared interval, the immediate stop and the pause bound the requests.
+  const pages = input.pages === undefined ? 1 : input.pages;
+  if (!positive(pages)) throw invalid();
   return { keyword, forum: (input.forum ?? 'arknights') as 'arknights' | 'all', pages, ...mode(input) };
 }
 function threadId(value: unknown): number {
   let id: number | undefined;
-  if (typeof value === 'number') id = integer(value);
-  else if (typeof value === 'string' && /^\d{1,10}$/.test(value.trim())) id = Number(value.trim());
+  if (typeof value === 'number') id = value;
+  else if (typeof value === 'string' && /^\d{1,16}$/.test(value.trim())) id = Number(value.trim());
   else if (typeof value === 'string') {
     let url: URL;
     try { url = new URL(value.trim()); } catch { throw invalid(); }
     if (!['https:', 'http:'].includes(url.protocol) || !linkHosts.has(url.hostname) || url.pathname !== '/read.php') throw invalid();
     const tid = url.searchParams.get('tid');
-    id = tid !== null && /^\d{1,10}$/.test(tid) ? Number(tid) : undefined;
+    id = tid !== null && /^\d{1,16}$/.test(tid) ? Number(tid) : undefined;
   }
-  if (id === undefined || id < 1 || id > 2_147_483_647) throw invalid();
+  if (!positive(id)) throw invalid();
   return id;
 }
 function readRequest(value: unknown) {
@@ -70,8 +72,7 @@ function readRequest(value: unknown) {
   if (!input || Object.keys(input).some((key) => !['thread', 'pages', 'fresh', 'cacheOnly'].includes(key))) throw invalid();
   const thread = threadId(input.thread);
   const pages = input.pages === undefined ? [1] : input.pages;
-  if (!Array.isArray(pages) || !pages.length || pages.length > ngaLimits.maxThreadPages || new Set(pages).size !== pages.length
-    || pages.some((page) => typeof page !== 'number' || !Number.isInteger(page) || page < 1 || page > ngaLimits.maxThreadPage)) throw invalid();
+  if (!Array.isArray(pages) || !pages.length || new Set(pages).size !== pages.length || !pages.every(positive)) throw invalid();
   return { thread, pages: pages as number[], ...mode(input) };
 }
 
@@ -352,7 +353,7 @@ export async function searchNga(value: NgaSearchRequest, options: NgaOptions): P
   return assemble({ kind: 'search', keyword: request.keyword, forum: request.forum, pages: request.pages }, outcome, items, ['title-only'], clock);
 }
 
-/** Read-only NGA thread pages (at most five per run) as citable posts. */
+/** Read-only NGA thread pages as citable posts; every requested page goes through the shared gate. */
 export async function readNgaThread(value: NgaReadRequest, options: NgaOptions): Promise<ResearchResult> {
   const request = readRequest(value);
   const clock = options.clock ?? systemClock;
@@ -391,7 +392,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     if (action === 'status') console.log(JSON.stringify({ ok: true, status: await ngaStatus({ privateDirectory: settings.privateDirectory }) }));
     else {
       let raw = '';
-      for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 64 * 1024) throw invalid(); }
+      for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > ngaLimits.inputBytes) throw invalid(); }
       let input: Record<string, unknown> | undefined;
       try { input = object(JSON.parse(raw)); } catch { throw invalid(); }
       if (!input) throw invalid();
