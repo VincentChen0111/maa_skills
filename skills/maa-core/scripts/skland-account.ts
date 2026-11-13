@@ -1,119 +1,34 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { createHash, createHmac } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSettings, startup } from './preferences.ts';
-import { CredentialError, readCredential, recordCredentialOutcome } from './credentials.ts';
 import type { Protector } from './credential-protection.ts';
 import { saveAccountSnapshot, snapshotFiles, type AccountSnapshot, type BaseOperator, type BaseRoom, type Coverage, type Operator } from './account-snapshot.ts';
+import { isObject, object, openSklandSession, SklandReadFailure as ReadFailure, type CredentialFailure, type CredentialReport, type SklandFetch,
+  type SklandIssue as Issue } from './skland-session.ts';
 
 /**
- * Read-only Skland account reader. It is the only user of the Skland account credential: the pasted
- * token is exchanged, requests are signed and the session refreshed in memory, and only the converted
- * snapshot (no token, cookie or account identifier) leaves the process. It never signs in for the user,
- * checks in, posts, likes, pays or writes; public Skland community research must not import this module.
- * Endpoints, signing and fields were checked against public MIT projects; see docs/skland-account-sources.md.
+ * Read-only Skland account reader. The session (token exchange, request signing, the two-level refresh and
+ * recording the credential outcome) is owned by skland-session.ts, which the community post reader shares;
+ * this module adds only the three account data endpoints and the conversion. Only the converted snapshot
+ * (no token, cookie or account identifier) leaves the process. It never signs in for the user, checks in,
+ * posts, likes, pays or writes. Endpoints and fields were checked against public MIT projects; see
+ * docs/skland-account-sources.md.
  */
-export type SklandFetch = (url: string, init: RequestInit) => Promise<Response>;
-export type SklandFailure = 'credential-unset' | 'credential-unreadable' | 'credential-expired' | 'windows-required' | 'protection-failed'
+export type { CredentialReport, SklandFetch } from './skland-session.ts';
+export type SklandFailure = CredentialFailure | 'credential-expired'
   | 'network-failed' | 'service-error' | 'signature-rejected' | 'response-invalid' | 'binding-missing' | 'binding-ambiguous';
-export type CredentialReport = 'usable' | 'expired' | 'unreadable' | 'unset' | 'unchanged';
 export type SklandRead = { status: 'ok'; snapshot: AccountSnapshot; credential: CredentialReport } | { status: SklandFailure; snapshot: null; credential: CredentialReport };
-type Issue = 'network-failed' | 'service-error' | 'signature-rejected' | 'response-invalid' | 'credential-rejected' | 'binding-missing' | 'binding-ambiguous';
 export type SnapshotDomain = 'operators' | 'inventory' | 'base';
 
-const grantUrl = 'https://as.hypergryph.com/user/oauth2/v2/grant';
-const zonai = 'https://zonai.skland.com';
-const skland = { appCode: '4ca99fa6b56cc2ba', cred: '/api/v1/user/auth/generate_cred_by_code', refresh: '/api/v1/auth/refresh',
-  binding: '/api/v1/game/player/binding', info: '/api/v1/game/player/info', cultivate: '/api/v1/game/cultivate/player' } as const;
-const requestTimeoutMs = 20_000;
-const maximumResponseBytes = 16 * 1024 * 1024;
+const skland = { binding: '/api/v1/game/player/binding', info: '/api/v1/game/player/info', cultivate: '/api/v1/game/cultivate/player' } as const;
 const fullMood = 8_640_000;
 export const sklandDisclosures = ['no-public-statement-as-of-2026-11-13', 'lag-unmeasured'] as const;
 
-class ReadFailure extends Error {
-  readonly issue: Issue;
-  constructor(issue: Issue) { super(issue); this.issue = issue; }
-}
-const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-function object(value: unknown): Record<string, unknown> { if (!isObject(value)) throw new Error('object-required'); return value; }
 const safeKey = (id: string) => !['__proto__', 'constructor', 'prototype'].includes(id);
 function identifier(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_]{1,96}$/.test(value) || !safeKey(value)) throw new Error('invalid-identifier');
   return value;
-}
-
-async function bodyText(response: Response): Promise<string> {
-  if (Number(response.headers.get('content-length')) > maximumResponseBytes) throw new ReadFailure('response-invalid');
-  if (!response.body) return '';
-  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maximumResponseBytes) { await reader.cancel().catch(() => undefined); throw new ReadFailure('response-invalid'); }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
-}
-/** One request: fixed host, no redirects, bounded time and size. Errors carry only a fixed code, never the URL or the reply. */
-async function call(fetcher: SklandFetch, url: string, init: RequestInit): Promise<Record<string, unknown>> {
-  let response: Response; let text: string;
-  try {
-    response = await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(requestTimeoutMs) });
-    text = await bodyText(response);
-  } catch (error) { throw error instanceof ReadFailure ? error : new ReadFailure('network-failed'); }
-  if (response.status === 429 || response.status >= 500) throw new ReadFailure('service-error');
-  try { return object(JSON.parse(text.replace(/^\uFEFF/, ''))); }
-  catch { throw new ReadFailure(response.ok ? 'response-invalid' : 'service-error'); }
-}
-const json = { 'Content-Type': 'application/json' };
-const status = (value: unknown) => Number.isSafeInteger(value) ? value as number : undefined;
-
-/**
- * Session with the two-level refresh: a 10000 reply refreshes the signing key once with the cred; a 10002
- * reply, or a refresh that is refused or does not help, exchanges the saved token again once. Only a grant
- * the service explicitly refuses rejects the credential. Every data request follows a grant that accepted
- * the token in this same read, so 10000/10002 after both levels is a signature, clock or header problem.
- */
-class SklandSession {
-  private cred = ''; private key = ''; private refreshed = false; private exchangedAgain = false;
-  private readonly fetcher: SklandFetch; private readonly userToken: string; private readonly clock: () => number;
-  constructor(fetcher: SklandFetch, userToken: string, clock: () => number) { this.fetcher = fetcher; this.userToken = userToken; this.clock = clock; }
-  async start() { await this.exchange(); }
-  private async exchange() {
-    const grant = await call(this.fetcher, grantUrl, { method: 'POST', headers: json, body: JSON.stringify({ appCode: skland.appCode, ['token']: this.userToken, type: 0 }) });
-    const code = isObject(grant.data) ? grant.data.code : undefined;
-    if (grant.status !== 0 || typeof code !== 'string' || !code) throw new ReadFailure(status(grant.status) !== undefined && grant.status !== 0 ? 'credential-rejected' : 'response-invalid');
-    const issued = await call(this.fetcher, zonai + skland.cred, { method: 'POST', headers: json, body: JSON.stringify({ code, kind: 1 }) });
-    const data = isObject(issued.data) ? issued.data : {};
-    if (issued.code !== 0 || typeof data.cred !== 'string' || !data.cred || typeof data['token'] !== 'string' || !data['token']) {
-      throw new ReadFailure(status(issued.code) !== undefined && issued.code !== 0 ? 'service-error' : 'response-invalid');
-    }
-    this.cred = data.cred; this.key = data['token'] as string;
-  }
-  private async refreshKey(): Promise<boolean> {
-    const reply = await call(this.fetcher, zonai + skland.refresh, { method: 'GET', headers: { cred: this.cred } });
-    const data = isObject(reply.data) ? reply.data : {};
-    if (reply.code === 0 && typeof data['token'] === 'string' && data['token']) { this.key = data['token'] as string; return true; }
-    if (status(reply.code) === undefined) throw new ReadFailure('response-invalid');
-    return false;
-  }
-  private signed(path: string, query: string): Record<string, string> {
-    const header = { platform: '', timestamp: String(Math.floor(this.clock() / 1000) - 1), dId: '', vName: '' };
-    const hex = createHmac('sha256', this.key).update(`${path}${query}${header.timestamp}${JSON.stringify(header)}`).digest('hex');
-    return { cred: this.cred, sign: createHash('md5').update(hex).digest('hex'), ...header };
-  }
-  async get(path: string, query = ''): Promise<Record<string, unknown>> {
-    for (;;) {
-      const reply = await call(this.fetcher, `${zonai}${path}${query ? `?${query}` : ''}`, { method: 'GET', headers: this.signed(path, query) });
-      if (reply.code === 0) { if (!isObject(reply.data)) throw new ReadFailure('response-invalid'); return reply.data; }
-      if (reply.code !== 10000 && reply.code !== 10002) throw new ReadFailure(status(reply.code) !== undefined ? 'service-error' : 'response-invalid');
-      if (reply.code === 10000 && !this.refreshed && !this.exchangedAgain) { this.refreshed = true; if (await this.refreshKey()) continue; }
-      if (this.exchangedAgain) throw new ReadFailure('signature-rejected');
-      this.exchangedAgain = true; await this.exchange();
-    }
-  }
 }
 
 /** Skland's default Arknights role; several roles without a default stop the read instead of guessing. */
@@ -129,25 +44,14 @@ function chosenRole(binding: Record<string, unknown>): string {
 }
 
 export async function readSklandAccount(options: { privateDirectory: string; fetcher?: SklandFetch; protector?: Protector; now?: () => Date }): Promise<SklandRead> {
-  const privateDirectory = resolve(options.privateDirectory);
-  let saved: { revision: string; values: Record<string, string> };
-  try { saved = await readCredential('skland', { privateDirectory, ...(options.protector ? { protector: options.protector } : {}) }); }
-  catch (error) {
-    const code = error instanceof CredentialError ? error.message : 'protection-failed';
-    if (code === 'credential-unset') return { status: 'credential-unset', snapshot: null, credential: 'unset' };
-    if (code === 'credential-unreadable') return { status: 'credential-unreadable', snapshot: null, credential: 'unreadable' };
-    return { status: code === 'windows-required' ? 'windows-required' : 'protection-failed', snapshot: null, credential: 'unchanged' };
-  }
-  let credential: CredentialReport = 'unchanged';
-  const record = async (outcome: 'usable' | 'expired') => {
-    if (await recordCredentialOutcome('skland', saved.revision, outcome, { privateDirectory }).catch(() => false)) credential = outcome;
-  };
+  const opened = await openSklandSession(options);
+  if (opened.status !== 'ready') return { status: opened.status, snapshot: null, credential: opened.credential };
+  const { session, credential } = opened;
   const now = options.now ?? (() => new Date(Date.now()));
-  const session = new SklandSession(options.fetcher ?? ((url, init) => fetch(url, init)), saved.values['token'] ?? '', () => now().getTime());
   try {
     await session.start();
     const binding = await session.get(skland.binding);
-    await record('usable');
+    await credential.record('usable');
     const query = `uid=${encodeURIComponent(chosenRole(binding))}`;
     const info = await session.get(skland.info, query);
     // Player info without the checked operator structure means the interface changed: no usable read.
@@ -157,13 +61,13 @@ export async function readSklandAccount(options: { privateDirectory: string; fet
     catch (error) {
       if (!(error instanceof ReadFailure)) throw error;
       cultivateIssue = error.issue;
-      if (error.issue === 'credential-rejected') await record('expired');
+      if (error.issue === 'credential-rejected') await credential.record('expired');
     }
-    return { status: 'ok', snapshot: sklandSnapshot({ info, cultivate, cultivateIssue }, now().toISOString()), credential };
+    return { status: 'ok', snapshot: sklandSnapshot({ info, cultivate, cultivateIssue }, now().toISOString()), credential: credential.report };
   } catch (error) {
     const issue: Issue = error instanceof ReadFailure ? error.issue : 'response-invalid';
-    if (issue === 'credential-rejected') { await record('expired'); return { status: 'credential-expired', snapshot: null, credential }; }
-    return { status: issue, snapshot: null, credential };
+    if (issue === 'credential-rejected') { await credential.record('expired'); return { status: 'credential-expired', snapshot: null, credential: credential.report }; }
+    return { status: issue, snapshot: null, credential: credential.report };
   }
 }
 

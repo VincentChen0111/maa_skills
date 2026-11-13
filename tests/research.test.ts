@@ -142,6 +142,9 @@ const textFields: Record<string, (value: ResearchResult, text: string) => void> 
   'title': (value, text) => { value.items[0]!.title = text; },
   'author': (value, text) => { value.items[0]!.author = text; },
   'location': (value, text) => { value.items[0]!.location = { label: 'floor', value: text }; },
+  // Ticket 19: Bilibili subtitle items carry a time location, and its source name is rendered with the experimental mark.
+  'time location': (value, text) => { value.items[0]!.location = { label: 'time', value: text }; },
+  'experimental source name': (value, text) => { value.experimental = true; value.sourceLabel = text; },
   'published': (value, text) => { value.items[0]!.publishedAt = text; },
   'item read time': (value, text) => { value.items[0]!.readAt = text; },
   'item reliability': (value, text) => { value.items[0]!.reliability = text; },
