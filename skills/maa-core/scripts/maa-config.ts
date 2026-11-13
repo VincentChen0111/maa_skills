@@ -552,7 +552,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
   if (recovery) { const changed = await locked(); if (changed) return changed; }
-  const connectionOnly = request.changes.length > 0 && request.changes.every(change =>change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
+  const connectionOnly = request.changes.length > 0 && request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
   const metadata = { id, skill: recovery ? 'maa-doctor' : connectionOnly ? 'maa-setup' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
