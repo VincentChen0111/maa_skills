@@ -48,6 +48,8 @@
 }
 ```
 
+`query` 返回和保存的报告带 `versions`：生成时读到的 MAA 版本和核实记录版本（读不出为 null），不计入报告 hash。`prepare` 的结果带同名字段，比较报告的记录与当前值：`state` 为 same、changed（`changed` 列出变了的项）、unknown 或 unrecorded（旧报告没有记录）。changed 时告诉用户报告生成之后 MAA 或核实记录换了版本；这只是提醒，不阻止准备。
+
 只准备当前配置；用户要另一配置时先由其在 MAA 中切换，再重新读摘要核对。快照或报告指纹变化时重新核对候选；循环次数变化须重做报告及批准。closed-confirmation-required、busy、unknown 按配置事务流程处理。作业资产未知时保留证据，doctor 不自动恢复未核资产，不删锁重试。
 
 脚本验证批准的精确范围后，将原文分别存到私有 `stage-jobs/<报告 hash>/source/<作业 id>.json`，将已批准派生执行内容存到同目录的 `<作业 id>.json`；报告 `candidate.hash` 是原文指纹，`candidate.execution.content/hash` 是实际执行内容及指纹。两份资产均经 executeConfigWrite 的同一进程持锁、关停、备份、写入、重开、读回检查；任何一份漂移都不能报 complete。MAA v6.21.4 的作业列表忽略全局 LoopTimes，因此每次已批准执行展开为独立主作业条目，不修改全局循环值；旧列表被完整替换，原生列表字段不会偷偷丢掉次数。
