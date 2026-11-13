@@ -62,6 +62,6 @@ R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主�
 
 - 任何一跳返回 401 或 403，表示官方服务器拒绝脚本的请求：出方案时不出方案，结果是 `source-refused`；下载时记为 `failed`，原因 `source-refused`。不重试，不换请求头。判断只有一处：`setup-download.ts` 的 `chainScriptable`，厂商表的记录状态和每一次实际请求都用它。
 - 记录状态里有 401／403 的厂商，出方案和下载都直接返回 `source-refused`，不向它发任何请求。脚本不能下载的厂商：`bluestacks-cn`（蓝叠 5）。用户在自己的浏览器里从官方页面 `https://www.bluestacks.cn/` 下载安装包，然后从方案里的 `run-emulator-installer` 这一步继续：由用户自己运行安装程序，不需要把文件交给脚本；之后照常是模拟器首次设置、游戏客户端（用户）和 adb 连接、复检（skill）。
-- 若维护者同意带官网页面作 Referer，需作为新规则登记：这是维护者才能做的决定，要在规格两张来源表登记来源，重新只读核对后再改厂商表。目前没有这个授权。
+- 不带官网页面作 Referer：维护者 2026-11-14 确认，原话「yes as you recommended」（按协调者的建议不带，用户在自己的浏览器里下载）。以后若要带，需作为新规则登记：在规格两张来源表登记来源，重新只读核对后再改厂商表。
 
 未核实的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。上表的模拟器下载主机和状态已由 HEAD 核对，但只代表核对当日：没有下载任何安装包，安装包内容和完整性没有核对（大小只来自 HEAD 的 Content-Length）；蓝叠 5 的 403 以后是否解除未知，解除后也要重新核对并改表，脚本才会下载它。Windows 自带 `tar.exe`（bsdtar）解压 zip、拒绝含 `..` 的条目，本机用合成 zip 实测过（见 [setup 验证记录](setup-verification.md)）。
