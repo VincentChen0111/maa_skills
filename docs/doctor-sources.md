@@ -20,7 +20,7 @@
 | 常见误判清单：连接类、关卡导航/难度切换、证据完整性、会客室/线索、版本差异、配置文件（`gui.new.json` 与日志不一致先看 `.bak`）、PC/Win32 输入、理智药/临期药、多开、触控模式 | `.agents/skills/maa-issue-log-analysis/KNOWLEDGE.md`（`11d14cb22cd353ccaf4c10839c6ebae6f8ffb8a1`） | 同上，逐类对照 |
 | 官方中文问题模板要求在 MAA「设置 → 问题反馈」生成日志压缩包并上传，并要求先查常见问题 | `.github/ISSUE_TEMPLATE/cn-bug-report.yaml`（`b2b4da7cbe4b628ac8e05b9090d59ac4f9d532e7`）；`docs/zh-cn/manual/faq.md`（`9e213b27289f968e0602862e03d6acbe14d85983`） | 转介入口：常见问题、连接说明、issue 列表和日志压缩包的生成位置 |
 
-Android 官方 [adb 文档](https://developer.android.com/tools/adb)（2026-11-13 只读核对）：adb 服务端只扫描 5555–5585 的奇数本机端口来发现模拟器，每个模拟器用一对端口（偶数为控制台、奇数为 adb），在 `adb devices` 里列为 `emulator-<控制台端口>`；经网络连接的设备要 `adb connect` 之后才出现在列表里。本仓库据此把 `emulator-<N>` 与本机端口 N+1 视为同一设备，并且网络地址不在列表里时只报「未连接」，不推断模拟器关着。
+Android 官方 [adb 文档](https://developer.android.com/tools/adb)（2026-11-13 只读核对）：adb 服务**启动时**扫描 5555–5585 的奇数本机端口来发现模拟器，每个模拟器用一对端口（偶数为控制台、奇数为 adb），在 `adb devices` 里列为 `emulator-<控制台端口>`；经网络连接的设备要 `adb connect` 之后才出现在列表里。AOSP `platform/packages/modules/adb` 提交 `1cf2f017d312f73b3dc53bda85ef2610e35a80e9` 的 `client/transport_emulator.cpp`（blob `e9ebaaa6f6fbadfa1ed5f465e557539adddcc761`，2026-11-13 只读核对）：扫描线程启动时调用一次 `PollAllLocalPortsForEmulator()`，之后只对连接刚关闭的端口重试 60 次、每次间隔 1 秒。所以服务启动后才开的模拟器不会被自动列出，等待也没有用。本仓库据此把 `emulator-<N>` 与本机端口 N+1 视为同一设备；配置的地址不在列表里时一律只报「未连接」，不推断模拟器关着，也不说等一会儿会出现。用户机器上 adb 的实际版本各不相同（MAA 和模拟器自带），这一行为没有在这些版本上逐一核对。
 
 2026-11-13 只读访问核对（HTTP 200）：`https://docs.maa.plus/zh-cn/manual/faq.html`、`https://docs.maa.plus/zh-cn/manual/connection.html`、`https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new/choose`。本仓库发布页 `https://api.github.com/repos/VincentChen0111/maa_skills/releases/latest` 当日返回 404（尚无正式发布），所以 `check --online` 当前得到 `skill-release-none`。
 

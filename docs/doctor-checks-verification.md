@@ -55,6 +55,17 @@
 
 先红后绿：`tests/doctor-analysis.test.ts` 在修复前 19 项中 5 项失败，其中新测试「the current-state connection check never runs a configured program that is not adb」显示 adb 替身被用 MAA.exe 调用；`tests/doctor-checks.test.ts` 在修复前因缺少共用判断的导出而整体失败。修复后：`tests/doctor-checks.test.ts` 26/26（新增：配置成 MAA.exe、HD-Player.exe、adb.exe.bak 时替身从未被调用；setup 发现同样不调用；判断的正反例；网络地址未连接、本机端口按 emulator 序号匹配、emulator 序号未列出），`tests/doctor-analysis.test.ts` 19/19，`tests/setup.test.ts` 29/29，`npm run typecheck` 通过；审查员的离线复现（HD-Player.exe、MAA.exe 两种 AdbPath）现在都返回 `adb-path-unrecognized` 且没有执行任何程序。按维护者 2026-11-13 的负载要求，本轮没有运行完整离线入口，只逐个运行了上面三个文件；`tests/setup-scenarios.test.ts`、`tests/doctor.test.ts`、`tests/doctor-scenarios.test.ts` 本轮未重跑（它们的样例没有配置连接，期望不受影响），留给协调者的完整入口。
 
+## 第 2 轮审查后的修复（2026-11-13）
+
+第 2 轮为有条件通过，一项 P3，协调者复核后接受：`device-not-listed` 假设 adb 会自动列出 5555–5585 的本机端口，但 adb 只在服务启动时扫描一次（AOSP `client/transport_emulator.cpp`，见[来源](doctor-sources.md)），之后才开的模拟器永远不会被自动列出，原修法却说等一会儿。这是连接状态措辞第二次出问题，按复发规则不再逐条改文字：
+
+- 一个所有者：`setup-connection.ts` 的 `classifyAdbListing`（地址加列表到状态）和 `connectionStates`（状态到严重程度、说明、修法），`connectionCheck` 生成检查行；`checks.ts` 不再有连接状态的说明，`doctor.ts` 不再有自己的对应表，评测场景也从 `connectionCheck` 取期望值。
+- 状态合并：地址不在列表里一律是 `device-not-connected`（提醒，修法为用户确认模拟器、开着则经 setup 的测试流程），删去 `device-not-listed` 和不再使用的 `start-emulator` 修法。
+- 同一所有者里一并修正：配置的写法本身在列表里时以它为准，否则取等价写法里最好的状态。审查员复现里「配置 `emulator-5554`，列表先有过期的 `127.0.0.1:5555 offline` 再有 `emulator-5554 device`」原来报离线（错误），现在报在线。
+- 一致性测试 `tests/connection-states.test.ts`：枚举自动扫描的本机端口、`emulator-N`、其他网络地址（16384、62001、21503、localhost 写法、局域网地址）乘以列表情形（在线、离线、未授权、不在、空列表、换写法列出、过期条目在前、本条离线而换写法在线、换写法先离线后在线），断言每个状态的说明和修法都不说模拟器关着、不说等待会出现，不在列表或未核对的状态都交 setup 的测试或连接流程，并且其他模块里没有连接状态的字面量。
+
+先红后绿：`tests/connection-states.test.ts` 在实现前因缺少导出整体失败；`tests/doctor-checks.test.ts` 改测试后 27 项中 3 项失败（`emulator-5556` 和 `127.0.0.1:5555` 不在列表时仍报 `device-not-listed`）；加入重复条目情形后一致性测试 2 项中 1 项失败（`127.0.0.1:5555` 遇到先列出的过期 `localhost:5555`）。修复后逐个运行：`tests/connection-states.test.ts` 2/2，`tests/doctor-checks.test.ts` 27/27，`tests/doctor-analysis.test.ts` 19/19，`tests/doctor-scenarios.test.ts` 17/17，`tests/setup.test.ts` 29/29，`npm run typecheck` 通过；审查员的 `r2-address.ts` 复现中不在列表的情形都报 `device-not-connected`，重复条目情形报在线。本轮没有运行完整离线入口。
+
 ## 设计默认值
 
 带限制的默认值都登记在规格「默认值及其来源」以「10 」开头的各行。只记在这里的实现选择：
