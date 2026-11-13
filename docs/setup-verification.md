@@ -143,6 +143,21 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 **R4 修后实际运行**（工作树内容与 `87721e6` 相同）：`npm run typecheck` 通过；逐个运行 `node --test`：setup-download-vendors 67/67、setup-download 19/19、setup-download-scenarios 20/20、setup 28/28、setup-scenarios 16/16、setup-integration 5/5，全部通过；`node scripts/privacy.ts` 无发现；metadata 1/1。`eval/network-fixture.mjs` 未改，没有运行 eval-network；按要求没有运行 `tests/maa-process.test.ts` 和完整入口 `node scripts/check.ts`（由协调者在固定提交上运行）。
 
+### 合并 10 之后（2026-11-14）
+
+合并提交 `8208ea0` 把 origin/main（10 doctor 完整检查 `4092277`，以及 12、17、20）并入本分支。冲突：CONTEXT.md 保留本分支「下载方案」和 main 扩写的「转介」「环境类失败」；README 与 maa-help 用 main 的新文字，只把 setup 那句换成本分支的「先展示官方下载方案，用户确认后才下载」；`setup.ts` 用 main 的共享检查表 `libraryCheck`，本分支改过的两条修法说明（MAA、Node 可经 setup plan 看官方下载方案）移到 `checks.ts` 的修法表；INDEX 取本分支后由 tracker 重新生成。
+
+合并后 PR #70 的 CI 失败，原因是 `recheckSetup` 自己用「任何检查出错」判断 `pending` 和 `complete`：10 让 setup 检查带上三项凭据后，检查编号多了三项，而且一份读不出的 NGA 凭据会让 setup 永远不能完成；它也是检查结果的第二个判断者。适配（本节所在提交）：
+
+- `checks.ts` 新增用途 `setup-recheck`，`recheckSetup` 的 `pending` 改由 `blockingChecks(检查结果, "setup-recheck")` 给出，再加复检自己的 `connection` 一项（来自重新发现和传输测试）；连接测试的前提（`maa`、`server`、`settings` 没有挡住）也改用同一个判断。不挡的错误记在复检结果新增的 `notBlocking`。退出码不变义：`setup-exit` 有错误或 `pending` 不空时为 1。
+- 归类（设计默认值，2026-11-14，已登记规格「默认值及其来源」新行「08、10 setup 最终复检按用途」，并改了 08 的默认值行、「规则来源」08 和 10 两行、「08 下载与补齐」和「检查与修法」正文）：挡住 `maa`、`server`、`node`、`settings`、`private-directory`、`connection`、`configuration`、`write-lock`；不挡 `platform`（`setup.ts recheck` 在非 Windows 直接拒绝）、`version`（只提醒）、`configuration-fields`（任务字段归 daily 和培养）、`remote-control`、三项凭据、`private-files`、`skill-version`、`skill-links`。
+- SKILL 第 6 步和接口说明的 `recheck` 一行写明 `notBlocking` 照样报告、不挡完成，完成看 `complete`。
+- 10 的测试 `doctor-checks` 里核对修法通道的正则只认旧的五个动作字面量，本分支加了下载动作后匹配不到，改为也接受 `...Object.keys(downloadActions)`。
+
+测试先行：先改测试，`check-purposes` 6 项中 2 项失败（新用途不存在；`setup.ts` 两处直接比较检查状态），`setup-download` 两项复检用例失败（检查编号多出三项凭据；NGA 凭据读不出时 `complete` 为 false、`pending` 为 `['credential-nga']`）；改代码后全部通过。新用例「recheck completes despite an unreadable NGA credential…」同时断言客户端不是国服时仍挂起（`pending` 为 `['server', 'connection']`、连接未测）。非 Windows 机器上 `platform` 出错，用例按平台写出（记在 `notBlocking`、退出码 1），不只在 Windows 成立。
+
+实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 6/6、setup-download 20/20、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2、eval-network 3/3；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。未验证：真模型对 `notBlocking` 的说明（行为评测待 26；复检要真实 adb 传输，离线评测没有它的替身，没有新增场景）；非 Windows 机器上的这些用例只按代码推断，本机未跑。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

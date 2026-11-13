@@ -439,15 +439,18 @@ test('final recheck covers Node, MAA, adb and the connection, finds the chosen c
   const tested = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
   assert.equal(tested.connection.status, 'connected');
   assert.deepEqual(calls.slice(-2), [['connect', '127.0.0.1:16384'], ['-s', '127.0.0.1:16384', 'get-state']]);
-  assert.deepEqual(tested.checks.map((item: { id: string }) => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version']);
-  assert.equal(tested.complete, tested.checks.every((item: { status: string }) => item.status !== 'error'));
-  assert.equal(tested.complete, process.platform === 'win32');
+  assert.deepEqual(tested.checks.map((item: { id: string }) => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version',
+    'credential-nga', 'credential-skland', 'credential-bilibili']);
+  // On a non-Windows test machine the platform check is an error; the recheck command itself refuses to run there, so it is reported, not
+  // pending. The exit code still means "there is an error".
+  const windows = process.platform === 'win32';
+  assert.deepEqual([tested.complete, tested.exitCode, tested.pending, tested.notBlocking], [true, windows ? 0 : 1, [], windows ? [] : ['platform']]);
   const saved = JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8'));
   assert.equal(saved.connection.status, 'connected'); assert.equal(saved.complete, tested.complete);
   assert.doesNotMatch(JSON.stringify(saved) + JSON.stringify(tested), /127\.0\.0\.1|maa-setup-download-|Synthetic profile/);
   const failing: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : 'offline' }) };
   const failed = await recheckSetup({ candidate: chosen }, context, async () => null, failing) as Record<string, any>;
-  assert.deepEqual([failed.complete, failed.connection.status], [false, 'failed']);
+  assert.deepEqual([failed.complete, failed.connection.status, failed.pending, failed.exitCode], [false, 'failed', ['connection'], 1]);
   assert.equal(JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8')).complete, false);
 });
 
@@ -469,4 +472,29 @@ test('recheck reports a chosen candidate that no longer exists instead of a gene
   assert.ok(result.pending.includes('connection'));
   assert.equal(JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8')).connection.status, 'candidate-unavailable');
   await assert.rejects(recheckSetup({ discoveryRevision: 'stale', candidate: chosen } as never, context, async () => null, adb), { message: 'request-invalid' });
+});
+
+test('recheck completes despite an unreadable NGA credential, which it still reports; an installation error keeps setup pending', async t => {
+  const f = await fixture(t, { maa: true });
+  const configFile = join(f.maaDirectory, 'config/gui.new.json');
+  const gui = (client: string) => JSON.stringify({ Current: 'P', Configurations: { P: { Gui: {
+    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: client } } } } });
+  await writeFile(configFile, gui('Official'));
+  const adbPath = join(f.root, 'tools/adb.exe'); await mkdir(join(f.root, 'tools')); await writeFile(adbPath, 'synthetic adb');
+  const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : 'device\n' }) };
+  const context = { home: f.home, adbPaths: [adbPath] };
+  const chosen = (await discoverSetupConnections(context, adb)).candidates[0]!.id;
+  // Another feature's state: a damaged NGA credential record in the private directory.
+  await mkdir(join(f.privateDirectory, 'credentials')); await writeFile(join(f.privateDirectory, 'credentials/nga.json'), '{"damaged":true}');
+  const reported = [...(process.platform === 'win32' ? [] : ['platform']), 'credential-nga'];
+  const result = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
+  assert.equal(result.checks.find((item: { id: string }) => item.id === 'credential-nga').status, 'error');
+  // Complete, yet the exit code keeps meaning "there is an error" (spec 「检查与修法」); the model reads `complete`.
+  assert.deepEqual([result.connection.status, result.complete, result.exitCode, result.pending, result.notBlocking], ['connected', true, 1, [], reported]);
+  const saved = JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8'));
+  assert.deepEqual([saved.complete, saved.notBlocking], [true, reported]);
+  // An installation error setup is responsible for still blocks: a client outside the CN scope, and the connection is then not checked.
+  await writeFile(configFile, gui('YoStarEN'));
+  const blocked = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
+  assert.deepEqual([blocked.complete, blocked.exitCode, blocked.pending, blocked.notBlocking, blocked.connection.status], [false, 1, ['server', 'connection'], reported, 'not-checked']);
 });

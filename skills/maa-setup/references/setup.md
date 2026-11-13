@@ -15,7 +15,7 @@
 | `download` | 方案的 `program`、`planId`、`fingerprint`，用户对这份方案的确认原话 `reference`；adb 另需用户本人接受许可协议后的 `termsAccepted: true`；模拟器另传与 plan 相同的 `vendor`、`url`、`version` | 重新读取官方索引并与方案指纹一致，独占登记这份方案后才请求文件；逐跳检查官方主机，核对大小与官方校验值后才保存为 `downloaded`；一份方案只用一次 |
 | `downloads` | `{}` | 每次重新核对文件摘要：`downloaded`、`download-invalid`、`failed`、`interrupted`、`in-progress`，以及解压状态 |
 | `install` | 下载记录的 `planId`；MAA／adb 另传用户所选空文件夹 `target` 绝对路径 | 先重新核对文件；MAA／adb 用系统 `tar.exe` 解压（最多 600 秒，超时为 `extract-timeout`）并核对 `MAA.exe`／`platform-tools/adb.exe`，失败或超时都清空该文件夹；已解压返回 `already-extracted`；Node／模拟器只返回用户步骤 |
-| `recheck` | `{}`，或用户选定的候选 `candidate`（候选 id），以及 discover 的可选候选输入；不接受 `discoveryRevision` | 重新检查 Node、MAA、设置、私有目录、下载状态；每次重新发现连接，按候选 id（只由 adb 路径和地址算出，连接写入和 MAA 改写配置后不变）找到同一候选后测试，找不到为 `candidate-unavailable`，没传候选不发起连接；原子替换 `setup-environment.json`；只有全部通过且连接测试通过才 `complete: true`、退出码 0 |
+| `recheck` | `{}`，或用户选定的候选 `candidate`（候选 id），以及 discover 的可选候选输入；不接受 `discoveryRevision` | 重新检查 Node、MAA、设置、私有目录、下载状态；每次重新发现连接，按候选 id（只由 adb 路径和地址算出，连接写入和 MAA 改写配置后不变）找到同一候选后测试，找不到为 `candidate-unavailable`，没传候选不发起连接；原子替换 `setup-environment.json`；只有用途 `setup-recheck` 挡住的检查（MAA 与国服客户端、Node、设置、私有目录、连接、配置可读、写入锁）都没有错误且连接测试通过才 `complete: true`，未完成的项记在 `pending`；凭据、私有记录、skill 版本与目录联接、远程控制、任务字段、平台和 MAA 版本的错误记在 `notBlocking`，照样报告、不挡完成；退出码仍是「1 表示有错误」，没有任何错误且完成时才为 0 |
 
 设置损坏／不可读时，`check` 返回退出码 1、`settings-unreadable` 及保留原文件后修复 JSON、字段或访问权限的用户修法。Windows、Node 和明确提供的 MAA 目录仍检查；未知私有目录返回 `private-directory-unverified`，不猜默认目录、不显示首次偏好提示，也不覆盖或自动创建。修复后重新检查。
 

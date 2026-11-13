@@ -112,7 +112,9 @@ const connectionReasons = new Set(['maa-directory-unset', 'cn-client-required', 
  * Final recheck after installation: Node, MAA and settings by the fresh check, adb and the connection by a
  * fresh discovery and, for the candidate the user chose, the adb transport test. The candidate id hashes only
  * the adb path and address, so it survives the connection write and MAA rewriting its configuration, while a
- * discovery revision would not. Complete only when nothing is pending.
+ * discovery revision would not. Complete only when nothing is pending: `pending` lists the check errors the
+ * `setup-recheck` purpose of `blockingChecks` names (what setup installs or configures) plus the connection when
+ * its test did not pass; other errors, such as a credential, are reported in `notBlocking`.
  */
 export type RecheckRequest = { candidate?: string };
 export async function recheckSetup(request: RecheckRequest = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary) {
@@ -123,8 +125,10 @@ export async function recheckSetup(request: RecheckRequest = {}, context: Connec
   const settings = await readSettings(home);
   const result = await checkSetup(context, versionReader);
   const downloads = (await downloadStatus({ home })).items;
+  const { blocking, notBlocking } = blockingChecks(result.checks, 'setup-recheck');
   let connection: Record<string, unknown>;
-  if (!['maa', 'server', 'settings'].every(id => result.checks.find(item => item.id === id)?.status === 'normal')) connection = { status: 'not-checked', reason: 'maa-check-required' };
+  // These three rows are only normal or error: discovery needs the MAA GUI, its CN profile and readable settings.
+  if (['maa', 'server', 'settings'].some(id => blocking.includes(id))) connection = { status: 'not-checked', reason: 'maa-check-required' };
   else try {
     const found = await discoverSetupConnections(context, adb);
     const counts = { adbCount: found.adbCount, failedAdb: found.failedAdb, candidates: found.candidates.length };
@@ -137,8 +141,9 @@ export async function recheckSetup(request: RecheckRequest = {}, context: Connec
   } catch (error) {
     connection = { status: 'unavailable', reason: error instanceof Error && connectionReasons.has(error.message) ? error.message : 'connection-check-failed' };
   }
-  const pending = [...result.checks.filter(item => item.status === 'error').map(item => item.id), ...(connection.status === 'connected' ? [] : ['connection'])];
-  const record = { ...result, exitCode: pending.length ? 1 : 0, downloads, connection, complete: pending.length === 0, pending };
+  const pending = [...new Set([...blocking, ...(connection.status === 'connected' ? [] : ['connection'])])];
+  // The exit code keeps meaning "there is an error" (`setup-exit`, from checkSetup); completion is `complete`.
+  const record = { ...result, exitCode: (result.exitCode || pending.length) ? 1 : 0, downloads, connection, complete: pending.length === 0, pending, notBlocking };
   await mkdir(settings.privateDirectory, { recursive: true });
   await writeEnvironmentRecord(settings.privateDirectory, record);
   return record;

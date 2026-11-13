@@ -79,7 +79,7 @@ test('every consumer of check results decides through blockingChecks with a regi
     'eval/maa-doctor/scenarios.ts': ['doctor-exit'],
     'skills/maa-core/scripts/credentials.ts': ['credentials-exit'],
     'skills/maa-core/scripts/doctor.ts': ['doctor-exit'],
-    'skills/maa-core/scripts/setup.ts': ['setup-exit'],
+    'skills/maa-core/scripts/setup.ts': ['setup-exit', 'setup-recheck'],
     'skills/maa-core/scripts/stage-run.ts': ['stage-retry'],
   });
   assert.deepEqual([...new Set(Object.values(consumers).flat())].sort(), [...checkPurposes].sort(), 'every purpose has a consumer');
@@ -95,6 +95,19 @@ test('stage-retry: errors in MAA, its configuration, the connection or the write
   }
   assert.deepEqual(blocking(['credential-nga', 'connection', 'skill-links']), { blocking: ['connection'], notBlocking: ['credential-nga', 'skill-links'] });
   assert.deepEqual(blockingChecks([{ id: 'connection', status: 'warning' }, { id: 'write-lock', status: 'normal' }], 'stage-retry'), { blocking: [], notBlocking: [] },
+    'warnings never block');
+});
+
+test('setup-recheck: errors in what setup installs or configures block completion; other features\' state is reported, not blocking', () => {
+  const blocking = (ids: string[]) => blockingChecks(ids.map(error), 'setup-recheck');
+  const blocks = ['maa', 'server', 'node', 'settings', 'private-directory', 'connection', 'configuration', 'write-lock'];
+  const reported = ['platform', 'version', 'configuration-fields', 'remote-control', 'credential-nga', 'credential-skland', 'credential-bilibili', 'private-files',
+    'skill-version', 'skill-links'];
+  assert.deepEqual([...blocks, ...reported].sort(), [...knownCheckIds].sort(), 'the table names every known check id');
+  for (const id of blocks) assert.deepEqual(blocking([id]), { blocking: [id], notBlocking: [] }, id);
+  for (const id of reported) assert.deepEqual(blocking([id]), { blocking: [], notBlocking: [id] }, `${id} is reported, not blocking`);
+  assert.deepEqual(blocking(['credential-nga', 'node', 'private-files']), { blocking: ['node'], notBlocking: ['credential-nga', 'private-files'] });
+  assert.deepEqual(blockingChecks([{ id: 'maa', status: 'warning' }, { id: 'node', status: 'normal' }], 'setup-recheck'), { blocking: [], notBlocking: [] },
     'warnings never block');
 });
 

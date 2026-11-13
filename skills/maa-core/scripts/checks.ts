@@ -35,7 +35,7 @@ export const knownCheckIds: readonly string[] = Object.freeze(Object.keys(groupO
  * purpose counts every error. Otherwise every check id is classified as blocking or not relevant, and an id in neither
  * list (a new or unknown check) blocks until it is classified: fail closed. Reasons: spec 「默认值及其来源」, 2026-11-14.
  */
-export const checkPurposes = ['doctor-exit', 'setup-exit', 'credentials-exit', 'stage-retry'] as const;
+export const checkPurposes = ['doctor-exit', 'setup-exit', 'credentials-exit', 'stage-retry', 'setup-recheck'] as const;
 export type CheckPurpose = typeof checkPurposes[number];
 export type PurposeRule = 'every-error' | { blocks: readonly string[]; notRelevant: readonly string[] };
 export const purposeRules: Readonly<Record<CheckPurpose, PurposeRule>> = Object.freeze({
@@ -60,6 +60,28 @@ export const purposeRules: Readonly<Record<CheckPurpose, PurposeRule>> = Object.
       'credential-nga', 'credential-skland', 'credential-bilibili', // used only by research and the account snapshot
       'private-files', // other records; the batch's own preparation and job files are verified directly
       'skill-version', 'skill-links', // the host's copies of these skills; MAA runs without them
+    ]),
+  }),
+  // The final setup recheck (ticket 08): is the environment setup was asked to install complete and usable? Only what
+  // setup installs or configures blocks `complete`; other features' state is reported in `notBlocking`. The recheck's
+  // own connection entry comes from a fresh discovery and transport test, not from this rule.
+  'setup-recheck': Object.freeze({
+    blocks: Object.freeze([
+      'maa', 'server', // the MAA GUI setup downloads or adopts, with its current configuration on a CN client
+      'node', // Node 24, which setup can download and which every skill script needs
+      'settings', 'private-directory', // the first-run settings and the private directory setup saves and prepares
+      'connection', // the adb and connection setup discovers, tests and saves
+      'configuration', // the MAA configuration the connection is saved into must be readable
+      'write-lock', // a configuration write (such as the connection write) whose result is not reconciled
+    ]),
+    notRelevant: Object.freeze([
+      'platform', // the recheck command itself refuses to run outside Windows (windows-required)
+      'version', // MAA version reminders only warn (spec 「检查与修法」)
+      'configuration-fields', // task, medicine and timer fields belong to daily and training; setup writes only connection fields
+      'remote-control', // a choice the user makes in MAA; setup does not configure it
+      'credential-nga', 'credential-skland', 'credential-bilibili', // optional, set by the user for research and the account snapshot
+      'private-files', // other features' records; setup's own environment record is rewritten by the recheck
+      'skill-version', 'skill-links', // the host's copies of these skills, installed and updated through the host
     ]),
   }),
 });
