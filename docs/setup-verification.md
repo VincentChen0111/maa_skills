@@ -56,8 +56,8 @@
 
 ### 未验证
 
-- 真模型行为评测：五个新场景以及因 SKILL 文字变化受影响的 07 五个 setup 场景、help 场景都没有运行。28 的可运行入口和登录预检尚未交付、维护者也还没有在专用登录目录登录；前后对照和分数不降由 [26](issues/26-v0-1-0-release-validation.md) 执行。`network-fixture.mjs` 的变化同时改变 13、14 成本／缺口场景的指纹，需以新运行器重测前基线。
-- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe` 只由 MAA 的 ci.yml 推断（见 [setup 来源](setup-sources.md)「R1 补充」）；platform-tools zip 为 `platform-tools/adb.exe`、蓝叠／夜神／逍遥的真实安装包主机未核实。GitHub 资产跳转到 `release-assets.githubusercontent.com` 由 R1 审查员只读核实；MuMu 下载接口跳转到 `a11.gdl.netease.com` 由本作者只读核对（没有下载安装包）。
+- 真模型行为评测：五个新场景（R4 后为六个，加 `setup-download-emulator-refused`）以及因 SKILL 文字变化受影响的 07 五个 setup 场景、help 场景都没有运行。28 的可运行入口和登录预检尚未交付、维护者也还没有在专用登录目录登录；前后对照和分数不降由 [26](issues/26-v0-1-0-release-validation.md) 执行。`network-fixture.mjs` 的变化同时改变 13、14 成本／缺口场景的指纹，需以新运行器重测前基线。
+- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe` 只由 MAA 的 ci.yml 推断（见 [setup 来源](setup-sources.md)「R1 补充」）；platform-tools zip 为 `platform-tools/adb.exe` 未核实。GitHub 资产跳转到 `release-assets.githubusercontent.com` 由 R1 审查员只读核实；六个模拟器厂商的下载链路由本作者 2026-11-13、2026-11-14 用 HEAD 逐跳只读核对（见 [setup 来源](setup-sources.md)「下载链路核对」），只代表核对当日，没有下载任何安装包，安装包内容没有核对。
 - 真实安装：没有运行任何安装程序，没有在本机安装 MAA、模拟器、adb 或 Node，也没有接触维护者的 MAA、模拟器或 adb。
 - Node 主版本不是 24 时的 CLI 放行只经代码阅读确认；本机只有 Node 24，没有用其他 Node 版本实际运行。
 - Linux CI 上两个 Windows 解压测试和 CLI 下载测试会跳过；Windows CI 尚未在本分支运行。
@@ -85,7 +85,7 @@ R2 修后实际运行（提交 `acebe2c`，工作树干净）：`npm run typeche
 R3 审查确认 R2 修复无问题，另在本包范围内发现一项 P2：夜神只放行 `yeshen.com`、逍遥只放行 `xyaz.cn`，而两者真实下载分别跳转到 `res06.bignox.com`、`download.microvirt.com`，所以永远下载不了。这和 R1 的 MuMu 是同一类缺陷，按维护者的复发规则（同类缺陷第二轮再现就不再逐条补路径）处理：
 
 - **唯一来源**：`setup-download.ts` 的 `emulatorVendors` 一张表，每个厂商有官网 `domains`（含子域名，沿用原范围）和已记录的下载链路 `chains`（起点地址、各跳主机，最后一跳是文件主机）。`vendorHosts` 只从链路取确切主机；plan 的起点检查、HEAD 逐跳和下载逐跳三处都只读这张表。原来 MuMu 专用的 `hosts` 字段删除。新增放行的确切主机只有 `res06.bignox.com`、`download.microvirt.com`，没有新增通配。
-- **链路核对**：本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对六个厂商的链路，没有下载任何安装包，结果和签名省略后的地址记录在 [setup 来源](setup-sources.md)「R3 下载链路核对」。蓝叠 CN 官网另列的 Win7 安装器 HEAD 返回 403、夜神 `win_64_12` 跳到 `.7z`，都没有收进表里。
+- **链路核对**：本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对六个厂商的链路，没有下载任何安装包，结果和签名省略后的地址记录在 [setup 来源](setup-sources.md)「下载链路核对」（该节 R4 后改名并加入 2026-11-14 复核）。蓝叠 CN 官网另列的 Win7 安装器 HEAD 返回 403、夜神 `win_64_12` 跳到 `.7z`，都没有收进表里。
 - **一致性测试** `tests/setup-download-vendors.test.ts`：表里恰好是六个完美支持厂商，每个至少一条链路，每条链路的起点和各跳主机都写在 `setup-sources.md` 中；逐条用网络替身回放「起点 → 各跳 → 文件主机」，出方案后只确认一次就下载成功，文件内容正确；再把最后一跳换成同公司未列出的主机（`a12.gdl.netease.com`、`res.ldplayer.net`、`cdn3.bluestacks.com`、`aliosscdn1.bluestacks.cn`、`res07.bignox.com`、`www.microvirt.com`），断言出方案被拒、该主机从未被访问。
 - **测试先行**：先只把链路数据写进表、判断仍走旧逻辑（临时保留原 MuMu 专用主机，并标明为红灯脚手架），一致性测试失败：夜神三条、逍遥一条报 `unofficial-source`，文档一致性也失败；随后删除脚手架、改为读表，并补全来源文档后全部通过。
 - **变异核对**：让 `vendorHosts` 返回空、让下载逐跳忽略表、给夜神加 `bignox.com` 通配、删掉逍遥的链路，四项都使一致性测试失败（依次 6、6、4、1 项）。
@@ -93,6 +93,55 @@ R3 审查确认 R2 修复无问题，另在本包范围内发现一项 P2：夜�
 - 规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」官方来源一行和模拟器文件名一行已同步；接口说明的模拟器一行改为指向这张表。
 
 R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typecheck` 通过；`node --test` 跑 7 个受影响文件（setup-download、setup-download-scenarios、setup-download-vendors、setup、setup-scenarios、setup-integration、eval-network）共 99 项全部通过；`node scripts/check.ts` 为 430 项，428 pass、1 fail、1 skip，唯一失败仍是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」，这次报 `maa-start-timeout`（此前两次为 `maa-close-timeout`、一次单独运行为 `maa-process-path-unavailable`），本票未改动它引用的文件，按协调者要求只报告。随后单独运行：privacy、tracker、metadata 均为空，评分规则自检 7 条／样例 14 个通过。本次修复已超出三轮审查上限，没有第四轮独立审查；是否授权复核和合并由维护者决定。
+
+### 第四轮之后的修复（交第五轮审查，2026-11-14）
+
+维护者为本任务放开了审查轮数。第四轮独立审查只审 R3 之后的三个提交，报告两项，协调者都接受。修复提交 `87721e6`；本节所在的文档提交另记。
+
+| 意见 | 处理 |
+| --- | --- |
+| P2 蓝叠 5（CN）永远下载不了：唯一记录的地址 `aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` 对没有 Referer 的请求返回 403（阿里云 OSS 防盗链，`x-oss-ec: 0003-00000501`）；脚本只把 404 当失败，所以仍出方案（大小未知），确认后必然 `failed / source-unavailable`；一致性测试的替身总回 200，看不到这一点 | 见下面各条 |
+| P3 `setup-sources.md` 两处错误：「未核实」仍说蓝叠、夜神、逍遥的真实下载主机要真实发行包才能确认，和上面已用 HEAD 核对的表矛盾；夜神三个起点合写成「约 572 MB」 | 「未核实」只留仍未核实的事实（MAA zip、platform-tools zip、安装包内容、蓝叠 5 的 403 以后是否解除）；夜神三个安装包分开写：`win_64` 572,471,032 字节（路径日期 20241211）、`win_64_9` 600,709,368 字节（20250226）、`fullPackage?formal` 431,437,560 字节（20250317）。本文件「未验证」一节的同一旧说法一并改正 |
+
+这是本包第三次出现「支持的厂商在真实环境下载不了」（R1 MuMu 文件名、R3 夜神／逍遥主机、R4 蓝叠 5 的 403），按维护者的复发规则处理：
+
+- **一个判断、一个出处**：`setup-download.ts` 的 `chainScriptable(statuses)`，任何状态是 401 或 403 就是官方服务器拒绝脚本请求。使用者只有两个：`request()`（全文件唯一发网络请求的地方，每一跳都检查，覆盖 MAA／Node／adb 的索引读取和 HEAD、四类程序的下载）和 `vendorScriptable(vendor)`（按厂商表记录的状态）。`resolveEmulator` 一开始就调用 `vendorScriptable`，plan 和 download 都经 `resolve_` 走到这里，所以蓝叠 5 不出方案、不发任何请求。plan 时任何一跳 401／403 抛 `source-refused`（CLI 输出 `{"status":"rejected","reason":"source-refused"}`，退出码 1）；下载 GET 的任何一跳 401／403 记为 `failed / source-refused`；都不重试、不换请求头。下载时登记记录之前的那次 HEAD 若被拒，和已有的 `unofficial-source` 一样直接拒绝、不请求文件、不写记录。
+- **不伪造请求头**：脚本只发 User-Agent `maa-skills-setup`（读 GitHub 索引另加 Accept），不发 Referer 或任何模仿浏览器的请求头。是否带官网页面作 Referer 是只有维护者能定的新规则，已写进来源文档和规格「默认值及其来源」：「若维护者同意带官网页面作 Referer，需作为新规则登记」。目前没有授权。
+- **厂商表记录核对事实**：每个厂商 `checked: '2026-11-14'`；每条链路 `observed` 记录每个地址的 HEAD 状态（MuMu、蓝叠国际版 `[302, 200]`，雷电 `[200]`，夜神 `[302, 200]`，逍遥 `[303, 200]`，蓝叠 5 `[403]`）。
+- **蓝叠 5 改由用户自己下载**（设计默认值，2026-11-14）：已核对 `run-emulator-installer` 存在，是用户步骤（用户自己运行安装程序并在安装窗口接受条款），不需要文件路径；之后 `emulator-first-run`、`game-client`（用户）和 `connect-adb`、`recheck`（skill）照常。`recheckSetup` 只把下载状态带进环境记录，检查项不含模拟器，不依赖下载记录（代码阅读）。SKILL 第 3 步写明：用户选 `bluestacks-cn` 时不用取地址；遇到 `source-refused` 告诉用户原因，请用户在自己的浏览器里从官网下载，再从运行安装程序这一步继续，不需要把文件交给脚本，不加请求头、不换地址或镜像。
+- **登记**：规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」新增一行；接口说明的模拟器一行和下载失败原因；SKILL 第 3 步；来源文档新增「官方服务器拒绝脚本请求」一节。这四处文档里的「脚本不能下载的厂商」列表由一致性测试与厂商表比对。
+- **评测**：新增场景 `setup-download-emulator-refused`（不授权下载；期望读偏好和 check，没有下载、没有文件变化）。离线重放在 `.agents`、`.claude` 两个布局下评分 pass；已安装 CLI 测试断言蓝叠 5 的 `plan` 返回退出码 1、`source-refused`，没有新增下载事件。真模型运行：未验证（同上「未验证」）。
+
+**真实网络只读核对（2026-11-14，本机时间 00:40 前后）**：Node fetch 只发 HEAD、`redirect: 'manual'`、只带 User-Agent `maa-skills-setup`，每个 Location 单独再 HEAD；夜神后两条起点 Node 连接超时，改用 `curl -I`（同样只发 HEAD、不跟随跳转、同一 User-Agent）。没有下载安装包，没有发送 Referer 或浏览器请求头。结果：蓝叠 5 起点 403、`x-oss-ec: 0003-00000501`（Node fetch 一次、`curl -I` 一次）；其余链路的主机和状态与 R3 一致，大小与文件名见 [setup 来源](setup-sources.md)「下载链路核对」。夜神三个文件的 Content-Disposition 都是 `nox_setup_v7.0.6.2_full.exe`，但大小不同。
+
+**一致性测试** `tests/setup-download-vendors.test.ts`（67 项）：
+
+1. 表结构：恰好六个完美支持厂商；每条链路 `observed` 每个地址一个，前面都是跳转，最后是 200 或 401／403；起点、各跳主机和核对日期都写在来源文档中。
+2. 由记录状态推出的「可脚本下载」恰好拒绝 `bluestacks-cn`（测试里固定写出，改变需要新的核对和文档）；来源文档、规格、接口说明、SKILL 里每一处「脚本不能下载的厂商」列表都与之相同。
+3. 五个可下载厂商的 8 条链路按记录状态回放：出方案、确认一次后下载成功，内容正确；每个请求只带 User-Agent。
+4. 蓝叠 5：带地址和不带地址的 plan、以及 download 都是 `source-refused`；替身没有收到任何请求，下载目录为空。
+5. 8 条链路的每一跳分别注入 401 和 403（28 项）：plan 为 `source-refused`，只访问到该跳为止，每个地址一次。
+6. 8 条链路的每一跳在下载 GET 注入 403（14 项）：`failed / source-refused`，GET 到该跳为止、每个地址一次，不保留文件，`downloads` 状态同为 `failed / source-refused`。
+7. 跳到同公司未列出的主机：plan 跳和**下载跳**各断言一次（下载跳：方案按记录链路正常给出，只有下载 GET 被引到该主机），都被拒且该主机从未被访问。
+8. 枚举 `setup-download.ts` 的全部生产者和使用者（按顶层声明归属，去掉注释）：发网络请求的只有 `request`；调用 `request` 的是 `text`、`resolveNode`、`resolveEmulator`、`transfer`；调用 `text` 的是 `resolveMaa`、`resolveNode`、`resolveAdb`；`chainScriptable` 的使用者是 `request`、`vendorScriptable`；`vendorScriptable` 的使用者是 `resolveEmulator`；`emulatorVendors` 和 `vendorHosts` 的使用者是 `resolveEmulator`、`transfer`；`resolveEmulator` 只由 `resolve_` 调用，`resolve_` 只由 `planDownload`、`executeDownload` 调用，`transfer` 只由 `executeDownload` 调用。全仓库（ts／mjs／js）只有 `skills/maa-core/scripts/setup.ts` 引入该模块（测试除外），引入的名字恰好是 `DownloadError`、`downloadStatus`、`executeDownload`、`installDownload`、`planDownload` 和类型 `DownloadContext`；表和两个判断函数的名字除本模块外只出现在这个测试里。
+
+`tests/setup-download.test.ts` 新增一项：MAA 索引 403、adb 索引 401、Node 安装包 HEAD 403 都不出方案（`source-refused`）；MAA 出方案后文件主机下载 403，记为 `failed / source-refused`，该地址只请求一次，只留下失败记录。
+
+**测试先行**：
+
+- 先只把 `checked`／`observed` 写进表、加上 `chainScriptable`／`vendorScriptable` 但不接入（红灯脚手架），新测试 67 项中 49 项失败：蓝叠 5 为 `Missing expected rejection`（仍出方案，即审查发现的缺陷）；各跳 401／403 在 plan 时 16 项仍出方案、12 项报 `file-name-unknown`，都不是 `source-refused`；下载跳 403 的 14 项报 `source-unavailable`；枚举测试缺少 `request` 这个使用者；两项文档测试失败。接入 `request()` 和 `resolveEmulator` 后只剩两项文档测试失败，补齐文档后 67 项全部通过。
+- 在 `e2f74bb` 原样导出（`git archive`）的副本上：新测试文件在链接时就失败（`does not provide an export named 'vendorScriptable'`）；`setup-download.test.ts` 新增的一项失败（`source-unavailable`，应为 `source-refused`），当前代码通过。
+- 变异核对（在副本上改一处、跑、恢复）：
+
+| 变异 | `e2f74bb` 的旧测试 | 当前测试 |
+| --- | --- | --- |
+| 下载 GET 的主机检查对模拟器一律放行 | setup-download-vendors 11/11、setup-download 18/18、setup-download-scenarios 18/18 全部通过（复现审查员的发现） | setup-download-vendors 9 项失败（8 条链路的下载跳断言及其父项） |
+| 下载 GET 的主机检查对所有程序一律放行 | vendors、scenarios 全部通过，只有 setup-download 的 MAA 跳转用例 1 项失败 | setup-download-vendors 9 项失败 |
+| 去掉 `resolveEmulator` 里的 `vendorScriptable` | — | 3 项失败（蓝叠 5 被访问；枚举） |
+| 去掉 `request()` 里的 `chainScriptable` | — | 45 项失败 |
+| 判断只认 403、不认 401 | — | 15 项失败 |
+
+**R4 修后实际运行**（工作树内容与 `87721e6` 相同）：`npm run typecheck` 通过；逐个运行 `node --test`：setup-download-vendors 67/67、setup-download 19/19、setup-download-scenarios 20/20、setup 28/28、setup-scenarios 16/16、setup-integration 5/5，全部通过；`node scripts/privacy.ts` 无发现；metadata 1/1。`eval/network-fixture.mjs` 未改，没有运行 eval-network；按要求没有运行 `tests/maa-process.test.ts` 和完整入口 `node scripts/check.ts`（由协调者在固定提交上运行）。
 
 ## 当前交付结论
 
