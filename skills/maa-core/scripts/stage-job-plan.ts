@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type ApprovedJob = { id: number; hash: string; sourceHash: string; source: { url: string; readAt: string; sha256?: string } };
+// support: the user explicitly approved borrowing one support unit for this slot (需借助战); the GUI 「借助战」 switch is set by the user.
+export type ApprovedJob = { id: number; hash: string; sourceHash: string; source: { url: string; readAt: string; sha256?: string }; support?: { slot: string; members: string[] } };
 export type ApprovedJobPlan = { reportHash: string; map: string; entries: { stageId: string; code: string; difficulty: 'normal' | 'raid'; difficultyGroup: string; loops: number; primary: ApprovedJob; alternates: ApprovedJob[] }[] };
 const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 export function approvedJobFile(privateDirectory: string, reportHash: string, id: number): string {
@@ -25,7 +26,9 @@ export function approvedJobList(plan: ApprovedJobPlan, privateDirectory: string)
     const ids = new Set<number>();
     for (const job of [entry.primary, ...entry.alternates]) {
       if (!job || !hash(job.hash) || !hash(job.sourceHash) || !Number.isSafeInteger(job.id) || job.id < 1 || ids.has(job.id)
-        || job.source?.url !== `https://prts.maa.plus/copilot/get/${job.id}` || !Number.isFinite(Date.parse(job.source.readAt))) throw new Error('job-plan-invalid');
+        || job.source?.url !== `https://prts.maa.plus/copilot/get/${job.id}` || !Number.isFinite(Date.parse(job.source.readAt))
+        || job.support !== undefined && (typeof job.support?.slot !== 'string' || !job.support.slot || !Array.isArray(job.support.members) || !job.support.members.length
+          || job.support.members.some(name => typeof name !== 'string' || !name))) throw new Error('job-plan-invalid');
       ids.add(job.id);
     }
     for (let repeat = 0; repeat < entry.loops; repeat++) list.push({ Name: entry.code, FilePath: approvedJobFile(privateDirectory, plan.reportHash, entry.primary.id),
