@@ -20,11 +20,11 @@
 4. 用户决定仍然应用时，再跑一次 `check`，加上 `"decision":{"acceptUnverified":["gate-7",...],"userWords":"用户这次的原话"}`；`acceptUnverified` 要覆盖当前全部未核实项。决定随这次写入记进私有目录的待执行和运行记录。
 5. 应用：`base-apply.ts apply`，输入在第 4 步的基础上加 `"host":"codex"或"claude"`、`"expectedRevision":"<第 1 步的 revision>"`。apply 会把全部核对重新跑一遍，结果和 check 不一致时拒绝。`closed-confirmation-required`、`busy`、`unknown` 按[配置事务接口](configuration.md)处理：只有用户明确确认没在操作已关闭的 MAA 后才加 `"closedConfirmed":true`。
 6. 报告结果：
-   - `complete`：列出 `changedKeys` 和备份位置 `backup`（私有目录里的相对路径），说明读回只核对了写入的值和排班副本的字节。排班文件每个计划都带时间段，由 MAA 图形界面在每次运行时按当时时间选计划；不要说 MAA 已经按时间切换，也不要说游戏里已经换好班。
-   - `unchanged`：MAA 已经指向这份排班，没有动 MAA。
+   - `complete`：列出 `changedKeys` 和备份位置 `backup`（私有目录里的相对路径），说明读回只核对了写入的值和排班副本的字节。`changedKeys` 为空、`copyInstalled` 为 true 时，MAA 的设置本来就指向这份排班，这次只是在关停 MAA 后重新装回了批准的排班副本，配置文件没有改。排班文件每个计划都带时间段，由 MAA 图形界面在每次运行时按当时时间选计划；不要说 MAA 已经按时间切换，也不要说游戏里已经换好班。
+   - `unchanged`：MAA 已经指向这份排班，副本也和批准的一致，没有动 MAA。
    - `rejected`：按 `reason` 说明，什么都没写。
    - `unknown`：保留锁、备份和记录，交给 maa-doctor 先只读核对；不删锁，不重试，不重放。maa-doctor 目前不能自动恢复基建这类附加文件的写入，只能报告证据，由用户核对后决定。
-7. `configuration.notes` 里有 `infrast-task-disabled`（这个基建任务没勾选，MAA 不会运行它）或 `weekly-schedule-skips-days`（周计划里有几天不运行）时告诉用户；是否改由用户在 MAA 里决定，不顺手修改。
+7. `configuration.notes` 里有 `infrast-task-disabled`（这个基建任务没勾选，MAA 不会运行它）时告诉用户；是否改由用户在 MAA 里决定，不顺手修改。周计划里有几天不运行不是提示，而是未核实项 `maa-weekly-schedule`（见下文）。
 
 ## 拒绝原因
 
@@ -34,7 +34,8 @@
 | `report-not-found`、`report-content-mismatch`、`base-approval-scope-mismatch`、`base-reference-invalid` | 引用不对、报告找不到或批准后被改过 | 重新出报告并批准 |
 | `base-plan-changed` | account 的排班文件在批准后被改过 | 重新出报告并批准 |
 | `plan-path-outside-private`、`plan-path-invalid` | 排班文件或副本的路径（包括经过链接）落在私有目录外 | 不写入；在私有目录里重新生成 |
-| `base-plan-content-mismatch`、`base-plan-copy-changed` | 报告里的排班或已有副本和批准的 SHA-256 对不上 | 不写入；重新出报告，副本异常交 maa-doctor |
+| `base-plan-content-mismatch` | 报告里保存的排班和批准的 SHA-256 对不上 | 不写入；重新出报告并批准 |
+| `base-plan-copy-changed` | 私有目录里的排班副本 `plan.applied` 和批准的字节不一样，常见原因是在 MAA 里手动调过这份排班；MAA 现在读的就是改过的内容 | 不覆盖、不删除、不移动这个文件，重新批准也没用（同一份排班的副本路径不变）。问用户要哪样：想继续用改过的排班，就不再应用这一份；想换回批准的排班，请用户自己把这个文件移走或删掉（想留着修改就先移到别处），之后重新 `check`，结果是 `ready`、`configuration.copy` 为 `absent`，再 `apply` 只装回批准的副本 |
 | `base-snapshot-changed` | 账号快照在出报告之后变了，旧的批准不能证明新内容 | 重新出报告并批准 |
 | `base-snapshot-unavailable`、`base-tables-unavailable`、`base-recheck-unavailable` | 现在读不到快照或固定表，无法重新检查 | 稍后再试；不按旧结果执行 |
 | `base-plan-not-applicable` | 现在重新检查有错误或不通过的验收门（`check` 里有明细） | 说明是哪一项；由 account 改方案 |
@@ -43,4 +44,9 @@
 | `lock-requires-reconciliation` | 有写入在进行（busy）或上次结果未知（unknown） | busy 等待；unknown 交 maa-doctor |
 | `maa-directory-unset` | 没设 MAA 目录 | 先用 maa-setup 设置 |
 
-`unverified` 里除了验收门（`gate-N`）和名表、持有类的项，还有 `maa-timers`：这个配置的 MAA 每日定时和排班检查用的运行时间不一致，验收门里的心情结论可能不适用。用户自己在那些时间手动运行时可以接受。
+副本不在了（例如用户按上一行移走了改过的文件）不是拒绝原因：MAA 的四个字段已经指向它时，`check` 给出 `ready`、`configuration.changes` 为空、`configuration.copy` 为 `absent`，`apply` 经统一写入器（锁、关停 MAA、备份、装回副本、读回）只装回批准的副本，不改配置文件。
+
+`unverified` 里除了验收门（`gate-N`）和名表、持有类的项，还有两项 MAA 配置里的事实：
+
+- `maa-timers`：这个配置的 MAA 每日定时和排班检查用的运行时间不一致，验收门里的心情结论可能不适用。用户自己在那些时间手动运行时可以接受。
+- `maa-weekly-schedule`：这个基建任务开着周计划，有几天不运行（证据里列出是哪几天）。那天 MAA 跳过整个基建任务、不换班，前一天最后一班一直上到下次运行，验收门的心情结论在这几天可能不成立。是否改周计划由用户在 MAA 里决定，不顺手修改。
