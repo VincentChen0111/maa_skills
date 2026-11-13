@@ -36,7 +36,7 @@
       "id": "timer-schedule",
       "behaviour": "定时字段 Id/Config/Hour/Minute/IsEnabled（false 关闭、true 每日、null 或省略为单次）、八个定时槽；按本机本地时间，定时前两分钟切换配置，午夜跨日，单次定时触发后置为 false",
       "skills": ["maa-core", "maa-daily", "maa-doctor"],
-      "tickets": ["05", "24"],
+      "tickets": ["05", "23", "24"],
       "evidence": ["docs/daily-verification.md", "docs/training-sources.md", "docs/maa-version-sources.md"],
       "sources": [
         { "path": "src/MaaWpfGui/Configuration/Global/Timer.cs", "blob": "e65ec2bf0b7c3848604665a8e7d7b8aff5036576" },
@@ -270,6 +270,47 @@
       "deviceVerified": []
     },
     {
+      "id": "base-plan-schedule",
+      "behaviour": "基建排班生成与检查：自定义基建排班协议的字段和取值（plans 的 period、duration、Fiammetta、drones 和十个设施键，房间对象的字段，产物取值，扩充协议的 layout、operators、metadata）；period 只由图形界面处理，按时间取文件里第一个时间段包含当前时间（两端都含）的计划，时间段重叠时选靠前的，找不到用第 0 个；plan_index 只要求在范围内，没有计划数上限；设施键、字段名和产物按字符串精确比较；菲亚梅塔 pre 在全部换班之前、post 在之后执行；无人机的 room 和 index；自定义模式下产物不一致时 MAA 会尝试切换；换班按名字逐字相等认人；MAA 的干员名表是 resource/battle_data.json 里无人机以外职业的 chars[*].name",
+      "skills": ["maa-account", "maa-core"],
+      "tickets": ["22"],
+      "evidence": ["docs/base-plan-verification.md"],
+      "sources": [
+        { "path": "docs/zh-cn/protocol/base-scheduling-schema.md", "blob": "c536a3854929bdf1768df0691d9a501bbac162cc" },
+        { "path": "src/MaaCore/Task/Interface/InfrastTask.cpp", "blob": "3f4fd2c56214df307f230a627a7f2f0ca3171643" },
+        { "path": "src/MaaCore/Task/Infrast/InfrastProductionTask.cpp", "blob": "d422a66f8e64bfe779b661d5269583a3693c5b76" },
+        { "path": "src/MaaCore/Task/Infrast/InfrastAbstractTask.cpp", "blob": "a736eccf0bf32f165f40b58930ffc48b512c179e" },
+        { "path": "src/MaaCore/Config/Miscellaneous/BattleDataConfig.cpp", "blob": "c0a37116b6f7a494864466f0b1f5acd175318ce8" },
+        { "path": "resource/battle_data.json", "blob": "9af755409a67ada8df565e5bc613152bc0e855d8" },
+        { "path": "src/MaaWpfGui/Models/CustomInfrastConfig.cs", "blob": "bac7c7315b47e2d5f0972ee212bcbbbf7a8b66e9" },
+        { "path": "src/MaaWpfGui/ViewModels/UserControl/TaskQueue/InfrastTaskUserControlModel.cs", "blob": "f8aa23bbb86ec3aa7379e327c33589a6bb1820ed" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "base-plan-apply",
+      "behaviour": "应用已批准的基建排班：gui.new.json 里基建任务的 Mode（InfrastMode，Custom 为 10000，写成名字，读时名字和数字都认）、Filename、PlanSelect（-1 按时间轮换）、CustomFileType（user_defined）、RoomList（Room 加 IsEnabled，IsEnabled 只在为 false 时写出）、UseWeeklySchedule 和 WeeklySchedule（DayOfWeek 到 bool 的字典，键经容错枚举转换器写成名字，读时名字和数字都认）；读配置时对 Filename 和 PlanSelect 的修正；保存时只省略 null；运行时周计划当天不运行就跳过整个任务，非常规模式只把勾选的房间按原顺序作为设施列表，只有自定义模式才传 filename 和 plan_index；MaaCore 只执行设施列表里的设施，列表里有不认识的名字时整个任务不接受；房间名与排班设施键的对应",
+      "skills": ["maa-core", "maa-daily"],
+      "tickets": ["23"],
+      "evidence": ["docs/base-apply-verification.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/InfrastTask.cs", "blob": "e967ea0c782a85bc3cb234eea6d2421e0b99783e" },
+        { "path": "src/MaaWpfGui/Utilities/JsonPredictAttribute.cs", "blob": "a84555aad5488f31654630fa2173589ed130a989" },
+        { "path": "src/MaaWpfGui/Configuration/Converter/JsonPredictSerializationModifier.cs", "blob": "83d5c145a522077af161480ff474d5954f7fae4f" },
+        { "path": "src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs", "blob": "2a33dd8d4c690f7180435c6ea0be8258eb1af724" },
+        { "path": "src/MaaWpfGui/Configuration/Converter/TolerantEnumConverter.cs", "blob": "eda9eb0a80b3407bb5be7ac3020f118b22561194" },
+        { "path": "src/MaaWpfGui/Configuration/Converter/TolerantEnumConverterFactory.cs", "blob": "79bfc1eb2856d3236d9eb7b325ff56b26bccfc89" },
+        { "path": "src/MaaWpfGui/ViewModels/UserControl/TaskQueue/InfrastTaskUserControlModel.cs", "blob": "f8aa23bbb86ec3aa7379e327c33589a6bb1820ed" },
+        { "path": "src/MaaWpfGui/Models/AsstTasks/AsstInfrastTask.cs", "blob": "c5a76fae277d4ac609ec187f53230d273db622ee" },
+        { "path": "src/MaaWpfGui/Constants/Enums/InfrastRoomType.cs", "blob": "322440fdf25e3462fc743f7b0a8a70e26c8dc089" },
+        { "path": "src/MaaCore/Common/AsstInfrastDef.h", "blob": "ac89f511e3cc46222c456cfaf3ede9ff5b39e00a" },
+        { "path": "src/MaaCore/Task/Interface/InfrastTask.cpp", "blob": "3f4fd2c56214df307f230a627a7f2f0ca3171643" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
       "id": "mastery-training",
       "behaviour": "专精训练：OperProgress 任务与计划字段、OperProgressDetail 与 InfrastTrainingTimeLeft 回调、开训确认的组合证据、自定义基建排班的 Training 房间与禁续训、导师评分只是选择策略",
       "skills": ["maa-core", "maa-daily"],
@@ -308,14 +349,6 @@
         "docs/zh-cn/protocol/integration.md"
       ],
       "note": "碎石与临期药：FightTask.cs 的 UseStone、StoneCount、UseStoneAllowSave、UseExpiringMedicine、MedicineExpireDays、UseExpireMedicineForActivity 和 OnDeserialized 对 UseStone 的重置；界面设置到 MaaCore 参数的换算；FightTask.cpp 对 medicine_expire_days、stone 的处理和临期药 9999 的确认次数上限；MedicineCounterTaskPlugin.cpp 的临期药处理；界面的临期天数范围；集成文档的参数说明。27 交付时登记为条目"
-    },
-    {
-      "ticket": "22",
-      "locations": [
-        "docs/zh-cn/protocol/base-scheduling-schema.md",
-        "resource/battle_data.json"
-      ],
-      "note": "基建排班生成：排班协议的 period（hh:mm、跨天拆段，由图形界面处理）和计划重叠时的选择；干员名表。22 交付时登记为条目"
     }
   ]
 }

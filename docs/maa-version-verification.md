@@ -20,9 +20,9 @@
 | 1 条目记录行为、位置/指纹、受影响 skill、两类已核版本；只存指纹 | 注册表 schema 由 `validateRegistry` 校验；`tests/maa-version-check.test.ts`「the repository registry covers …」逐条核对 skill、来源记录和工单存在 | 离线通过 |
 | 2 为已实现的依赖登记证据，不自动登记起点经验 | 同一测试扫描全部 `docs/*-sources.md` 和 skill 参考里在固定提交上引用的 MAA 文件，每个都必须已登记或待登记；条目的 blob 与已有来源记录逐一一致（见来源） | 离线通过；条目范围的完整性还靠审查 |
 | 3 登记 27 的位置（未交付则由 27 补上） | 注册表 `pending` 的 27 一项；同一测试在 27 标为已完成而仍在待登记时失败 | 离线通过；正式条目由 27 交付时登记 |
-| 4 沿用 07 的读法；记录带版本号；计划和待执行记录写版本，执行或恢复时报告差异，未核实只提醒 | `tests/maa-version.test.ts` 的记录与版本标记测试；`tests/maa-config.test.ts`「the pending record carries …」；`tests/doctor.test.ts`「recovery reports a changed MAA or record version …」（changed/same/unrecorded/格式错误四种）和「a restoration writes the current version stamp …」；`tests/stage-jobs.test.ts`「preparation reports …」「a saved stage report records …」；`tests/training-plan.test.ts`「a plan records the MAA and record versions …」 | 离线通过；基建排班由 22/23 实现时沿用 |
+| 4 沿用 07 的读法；记录带版本号；计划和待执行记录写版本，执行或恢复时报告差异，未核实只提醒 | `tests/maa-version.test.ts` 的记录与版本标记测试；`tests/maa-config.test.ts`「the pending record carries …」；`tests/doctor.test.ts`「recovery reports a changed MAA or record version …」（changed/same/unrecorded/格式错误四种）和「a restoration writes the current version stamp …」；`tests/stage-jobs.test.ts`「preparation reports …」「a saved stage report records …」；`tests/training-plan.test.ts`「a plan records the MAA and record versions …」 | 离线通过；基建排班由 22/23 实现时沿用（2026-11-14：23 的应用经统一写入器，待执行记录带版本；22 的基建报告还没有写版本，未完成，见「合并 22、23」） |
 | 5 任务类型集合进依赖条目，核实后采用 | 条目 `task-type-set` 的 `facts`；「the task type set entry lists every type the configuration writer identifies …」；v6.19.0 起不变的说法核对后不成立，见来源 | 离线通过；列表在 4 个提交上读取核对 |
-| 6 登记 10、16、22 的位置 | 10 的位置在 5 条条目里；16、22 在 `pending` | 离线通过 |
+| 6 登记 10、16、22 的位置 | 10 的位置在 5 条条目里；16、22 在 `pending`（2026-11-14 都已交付，改为条目 `stage-run-evidence`、`base-plan-schedule`，见「合并 10 最终版」「合并 22、23」） | 离线通过 |
 | 7 正式版全部未变才开 PR，变化或缺失开 issue，不错误认证 | 「a fixed sample source tree …」（未变、变化、缺失三种和 CLI 退出码）；「an unchanged stable release opens one PR …」；「a refused PR fails the run every day until it can be opened from the existing branch; a partly written branch is completed」（仓库不允许 Actions 开 PR 时每天失败，打开设置后的下一次运行从已有分支开出 PR；分支上缺写的文件只补那一个）；「a stable release with a changed or missing entry opens an issue …」 | 离线通过（网络与 GitHub 用替身） |
 | 8 beta 变化提前预警，不进列表；重复检查不重复通知 | 「a beta with changes opens one early-warning issue …」；PR、issue、beta 三种的重复检查，以及后续版本带相同变化、已有 PR 缺标签（补标签，不开第二个）两种情况 | 离线通过 |
 | 9 核实记录接入 setup/doctor；源码已核后提醒可升级，未核实只提醒 | `tests/maa-version.test.ts`「a newer source-verified stable release …」「setup reads the record …」；`tests/doctor-checks.test.ts`「an empty verification record is stated as empty, and a newer source-verified release is the same reminder as in setup」 | 离线通过 |
@@ -67,6 +67,18 @@
 - 只读网络：`raw.githubusercontent.com` 读 34 个文件（29 个在 v6.21.4 和 v6.22.0 两个提交上都读，5 个只读 v6.21.4，用来对照已登记的 v6.22.0 指纹），放在系统临时目录里算 blob、看 diff 和解析 JSON，算完删除，没有放进仓库。
 
 逐个运行的结果（都在合并后的工作区里）：`npm run typecheck` 通过；`check-purposes` 5/5、`maa-version` 5/5、`maa-version-check` 12/12、`doctor` 80/80、`doctor-checks` 27/27、`doctor-scenarios` 19/19、`setup` 29/29、`setup-scenarios` 22/22、`stage-jobs` 8/8、`stage-jobs-matching` 11/11、`stage-jobs-regressions` 11/11、`stage-run` 15/15、`stage-run-rerun-gate` 30/30、`stage-run-alternates` 11/11、`stage-run-flow` 4/4、`stage-run-scenarios` 1/1、`credentials` 6/6、`help-installation` 6/6、`metadata` 2/2、`maa-config` 60/60；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。合并提交本身（调整之前）`maa-version-check` 有 1 项失败，就是上面的注册表一项。没有跑完整离线入口。
+
+## 合并 22、23（2026-11-14）
+
+协调者先把带 22 的 main（`49e64c3`）合进本分支（`9756371`），这次再合入带 23 的 main（`e39d463`），合并提交 `ff4ff06`。冲突三处，都按两边保留解决：`docs/issues/INDEX.md` 取本分支后用 `node scripts/tracker.ts --write` 重新生成；`docs/spec.md`「默认值及其来源」两边新增的行都保留，按工单号排成 22、23、25；`skills/maa-core/scripts/maa-config.ts` 两边各加了一行导入（25 的版本标记、23 的基建授权）和一个待执行记录字段（25 的 `versions`、23 的 `baseManifest`），合并后导入都保留，待执行记录同时写这两项。恢复时只接受 `versions` 这一个可选字段，没有改：带 `trainingManifest` 或 `baseManifest` 的待执行记录照 main 原来的规则不能自动恢复，与 23「结果未知时 doctor 不自动恢复排班副本」一致。
+
+- 依赖注册表：22 已交付，`tests/maa-version-check.test.ts` 因此失败（「ticket 22 is complete; move its pending locations into entries」）。按本票自己的规则把 22 改为条目 `base-plan-schedule`，新登记 23 的 `base-plan-apply`，`timer-schedule` 的工单加上 23；核对方法和逐文件结论见[来源记录](maa-version-sources.md)「合并 22、23 时登记的条目」。注册表现为 19 条条目、87 个文件，待登记只剩 27；经生成器重新生成的随包核实记录不变。规格「25 未交付工单」一行同步改了。
+- 覆盖测试的范围：测试只扫描 `docs/*-sources.md` 和 skill 参考，22、23 的 MAA 事实写在各自的 `*-verification.md` 里，所以测试没有发现它们还没登记；这次逐行对照两张表登记，并用测试的同一个匹配式临时扫了 `docs/` 下全部页面，只剩 05 记录里那个已说明的旧路径。测试本身没有改。
+- 检查结果的用途：23 没有新增检查编号，也没有直接比较检查状态的地方（`base-apply.ts` 不读共享检查）；`maa-timers`、`maa-weekly-schedule` 是排班检查的未核实项，不是检查编号。四种用途的归类不变。
+- 版本标记（验收第 4 条里的「以及之后的基建排班」）：23 的应用经统一写入器写配置，待执行记录带版本，doctor 恢复时报告差异，这一半已经有了。另一半没有：22 保存的基建报告不写生成时读到的 MAA 版本和核实记录版本（`base-report.ts` 只记所依据的协议版本 v6.21.4，代码注释和 [22 的验证记录](base-plan-verification.md)都写明留给 25），所以 23 应用时也无法报告与报告生成时的差异。补上要改 22 的报告内容和「修订后哪些结果变了」的判断，不在这次合并的范围里，记为未完成，交协调者决定由哪个包补上。
+- 只读网络：`raw.githubusercontent.com` 读 17 个文件在 v6.21.4 和 v6.22.0 两个提交上的内容，放在系统临时目录里算 blob、看 diff、解析 JSON，算完删除，没有放进仓库。
+
+逐个运行的结果（都在登记之后的工作区里）：`npm run typecheck` 通过；`maa-version-check` 12/12、`maa-version` 5/5、`check-purposes` 5/5、`base-apply` 16/16、`base-apply-scenarios` 1/1、`base-plan` 15/15、`base-report` 7/7、`base-report-scenarios` 2/2、`doctor` 80/80、`doctor-scenarios` 19/19、`stage-jobs` 8/8、`stage-run` 15/15、`maa-config` 60/60、`help-installation` 6/6、`metadata` 2/2；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。合并提交 `ff4ff06` 上（登记之前）`maa-config` 60/60、`base-apply` 16/16，`maa-version-check` 11/12，失败的就是上面的注册表一项。没有跑完整离线入口。
 
 ## 设计默认值
 
