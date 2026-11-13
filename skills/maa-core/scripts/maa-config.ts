@@ -7,13 +7,14 @@ import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 import { prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
+import { baseReferencePattern, buildBaseChanges, checkGrant, inspectBaseAsset, installBaseAsset, loadBaseAsset, type BaseAsset, type BasePlanGrant } from './base-config.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
   maaDirectory: string; privateDirectory: string; host: 'codex' | 'claude';
   expectedRevision: string;
   closedConfirmed?: boolean;
-  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant };
+  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant; basePlan?: BasePlanGrant };
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
@@ -56,17 +57,23 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   }
   return JSON.stringify(value);
 }
-function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery') {
-  if (['medicineCount', 'jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
+function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', baseAsset?: BaseAsset | null) {
+  if (['medicineCount', 'jobPlan', 'trainingPlan', 'basePlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan'].includes(key))
     || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');
+  // Ticket 23: an approved base plan derives its own exact change set; the copy was loaded from the approved report.
+  if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
+  const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
+  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan'].includes(key)) || request.authorization.source !== 'approved-report'
+    || !request.changes.length || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
   const medicineTasks = new Set<string>();
   const enabledTasks: (string | number)[][] = [];
   const dependencies: (string | number)[][] = [];
   if (training) dependencies.push(['Configurations', training.profile, 'TaskQueue'], ['Timers']);
+  if (base) dependencies.push(base.taskPath);
   for (const change of request.changes) {
     if (!Array.isArray(change.path) || !change.path.length) throw new Error('change-not-allowed');
     const path = change.path;
@@ -133,7 +140,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
         medicineTasks.add(JSON.stringify(path.slice(0, 4)));
       }
     }
-    if (training) allowed = true;
+    if (training || base) allowed = true;
     if (!allowed || (!nullableBoolean && old !== null && typeof old !== typeof value)) throw new Error('change-not-allowed');
     const parent = at(next, path.slice(0, -1)) as Record<string | number, unknown>;
     parent[path.at(-1)!] = value;
@@ -438,6 +445,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
       const body = object(JSON.parse(input));
       if (Object.keys(body).some(key => !['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
+      // Ticket 23: an approved base plan is applied only through base-apply.ts, which re-runs every check first.
+      if (body.authorization && typeof body.authorization === 'object' && Object.hasOwn(body.authorization, 'basePlan')) throw new Error('base-apply-route-required');
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
@@ -473,7 +482,12 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   let original: RecordValue;
   let trainingAsset: TrainingAsset | null = null;
   let assetBefore: 'absent' | 'matching' | null = null;
-  const checkAsset = async () => { if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== assetBefore) throw new Error('training-asset-target-changed'); };
+  let baseAsset: BaseAsset | null = null;
+  let baseBefore: 'absent' | 'matching' | null = null;
+  const checkAsset = async () => {
+    if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== assetBefore) throw new Error('training-asset-target-changed');
+    if (baseAsset && await inspectBaseAsset(baseAsset, request.privateDirectory) !== baseBefore) throw new Error('base-plan-copy-changed');
+  };
   let targets: { path: (string | number)[]; value: string | undefined }[];
   const checkTargets = (config: RecordValue) => {
     if (targets.some(target => comparableAt(config, target.path) !== target.value)) throw new Error('authorized-target-changed');
@@ -501,9 +515,14 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
       }
     }
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
-    const prepared = prepare(original, request, recovery ? 'recovery' : connection);
+    if (request.authorization.basePlan) {
+      if (!baseReferencePattern.test(request.authorization.reference)) return rejected('authorization-invalid');
+      baseAsset = await loadBaseAsset(request.privateDirectory, request.authorization.reference, checkGrant(request.authorization.basePlan));
+    }
+    const prepared = prepare(original, request, recovery ? 'recovery' : connection, baseAsset);
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
+    if (baseAsset) baseBefore = await inspectBaseAsset(baseAsset, request.privateDirectory);
     targets = request.changes.map(change => {
       const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
         : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
@@ -538,6 +557,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   };
   let lockClosed = false;
   let closeStarted: Date;
+  // Ticket 23: the run record keeps which approved plan bytes were applied and the user's decision on unverified items.
+  const runRecord = request.authorization.basePlan ? { basePlan: { sha256: request.authorization.basePlan.sha256, decision: request.authorization.basePlan.decision } } : {};
   try {
     await phase('check');
     const state = await maa.inspect();
@@ -547,10 +568,11 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const { authorization, changes } = request;
     await checkAsset();
     const trainingManifest = trainingAsset ? { file: trainingAsset.file, before: assetBefore, sha256: trainingAsset.sha256, immutable: true } : undefined;
-    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest }) + '\n', { mode: 0o600 });
+    const baseManifest = baseAsset ? { file: baseAsset.relative, before: baseBefore, sha256: baseAsset.sha256, immutable: true } : undefined;
+    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest, baseManifest }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
-    const preview = prepare(original, request, recovery ? 'recovery' : connection);
+    const preview = prepare(original, request, recovery ? 'recovery' : connection, baseAsset);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
     if (!checkMaintenanceWindow(original, closeStarted, deadline) || !checkMaintenanceWindow(preview.config, closeStarted, deadline)) throw new Error('timer-window');
@@ -562,7 +584,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
     await checkAsset();
-    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection);
+    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, baseAsset);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');
@@ -577,6 +599,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (!(await maa.inspect()).treeExited) throw new Error('process-tree-running');
     await checkAsset();
     if (trainingAsset) await installTrainingAsset(trainingAsset);
+    if (baseAsset) await installBaseAsset(baseAsset, request.privateDirectory);
     const temporary = `${file}.${id}.tmp`;
     const handle = await open(temporary, 'wx', 0o600);
     try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
@@ -591,6 +614,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const readback = await readConfiguration(request.maaDirectory);
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== 'matching') throw new Error('training-asset-readback-mismatch');
+    if (baseAsset && await inspectBaseAsset(baseAsset, request.privateDirectory) !== 'matching') throw new Error('base-plan-readback-mismatch');
     for (const change of request.changes) {
       if (comparableAt(readback, change.path) !== comparableAt(config, change.path)) throw new Error('readback-mismatch');
     }
@@ -599,7 +623,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     }
     await phase('record');
     const result = { status: 'complete', phase: 'complete', operation: id, changedKeys, reason: null };
-    await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result }) + '\n', { mode: 0o600 });
+    await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result, ...runRecord }) + '\n', { mode: 0o600 });
     await phase('release');
     if (object(JSON.parse(await readFile(lockFile, 'utf8'))).id !== id) throw new Error('lock-owner-changed');
     await lock.close(); lockClosed = true;
@@ -607,7 +631,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     return result;
   } catch {
     const result = { status: 'unknown', phase: metadata.phase, operation: id, changedKeys: [] as string[], reason: 'reconciliation-required' };
-    try { await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result }) + '\n', { mode: 0o600 }); }
+    try { await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result, ...runRecord }) + '\n', { mode: 0o600 }); }
     catch { /* The retained lock remains evidence when the private record cannot be saved. */ }
     return result;
   } finally {
