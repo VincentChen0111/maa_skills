@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { credentialCheck, credentialServices } from '../../skills/maa-core/scripts/credentials.ts';
 import { groupOf, libraryCheck } from '../../skills/maa-core/scripts/checks.ts';
+import { connectionCheck } from '../../skills/maa-core/scripts/setup-connection.ts';
 
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const gui = { RuntimeSettings: { ClientType: 'Official' } };
@@ -37,7 +38,7 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
     libraryCheck('settings', 'normal', 'settings-readable', 'set-preferences'),
     libraryCheck('private-directory', 'normal', 'private-directory-present', 'prepare-private-directory'),
     libraryCheck('version', 'warning', 'verification-record-empty', 'read-version-verification'),
-    corrupt ? libraryCheck('connection', 'warning', 'connection-unreadable', 'inspect-maa-configuration') : libraryCheck('connection', 'warning', 'connection-not-configured', 'connect-through-setup'),
+    connectionCheck(corrupt ? 'connection-unreadable' : 'connection-not-configured'),
     corrupt
       ? { id: 'configuration', status: 'error', reason: 'Configuration cannot be parsed.', repair: { id: 'manual-configuration', executor: 'user', description: 'Inspect the configuration and retained backups manually.' } }
       : { id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' } },

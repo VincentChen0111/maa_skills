@@ -3,6 +3,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readSettings } from './preferences.ts';
+import { repairOf, type CheckStatus, type LibraryCheck } from './checks.ts';
 export type SetupContext = { home?: string; maaDirectory?: string };
 export type ConnectionContext = SetupContext & { adbPaths?: string[]; addresses?: string[] };
 /** Only adb process execution is substituted by tests. Arguments are always an array, never a shell. */
@@ -46,20 +47,61 @@ export async function resolveAdbExecutable(path: unknown, relativeTo: string): P
   return isAdbExecutablePath(canonical) ? { executable: canonical } : { reason: 'adb-path-unrecognized' };
 }
 
-export type ConnectionState = 'device-online' | 'device-offline' | 'device-unauthorized' | 'device-not-listed' | 'device-not-connected' | 'adb-unavailable'
+export type ConnectionState = 'device-online' | 'device-offline' | 'device-unauthorized' | 'device-not-connected' | 'adb-unavailable'
   | 'adb-missing' | 'adb-path-unrecognized' | 'connection-not-configured' | 'connection-unreadable';
+
 /**
- * Android adb (developer.android.com/tools/adb): the server finds local emulators by scanning odd ports 5555–5585
- * and lists each as `emulator-<console port>`, the console port being the adb port minus one. Other network
- * addresses appear only after something runs `adb connect`, so their absence says nothing about the emulator.
+ * The one owner of what each connection state means (status, message, repair); doctor's check and analyze
+ * only look states up here. Facts behind the wording (docs/doctor-sources.md):
+ * - Android adb lists a network address only after something runs `adb connect` to it.
+ * - The adb server scans the local emulator ports (odd 5555–5585, listed as `emulator-<port - 1>`) only when
+ *   it starts; afterwards it only retries ports that just disconnected, 60 times one second apart (AOSP
+ *   `client/transport_emulator.cpp`). An emulator started after the server never appears by waiting.
+ * So an address missing from the list says nothing about whether the emulator is running.
  */
+export const connectionStates: Record<ConnectionState, { status: CheckStatus; message: string; repair: string }> = {
+  'device-online': { status: 'normal', message: 'adb lists the configured address as an online device.', repair: 'inspect-connection-in-maa' },
+  'device-offline': { status: 'error', message: 'adb lists the configured address as offline.', repair: 'restart-emulator-and-adb' },
+  'device-unauthorized': { status: 'error', message: 'adb lists the configured address as unauthorized.', repair: 'authorize-adb' },
+  'device-not-connected': { status: 'warning', repair: 'test-connection-through-setup', message: 'adb is not currently connected to the configured address. '
+    + 'adb lists a network address only after a connection, and finds local emulator ports only when its server starts (afterwards it only retries ports that just disconnected, for about 60 seconds), '
+    + 'so this does not show whether the emulator is running.' },
+  'adb-unavailable': { status: 'warning', message: 'The configured adb could not be run, so the connection was not verified.', repair: 'connect-through-setup' },
+  'adb-missing': { status: 'error', message: 'The configured adb executable does not exist.', repair: 'connect-through-setup' },
+  'adb-path-unrecognized': { status: 'warning', message: 'The configured adb path does not name an adb executable, so doctor did not run it and the connection was not verified.', repair: 'connect-through-setup' },
+  'connection-not-configured': { status: 'warning', message: 'No adb path or no address is configured; MAA may detect the emulator itself, so the connection was not verified.', repair: 'connect-through-setup' },
+  'connection-unreadable': { status: 'warning', message: 'The connection settings could not be read; see the configuration checks.', repair: 'inspect-maa-configuration' },
+};
+export function connectionCheck(state: ConnectionState): LibraryCheck {
+  const entry = connectionStates[state];
+  return { id: 'connection', status: entry.status, reason: state, message: entry.message, repair: repairOf(entry.repair) };
+}
+
+/** The local adb port an address names: `127.0.0.1:N`/`localhost:N` is N, and adb's `emulator-N` serial is N + 1. */
 function localAdbPort(value: string): number | null {
   const loopback = /^(?:127\.0\.0\.1|localhost):(\d{1,5})$/.exec(value);
   if (loopback) return Number(loopback[1]);
   const serial = /^emulator-(\d{1,5})$/.exec(value);
   return serial ? Number(serial[1]) + 1 : null;
 }
-const autoListed = (port: number | null) => port !== null && port >= 5555 && port <= 5585 && port % 2 === 1;
+/**
+ * The one owner of configured address + `adb devices` output → state. The configured spelling is what MAA
+ * uses, so its own entry decides; otherwise the best entry under an equivalent spelling (device, then
+ * unauthorized, then anything else as offline). Absence is only "not connected", never "emulator off".
+ */
+export function classifyAdbListing(address: string, stdout: string): ConnectionState {
+  const port = localAdbPort(address);
+  const rank = (state: string) => state === 'device' ? 3 : state === 'unauthorized' ? 2 : 1;
+  let own: string | null = null, equivalent: string | null = null;
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^(\S+)\s+(\S+)/.exec(line.trim());
+    if (!match || match[1] === 'List') continue;
+    if (match[1] === address) { if (own === null || rank(match[2]!) > rank(own)) own = match[2]!; }
+    else if (port !== null && localAdbPort(match[1]!) === port && (equivalent === null || rank(match[2]!) > rank(equivalent))) equivalent = match[2]!;
+  }
+  const found = own ?? equivalent;
+  return found === null ? 'device-not-connected' : found === 'device' ? 'device-online' : found === 'unauthorized' ? 'device-unauthorized' : 'device-offline';
+}
 /**
  * Doctor's read-only connection check: the current profile's adb path and address, then only `adb devices`.
  * It never runs `connect`, never runs a program that is not adb, never selects or writes a connection and
@@ -75,16 +117,9 @@ export async function inspectConnection(maaDirectory: string, adb: AdbBoundary =
   if (typeof adbPath !== 'string' || !adbPath.trim() || typeof address !== 'string' || !address.trim()) return 'connection-not-configured';
   const resolved = await resolveAdbExecutable(adbPath, maaDirectory);
   if ('reason' in resolved) return resolved.reason;
-  const port = localAdbPort(address);
-  const same = (listed: string) => listed === address || port !== null && localAdbPort(listed) === port;
   try {
     const result = await adb.run(resolved.executable, ['devices']);
-    if (result.exitCode !== 0) return 'adb-unavailable';
-    for (const line of result.stdout.split(/\r?\n/)) {
-      const match = /^(\S+)\s+(\S+)/.exec(line.trim());
-      if (match && same(match[1]!)) return match[2] === 'device' ? 'device-online' : match[2] === 'unauthorized' ? 'device-unauthorized' : 'device-offline';
-    }
-    return autoListed(port) ? 'device-not-listed' : 'device-not-connected';
+    return result.exitCode !== 0 ? 'adb-unavailable' : classifyAdbListing(address, result.stdout);
   } catch { return 'adb-unavailable'; }
 }
 type Candidate = { id: string; adbPath: string; address: string; sources: string[]; state: string };

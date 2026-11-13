@@ -7,7 +7,7 @@ import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials, userCredentialRepairs } from './credentials.ts';
 import { groupOf, libraryCheck, type CheckResult as LibraryCheckResult, type LibraryCheck } from './checks.ts';
 import { inspectInstallation } from './setup.ts';
-import { inspectConnection, type AdbBoundary, type ConnectionState } from './setup-connection.ts';
+import { connectionCheck, inspectConnection, type AdbBoundary } from './setup-connection.ts';
 import { readMaaVersion, type MaaVersionReader } from './maa-version.ts';
 import { githubReleaseLookup, privateFilesCheck, remoteControlCheck, skillInstallationChecks, type ReleaseLookup } from './doctor-checks.ts';
 import { classifyRun, evidenceOf, parseCallbacks, runsNewestFirst, safeToken, savedScreenshots, type Callback, type EvidenceItem } from './maa-log.ts';
@@ -29,12 +29,6 @@ export async function executeRepairs(request: RepairRequest, maa: MaaProcess) {
   return executeConfigRecovery({ ...request, action: request.approved[0] as RecoveryRequest['action'] }, maa);
 }
 
-const connectionChecks: Record<ConnectionState, [CheckResult['status'], string]> = {
-  'device-online': ['normal', 'inspect-connection-in-maa'], 'device-offline': ['error', 'restart-emulator-and-adb'],
-  'device-unauthorized': ['error', 'authorize-adb'], 'device-not-listed': ['warning', 'start-emulator'], 'device-not-connected': ['warning', 'test-connection-through-setup'],
-  'adb-unavailable': ['warning', 'connect-through-setup'], 'adb-missing': ['error', 'connect-through-setup'], 'adb-path-unrecognized': ['warning', 'connect-through-setup'],
-  'connection-not-configured': ['warning', 'connect-through-setup'], 'connection-unreadable': ['warning', 'inspect-maa-configuration'],
-};
 const defaultSkillsRoot = () => resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 async function writeRecord(privateDirectory: string, name: string, value: unknown) {
@@ -49,7 +43,7 @@ export async function runChecks(context: CheckContext, maa: MaaProcess, boundari
   const installation = await inspectInstallation({ home: context.home, maaDirectory: context.maaDirectory }, boundaries.versionReader ?? readMaaVersion);
   const checks: (CheckResult & { message?: string; details?: string[] })[] = [...installation.checks];
   const connection = await inspectConnection(context.maaDirectory, boundaries.adb);
-  checks.push(libraryCheck('connection', connectionChecks[connection][0], connection, connectionChecks[connection][1]));
+  checks.push(connectionCheck(connection));
   const recovery = await inspectConfigRecovery(context, maa);
   if (recovery.configuration === 'valid') {
     checks.push({ id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' } });

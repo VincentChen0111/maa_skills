@@ -103,7 +103,9 @@ test('connection checks read adb state without connecting or printing the addres
     // adb lists a network address only after something connects to it, so absence says nothing about the emulator.
     ['network address not connected', '127.0.0.1:16384', 'emulator-5554\tdevice', 'warning', 'device-not-connected', 'test-connection-through-setup'],
     ['console port listed under its emulator serial', '127.0.0.1:5555', 'emulator-5554\tdevice', 'normal', 'device-online', 'inspect-connection-in-maa'],
-    ['emulator serial not listed', 'emulator-5556', 'emulator-5554\tdevice', 'warning', 'device-not-listed', 'start-emulator'],
+    // adb scans local emulator ports only when its server starts, so an emulator started later is never auto-listed either.
+    ['emulator serial not listed', 'emulator-5556', 'emulator-5554\tdevice', 'warning', 'device-not-connected', 'test-connection-through-setup'],
+    ['local emulator port not listed', '127.0.0.1:5555', '', 'warning', 'device-not-connected', 'test-connection-through-setup'],
   ];
   for (const [name, address, listing, status, reason, repair] of cases) await t.test(name, async (t) => {
     const f = await fixture(t, { connect: { AdbPath: 'adb/synthetic-adb.exe', Address: address, AutoDetect: false } });
