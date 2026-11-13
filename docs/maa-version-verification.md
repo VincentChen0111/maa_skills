@@ -99,6 +99,30 @@
 
 逐个运行的结果（本分支工作区，改完之后）：`npm run typecheck` 通过；`maa-version-check` 13/13、`maa-version` 5/5、`base-report` 8/8、`base-report-scenarios` 2/2、`base-plan` 15/15、`base-apply` 17/17、`base-apply-scenarios` 1/1、`stage-jobs` 8/8、`training-plan` 8/8、`maa-config` 60/60、`doctor` 80/80、`help-installation` 6/6、`metadata` 2/2；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现。新测试的版本读取都用替身（测试目录里没有 MAA.exe 时不调用读取），没有运行真实 PowerShell 读版本；没有联网，没有跑完整离线入口。
 
+## 第 5 轮：测试不再启动真实的版本读取（2026-11-14）
+
+审查第 5 轮（P3）：进程边界没有 `version()` 时，`versionStampOf` 把 `undefined` 传给 `readVersionStamp`，触发默认参数 `readMaaVersion`，在 Windows 上启动 PowerShell 读 MAA.exe；`maa-config.ts` 的注释、本页设计默认值一行和 `tests/base-apply.test.ts` 的注释却说版本记为未知。按协调者选的做法（a）处理，生产行为不变：
+
+- 保留生产里的退回（作业 `switch` 的边界没有 `version`，靠它读到版本）；三处说明改成代码的实际行为。
+- 测试替身补 `version`：doctor 的 fixture，setup 里的几个 `MaaProcess` 替身；setup 的 `checkSetup`、`prepareSetup`、`runChecks` 补 `versionReader`；doctor、doctor-checks、doctor-analysis 启动命令行子进程时用 `--import` 预加载 `tests/fixtures/maa-version-double.ts`；`tests/fixtures/setup-boundary.mjs` 的进程替身补 `version`，并且把 `maa-version.ts` 的 `node:child_process` 也接到这个边界（10 把读取器从 `setup.ts` 移到 `maa-version.ts` 之后，这个边界就拦不到 setup 检查的读取了）。
+- 防回归：`tests/fixtures/maa-version-guard.ts`。测试文件导入它以后，真实读取器的那一种 PowerShell 调用由替身回答（不启动进程，版本未知，和占位 MAA.exe 的真实结果相同），文件结束时只要有一次读取就失败，并列出被读的 MAA.exe；导入时先自检替身仍能拦住 `readMaaVersion` 的调用形式，拦不住也失败。已导入：doctor、doctor-checks、doctor-analysis、setup、setup-integration、maa-config、base-apply、stage-jobs、stage-run、training-plan、training-integration。先只在 doctor 里导入、没补替身时运行 doctor：80 个测试通过、文件级 1 项失败（守卫列出 50 次读取）；补上之后 80/80。
+
+真实读取器调用次数（统计方法：用 `git archive` 导出临时副本，把副本里的 `readMaaVersion` 改成只记录调用栈、不启动进程，每个测试文件单独运行一次；修复后的副本只记录仍会落到真实 `execFile` 的调用。统计完删除副本）：
+
+| 测试文件 | 修复前 | 修复后 | 说明 |
+|---|---|---|---|
+| doctor | 54 | 0 | 50 次是 fixture 的 `MaaProcess` 没有 `version`（恢复核对和恢复写入的版本标记），4 次是命令行子进程 |
+| setup | 16 | 0 | 5 次 `checkSetup`/`prepareSetup` 没传读取器，11 次进程替身没有 `version`（写入和恢复） |
+| doctor-checks | 2 | 0 | 命令行子进程 `doctor.ts check` |
+| doctor-analysis | 2 | 0 | 命令行子进程 `doctor.ts analyze` |
+| setup-scenarios | 20 | 12 | 去掉的 8 次来自 setup 边界测试（4 次写入的版本标记、4 次 `prepare` 的检查）；留下的 12 次见下 |
+| doctor-scenarios | 16 | 未改、未重跑 | 见下 |
+| maa-config、base-apply、stage-jobs、stage-run、training-plan、training-integration、setup-integration、base-report、stage-run-rerun-gate、stage-run-alternates、stage-run-flow、check-purposes、maa-version | 0 | 0 | 前 7 个现在由守卫保证 |
+
+保留的真实读取：doctor-scenarios 的「doctor scenarios observe actual installed CLI checks …」（16 次）和 setup-scenarios 的「setup scenarios observe installed check and preference CLI behavior …」（12 次）按评测场景原样运行安装好的 `doctor.ts check`、`setup.ts check`，不加任何边界；场景期望的「版本未知」一行就是真实读取器读占位 MAA.exe 的结果（`eval/maa-doctor/scenarios.ts` 的注释）。这两处在 25 之前就会启动 PowerShell，不是本轮的替身问题。`tests/maa-process.test.ts` 没有运行。
+
+逐个运行的结果（修复之后的工作区）：`npm run typecheck` 通过；`doctor` 80/80、`doctor-checks` 27/27、`doctor-analysis` 19/19、`setup` 29/29、`setup-integration` 5/5、`setup-scenarios` 22/22、`maa-config` 60/60、`base-apply` 17/17、`stage-jobs` 8/8、`stage-run` 15/15、`training-plan` 8/8、`training-integration` 2/2、`maa-version` 5/5、`maa-version-check` 13/13、`help-installation` 6/6、`metadata` 2/2。没有跑完整离线入口，没有联网。
+
 ## 设计默认值
 
 带限制的默认值都登记在规格「默认值及其来源」以「25 」开头的各行。只记在这里的实现选择：
@@ -110,7 +134,7 @@
 - 基建报告的 Markdown 和 `draft` 命令行输出不显示版本（2026-11-14），与作业报告相同：标记在报告 JSON 里，差异由 23 的 `check`、`apply` 报告。
 - 覆盖测试的例外按「页面 + 路径」登记（2026-11-14），例外不再出现时测试失败：例外只为已说明的历史记录保留，不能顺带放过别处的新引用。
 - 专精 `apply` 在执行前就返回 `check-required` 的结果也带 `versions`，三种结果形状一致。
-- `MaaProcess.version()` 是可选方法：测试替身不提供时版本记为 null，生产实现总是提供。只有 MAA.exe 存在时才调用。
+- `MaaProcess.version()` 是可选方法：边界不提供时，`versionStampOf` 退回真实的 MAA.exe 读取器 `readMaaVersion`（在 Windows 上启动 PowerShell），与上文「合并 10 最终版」里 16 的替身一段说的相同；生产里作业 `switch` 的边界（`stage-run.ts`）没有 `version`，就靠这个退回读到版本。读取只在 MAA.exe 存在时发生。测试替身必须自己提供 `version`（或给 setup、doctor 传 `versionReader`），`tests/fixtures/maa-version-guard.ts` 让走到真实读取器的测试文件失败，见下文「第 5 轮：测试不再启动真实的版本读取」。
 - 通知正文用中文（与仓库文档一致），标签名 `maa-version-check`，PR 分支 `maa-version-check/v<版本>`，变化键取 SHA-256 前 16 位。
 - `verify`、`reverify` 只接受本地源码目录，不联网；联网只在 `daily --online`。命令行的 `--registry`、`--record` 用于指定其他文件，默认是仓库里的两份。
 
