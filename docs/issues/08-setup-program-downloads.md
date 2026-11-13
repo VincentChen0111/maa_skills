@@ -10,7 +10,7 @@ Blocked by: [07: setup 接入现有环境](07-setup-existing-environment.md)
 
 ## 背景与目标
 
-实施进度：未开始。
+实施进度：进行中。
 
 环境缺项时 setup 需要把检查结果推进到可用环境，但每次程序下载都由用户决定。
 
