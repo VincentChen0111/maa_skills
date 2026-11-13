@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
+import { fileURLToPath } from 'node:url';
+import { executeConfigWrite, inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
+import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { approvedJobFile, approvedJobList, type ApprovedJobPlan } from '../skills/maa-core/scripts/stage-job-plan.ts';
-import { decideStageRun, observeStageRun, readStageRun, startStageRun, switchStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
-import { attempt, chainEnd, connection, copilotStart, preparedBatch, type PreparedBatch } from './fixtures/stage-run-data.ts';
+import { decideStageRun, loadBatchView, observeStageRun, readStageRun, stageRunOutcome, startStageRun, switchStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
+import { attempt, chainEnd, connection, copilotStart, core, preparedBatch, type PreparedBatch } from './fixtures/stage-run-data.ts';
 
 const pendingPlan = async (privateDirectory: string, operation: string): Promise<ApprovedJobPlan> => {
   const lines = (await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
@@ -82,4 +85,138 @@ test('a MAA-reported failure switches to the next approved alternate through the
   assert.deepEqual(done.stages.map(stage => [stage.code, stage.result]), [['SYN-1', 'success'], ['SYN-2', 'success']]);
   assert.equal(done.next, 'report');
   assert.equal((await observe(c)).next, 'report', 'the old run hands over once the alternate batch is tracked');
+});
+
+const failedPrimary = async (c: Tracked, outcome: 'failed' | 'not-three-star' = 'failed') => {
+  const t0 = fromNow(-600);
+  await c.batch.core([...copilotStart(t0, { files: c.batch.files }), ...attempt(t0 + 10, 0, c.batch.files[0]!, outcome), ...chainEnd(t0 + 60, 'TaskChainError')]);
+  return observe(c);
+};
+const decideAndSwitch = async (c: Tracked, reason = 'MAA 报告这一关失败，按批准顺序换下一份备选') => {
+  await decideStageRun({ ...c.paths, runId: c.runId, decision: 'switch-alternate', reason });
+  return switchStageRun(await switchRequest(c), c.batch.maa);
+};
+const listed = async (c: Tracked) => (await profile(c)).Copilot.TaskList.map((item: { CopilotId: number; Index: number }) => [item.CopilotId, item.Index]);
+const completions = async (c: Tracked) => (await readFile(join(c.batch.privateDirectory, 'daily-runs.jsonl'), 'utf8')).split(/\r?\n/).filter(line => line.includes('"status":"complete"')).length;
+const ledgerFile = (c: Tracked, key: string) => join(c.batch.privateDirectory, 'stage-runs', 'switches', `${key}.json`);
+
+test('not three stars after a 3-star run: the alternate makes up only the runs not yet cleared', async t => {
+  const c = await tracked(t), t0 = fromNow(-600), files = c.batch.files;
+  await c.batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'three-star'), ...attempt(t0 + 60, 1, files[1]!, 'not-three-star'), ...chainEnd(t0 + 100, 'TaskChainError')]);
+  const failed = await observe(c);
+  assert.deepEqual(failed.stages.map(stage => stage.result), ['not-three-star', 'unknown']);
+  assert.deepEqual(failed.allowedDecisions, ['switch-alternate', 'stop-and-tell-user']);
+  const switched = await decideAndSwitch(c);
+  assert.deepEqual(switched.runs, [{ stageId: 'synthetic_01', job: 2, runs: 1 }, { stageId: 'synthetic_02', job: 4, runs: 1 }], 'the non-3-star run is not counted as done');
+  assert.deepEqual(await listed(c), [[2, 0], [4, 1]]);
+});
+
+test('alternates used up: the next failure only stops and reports; nothing outside the approval is looked for', async t => {
+  const c = await tracked(t);
+  await failedPrimary(c);
+  const switched = await decideAndSwitch(c);
+  const next = await startStageRun({ ...c.paths, operation: switched.operation!, reference: '合成用户：备选换好了，我点开始' });
+  const files = [2, 2, 4].map(id => approvedJobFile(c.batch.privateDirectory, c.batch.reportHash, id)), t1 = fromNow(60);
+  await c.batch.core(retag([...copilotStart(t1, { files }), ...attempt(t1 + 10, 0, files[0]!, 'not-three-star'), ...chainEnd(t1 + 50, 'TaskChainError')], 2));
+  const failed = await observe(c, next.runId);
+  assert.deepEqual(failed.stages.map(stage => stage.result), ['not-three-star', 'unknown']);
+  assert.deepEqual(failed.alternates, [{ stageId: 'synthetic_01', job: 2, next: null, left: 0 }, { stageId: 'synthetic_02', job: 4, next: null, left: 0 }]);
+  assert.deepEqual(failed.allowedDecisions, ['stop-and-tell-user']); assert.equal(failed.next, 'report');
+  await assert.rejects(decideStageRun({ ...c.paths, runId: next.runId, decision: 'switch-alternate', reason: '再换一份' }), /decision-not-allowed/);
+  await assert.rejects(switchStageRun(await switchRequest(c, next.runId), c.batch.maa), /alternates-exhausted/);
+  assert.deepEqual(await listed(c), [[2, 0], [2, 1], [4, 2]], 'the list is left as it was');
+});
+
+test('an environment failure is not a job failure: verify first, then the model may switch; the primary is set aside, not marked failed', async t => {
+  const c = await tracked(t), t0 = fromNow(-600);
+  const loaded = core(t0 + 10, 'SubTaskExtraInfo', { taskchain: 'Copilot', taskid: 1, class: 'asst::MultiCopilotTaskPlugin', what: 'CopilotListLoadTaskFileSuccess',
+    details: { stage_name: 'synthetic', file_name: c.batch.files[0], id: 0 } });
+  await c.batch.core([...copilotStart(t0, { files: c.batch.files }), loaded, connection(t0 + 12, 'Disconnect'), ...chainEnd(t0 + 13, 'TaskChainError')]);
+  const observed = await observe(c);
+  assert.equal(observed.next, 'verify'); assert.deepEqual(observed.allowedDecisions, ['stop-and-tell-user']);
+  await assert.rejects(decideStageRun({ ...c.paths, runId: c.runId, decision: 'switch-alternate', reason: '断连了，换备选' }), /decision-not-allowed/);
+  const verified = await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa);
+  assert.deepEqual(verified.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
+  const switched = await decideAndSwitch(c, '断连已核对清楚，模型决定换备选 2');
+  assert.deepEqual([switched.trigger, switched.from, switched.to, switched.state], ['environment', 1, 2, 'prepared']);
+  assert.deepEqual(switched.runs, [{ stageId: 'synthetic_01', job: 2, runs: 2 }, { stageId: 'synthetic_02', job: 4, runs: 1 }]);
+  assert.deepEqual(switched.unknown, ['sanity', 'medicine-inventory', 'originium', 'stage-progress'], 'approval-time state is not reused');
+  const outcome = stageRunOutcome(await readStageRun(c.batch.privateDirectory, c.runId), (await loadBatchView(c.paths, c.runId)).batch);
+  assert.deepEqual(outcome.stages.map(stage => [stage.stageId, stage.result, stage.job]), [['synthetic_01', 'unknown', 1], ['synthetic_02', 'unknown', 4]]);
+  assert.deepEqual(outcome.switch && [outcome.switch.trigger, outcome.switch.state], ['environment', 'prepared']);
+});
+
+test('a repeated switch request returns the existing record without writing again; the same key with a different input is refused, both digests kept', async t => {
+  const c = await tracked(t);
+  await failedPrimary(c);
+  await decideStageRun({ ...c.paths, runId: c.runId, decision: 'switch-alternate', reason: 'MAA 报告失败' });
+  const request = await switchRequest(c);
+  const first = await switchStageRun(request, c.batch.maa), writes = await completions(c);
+  const again = await switchStageRun(request, c.batch.maa);
+  assert.deepEqual([again.repeated, again.key, again.state, again.operation], [true, first.key, 'prepared', first.operation]);
+  assert.equal(await completions(c), writes, 'no second write');
+  await assert.rejects(switchStageRun({ ...request, expectedRevision: await revision(c) }, c.batch.maa), /idempotency-conflict/);
+  const ledger = JSON.parse(await readFile(ledgerFile(c, first.key), 'utf8'));
+  assert.equal(ledger.conflicts.length, 1); assert.match(ledger.conflicts[0].input, /^[a-f0-9]{64}$/); assert.notEqual(ledger.conflicts[0].input, ledger.input);
+  assert.equal(await completions(c), writes);
+});
+
+test('a switch the writer refused before writing anything may be requested again', async t => {
+  const c = await tracked(t);
+  await failedPrimary(c);
+  Object.assign(c.batch.state, { running: false, treeExited: true, ready: false });
+  const refused = await decideAndSwitch(c);
+  assert.deepEqual([refused.state, refused.next, refused.write?.reason], ['rejected', 'retry-switch', 'closed-confirmation-required']);
+  assert.deepEqual(await listed(c), [[1, 0], [1, 1], [4, 2]]);
+  assert.equal((await observe(c)).next, 'switch');
+  const done = await switchStageRun({ ...await switchRequest(c), closedConfirmed: true }, c.batch.maa);
+  assert.deepEqual([done.state, done.repeated, done.key], ['prepared', false, refused.key]);
+  assert.deepEqual(JSON.parse(await readFile(ledgerFile(c, done.key), 'utf8')).attempts.map((item: { status: string }) => item.status), ['rejected', 'complete']);
+});
+
+test('a switch left writing by a process that is gone reads as interrupted: verify only, never resumed', async t => {
+  const c = await tracked(t);
+  await failedPrimary(c);
+  await decideStageRun({ ...c.paths, runId: c.runId, decision: 'switch-alternate', reason: 'MAA 报告失败' });
+  const request = await switchRequest(c), first = await switchStageRun(request, c.batch.maa);
+  const ledger = JSON.parse(await readFile(ledgerFile(c, first.key), 'utf8'));
+  const exited = spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' });
+  await writeFile(ledgerFile(c, first.key), JSON.stringify({ ...ledger, state: 'writing', write: null, owner: { pid: Number(exited.stdout.trim()), at: ledger.owner.at } }));
+  const writes = await completions(c);
+  const old = await observe(c);
+  assert.deepEqual([old.switch?.state, old.next], ['interrupted', 'verify']); assert.deepEqual(old.allowedDecisions, ['stop-and-tell-user']);
+  const again = await switchStageRun(request, c.batch.maa);
+  assert.deepEqual([again.state, again.repeated, again.next, again.operation], ['interrupted', true, 'verify', null]);
+  assert.equal(await completions(c), writes, 'not resumed');
+});
+
+test('the unified writer accepts only the continuation list of approved jobs; the generic write CLI refuses any continuation', async t => {
+  const c = await tracked(t);
+  const plan = await pendingPlan(c.batch.privateDirectory, c.batch.operation);
+  const valid: ApprovedJobPlan = { ...plan, continuation: { from, stages: [{ stageId: 'synthetic_01', job: 2, runs: 1 }] } };
+  const before = await revision(c);
+  /** A continuation naming a job not approved for the stage, and a list that is not the continuation's expansion. */
+  const refused: [ApprovedJobPlan, unknown][] = [[{ ...plan, continuation: { from, stages: [{ stageId: 'synthetic_01', job: 4, runs: 1 }] } }, approvedJobList(valid, c.batch.privateDirectory)],
+    [valid, approvedJobList(plan, c.batch.privateDirectory)]];
+  for (const [jobPlan, value] of refused) {
+    const result = await executeConfigWrite({ maaDirectory: c.batch.maaDirectory, privateDirectory: c.batch.privateDirectory, host: 'claude', expectedRevision: before,
+      authorization: { source: 'current-request', reference: '合成用户批准', jobPlan }, changes: [{ path: ['Configurations', 0, 'Copilot', 'TaskList'], value },
+        { path: ['Configurations', 0, 'Copilot', 'EnableUserAdditional'], value: false }] }, c.batch.maa);
+    assert.deepEqual([result.status, result.reason], ['rejected', 'request-invalid']);
+  }
+  assert.equal(await revision(c), before);
+  await updateSettings({ language: 'zh-CN', privateDirectory: c.batch.privateDirectory, maaDirectory: c.batch.maaDirectory }, c.batch.root);
+  const env = { ...process.env, MAA_SKILLS_HOME: c.batch.root };
+  const script = (name: string) => fileURLToPath(new URL(`../skills/maa-core/scripts/${name}`, import.meta.url));
+  const pending = await readFile(join(c.batch.privateDirectory, 'daily-pending.jsonl'), 'utf8');
+  const cli = spawnSync(process.execPath, [script('maa-config.ts'), 'write'], { env, encoding: 'utf8', input: JSON.stringify({ host: 'claude', expectedRevision: '0'.repeat(64),
+    authorization: { source: 'current-request', reference: '合成用户批准', jobPlan: valid },
+    changes: [{ path: ['Configurations', 0, 'Copilot', 'TaskList'], value: approvedJobList(valid, c.batch.privateDirectory) }, { path: ['Configurations', 0, 'Copilot', 'EnableUserAdditional'], value: false }] }) });
+  assert.deepEqual(JSON.parse(cli.stdout), { ok: false, status: 'check-required' });
+  assert.equal(await readFile(join(c.batch.privateDirectory, 'daily-pending.jsonl'), 'utf8'), pending);
+  await failedPrimary(c);
+  const call = (input: unknown) => JSON.parse(spawnSync(process.execPath, [script('stage-run.ts'), 'switch'], { env, encoding: 'utf8', input: JSON.stringify(input) }).stdout);
+  const body = { runId: c.runId, stageId: 'synthetic_01', expectedRevision: before, host: 'claude' };
+  assert.deepEqual(call({ ...body, extra: 1 }), { ok: false, status: 'check-required', reason: 'request-invalid' });
+  assert.deepEqual(call(body), { ok: false, status: 'check-required', reason: 'switch-not-decided' });
 });

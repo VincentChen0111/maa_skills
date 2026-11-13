@@ -429,7 +429,7 @@ export async function recordStageProgress(input: { privateDirectory: string; maa
 function switchSummary(record: SwitchRecord, repeated: boolean) {
   const next = record.state === 'prepared' ? 'start-alternate' : record.state === 'rejected' ? 'retry-switch' : 'verify';
   return { key: record.key, state: record.state, stageId: record.stageId, from: record.from, to: record.to, trigger: record.trigger, runs: record.continuation,
-    operation: record.state === 'prepared' ? record.write?.operation ?? null : null, start: 'user' as const, next, repeated,
+    operation: record.state === 'prepared' ? record.write?.operation ?? null : null, start: 'user' as const, next, repeated, unknown: unknownState,
     write: record.write && { status: record.write.status, reason: record.write.reason }, conflicts: record.conflicts.length };
 }
 /**
