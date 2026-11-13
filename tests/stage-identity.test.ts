@@ -96,4 +96,10 @@ test('search results on the same map or with unresolvable names are never report
   assert.deepEqual(ambiguous.stages[0]!.searchResult, { outcome: 'unresolved', returned: 2, belonging: 0, sameMap: 0, unresolved: 2 });
   assert.match(formatStageJobs(ambiguous), /检索结果：返回的 2 份作业中，2 份的关卡名对应不到唯一的关卡；不能据此判断这一关没有作业。/);
   for (const report of [sameMap, ambiguous]) assert.doesNotMatch(formatStageJobs(report), /本次检索条件下这一关没有作业/);
+  // Both consumers of the predicate agree: the per-candidate verdicts are exactly what the search classification counted.
+  for (const report of [sameMap, ambiguous]) for (const [index, stage] of report.stages.entries()) {
+    const returned = stage.candidates.filter(candidate => report.search[index]!.ids.includes(candidate.id));
+    assert.deepEqual([stage.searchResult.belonging, stage.searchResult.sameMap, stage.searchResult.unresolved],
+      (['this-stage', 'same-map-unprovable', 'unknown'] as const).map(kind => returned.filter(candidate => candidate.stageMatch === kind).length));
+  }
 });
