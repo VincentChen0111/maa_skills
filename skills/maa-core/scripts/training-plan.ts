@@ -7,6 +7,7 @@ import { queryTraining } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, type TrainingPlan } from './training-state.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
 import { executeConfigWrite, inspectConfiguration, type MaaProcess } from './maa-config.ts';
+import type { ExpiringMedicineGrant } from './consumption-grant.ts';
 
 type Options = { home?: string; fetcher?: typeof fetch };
 const object = (value: unknown): Record<string, unknown> => {
@@ -110,9 +111,24 @@ function grantFor(plan: TrainingPlan, action: { kind: TrainingGrant['kind']; due
     assistant: (action.kind === 'assistant' ? plan.afterStartAssistants?.[String(plan.rank)] : undefined) ?? plan.assistants[String(plan.rank)] ?? plan.assistants[String(plan.target.goal)]!, ...(expectedTimer === undefined ? {} : { expectedTimer }) };
 }
 
+/**
+ * The writer authorization for a training write. A current expiring-medicine approval (ticket 27) may accompany it: the
+ * apply or reconcile request then carries the user's words for this request, and the writer's consumption predicate
+ * checks the grant; without one the plan's own authorization is used unchanged.
+ */
+function trainingAuthorization(plan: TrainingPlan, request: Record<string, unknown>, grant: TrainingGrant) {
+  if (request.expiringMedicine === undefined) return { ...plan.authorization, trainingPlan: grant };
+  return { source: 'current-request' as const, reference: request.reference as string, trainingPlan: grant, expiringMedicine: request.expiringMedicine as ExpiringMedicineGrant };
+}
+function trainingRequest(input: unknown) {
+  const request = object(input);
+  if (request.expiringMedicine !== undefined && (typeof request.reference !== 'string' || !request.reference.trim())) throw new Error('training-authorization-required');
+  return request;
+}
+
 /** Uses the common writer, including its lock, backup, maintenance window and readback. No device calls. */
 export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options: Options = {}) {
-  const request = object(input);
+  const request = trainingRequest(input);
   return withPlan(request.id, options, async (plan, context) => {
     if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
     if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply' };
@@ -134,7 +150,7 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     await save(context.file, plan);
     const result = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
       host: request.host as 'codex' | 'claude', closedConfirmed: request.closedConfirmed as boolean | undefined,
-      expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision, authorization: { ...plan.authorization, trainingPlan: grant }, changes: prepared.changes }, maa);
+      expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision, authorization: trainingAuthorization(plan, request, grant), changes: prepared.changes }, maa);
     plan.action.operation = result.operation;
     if (result.status === 'complete') {
       if (action.kind === 'start') plan.materialReady = false;
@@ -150,7 +166,7 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
 
 /** Re-entry is explicit: no daemon promises to clean a timer while this tool is offline. */
 export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, options: Options = {}) {
-  const request = object(input);
+  const request = trainingRequest(input);
   if (typeof request.logFile !== 'string') throw new Error('training-log-required');
   return withPlan(request.id, options, async (original, context) => {
     if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
@@ -177,7 +193,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
         cleanup = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
           host: request.host as 'codex' | 'claude', closedConfirmed: request.closedConfirmed as boolean | undefined,
           expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision,
-          authorization: { ...plan.authorization, trainingPlan: grant }, changes: prepared.changes }, maa);
+          authorization: trainingAuthorization(plan, request, grant), changes: prepared.changes }, maa);
       }
       if (cleanup?.status !== 'complete') { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
     }
