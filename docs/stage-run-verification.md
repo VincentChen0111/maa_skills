@@ -42,6 +42,23 @@
 - 第 2 轮修复后（维护者 2026-11-13 新规：作者不跑完整离线入口，由协调者按包串行运行；只跑类型检查和改动涉及的单个测试文件，逐个运行）：`npm run typecheck` 通过；单个文件逐个运行 `stage-run-rerun-gate` 8/8、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1。修复前一次（新规之前）`maa-callback`、`maa-log-window` 和专精 9 个文件合在一条命令里跑过 45/45，这一轮没有改这些文件。完整离线入口未由作者运行。
 - 第 3 轮修复后（同样只跑类型检查和单个文件，逐个运行）：新增的 3 项测试先写，旧代码下「同一份报告重新准备」「普通与突袭共用作业」两项失败（第二批第一次 `start` 以 `batch-may-have-run` 拒绝），「时间读不出」一项本来就通过（旧代码不看时间）；修复后 `npm run typecheck` 通过，`stage-run-rerun-gate` 11/11、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1。完整离线入口未由作者运行。
 
+## 合并 10 后的调整（2026-11-14）
+
+把 main（含本票）合进 10 的分支 `claude/10-doctor-checks` 后发现：`verify` 原来要求「共享 doctor 检查没有错误」，写的时候 doctor 只查配置、写入锁和凭据；10 把 `runChecks` 扩成八组，过期的凭据、损坏的 skill 目录联接、一份无关的私有记录都会让 `clear` 为假，合理的重试只剩停下。同类缺陷在 08 的分支上也出现过（setup 复查把过期的可选凭据算成没装好，该分支尚未合并）。按同类缺陷规则改为一个判断、一个所有者和一致性测试：
+
+- `checks.ts` 新增唯一的判断 `blockingChecks(检查结果, 用途)`，返回挡住的错误编号和不挡的错误编号。用途：`doctor-exit`、`setup-exit`、`credentials-exit`（退出码，所有错误都算）和 `stage-retry`（本票的核对）。`stage-retry` 为每个检查编号归类，没有归类的编号一律挡住；划分和理由登记在规格「默认值及其来源」的「10、16 检查结果按用途」一行，以及「日常操作」正文和两张表的 10、16 行。
+- `verifyStageRun` 用 `stage-retry`：`clear` 要求 MAA 在运行、列表与作业文件未变、`blocking` 为空；核对结果新增 `blocking`、`notBlocking` 两个编号列表，摘要的 `verifications` 里也有。不挡的错误仍在 `checks` 里，`references/stage-run.md` 第 9 条要求模型把两类都告诉用户。
+- `verifyStageRun` 新增可选的第三个参数，只替换系统边界（MAA.exe 版本读取、adb），与 doctor 的 `runChecks` 相同；CLI 不传。
+- 测试夹具 `preparedBatch` 改成一个健康的国服安装：设置文件（在 `home`，指向夹具的 MAA 目录和私有目录）、`MAA.exe` 占位文件、国服客户端、配置好的 adb 路径和地址，adb 替身列为在线。原来的夹具没有这三样，`maa`、`server`、`settings` 三项报错；这三项按划分会挡住重试，所以合并后的失败一部分来自夹具本身不完整。
+- 一致性测试 `tests/check-purposes.test.ts`：`runChecks` 实际产出的编号与 `checks.ts` 的已知编号完全一致，setup 和凭据检查的编号都在其中；每种用途对每个编号恰好归类一次，没有多余的；扫描 `skills/`、`scripts/`、`eval/` 的源码，除 `checks.ts` 外不得直接比较检查的状态，每处 `blockingChecks` 调用都写明用途，调用处与登记表（doctor、setup、凭据、`stage-run.ts`、doctor 评测场景）一致，每种用途都有使用者。
+
+先红后绿（Windows，逐个运行）：
+
+- 合并后、修复前（协调者的 `home` 改动已在）：`stage-run-rerun-gate` 11 项中 6 通过、5 失败，失败的都是核对后只剩停下。`stage-run` 14 项中 1 失败是协调者在任务说明里报告的，作者没有在修复前重跑。
+- 先写的测试：`check-purposes` 因缺少 `blockingChecks` 导出整体失败；`stage-run-rerun-gate` 新增「errors unrelated to a stage retry are reported but do not block it; a connection or write-lock error does」在夹具已改好的情况下失败于 `clear`（凭据和私有记录的错误挡住了重试），其余 11 项通过。那次运行时 `verifyStageRun` 还不接受替身参数，所以在 Windows 上每次 `verify` 都实际调用了 PowerShell 读占位 `MAA.exe` 的版本，并尝试执行临时目录里名为 `adb.exe` 的文本占位文件（执行失败，连接记为提醒）；实现之后测试都经替身，不再调用。
+- 修复后：`npm run typecheck` 通过；`check-purposes` 5/5、`stage-run-rerun-gate` 12/12、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1、`doctor` 74/74、`doctor-checks` 27/27、`doctor-scenarios` 17/17、`doctor-analysis` 19/19、`setup` 29/29、`setup-scenarios` 22/22、`connection-states` 2/2、`credentials` 6/6。完整离线入口按规则由协调者运行，作者未运行。
+- 未验证：`references/stage-run.md` 第 9 条的文字改动没有做真模型前后评测（工单 28 未交付、评测登录目录未就绪），留给 26。
+
 ## PR CI 发现后的修复（2026-11-14，交第五轮审查）
 
 PR 的 Ubuntu CI 上，`tests/stage-run.test.ts`「run record and summaries keep paths only for MAA debug images…」失败：`leaked /tmp/maa-stage-run-…/maa`。

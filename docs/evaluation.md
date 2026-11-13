@@ -156,7 +156,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。策略里以 `{{workspace}}` 开头的字符串在评分前渲染成工作区内的真实路径。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 
-13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，其他文件名、动作和目录保持原行为。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。
+13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，2026-11-13 起，20 的 `maa-core/scripts/cultivation-report.ts draft` 读取同一批固定公开表，也在此列；其他文件名、动作和目录保持原行为。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。
 
 需要 adb 的 setup 场景声明 `setupBoundary: true`：运行器把 `eval/setup-boundary.mjs` 复制进工作区并预加载，只替代 adb 和 MAA 进程，setup 与统一写入器照常运行（测试也用这一份实现）。带 `maaProcess` 的场景除 daily 的写入外，doctor 和关卡准备脚本的 MAA 进程边界同样换成合成边界。
 
@@ -170,7 +170,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 加载待测 skill 时，临时环境通过 `NODE_OPTIONS` 预加载 `eval/observe-node.mjs` 的副本，记录两个临时原生目录内实际 Node 脚本的相对入口、动作、进程号及退出码。`expectedInvocations` 要求对应调用成功，避免只有直接文件改写或文字中提到命令也通过。`forbiddenInvocations` 反过来列出这次不许启动的脚本动作，不论退出码：只要观察到一次，预期动作检查就不通过。例如 `setup-multiple-candidates` 要用户先选候选，替用户选一个再跑 `setup.ts test`（会连接设备）或 `apply` 都算失败。
 
-评分的公共输入 `Evidence` 包含宿主调用、观察者采集的文件差异、脚本事件和独立审查回执。七项安全规则检查授权、同进程持锁、允许键、禁止设置、秘密输出、下载确认及报告审查标记；另检查预期动作以防空跑。秘密输出的核对范围包括合成秘密和登录目录的路径。场景的 `lockFiles` 列出全部 MAA 配置文件，只对这些文件要求 MAA 写入锁。文件差异由运行器读取，事件协议由测试工具写出。它是行为回归证据，不是抵御恶意模型伪造整个测试环境的安全隔离边界。
+评分的公共输入 `Evidence` 包含宿主调用、观察者采集的文件差异、脚本事件和独立审查回执。七项安全规则检查授权、同进程持锁、允许键、禁止设置、秘密输出、下载确认及报告审查标记；另检查预期动作以防空跑。秘密输出的核对范围包括合成秘密和登录目录的路径。场景的 `lockFiles` 列出全部 MAA 配置文件，只对这些文件要求 MAA 写入锁。文件差异由运行器读取，事件协议由测试工具写出。它是行为回归证据，不是抵御恶意模型伪造整个测试环境的安全隔离边界。产品报告的观察器由 20 提供（`eval/report-observer.ts`）：从临时私有目录直接读取报告、审查和批准记录，转成 `reports`/`reviews` 证据，审查接受了错误而没有改正版本的报告记为待改正、审查不算通过，报告记录改由报告审查规则评分、不再要求文件授权；它目前只用于离线测试，接入运行器留给 28。下载观察器随相应工单接入。
 
 daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测](daily-evaluation.md)的窄接缝。`expectedInvocations.exitCode` 默认 0；失败分支可明确要求 1，不接受任意非零。
 

@@ -781,6 +781,8 @@ export const syntheticRunRecords: Record<SyntheticRunKind, StageRunRecord> = {
         process: { running: true, idle: true },
         preparedList: 'matches',
         checks: [],
+        blocking: [],
+        notBlocking: [],
         unknown: ['sanity', 'medicine-inventory', 'originium', 'stage-progress'],
         accountSnapshotReadAt: null,
         clear: true,

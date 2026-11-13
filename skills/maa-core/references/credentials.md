@@ -65,4 +65,4 @@ import { inspectCredentials, credentialCheck, readCredential, recordCredentialOu
 - `recordCredentialOutcome(service, revision, outcome, { privateDirectory, expiresAt? })`：实际读取后记下结果。`revision` 不是当前记录的修订号时不写，返回 `false`，旧值的结果不会把新值标成可用。只有对方明确拒绝凭据（例如未授权、token 换取访问凭证失败）才记 `expired`；网络失败、超时、风控、响应不完整不记，按读取器自己的状态报告。
 - `saveCredential`、`normalizeCredentialValue` 只供输入流程和测试使用，skill 不调用。
 
-测试用 `--import` 加载器替换 `credential-protection.ts`（见仓库 `tests/fixtures/credential-boundary.mjs`），文件和 CLI 保持真实；不读取维护者的真实凭据。森空岛 token 换取访问凭证、请求签名和刷新属于读取器（工单 12），本接口不联网。
+测试用 `--import` 加载器替换 `credential-protection.ts`（见仓库 `tests/fixtures/credential-boundary.mjs`），文件和 CLI 保持真实；不读取维护者的真实凭据。森空岛 token 换取访问凭证、请求签名和刷新属于读取器 `skland-account.ts`（见 maa-account 的[森空岛接口](../../maa-account/references/skland.md)），本接口不联网。

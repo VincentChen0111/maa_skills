@@ -208,8 +208,54 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   if (requiredMedicine > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
   return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
-async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
+export async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
   return object(JSON.parse((await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')).replace(/^\uFEFF/, '')));
+}
+/**
+ * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with.
+ * Returns field kinds only (never a profile name or value); `timerProfileMissing` marks an enabled timer whose
+ * configuration no longer exists. Unknown task types and fields the writer never manages are not judged.
+ */
+export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {
+  const config = object(value); const invalid = new Set<string>(); let timerProfileMissing = false;
+  const profiles = object(config.Configurations);
+  const integer = (item: unknown, min: number, max: number) => Number.isSafeInteger(item) && Number(item) >= min && Number(item) <= max;
+  for (const name of Object.keys(profiles)) {
+    const profile = profiles[name];
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) { invalid.add('profile'); continue; }
+    const queue = (profile as RecordValue).TaskQueue;
+    if (queue === undefined) continue;
+    if (!Array.isArray(queue)) { invalid.add('task-queue'); continue; }
+    for (const item of queue) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) { invalid.add('task'); continue; }
+      const task = item as RecordValue;
+      if (Object.hasOwn(task, 'IsEnable') && typeof task.IsEnable !== 'boolean') invalid.add('task.IsEnable');
+      if (knownTaskType(task) !== 'Fight') continue;
+      if (Object.hasOwn(task, 'UseMedicine') && typeof task.UseMedicine !== 'boolean') invalid.add('fight.UseMedicine');
+      if (Object.hasOwn(task, 'MedicineCount') && !integer(task.MedicineCount, 0, 2147483647)) invalid.add('fight.MedicineCount');
+    }
+  }
+  if (config.Timers !== undefined) {
+    if (!config.Timers || typeof config.Timers !== 'object' || Array.isArray(config.Timers)) invalid.add('timers');
+    else {
+      const timers = config.Timers as RecordValue;
+      for (const flag of ['CustomConfig', 'ForceScheduledStart', 'ShowWindowBeforeForceScheduledStart', 'NotifyBeforeScheduledStart']) {
+        if (Object.hasOwn(timers, flag) && typeof timers[flag] !== 'boolean') invalid.add(`timers.${flag}`);
+      }
+      if (Object.hasOwn(timers, 'ScheduledStartNotificationMinutes') && !integer(timers.ScheduledStartNotificationMinutes, 0, 1439)) invalid.add('timers.ScheduledStartNotificationMinutes');
+      if (timers.List !== undefined && !Array.isArray(timers.List)) invalid.add('timers.List');
+      for (const item of Array.isArray(timers.List) ? timers.List : []) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) { invalid.add('timer'); continue; }
+        const timer = item as RecordValue; const enabled = timerEnabled(timer);
+        if (enabled !== null && typeof enabled !== 'boolean') invalid.add('timer.IsEnabled');
+        if (!integer(timer.Hour, 0, 23)) invalid.add('timer.Hour');
+        if (!integer(timer.Minute, 0, 59)) invalid.add('timer.Minute');
+        if (Object.hasOwn(timer, 'Config') && typeof timer.Config !== 'string') invalid.add('timer.Config');
+        else if (enabled !== false && typeof timer.Config === 'string' && !Object.hasOwn(profiles, timer.Config)) timerProfileMissing = true;
+      }
+    }
+  }
+  return { invalid: [...invalid], timerProfileMissing };
 }
 async function existingLock(file: string) {
   let text: string;
@@ -438,6 +484,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
       const body = object(JSON.parse(input));
       if (Object.keys(body).some(key => !['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
+      /** A job-plan continuation (ticket 17) is written only by `stage-run.ts switch`, after the re-run gate allowed it. */
+      const jobPlan = body.authorization && typeof body.authorization === 'object' ? (body.authorization as RecordValue).jobPlan : undefined;
+      if (jobPlan && typeof jobPlan === 'object' && Object.hasOwn(jobPlan, 'continuation')) throw new Error('request-invalid');
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);

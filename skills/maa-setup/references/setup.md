@@ -24,6 +24,6 @@
 
 `setup.ts apply` 调用统一 writer 的 `executeSetupConfigWrite`；该入口自身通过 `setup-connection.ts` 重新发现、选定并复测，按现场当前配置生成精确四字段差异，不接受任意 changes 或其他授权 grant。普通 `maa-config.ts write`／`executeConfigWrite` 不允许连接字段，不能用 approved-report 绕过。原空地址、空／相对 adb 路径及开关仅能经 doctor 已核遗留事务恢复。无变更仍检查 active／stale／unknown 锁；失败重开后不得把已写入当成接入完成。
 
-`version` 从 MAA.exe 的 Windows ProductVersion 读取；缺少或格式未知时为 null。随包 [验证版本记录](../../maa-core/references/verified-versions.json) 目前两个列表都为空：仅核对若干固定源码字段不等于完整版本源码已核，更不等于实机已核。修改验证列表必须有本仓库实际验证证据。版本提醒不阻止接入。
+`version` 从 MAA.exe 的 Windows ProductVersion 读取；缺少或格式未知时为 null。随包 [验证版本记录](../../maa-core/references/verified-versions.json) 目前两个列表都为空：仅核对若干固定源码字段不等于完整版本源码已核，更不等于实机已核。修改验证列表必须有本仓库实际验证证据。两个列表都为空时 `version` 的原因是 `verification-record-empty`，返回的 `version` 另有 `recordEmpty: true`；读法和判断与 doctor 共用 `maa-core/scripts/maa-version.ts`。版本提醒不阻止接入。
 
 缺失程序只给官方入口：[MAA 下载与安装](https://docs.maa.plus/zh-cn/manual/install.html)、[MAA 官方发布](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases)、[Node 官方下载](https://nodejs.org/en/download)（选择 24.x）、[Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)、[MAA Windows 模拟器支持说明](https://docs.maa.plus/zh-cn/manual/device/windows.html)（从说明进入对应模拟器官方站点）。文件下载、解压和安装由后续下载流程处理；不把这些入口当成已获下载同意。
