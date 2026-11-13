@@ -23,6 +23,8 @@
 | [TaskQueueViewModel.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs) | `1de00775603e0c41b75379583578a8f01e4ddb88` |
 | [CopilotViewModel.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/CopilotViewModel.cs) | `066ca1bbab9a4690950319ed710a04a018095b75` |
 | [NotificationService.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Services/Notification/NotificationService.cs) | `e883347e2b445dfe82041a39e46d47ca7249a2ac` |
+| [CopilotItemViewModel.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/Items/CopilotItemViewModel.cs) | `222c05ae2d9520c058acc27c1f1beab5fe50b38b` |
+| [ConfigFactory.cs](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs) | `7f9a85ca85a2faadfa051655c30c8620bf26f3d9` |
 
 ## 回调行和日志文件
 
@@ -52,6 +54,12 @@
 - 任务失败后仍写完成任务（核实后采用）：`Assistant.cpp` 第 720–723 行出错后队列空了照样发 `AllTasksCompleted`，`AsstProxy.cs` 第 1672–1675 行自动战斗收到它就写「完成任务: 」。所以读 `gui.log` 先查错误标记，再查完成标记，两者都有按错误处理。
 - `AsstProxy.cs` 第 1484、1537 行另写英文的 `Start Task Chain: {TaskChain}, Task ID: {TaskId}` 和 `Completed Task Chain: ...`，用来划定本次运行的时间段。
 - 运行时长上限（明确超时）：`TaskQueueViewModel.cs` 第 954 行写 `Run duration limit reached: {LimitMinutes} min, stopping`，随后按手动停止处理；任务链以 `TaskChainStopped` 结束且这一段里有这条记录时记明确超时，没有这条记录的停止记结果未知。
+
+## 作业列表的勾选（核实后采用，2026-11-13 第 2 轮审查后补）
+
+- 列表模式开始时 `CopilotViewModel.cs` 第 2279–2282 行只把勾选的条目（`IsChecked`）提交给 MAA，所以下次点开始会打的就是仍勾选的条目。
+- 自动取消勾选只有一处：`AsstProxy.cs` 第 2162–2165 行在 `StageDrops-Stars-3` 或 `StageDrops-Stars-Adverse` 时调用 `CopilotTaskSuccess`，`CopilotViewModel.cs` 第 2036–2057 行把当前这一项取消勾选并保存。没有三星的结算、作战失败、断连都不会取消勾选。
+- 勾选随即保存：`CopilotItemViewModel.cs` 第 95–100 行 `IsChecked` 的 setter 调 `SaveCopilotTask`，`CopilotViewModel.cs` 第 2028–2030 行把列表写回当前配置的 `Copilot.TaskList`；`ConfigFactory.cs` 第 43 行的配置文件是 `config/gui.new.json`，第 52、56、310–312、324–336 行在属性变化后去抖 200 毫秒再写盘。所以带 `retryOf` 的 `start` 读 `gui.new.json` 里每项的 `IsChecked`，就是用户在界面上的勾选；刚点完的 200 毫秒内可能还没写盘，`start` 按读到的判断，勾得多就拒绝，不会放宽。
 
 ## 原生定时接管（核实后采用）
 
