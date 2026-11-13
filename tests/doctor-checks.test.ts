@@ -13,6 +13,7 @@ import { checkGroups, skillRepairChannels } from '../skills/maa-core/scripts/che
 import { assessMaaVersion } from '../skills/maa-core/scripts/maa-version.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { discoverSetupConnections, isAdbExecutablePath, type AdbBoundary } from '../skills/maa-core/scripts/setup-connection.ts';
+import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
 const coreDirectory = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
 const windows = process.platform === 'win32';
@@ -76,23 +77,32 @@ test('every skill-executed repair names an existing channel script and action, n
 });
 
 test('MAA version records only warn when missing, empty or not covering the installed version', () => {
-  const unavailable = assessMaaVersion('6.21.4', { available: false, sourceVerified: [], deviceVerified: [] });
+  const unavailable = assessMaaVersion('6.21.4', { available: false, recordVersion: null, sourceVerified: [], deviceVerified: [] });
   assert.deepEqual([unavailable.status, unavailable.reason], ['warning', 'verification-record-unavailable']);
-  const empty = assessMaaVersion('6.21.4', { available: true, sourceVerified: [], deviceVerified: [] });
+  const empty = assessMaaVersion('6.21.4', { available: true, recordVersion: 1, sourceVerified: [], deviceVerified: [] });
   assert.deepEqual([empty.status, empty.reason, empty.evidence.recordEmpty], ['warning', 'verification-record-empty', true]);
-  const unknown = assessMaaVersion(null, { available: true, sourceVerified: ['6.21.4'], deviceVerified: ['6.21.4'] });
+  const unknown = assessMaaVersion(null, { available: true, recordVersion: 1, sourceVerified: ['6.21.4'], deviceVerified: ['6.21.4'] });
   assert.deepEqual([unknown.status, unknown.reason], ['warning', 'maa-version-unknown']);
-  const partly = assessMaaVersion('6.22.0', { available: true, sourceVerified: ['6.22.0'], deviceVerified: ['6.21.4'] });
+  const partly = assessMaaVersion('6.22.0', { available: true, recordVersion: 1, sourceVerified: ['6.22.0'], deviceVerified: ['6.21.4'] });
   assert.deepEqual([partly.status, partly.reason], ['warning', 'maa-version-not-fully-verified']);
-  const verified = assessMaaVersion('6.21.4', { available: true, sourceVerified: ['6.21.4'], deviceVerified: ['6.21.4'] });
+  const verified = assessMaaVersion('6.21.4', { available: true, recordVersion: 1, sourceVerified: ['6.21.4'], deviceVerified: ['6.21.4'] });
   assert.deepEqual([verified.status, verified.reason], ['normal', 'maa-version-verified']);
 });
 
-test('the packaged empty verification record is stated as empty, not as a failed check', async (t) => {
+test('an empty verification record is stated as empty, and a newer source-verified release is the same reminder as in setup', async (t) => {
   const f = await fixture(t);
-  const result = await runChecks(f.context, f.maa, { ...quiet, versionReader: async () => '6.21.4' });
+  const verificationRecord = join(f.root, 'record.json');
+  await writeFile(verificationRecord, JSON.stringify({ schemaVersion: 2, recordVersion: 1, sourceVerified: [], deviceVerified: [] }));
+  const result = await runChecks({ ...f.context, verificationRecord }, f.maa, { ...quiet, versionReader: async () => '6.21.4' });
   assert.deepEqual([row(result, 'version').status, row(result, 'version').reason], ['warning', 'verification-record-empty']);
-  assert.deepEqual(result.version, { installed: '6.21.4', recordAvailable: true, recordEmpty: true, sourceVerified: false, deviceVerified: false });
+  assert.deepEqual(result.version, { installed: '6.21.4', recordAvailable: true, recordEmpty: true, recordVersion: 1, sourceVerified: false, deviceVerified: false,
+    newerSourceVerified: null, newerDeviceVerified: false });
+  await writeFile(verificationRecord, JSON.stringify({ schemaVersion: 2, recordVersion: 2, sourceVerified: ['6.21.4', '6.22.0'], deviceVerified: ['6.21.4'] }));
+  const upgrade = await runChecks({ ...f.context, verificationRecord }, f.maa, { ...quiet, versionReader: async () => '6.21.4' });
+  const setup = await checkSetup({ home: f.home, verificationRecord }, async () => '6.21.4');
+  assert.deepEqual(row(upgrade, 'version'), { ...row(setup, 'version'), group: 'installation' });
+  assert.deepEqual([row(upgrade, 'version').status, row(upgrade, 'version').reason, row(upgrade, 'version').repair.executor], ['warning', 'maa-upgrade-available', 'user']);
+  assert.equal(upgrade.version.newerSourceVerified, '6.22.0');
 });
 
 test('connection checks read adb state without connecting or printing the address', async (t) => {
@@ -274,7 +284,7 @@ test('doctor CLI check accepts --online, keeps 0/1/2 exit codes and resolves the
   const f = await fixture(t);
   const env = { ...process.env, MAA_SKILLS_HOME: f.home, USERPROFILE: f.root, HOME: f.root };
   const cli = join(f.skillsRoot, 'maa-core/scripts/doctor.ts');
-  const invoke = (args: string[]) => spawnSync(process.execPath, [cli, ...args], { env, input: '{}', encoding: 'utf8', windowsHide: true });
+  const invoke = (args: string[]) => spawnSync(process.execPath, ['--import', versionDoublePreload, cli, ...args], { env, input: '{}', encoding: 'utf8', windowsHide: true });
   const checked = invoke(['check', '--json']);
   assert.equal(checked.status, windows ? 0 : 1, checked.stdout + checked.stderr);
   const result = JSON.parse(checked.stdout);

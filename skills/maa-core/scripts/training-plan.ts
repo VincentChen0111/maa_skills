@@ -6,9 +6,11 @@ import { readSettings } from './preferences.ts';
 import { queryTraining } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, type TrainingPlan } from './training-state.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
-import { executeConfigWrite, inspectConfiguration, type MaaProcess } from './maa-config.ts';
+import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
+import { compareVersionStamp, readMaaVersion, readVersionStamp, type MaaVersionReader } from './maa-version.ts';
 
-type Options = { home?: string; fetcher?: typeof fetch };
+/** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
+type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('training-request-invalid');
   return value as Record<string, unknown>;
@@ -98,6 +100,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
   const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
   plan.configurationBinding = bindConfiguration(config, plan);
+  plan.versions = await readVersionStamp(context.settings.maaDirectory, options.versionReader ?? readMaaVersion);
   if (plan.state !== 'satisfied') buildTrainingChanges(config, grantFor(plan, { kind: 'preplace', dueAt: new Date(Math.ceil((Date.now() + 3600000) / 60000) * 60000).toISOString() }), context.settings.privateDirectory);
   await mkdir(context.directory, { recursive: true });
   const file = await open(context.file, 'wx', 0o600); try { await file.writeFile(JSON.stringify(plan, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
@@ -115,11 +118,14 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
   const request = object(input);
   return withPlan(request.id, options, async (plan, context) => {
     if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
-    if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply' };
+    const maaDirectory = context.settings.maaDirectory;
+    // Every result reports the MAA and record versions against those read at preparation; a difference refuses nothing.
+    const drift = async () => compareVersionStamp(plan.versions, await versionStampOf(maaDirectory, maa));
+    if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply', versions: await drift() };
     const action = nextTrainingAction(plan, new Date().toISOString());
-    if (!action || action.kind === 'start' && !plan.materialReady) return { status: 'check-required', reason: 'training-facts-or-materials-required' };
+    if (!action || action.kind === 'start' && !plan.materialReady) return { status: 'check-required', reason: 'training-facts-or-materials-required', versions: await drift() };
     const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
-    if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed' };
+    if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed', versions: await drift() };
     const grant = grantFor(plan, action), prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
     const intended = structuredClone(config);
     for (const change of prepared.changes) {
@@ -144,7 +150,7 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     }
     else { plan.state = 'unknown'; plan.issues.push(`training:configuration-${result.status}`); }
     await save(context.file, plan);
-    return result;
+    return { ...result, versions: await drift() };
   });
 }
 
@@ -190,14 +196,14 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
     if (matchesBinding(observedOriginal, actualBinding, true)) plan.configurationBinding = actualBinding;
     else { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:configuration-binding-changed'); }
     plan.issues = [...new Set(plan.issues)]; await save(context.file, plan);
-    return { plan, cleanup };
+    return { plan, cleanup, versions: compareVersionStamp(original.versions, await versionStampOf(context.settings.maaDirectory, maa)) };
   });
 }
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
-    expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues };
+    expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
 
 const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;

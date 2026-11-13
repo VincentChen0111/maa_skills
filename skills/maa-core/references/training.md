@@ -24,6 +24,8 @@
 2. `training-plan.ts prepare` 输入 `{query:<上述查询>, authorization: { source:"current-request"或"approved-report",reference:<授权原话或报告条目> }, binding:{profile:0,infrastTask:0,progressTask:1,timer:0}, currentTrainee:null或<当前受训者ID>, manualTraining:false}`。所有序号从 0 起；`currentTrainee:null` 明确当前没有受训者，不代表未知。当前是谁待核时先查询，不准备猜测。返回计划 ID，仅保存待执行记录。
 3. `training-plan.ts apply` 输入 `{id,host:"codex"或"claude",closedConfirmed?:true}`。只有已经收到用户关于已关闭 MAA 未被操作的确认才加 `closedConfirmed:true`。脚本复用安全事务；`complete` 仅代表配置及引用文件读回完成。检查阶段 `rejected`/`busy` 未写入，可在原因解除后继续；`unknown` 先核对，不能重试。准备时的配置名、队列和槽身份持续绑定；漂移停下核对，仅允许原生已完成后清空培养目标及关闭单次槽的已知变化。每次只安排一个阶段，原生单次定时按本机时钟触发；不创建外部定时器或点击设备。
 4. 原生执行之后，`training-plan.ts reconcile` 输入 `{id,logFile:<已选MAA目录内实际Core日志>,host,closedConfirmed?}`。只接受该实例目录内日志；保留原日志，不把完整日志贴到对话。日志须包含本动作实际 `append_task` 参数与同线程返回的 task_id，再以同进程/任务 ID/任务链的 TaskChainStart 关联回调；仅截一条完成消息不足。Infrast 需匹配本计划不可变训练文件、Training-only、禁续训和计划序号，OperProgress 需匹配唯一目标及下一档。缺失、多个候选或中途参数变化先核对；不能借材料刷新重放。`read` 输入 `{id}` 可随时读取安全摘要。
+
+计划在 `prepare` 时写下读到的 MAA 版本和核实记录版本（摘要的 `versions`，读不出为 null）。`apply` 的结果和 `reconcile` 的返回都带 `versions`：`state` 为 same、changed（`changed` 列出变了的项）、unknown 或 unrecorded（旧计划没有记录）。changed 时告诉用户准备之后 MAA 或核实记录换了版本；这只是提醒，不阻止执行，未核实的版本同样只提醒。
 5. 换受训者先预入驻：仅 Training、自定义候选、`ContinueTraining=false`、培养任务停用。实际 Infrast 执行完成只记预入驻执行，不记就位；下次 apply 的独立开训至少晚于该**实际完成时间 6 分钟**。这是未实机验证的故障防护措施。
 6. 开训只记录正确目标/技能/档次的倒计时，并要求当前开训阶段 `InfrastTrainingConfirm` 的 Completed 回调在此前；手动已开训只能走观察。培养任务成功、计划清零或全部完成均不足。培养任务完成且有确认但缺倒计时，下一次只安排观察，不再开训。目标已满足与已知等级矛盾记失败，清理本计划依赖的单次槽后等待核对。
 7. 核实开训后下一次 apply 尝试换助手；助手执行完始终 `unverified`。原生训练回调在换人前发出，故换人后再安排一次观察，使用新倒计时更新结束点；到预计结束点仍须同目标真实完成回调且时间不早于本档开训/最新训练观察，才能进入下一档。手动开训保护仅限当前档，实际完成后保留历史并解除该档标志，后续已批准档次仍可启动。晚完成就重新观察；超过一天的观察拆成最多 23 小时内检查，不把原生槽当作带日期的提醒。

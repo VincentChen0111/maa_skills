@@ -13,6 +13,7 @@ import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, rec
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
 import { readSettings } from './preferences.ts';
 import { inline } from './research.ts';
+import { readMaaVersion, readVersionStamp, type MaaVersionReader, type MaaVersionStamp } from './maa-version.ts';
 
 type ObjectValue = Record<string, unknown>;
 const isObject = (value: unknown): value is ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -20,12 +21,20 @@ const object = (value: unknown): ObjectValue => isObject(value) ? value : {};
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const filled = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 const kind = 'base';
-/** The pinned MAA protocol the exported plan follows; ticket 25 registers it and adds the installed-version record. */
+/**
+ * The pinned MAA protocol the exported plan follows (registered by ticket 25 as entry `base-plan-schedule`). The MAA
+ * version installed when the report is drafted is a separate stamp, `versions` (ticket 25).
+ */
 export const maaProtocol = { version: 'v6.21.4', commit: '52d0b2acaca116585b02e1e6a9da303460f81a24', file: 'docs/zh-cn/protocol/base-scheduling-schema.md' };
 
 type Goals = { source: 'user-stated' | 'assumed'; text: string };
 type Generated = Extract<GenerateResult, { status: 'written' }>;
-export type BaseContent = AdviceContent & { kind: 'base'; input: ObjectValue; goals: Goals; assumptions: string[]; summary: string | null; maaProtocol: typeof maaProtocol;
+/**
+ * `versions`: the MAA and verification-record versions read when the report was drafted (null when unreadable). It is
+ * inside the report hash, so the approval binds it; reports drafted before ticket 25 have none, and applying reports
+ * them as `unrecorded`. It is version metadata, not a result: a correction never lists it as a changed result.
+ */
+export type BaseContent = AdviceContent & { kind: 'base'; input: ObjectValue; goals: Goals; assumptions: string[]; summary: string | null; maaProtocol: typeof maaProtocol; versions?: MaaVersionStamp;
   plan: { file: string; sha256: string; json: ObjectValue; dropped: string[]; fills: Fill[] }; snapshot: { readAt: unknown; sourceTimes: unknown; coverage: unknown; fingerprint: string };
   operators: Record<string, OperatorFacts>; check: Omit<PlanCheck, 'operators'>; sources: Generated['sources'] };
 export type DraftResult = { status: 'saved'; reportHash: string; state: ReportState<BaseContent> } | { status: 'needs-input'; issues: string[] };
@@ -93,7 +102,7 @@ function parseReport(input: ObjectValue): { goals?: Goals; assumptions: string[]
 }
 
 /** Validates, generates and checks the plan, then saves one report version; returns needs-input instead of guessing. */
-export async function draftBaseReport(value: unknown, options: GenerateOptions & { now?: () => Date } = {}): Promise<DraftResult> {
+export async function draftBaseReport(value: unknown, options: GenerateOptions & { now?: () => Date; versionReader?: MaaVersionReader } = {}): Promise<DraftResult> {
   const input = object(value);
   if (!isObject(value)) return { status: 'needs-input', issues: ['input-invalid'] };
   const report = parseReport(input);
@@ -112,7 +121,8 @@ export async function draftBaseReport(value: unknown, options: GenerateOptions &
   const { operators, ...check } = generated.check;
   const body: Omit<BaseContent, 'items'> = { schemaVersion: 1, kind, createdAt: (options.now?.() ?? new Date()).toISOString(), revisionOf: null,
     input: Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'revisionOf' && key !== 'format')), goals: report.goals, assumptions: report.assumptions, summary: report.summary,
-    maaProtocol, plan: { file: generated.relative.replaceAll('\\', '/'), sha256: generated.sha256, json: generated.plan, dropped: generated.dropped, fills: generated.fills },
+    maaProtocol, versions: await readVersionStamp(settings.maaDirectory, options.versionReader ?? readMaaVersion),
+    plan: { file: generated.relative.replaceAll('\\', '/'), sha256: generated.sha256, json: generated.plan, dropped: generated.dropped, fills: generated.fills },
     snapshot: { ...generated.snapshot, fingerprint: generated.inputs.snapshot! }, operators, check, sources: generated.sources };
   const content = { ...body, items: [{ id: 'P1', title: `基建排班：${body.plan.file}（${list(generated.plan.plans).length} 个班次）`, scope: planScope(body) }] } as BaseContent;
   if (input.revisionOf !== undefined) {

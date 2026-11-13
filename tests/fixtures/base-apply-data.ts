@@ -30,8 +30,12 @@ export function infrastConfig(options: { timers?: boolean; roomOff?: string; mod
 }
 
 export type ApplyHome = { home: string; maa: string; configFile: string; tablesFile: string; reportHash: string; reference: string };
-/** A temporary home with settings, snapshot, MAA directory (name table and GUI configuration) and a saved base report. */
-export async function applyHome(options: { input?: Record<string, unknown>; approve?: boolean; config?: unknown; baseFile?: unknown } = {}): Promise<ApplyHome> {
+/**
+ * A temporary home with settings, snapshot, MAA directory (name table and GUI configuration) and a saved base report.
+ * `version`: a placeholder MAA.exe is written and the report is drafted with a version reader double returning it;
+ * later reads then need a double too (a `versionReader` for check, `version()` on the MAA process for apply).
+ */
+export async function applyHome(options: { input?: Record<string, unknown>; approve?: boolean; config?: unknown; baseFile?: unknown; version?: string } = {}): Promise<ApplyHome> {
   const home = await mkdtemp(join(tmpdir(), 'maa-base-apply-')), maa = join(home, 'maa'), tablesFile = join(home, 'base-tables.json');
   await mkdir(join(maa, 'resource'), { recursive: true }); await mkdir(join(maa, 'config'), { recursive: true });
   if (options.baseFile !== undefined) {
@@ -45,7 +49,10 @@ export async function applyHome(options: { input?: Record<string, unknown>; appr
   await writeFile(join(home, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory: home, maaDirectory: maa }));
   await writeFile(join(home, 'account-snapshot.json'), JSON.stringify(planSnapshot()));
   await writeFile(tablesFile, JSON.stringify(planTables()));
-  const drafted = await draftBaseReport({ goals, ...planInput(), tablesFile, ...options.input }, { home, now: () => new Date('2026-11-13T09:00:00.000Z') });
+  const version = options.version;
+  if (version !== undefined) await writeFile(join(maa, 'MAA.exe'), 'synthetic executable placeholder');
+  const drafted = await draftBaseReport({ goals, ...planInput(), tablesFile, ...options.input }, { home, now: () => new Date('2026-11-13T09:00:00.000Z'),
+    ...version === undefined ? {} : { versionReader: async () => version } });
   if (drafted.status !== 'saved') throw new Error(`fixture draft: ${JSON.stringify(drafted)}`);
   await recordReviewSkip(home, 'base', drafted.reportHash, { userWords: '这次跳过审查' });
   if (options.approve !== false) await approveBaseReportItems(home, drafted.reportHash, { items: ['P1'], userWords: '我批准排班这一项 P1' });

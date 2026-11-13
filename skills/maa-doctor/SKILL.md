@@ -10,7 +10,7 @@ description: 按症状诊断 MAA 使用问题：检查安装、连接、配置�
 运行 `node <本目录>/../maa-core/scripts/preferences.ts read`，标准输入传当前用户语言的 BCP 47 标签。按返回语言回复；未设置时提示可以设置。用户要求改设置或记录偏好原话时使用 [共享偏好接口](../maa-core/references/preferences.md)。
 
 1. 运行 `node <本目录>/../maa-core/scripts/doctor.ts check --json`，接口见 [检查与恢复接口](references/checks.md)。检查只读，仅更新私有目录的最近检查记录。按 `group` 列出每条状态、原因、修法和执行者，先讲和用户症状相关的组；说明 `recovery.changes` 中已生效、未生效及未知项。返回的是白名单证据，不读取完整配置到对话。用户问到 skill 更新、版本，或同意联网查询时，改用 `check --json --online`（只读访问 GitHub 公开接口）。
-2. 版本：`version` 只按随包核实记录提醒，未核实或记录为空都照常可用，如实说明列表为空；不建议用户为此降级或升级。`skill-version` 提醒有新发布时，更新由用户走宿主自己的更新入口，同时更新 maa-core。`skill-links` 报告损坏的目录联接或缺少 SKILL.md 时，由用户重建联接或重新安装，doctor 不改宿主目录。
+2. 版本：`version` 只按随包核实记录提醒，未核实或记录为空都照常可用，如实说明列表为空。`maa-upgrade-available` 时告诉用户可以升级到 `newerSourceVerified`，说明它是源码已核、是否也实机已核（`newerDeviceVerified`），当前版本照常可用；要升级由用户自己在 MAA 的更新设置或官方发布页完成，你不下载、不安装、不替用户升级 MAA，即使用户要求也只说明怎么做。不建议降级。`recovery.versions` 或修法结果的 `versions` 为 changed 时，告诉用户遗留写入之后 MAA 或核实记录换了版本，这只是提醒，不改变修法的前提。`skill-version` 提醒有新发布时，更新由用户走宿主自己的更新入口，同时更新 maa-core。`skill-links` 报告损坏的目录联接或缺少 SKILL.md 时，由用户重建联接或重新安装，doctor 不改宿主目录。
 3. `remote-control` 为提醒时告诉用户：MAA 的远程控制已配置，远端可以让 MAA 执行包括抽卡在内的任务，这条路不经过本项目的写入器；是否保留由用户在 MAA 设置里决定，doctor 不提供自动修法。不复述端点地址或身份标识。
 4. 用户描述的是运行失败、报错或「MAA 没做完」时，读 [排查与转介对照](references/triage.md)，运行 `doctor.ts analyze --json`，标准输入传 `{}`；用户提到 MAA 退出码时一并传 `processExitCode`，它不作为成功的证据。按 `outcome` 说明结果：只有 `completed` 是完成；`unknown` 时只核对当前状态，不重新运行、不重试、不改配置。
 5. 环境类失败（`classification.environment` 为 true：连接、识别环境、MAA 进程）先讲原因、证据和 `currentState`，再从 `nextSteps` 里由你判断：在原有批准范围内重试、换下一份已批准的备选，或停下告诉用户。不按失败次数自动交给用户或换作业；重试不增加理智药或碎石的数量，也不改变启动方式。需要连接检查时用 `check` 的同一结果，不另跑别的连接命令。`device-not-connected` 不说明模拟器关着，先问用户模拟器是否开着。

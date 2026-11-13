@@ -58,11 +58,12 @@ test('the Skland input flow discloses before the paste prompt, has no password p
   const result = run(f, ['input', 'skland', '--stdin'], `y\n${value}\n`);
   assert.equal(result.code, 0, result.stdout + result.stderr);
   const disclosure = result.stdout.search(/截至 2026-11-13.*鹰角/);
-  const readOnly = result.stdout.search(/只用来读取账号数据/);
+  const readOnly = result.stdout.search(/只用来读取你的账号数据/);
   const prompt = result.stdout.search(/粘贴.*token/);
   assert.ok(disclosure >= 0 && readOnly >= 0 && prompt > disclosure && prompt > readOnly, result.stdout);
   assert.doesNotMatch(result.stdout + result.stderr, /密码|password/i);
-  assert.match(result.stdout, /森空岛社区公开内容的调研不会使用这个 token/, 'community research never reuses the account credential');
+  assert.match(result.stdout, /你给出链接的森空岛社区帖子/, 'since 2026-11-14 the same token also reads the Skland community posts the user links');
+  assert.match(result.stdout, /不用于任何写入、签到、发帖、点赞、评论或修改/);
   assert.match(result.stdout, /token 过期后，重新运行本脚本粘贴新的 token/);
   await assertNoLeak(f.root, value, result.stdout, result.stderr);
   assert.deepEqual(await readFile(join(f.home, 'config.json')), settings, 'the settings file carries no credential data');
