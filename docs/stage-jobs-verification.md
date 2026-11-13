@@ -128,3 +128,36 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 - 没有运行真实 MAA、模拟器或游戏：借助战补位、「借助战」开关和「补漏」档位只有固定源码和合成配置证据；MAA 能否在好友助战里找到对应干员取决于实际助战列表。
 - 在线查询读取固定干员表只用边界替身测试；作者 2026-11-13 匿名下载该文件（15.6 MB）用于核对，CLI 在线路径没有实跑。
 - 线上评分分界（10 票）来自一次 300 份作业的抽样，作业站配置以后可能改变；本工具直接使用作业站的标记，不依赖这个数字。
+
+### R1 审查修复（2026-11-13）
+
+协调者转来独立 R1 的结论：有条件通过，P1 0、P2 1、P3 4；协调者逐条复核后全部接受，另接受审查员在同一段匹配代码里找到的三处 15 既有缺陷（同属关卡身份一类）。审查记录由协调者保存，本节只记修复和证据。本轮基点是上一轮的最后提交 `f493cdc`。
+
+| 意见 | 修复 | 证据 |
+| --- | --- | --- |
+| P2：同一关卡关键字下返回的作业不在别名里时被说成「本次检索条件下这一关没有作业」，第 9 章突袭因此报没有作业 | 新增唯一的关卡身份判断 `resolveJobStage`，逐份地图核对和每关检索结果分类共用；只有确属其他地图的结果才可以说没有作业，同图无法证明和关卡名无法确定另列 | `tests/stage-identity.test.ts`「a chapter-9 raid job named by the normal stageId …」「search results on the same map or with unresolvable names …」 |
+| 15 既有 (c)：第 9 章突袭作业全部判为地图不符 | 同上：同 levelId、同代号、同难度组的普通/突袭孪生关卡算本关，由作业的难度位决定能否用于突袭 | 同上，及一致性测试逐个列出 17 对 |
+| 15 既有 (b)：act50side_ex01/ex02 的 levelId 互换，levelId 末段别名让写着 TD-EX-2 的作业通过 TD-EX-1 的核对 | 不再接受 levelId 末段；MAA 列表模式按作业自己的 stage_name 查关卡并按它的代号导航（固定源码），所以这份作业会跑到 TD-EX-2，现判为其他关卡 | 「stage identity conformance on pinned table cases …」「the per-job map check uses the same predicate …」 |
+| 15 既有 (a)：难度 0 或缺省一律判为不符 | 按 MAA 图形界面的处理，0 或缺省只算普通；突袭仍不用，理由写成 `difficulty-unstated-normal-only` | 「difficulty 0 or missing means normal only …」 |
+| P3：规格正文没有评分门槛数字，不足 5 票不设门槛没有登记 | 正文写明 5 票 65%、按对数过渡到 100 票 85%、更多票不再提高、不足 5 票不设门槛；默认值表同一行补上不足 5 票的理由 | `docs/spec.md` 29 段与「默认值及其来源」 |
+| P3：缺场景 | 新增 `daily-stage-six-star-unsupported`，安装后两种布局实调 `stages` 和 `query` | `tests/stage-scenarios.test.ts` |
+| P3：工单 26 只列 15 的六个场景 | 26 登记 29 的模型验收延期和新增五个场景 | 工单 26 正文 |
+| P3：作业接口核对说难度只有 1/2/3 | 改为 0 或缺省未设置、1 普通、2 突袭、3 两者，并补 R1 补核一节 | `docs/stage-jobs-sources.md` |
+
+一致性测试用 `tests/fixtures/stage-identity-cases.ts`：从固定关卡表摘出的 46 条记录，只含 ID、代号、区域、难度、难度组和解锁条件，不含名称或描述。覆盖全部 17 对第 9 章孪生关卡、act50side 的互换、只写 levelId 末段的 NONE 关卡（`training_1`）、普通的 NONE 普通/突袭关卡、`#s`、以及 TOUGH/EASY 共用代号的情形。同一测试还核对两处使用方给出的结论相同。
+
+测试先行：先写 `tests/stage-identity.test.ts`。由于新判断尚未导出，整文件先因导入失败报红；另把不依赖新导出的三项复制到被忽略的 `.tmp/29/r1-red-raid.test.ts` 对旧代码运行，`.tmp/29/r1-red2.txt` 记录 3 项全部失败：第 9 章突袭的两份作业是 blocked；写着 `act50side_ex02` 的作业在 TD-EX-1 下是 ready（错关会被准备）；没写难度的作业在普通关是 blocked。实现后这些用例通过。
+
+与 15 相比还有两处行为变化，都是同一判断的直接结果：只写 levelId 末段、而末段不是任何 stageId 的作业（例如 `training_1`）现在判为无法确定，MAA 同样查不到它；写完整 levelId、而这个 levelId 被两个同难度的关卡共用时（固定表有 71 个，例如活动任务关卡的 `_m1`/`_m2`），现在判为同图无法证明，不再接受。
+
+本轮只改了上一轮自己的 29 测试，15 的测试没有改：检索结果多了 `sameMap`、`unresolved` 两个计数；「名称相近的其他关卡」用例给合成关卡表补了一条 `synthetic_010`，因为查不到的名字不再算作其他关卡；`#s` 用例的理由从 `map-mismatch` 改为 `stage-same-map-unproven`。
+
+报告结构在上文所列之外又多了：候选的 `stageMatch`；每关 `searchResult` 的 `sameMap`、`unresolved` 计数，以及 `same-map-unproven`、`unresolved` 两种结果；`tables.stages` 除所选关卡外还保留作业关卡名解析到的条目（所选关卡在前，其余按 ID 排序），准备时据此重新解析出同样的结论。
+
+本轮实际运行（本机 Windows，Node 24）：
+- `npm run typecheck` 通过。
+- 单文件：`stage-identity` 5/5、`stage-jobs-matching` 11/11、`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`stage-demo` 1/1、`maa-config` 59/59、`doctor` 74/74。
+- 在 `d9ca582` 上两次完整运行 `node scripts/check.ts`（`.tmp/29/r1-check.txt`、`r1-check-2.txt`），结果相同：399 项，397 通过、1 失败、1 跳过。失败项都是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI …」在第一次关闭合成 GUI 时报 `maa-close-timeout`。该入口在测试失败后不再跑后续检查，所以另外直接调用同样的导出函数：tracker、privacy、metadata 无错误，`scripts/eval-selftest.ts` 7 rules / 14 samples 通过。
+- `maa-process.test.ts` 单独跑三次：第一次 2 项失败（同一关闭用例，另有 native observer 用例报 `maa-process-command-failed`），第二次 1 项失败（同一关闭用例），第三次 15/15 通过。本分支没有改 `maa-process.ts` 和这个测试文件；当时本机有 33 个 node/PowerShell 进程在跑（其他构建并行）。协调者转述：审查员在完整运行里见过一次这个关闭超时，单独跑三次都是 15/15。
+
+未验证（本轮新增）：检索结果分类没有可离线运行的评测场景。评测的网络替身只服务固定提交的 GitHub JSON，而且只对 operator-cost 和 cultivation-gaps 两个脚本生效；要为作业站接口加替身，得改共享评测框架，而工单 28 正在改这部分。所以这类结果目前只有导出函数和 CLI 接缝的测试，模型怎样转述它们没有评测，已登记到工单 26。
