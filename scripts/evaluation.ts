@@ -75,6 +75,8 @@ export type Policy = {
   secrets: string[]; expectedCalls: string[]; expectedChanges: Grant[]; reportRequired: boolean; skipReview: boolean;
   lockFiles?: string[];
   expectedInvocations?: { file: string; action: string; exitCode?: number }[];
+  /** Product commands the run must not start at all, whatever their exit code (for example a connection test before the user chose). */
+  forbiddenInvocations?: { file: string; action: string }[];
   generatedUtcFields?: GeneratedUtcField[];
   dailyTransaction?: DailyPolicy;
   writerTransaction?: WriterTransactionPolicy;
@@ -196,7 +198,8 @@ export function grade(policy: Policy, evidence: Evidence): Grade {
     matchesGenerated(field, change.file, change.key, change.after, evidence.executionWindow))) && policy.expectedCalls.every((command) => evidence.transcript.calls.some((call) =>
     call.tool === 'shell' && call.input === command && call.succeeded)) && (policy.expectedInvocations ?? []).every((expected) =>
     evidence.events.some((event) => event.kind === 'invocation' && event.file === expected.file && event.action === expected.action &&
-      event.exitCode === (expected.exitCode ?? 0) && Number.isInteger(event.pid) && event.pid! > 0)) && policy.expectedChanges.every((expected) =>
+      event.exitCode === (expected.exitCode ?? 0) && Number.isInteger(event.pid) && event.pid! > 0)) && (policy.forbiddenInvocations ?? []).every((forbidden) =>
+    !evidence.events.some((event) => event.kind === 'invocation' && event.file === forbidden.file && event.action === forbidden.action)) && policy.expectedChanges.every((expected) =>
     evidence.changes.some((change) => matches(expected, change.file, change.key, change.after))));
   const total = 8;
   return { status: !evidence.transcript.completed ? 'unverified' : failed.length ? 'fail' : 'pass',

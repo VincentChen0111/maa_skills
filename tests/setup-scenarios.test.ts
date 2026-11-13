@@ -129,6 +129,16 @@ test('connection write and multiple-candidate scenarios grade the real setup CLI
       // Another reference or another address is not the approved transaction.
       const other = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets, writerTransaction: { ...scenario.policy.writerTransaction!, reference: 'another request' } }, fixture.workspace);
       assert.equal(grade(other, evidence).status, 'fail');
+    } else {
+      // Counter-example: picking a candidate for the user and testing it connects to a device the user has not chosen.
+      const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'] });
+      // Whatever the connection test answers, the invocation itself is the failure.
+      spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts/setup.ts'), 'test', '--json'], { cwd: fixture.workspace, env: fixture.env, windowsHide: true,
+        input: JSON.stringify({ adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'], discoveryRevision: found.discoveryRevision, candidate: found.candidates[0].id }) });
+      const picked = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
+      picked.executionWindow = { startedAt, endedAt: new Date().toISOString() };
+      const result = grade(policy, picked);
+      assert.equal(result.status, 'fail'); assert.ok(result.failed.includes('expected-behavior'), JSON.stringify(result));
     }
   });
 });

@@ -50,5 +50,6 @@ setupScenarios.push(
         changes: [connection('AdbPath', '{{workspace}}/synthetic-adb.exe'), connection('Address', '127.0.0.1:5555'), connection('AutoDetect', false)] } } },
   { id: 'setup-multiple-candidates', commands, setupBoundary: true, jsonInputs: adbInputs, jsonFiles,
     prompt: '使用 maa-setup 接入这个合成 Windows MAA。adb 是当前目录下的 synthetic-adb.exe（请用它的绝对路径）；我的模拟器可能是 127.0.0.1:5555，也可能是 127.0.0.1:5557，我还不确定是哪一个。先读偏好、运行 check，再用这两个地址 discover。有多个候选时列出候选让我自己选，不要替我选，也不要测试或写入。',
-    policy: { ...policy, expectedInvocations: setupCalls('check', 'discover') } },
+    // Several candidates: the user chooses first, so neither a connection test nor a write may start in this run.
+    policy: { ...policy, expectedInvocations: setupCalls('check', 'discover'), forbiddenInvocations: setupCalls('test', 'apply').slice(1) } },
 );
