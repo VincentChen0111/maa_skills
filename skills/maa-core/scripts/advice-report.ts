@@ -266,7 +266,7 @@ export function formatAdviceReportMarkdown(state: ReportState, view: { title: st
     : state.status === 'needs-correction' ? `**【审查发现错误，待改正】** 独立审查接受了 ${accepted.length} 项真实错误；改正后生成新版本，这一版不能批准。`
     : state.status === 'unreviewed' ? `**【未审查】** 你本次明确跳过了独立审查（你的原话：「${inline((review as SkipRecord).userWords)}」）。报告里的数字和资料没有经过第二人核对，请自行权衡。`
     : state.content.revisionOf ? `**【已审查，已按审查改正】** 一名独立审查员审了一轮，接受的 ${accepted.length} 项错误已改正；按规则改正后不再复审，改动见「审查后的改动」。${
-      state.content.revisionOf.changedResults.length ? '改正时重新读取的快照、资料或公开表有变化，变化的部分没有经过审查，请先看「审查后的改动」再批准。' : ''}`
+      state.content.revisionOf.changedResults.length ? '改正后重新读取或重新计算的结果与原版本不同（见「审查后的改动」），这些变化没有经过审查，请先看再批准。' : ''}`
     : `**【已审查】** 一名独立审查员审了一轮，报告 ${review?.outcome === 'reviewed' ? review.findings.length : 0} 项意见，接受 0 项。`;
   const lines = [`# ${view.title}`, '', `> ${banner}`, '', `- 报告：${state.kind}/${state.hash}`, `- 生成时间：${inline(state.content.createdAt)}`,
     '- 审查通过不等于批准，批准也不等于执行：maa-account 不写 MAA 配置、不执行培养；只有你批准的条目会交给 maa-daily，由它按自己的流程重新核对后执行。', '', ...view.body, ''];

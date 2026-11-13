@@ -215,32 +215,51 @@ function changedFields(before: ObjectValue, after: ObjectValue): string[] {
   return fields;
 }
 
-/**
- * Everything a draft re-reads or recalculates, flattened by field name: snapshot facts, step results, citations
- * and the shared calculation. Public tables are identified by repository, commit, file and content hash, so the
- * same pinned table read again later is not a change; any other re-read difference is.
- */
-function resultView(value: unknown): Record<string, unknown> {
-  const content = object(value), snapshot = object(content.snapshot), gaps = object(content.gaps), view: Record<string, unknown> = {};
-  for (const key of ['readAt', 'sourceTimes', 'coverage']) view[`snapshot.${key}`] = snapshot[key];
-  for (const key of ['mode', 'supportedThrough', 'itemNames']) view[key] = content[key];
-  (Array.isArray(content.steps) ? content.steps : []).forEach((step, index) => {
-    for (const key of ['operator', 'cost', 'uncertainties', 'crossCheck', 'cumulative', 'supported']) view[`steps[${index}].${key}`] = object(step)[key];
-  });
-  for (const entry of Array.isArray(content.evidence) ? content.evidence.map(object) : []) {
-    const { id, item, ...rest } = entry;
-    for (const [key, field] of Object.entries(rest)) view[`evidence.${String(id)}.${key}`] = field;
-    for (const [key, field] of Object.entries(object(item))) view[`evidence.${String(id)}.item.${key}`] = field;
+// ---- what counts as a changed result between a reviewed version and its correction ------------------------------
+// One owner for this rule: every producer a draft re-reads or recomputes is listed here, each with the fields that
+// are content. Read times, staleness, cache origin and raw-response hashes only say when or how something was read,
+// so reading the same content again later is never a change. tests/cultivation-report.test.ts enumerates every
+// producer with a same-content-later case and a real-change case.
+
+type ResultView = Record<string, unknown>;
+const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+const omit = (value: unknown, keys: string[]) => Object.fromEntries(Object.entries(object(value)).filter(([key]) => !keys.includes(key)));
+/** Fields that only record when or how a citation was read, per evidence type. */
+const readOnlyFields: Record<CultivationEvidence['type'], { entry: string[]; item: string[] }> = {
+  'nga-post': { entry: [], item: ['readAt', 'stale', 'origin'] },
+  // A job page's raw-response hash also covers counters such as views; the matched content fields are compared instead.
+  'job': { entry: ['readAt', 'sha256'], item: [] },
+  'research-item': { entry: [], item: ['readAt', 'stale', 'origin'] },
+};
+function evidenceView(content: ObjectValue, type: CultivationEvidence['type']): ResultView {
+  const view: ResultView = {};
+  for (const entry of list(content.evidence).map(object).filter(value => value.type === type)) {
+    const id = String(entry.id), skip = readOnlyFields[type];
+    for (const [key, field] of Object.entries(omit(entry, ['id', 'item', ...skip.entry]))) view[`evidence.${id}.${key}`] = field;
+    if (entry.item !== undefined) for (const [key, field] of Object.entries(omit(entry.item, skip.item))) view[`evidence.${id}.item.${key}`] = field;
   }
-  for (const key of Object.keys(gaps)) if (key !== 'costs') view[`gaps.${key}`] = gaps[key];
-  const costs = Array.isArray(gaps.costs) ? gaps.costs.map(object) : [];
-  view['gaps.costs'] = costs.map(({ sources: _sources, snapshot: _snapshot, ...rest }) => rest);
-  view.sources = (Array.isArray(costs[0]?.sources) ? costs[0]!.sources as unknown[] : []).map(object).map(source => [source.repository, source.commit, source.file, source.sha256]);
   return view;
 }
-/** Re-read data and tool results that differ from the reviewed version; they are listed because they were not reviewed. */
-function changedResults(before: unknown, after: unknown): string[] {
-  const old = resultView(before), next = resultView(after);
+export const resultProducers: { name: string; view: (content: ObjectValue) => ResultView }[] = [
+  // The snapshot's own facts; its read and scan times are not content. What it says about stock shows in the steps.
+  { name: 'snapshot', view: content => ({ 'snapshot.coverage': object(content.snapshot).coverage }) },
+  { name: 'steps', view: content => Object.fromEntries(list(content.steps).flatMap((step, index) =>
+    ['operator', 'cost', 'uncertainties', 'crossCheck', 'cumulative', 'supported'].map(key => [`steps[${index}].${key}`, object(step)[key]]))) },
+  { name: 'supportedThrough', view: content => ({ supportedThrough: content.supportedThrough }) },
+  { name: 'nga-evidence', view: content => evidenceView(content, 'nga-post') },
+  { name: 'job-evidence', view: content => evidenceView(content, 'job') },
+  { name: 'research-items', view: content => evidenceView(content, 'research-item') },
+  // The shared calculation; each cost's snapshot copy and table sources belong to the producers above and below.
+  { name: 'gap-result', view: content => ({ mode: content.mode, itemNames: content.itemNames, ...Object.fromEntries(Object.entries(omit(content.gaps, ['costs'])).map(([key, field]) => [`gaps.${key}`, field])),
+    'gaps.costs': list(object(content.gaps).costs).map(cost => omit(cost, ['sources', 'snapshot'])) }) },
+  // A pinned public table is identified by repository, commit, file and content hash, not by when it was read.
+  { name: 'public-tables', view: content => ({ sources: list(object(list(object(content.gaps).costs)[0]).sources).map(object)
+    .map(source => [source.repository, source.commit, source.file, source.sha256]) }) },
+];
+/** The one predicate: result fields that differ between a reviewed version and its correction; they were not reviewed. */
+export function changedReportResults(before: unknown, after: unknown): string[] {
+  const view = (value: unknown) => Object.assign({}, ...resultProducers.map(producer => producer.view(object(value)))) as ResultView;
+  const old = view(before), next = view(after);
   return [...new Set([...Object.keys(old), ...Object.keys(next)])].filter(key => JSON.stringify(old[key]) !== JSON.stringify(next[key]));
 }
 
@@ -264,7 +283,7 @@ export async function draftCultivationReport(value: unknown, options: DraftOptio
     const parent = await loadAdviceReport(settings.privateDirectory, kind, String(revision.reportHash));
     built.content.revisionOf = { reportHash: parent.hash, corrections: (revision.corrections as ObjectValue[]).map(entry => ({ finding: String(entry.finding ?? ''), change: String(entry.change ?? '') })),
       changedFields: changedFields(object(object(parent.content).input), built.content.input as unknown as ObjectValue),
-      changedResults: changedResults(parent.content, built.content) };
+      changedResults: changedReportResults(parent.content, built.content) };
   }
   const saved = await saveAdviceReport(settings.privateDirectory, built.content);
   return { status: 'saved', reportHash: saved.hash, state: await loadAdviceReport(settings.privateDirectory, kind, saved.hash) as ReportState<CultivationContent> };

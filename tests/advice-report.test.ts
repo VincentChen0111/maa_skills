@@ -117,9 +117,21 @@ test('a correction drafted after the account snapshot changed lists every change
     assert.ok(content.revisionOf!.changedResults.includes(field), field);
   assert.ok(!content.revisionOf!.changedResults.some(field => field.startsWith('sources')), 'the same pinned tables re-read later are not a change');
   const markdown = formatCultivationReportMarkdown(revision.state);
-  assert.match(markdown, /\*\*【已审查，已按审查改正】\*\*.*改正时重新读取的快照、资料或公开表有变化，变化的部分没有经过审查/);
+  const banner = '改正后重新读取或重新计算的结果与原版本不同（见「审查后的改动」），这些变化没有经过审查，请先看再批准。';
+  assert.ok(markdown.split('\n').some(line => line.startsWith('> **【已审查，已按审查改正】**') && line.endsWith(banner)), 'neutral banner');
+  assert.ok(!markdown.includes('改正时重新读取的快照、资料或公开表有变化'), 'the banner does not claim a re-read');
   assert.ok(markdown.includes('与原版本不同的输入：无'));
   assert.match(markdown, /与原版本不同的工具结果和资料：.*supportedThrough/);
+
+  // A correction that only reorders steps re-reads nothing, yet recomputes results: same neutral banner, no re-read claim.
+  const draft = reportDraft();
+  const reordered = await draftCultivationReport({ ...draft, steps: [draft.steps[1]!, draft.steps[0]!], revisionOf: { reportHash: hash, corrections: [{ finding: 'F1', change: '交换两步顺序' }] } },
+    { home, fetcher: reportFetcher() });
+  if (reordered.status !== 'saved') return assert.fail(JSON.stringify(reordered));
+  assert.ok(reordered.state.content.revisionOf!.changedFields.includes('steps[0].name'));
+  assert.ok(reordered.state.content.revisionOf!.changedResults.includes('steps[0].operator'));
+  const swapped = formatCultivationReportMarkdown(reordered.state);
+  assert.ok(swapped.includes(banner) && !swapped.includes('改正时重新读取的快照'));
 });
 
 test('an explicit skip starts no review, marks the report 未审查 at the top and still allows item approval', async (t) => {
