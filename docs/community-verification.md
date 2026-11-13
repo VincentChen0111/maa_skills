@@ -169,7 +169,7 @@
 | --- | --- | --- |
 | 6 重定向按风控报告并暂停 | `tests/skland-community.test.ts`「with the real Node fetch a redirect on the post / on the exchange …」：真实 Node fetch 对本机回环服务。结果为 `risk-control`，原因 `http-302`，修法 `retry-later`，凭据 `unchanged`，暂停到 30 分钟后。服务端只看到 grant、cred、item（换取被重定向时只有 grant），重定向目标从未被请求；3 秒后再读为 `risk-stopped`、0 个请求，服务端没有再收到任何请求。风控表新增帖子、换授权码、换 cred（307）三处重定向，用按 Node 语义处理重定向的替身；`assertAllowed` 核对每个请求都是 `manual` 模式。`tests/community-scenarios.test.ts`「a redirect in the synthetic Skland world …」：已安装的读取器在合成世界读帖子 7654321，得到 `risk-control`、`http-302`、3 个请求、来源暂停；再读为 `risk-stopped`、0 个请求 | 通过（回环与替身）；真实站点未验证 |
 | 凭据文字与修法一致 | 「a credential that cannot be opened on this machine …」：`protection-failed` 得 `retry-later`，`windows-required` 得 `use-windows`，都不发请求、凭据状态不变，中英文 Markdown 都不出现 `credentials.ts input` 或重新输入；`tests/bilibili.test.ts`「a SESSDATA that cannot be opened …」同理 | 通过 |
-| 测试不碰真实网络 | 上述五个测试文件都加载 `offline-network.mjs`；「the test guard makes real network fail …」 | 通过 |
+| 测试不碰真实网络 | 上述五个测试文件都加载 `offline-network.mjs`；「the test guard makes real network fail …」。第一轮时防护只管本进程的 TCP 连接和 `dns.lookup`，不管 Windows 传输启动的 PowerShell；第二轮修复补上，确切覆盖范围见「2026-11-14 第二轮修复」 | 通过（第二轮修复后） |
 
 ### 设计默认值（第一轮修复）
 
@@ -180,10 +180,46 @@
 
 先失败的证据，产品代码修改前：`tests/skland-community.test.ts` 23 项中 18 项失败。帖子、换取和换 cred 上的三种重定向都报 `network-failed`（审查发现在替身中复现）；两个真实 fetch 回环用例都报 `network-failed`；`assertAllowed` 要求 `manual`，所以其余带请求的用例也失败；凭据文字用例失败。防护用例第一次失败是测试自身的问题：端口 9 是 fetch 禁用的端口，报 bad port；改用 80 端口后通过（它只核对防护本身，与产品代码无关）。`tests/bilibili.test.ts` 新用例失败（页结果没有原因）。整个过程没有真实网络请求：防护在这些测试运行前已经加上。修复后逐个运行一次（不是完整门禁）：`npm run typecheck` 通过；`tests/skland-community.test.ts` 23 项、`tests/skland-account.test.ts` 18 项、`tests/skland-scenarios.test.ts` 1 项、`tests/research.test.ts` 7 项、`tests/research-transport.test.ts` 3 项、`tests/community-cli.test.ts` 3 项、`tests/community-content.test.ts` 14 项、`tests/community-scenarios.test.ts` 3 项、`tests/research-scenarios.test.ts` 1 项、`tests/nga.test.ts` 13 项、`tests/bilibili.test.ts` 16 项、`tests/credentials.test.ts` 6 项、`tests/evaluation.test.ts` 8 项、`tests/eval-network.test.ts` 3 项、`tests/help-installation.test.ts` 6 项、`tests/metadata.test.ts` 2 项全部通过。`node scripts/tracker.ts` 无错误；`node scripts/privacy.ts .` 第一次报了回环测试里一处 `token:` 字面量，改成仓库惯用的 `['token']` 写法后无发现，`tests/skland-community.test.ts` 重跑仍是 23 项通过。账号读取的回环核对用的是一次性脚本，不在仓库里。没有运行完整门禁和 `tests/maa-process.test.ts`。合成世界的重定向用例没有在修复前的代码上单独跑过红灯：旧合成世界只接受 `error`，旧读取器又不会交回 3xx，两种组合都只能得到 `network-failed`。
 
+## 2026-11-14 第二轮修复
+
+独立审查第二轮接受三项（都是 P3，协调者全部接受）：网络防护没有覆盖 Windows 平台传输；技能文字对所有 `credential-unreadable` 都给输入命令，与修法不符；B 站文字说「本次没有发请求」，与请求数 1 矛盾。审查员的离线复现（防护下方垫一层记录，再读 B 站和森空岛）在本轮直接复用。
+
+### 修复内容
+
+- 网络防护（`tests/fixtures/offline-network.mjs`）：B 站读取器在 Windows 上默认用 `research-transport.ts` 的 Windows 传输，它启动 `powershell.exe`，由 .NET 发请求，不经本进程的套接字。第一轮的事故（约 20 次匿名 GET）走的就是这条路。防护现在也在进程内拒绝经 `child_process` 启动 Windows PowerShell 或 PowerShell 7，报 `offline-test-real-network`。覆盖 `spawn`、`spawnSync`、`execFile`、`execFileSync`、`exec`、`execSync`、`fork`，`exec` 和 `execFile` 的 promisify 形式也覆盖。判定规则：程序文件名是 powershell 或 pwsh（不分大小写，可带 `.exe` 和路径）就拒绝；经 shell 运行的命令行（`exec`、`execSync`、`shell` 选项，或程序本身是 cmd、sh、bash 等）里出现这两个词也拒绝；`fork` 看 `execPath`。每次拒绝记进 `globalThis.__maaOfflineNetworkGuard.refused`，内容是接口名加主机名或程序名。这样，读取器把传输错误改写成代码后，测试仍能证明是防护挡下的。
+- 防护的确切覆盖范围，夹具注释与本记录一致。覆盖：非本机回环的 TCP 连接（`net.Socket` 的 connect，http、https、tls、fetch 都经过它）；这类主机的 `dns.lookup` 和 `dns.promises.lookup`；上面说的 PowerShell 启动。不覆盖：UDP（`dgram`）、`dns.resolve*`（直接查询 DNS 服务器）、PowerShell 以外的程序、worker 线程，以及没有加载防护的子 Node 进程。第一轮修复内容里写的「拒绝任何……DNS 查询」不准确，实际只管 `dns.lookup`，这里更正。
+- 防护直接全局拒绝 PowerShell，没有用 `module.registerHooks` 只替换调研传输，因为加载防护的测试都不需要 PowerShell。`skland-community`、`bilibili`、`community-content` 在进程内用保护替身；`community-cli` 的子进程用 `credential-boundary.mjs`，B 站的子进程另用 `community-boundary.mjs`；`community-scenarios` 的评测子进程用评测网络夹具替换 Windows 保护。下面的逐文件运行证实了这一点。真正用 PowerShell 的测试（`help-installation`、`setup-scenarios`、`maa-process`）不加载防护，不受影响。
+- 新增 `tests/fixtures/guard-backstop.mjs`，只在防护自身的测试里用，加载顺序在防护之前。凡是越过防护的连接、`dns.lookup` 和子进程启动，它都记下来并让其失败，所以防护失效时也不会有请求离开本机、不会有程序运行。新增 `tests/offline-network.test.ts` 的两个用例。
+- 技能文字（`skills/maa-account/SKILL.md` 森空岛社区与 B 站两步，`skills/maa-core/references/research.md` 两条）：森空岛社区按结果的 `repair` 分支。`enter-credential`、`reenter-credential` 给输入命令；`retry-later` 说稍后再试（凭据无法读取时说明是 Windows 加密这次没有完成，不要重新输入；风控时说明暂停到何时）；`use-windows` 说在保存凭据的 Windows 用户下使用；`check-system-time` 说检查系统时间；`report-issue` 说报告问题。B 站按字幕页的结论和原因分支：`credential-required`、`credential-rejected`，以及不带原因的 `credential-unreadable` 给输入命令；`protection-failed` 说稍后再试；`windows-required` 说在保存凭据的 Windows 用户下使用；`login-not-recognized` 说用户可以自己重新输入。其他技能和接口文件里的凭据说法也核对过：账号快照（`references/skland.md`）把 `windows-required`、`protection-failed` 作为单独的错误；`credentials.md` 的 `unreadable` 是记录损坏这一检查状态；setup 和 doctor 只讲检查状态。这些都与修法一致，没有改动。规格正文「共享工具」的森空岛社区一条、「默认值及其来源」19 行和「规则来源」19 行同步补上这条规则。
+- B 站文字（`skills/maa-core/scripts/research.ts`）：凭据解不开时，状态文字改为「没有用到这份凭据，需要它的内容没有读取」（英文「the credential was not used, content that needs it was not read」），不再说没有发请求。两个来源共用同一句；森空岛社区这时确实一个请求也没发，这句话对它同样成立。
+- 不在本包范围、留给协调者（工单 18）：NGA 读取器把 `protection-failed`、`windows-required` 都报成不带原因的 `credential-unreadable`，Markdown 和技能文字因此仍让用户重新运行 `credentials.ts input nga`，与第一轮修复前的森空岛社区是同一个问题；本包没有改动。另外，`research-transport.ts` 的 Windows 传输在 `spawn` 同步抛错时，`finish` 在 `timer` 声明之前就用到了它（暂时性死区），抛出 ReferenceError，于是读取器记成 `transport-failed`，而本意是 `transport-unavailable`。这是防护测试发现的，两者都是网络失败、都不重试；那段代码属于 18，本包没有改动，测试也只要求原因是两者之一。
+
+### 验收对照（第二轮修复）
+
+| 项 | 证据 | 状态 |
+| --- | --- | --- |
+| 防护挡住 Windows 平台传输 | `tests/offline-network.test.ts`「readBilibiliVideo without a transport fails under the guard and starts nothing …」：不传 `transport` 读 B 站，结果为 `network-failed`。Windows 上防护记录恰好一次 `child_process.spawn powershell.exe`，其他平台记录对 `api.bilibili.com` 的连接；下层记录为空，`child_process` 诊断通道也没有看到任何子进程 | 通过（本机 Windows） |
+| 每个 `child_process` 入口都拒绝 PowerShell，其他程序照常通过 | 同文件「the test guard refuses to start PowerShell through every child_process entry point …」：11 种写法和 promisify 的 `exec` 都以 `offline-test-real-network` 失败，下层记录为空；`node` 本身能越过防护，到达下层 | 通过 |
+| 审查员的复现 | 审查员的 `guard-proof.test.mjs`（不改动）对本分支运行：15 种套接字和 DNS 写法都报 `offline-test-real-network`，下层记录为空，本机回环照常；不传 `transport` 的 B 站读取下层记录为空（第二轮审查时这里记下了一次 PowerShell 启动） | 通过 |
+| 技能文字按修法给出说法 | `tests/community-scenarios.test.ts`「the skill and the interface give the credential input command only when the repair is to enter it …」：SKILL 两步和 research.md 两条里，凡是含输入命令的分句都不含 `retry-later`、`use-windows`、`check-system-time`、`protection-failed`、`windows-required` 或「稍后再试」；每种修法或原因都有自己的说法 | 通过（文字层面）；真模型行为未验证 |
+| B 站文字与请求数一致 | `tests/bilibili.test.ts`「a SESSDATA that cannot be opened …」：请求数 1，中英文都不出现「没有发请求」或「nothing was sent」，并写明没有用到这份凭据；`tests/skland-community.test.ts`「a credential that cannot be opened …」：请求数 0，用同一句 | 通过 |
+
+### 设计默认值（第二轮修复）
+
+- 产品限制（只在修法是输入凭据时给输入命令；凭据这次解不开时不要求重新输入）写进规格：「共享工具」森空岛社区一条，「默认值及其来源」的「19 森空岛社区结果带 `credential`……」行，「规则来源」19 行。标为「设计默认值，2026-11-14，第二轮审查修复」。理由：重新输入一份仍然有效的凭据没有用，还多一次暴露。
+- 只影响测试：防护全局拒绝 PowerShell，理由见上。防护记录被拒的尝试，因为读取器会把传输错误改写成代码，只看结果无法证明是防护挡下的。文字用两个来源共用的一句，不分来源各写一套，因为这句话对两个来源都成立。
+
+### 运行记录（第二轮修复）
+
+先失败的证据：`tests/bilibili.test.ts` 新断言在改 `research.ts` 前失败，报「protection-failed: the status agrees with the request count」。`tests/community-scenarios.test.ts` 新用例在改技能文字前失败，报「the Skland branches follow the result's repair」。`tests/offline-network.test.ts` 在改防护前两项都失败，因为旧防护没有拒绝记录；这一步下层已经先加载，所以没有真实网络。改防护后第一次运行，B 站读取的原因是 `transport-failed` 而不是预期的 `transport-unavailable`，由此发现上面所说 18 的暂时性死区问题，测试随之放宽为两者之一。审查员的 `bili-text.ts` 改前输出为状态「本次没有发请求」、请求数 1，复现了问题。
+
+修复后逐个运行一次，都是单个文件，没有运行完整门禁：`npm run typecheck` 通过。各文件全部通过，项数如下：`offline-network` 2 项（新）、`skland-community` 23 项、`skland-account` 18 项、`research` 7 项、`research-transport` 3 项（另有 1 项只在非 Windows 运行，本机跳过）、`bilibili` 16 项、`nga` 13 项、`credentials` 6 项、`community-cli` 3 项、`community-content` 14 项、`community-scenarios` 4 项、`research-scenarios` 1 项、`evaluation` 8 项、`eval-network` 3 项、`help-installation` 6 项、`metadata` 2 项。`node scripts/privacy.ts .` 第一次在新测试的两处盘符路径字面量上报了 `private-path`；改为由 `SystemRoot`、`ProgramFiles` 拼出路径后，结果无发现，`offline-network` 重跑仍是 2 项通过。`node scripts/tracker.ts` 无错误。没有运行 `tests/maa-process.test.ts`，也没有任何真实网络请求。
+
 ## 未验证
 
 - 森空岛社区（2026-11-14 起）：**没有发过任何带凭据的真实森空岛请求**。帖子接口是否接受账号快照会话（`/api` 一侧）的签名、真实返回字段、真实风控信号、读取时会不会触发其他校验，都要维护者在本机用自己的 token 核对；读帖的真实可用性因此未验证。上面运行记录里那次误发的匿名请求不算核对。
 - 重定向（第一轮修复）：真实森空岛会不会对换取或帖子请求回重定向、转到哪里都未验证；读取器取回 3xx 并暂停来源的行为只用真实 Node fetch 对本机回环服务核对过。
 - 真实站点：帖子真实字段；带 SESSDATA 时字幕列表、`login_mid`、字幕文件主机与格式、失效时的真实回答；两站的真实风控信号；如实 User-Agent 长期是否被接受；3 秒和 30 分钟是否够用。清单见[社区来源核对](community-sources.md)「未验证」。核对时只发了几次不带凭据的请求。
 - Windows 传输经系统代理和证书存储访问这两个站点：与 18 相同，只对本机替身实测。
-- 真模型行为评测：所有场景（含 2026-11-14 新增的两个森空岛场景）只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。
+- 真模型行为评测：所有场景（含 2026-11-14 新增的两个森空岛场景）只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。第二轮修复又改了 `skills/maa-account/SKILL.md` 和 `skills/maa-core/references/research.md` 的凭据说法（按修法分支），只有文字层面的测试；agent 在 `retry-later`、`use-windows` 时确实不让用户重新输入，这一点未验证，同样留给工单 26。目前也没有覆盖这种情况的评测场景。
+- 防护测试的非 Windows 分支（不传 `transport` 的 B 站读取走 fetch，在连接处被拒）只会在 CI 的 Linux 上运行，本机没有跑过。
