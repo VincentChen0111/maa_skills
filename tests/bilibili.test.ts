@@ -1,3 +1,4 @@
+import './fixtures/offline-network.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
@@ -121,6 +122,21 @@ test('with the user\'s SESSDATA the subtitles are read: only the player request 
   const offline = await readBilibiliVideo({ video: bvid, cacheOnly: true }, options);
   assert.deepEqual([offline.status, offline.requests, offline.pages.map((page) => page.served)], ['ok', 0, ['stale-cache', 'stale-cache']]);
   assert.ok(offline.limitations.includes('stale-cache'));
+});
+
+test('a SESSDATA that cannot be opened on this machine is not called unreadable: the text says retry later or use Windows, never enter it again', async (t) => {
+  for (const [failure, zh] of [['protection-failed', /稍后再试/], ['windows-required', /Windows/]] as const) {
+    const f = await setup(t, true);
+    const { transport, calls } = transportDouble(route);
+    const failing: Protector = { protect: protector.protect, unprotect: async () => { throw new Error(failure); } };
+    const result = await readBilibiliVideo({ video: bvid }, { privateDirectory: f.privateDirectory, transport, protector: failing, clock: f.clock });
+    assert.deepEqual(result.pages.map((page) => [page.outcome, page.reason ?? null]), [['fresh', null], ['credential-unreadable', failure]]);
+    assert.equal(calls.length, 1, 'no player request without the opened SESSDATA');
+    assert.equal(await credentialState(f.privateDirectory), 'unverified', `${failure} leaves the saved SESSDATA as it was`);
+    const markdown = { zh: formatResearchMarkdown(result, 'zh'), en: formatResearchMarkdown(result, 'en') };
+    for (const text of Object.values(markdown)) assert.doesNotMatch(text, /credentials\.ts input|重新|again in your own terminal/, failure);
+    assert.match(markdown.zh, zh);
+  }
 });
 
 test('requests are validated before anything is read or sent; there is no search and no short-link redirect', async (t) => {

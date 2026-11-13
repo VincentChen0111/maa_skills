@@ -1,3 +1,4 @@
+import './fixtures/offline-network.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -9,6 +10,9 @@ import { grade } from '../scripts/evaluation.ts';
 import { bilibiliVideoId, communityScenarios, sklandEvalSecrets, sklandEvalToken } from '../eval/maa-account/community-scenarios.ts';
 
 const post = { post: 'https://www.skland.com/article?id=1234567' };
+const guard = new URL('./fixtures/offline-network.mjs', import.meta.url).href;
+/** The fixture's own preloads (observer, trusted network fixture) run after the test guard that makes any real network fail. */
+const offline = (env: NodeJS.ProcessEnv) => ({ ...env, NODE_OPTIONS: `--import=${guard} ${env.NODE_OPTIONS ?? ''}`.trim() });
 const requests: Record<string, [string, unknown]> = {
   'account-bilibili-cached-experimental': ['bilibili.ts', { video: `https://www.bilibili.com/video/${bilibiliVideoId}` }],
   'account-skland-community-read': ['skland-community.ts', post],
@@ -26,7 +30,7 @@ test('Skland community and Bilibili scenarios run the installed readers offline 
     t.after(() => fixture.dispose());
     const [script, request] = requests[scenario.id]!;
     const run = (file: string, verb: string, input: unknown) => spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts', file), verb],
-      { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+      { cwd: fixture.workspace, env: offline(fixture.env), input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
     const preferences = run('preferences.ts', 'read', { currentLanguage: 'zh-CN' });
     assert.equal(preferences.status, 0, preferences.stderr);
     const json = run(script, 'read', request);
@@ -77,4 +81,22 @@ test('the Skland scenarios and the skill agree: a linked post is read with the u
   assert.match(step, /credentials\.ts input skland/);
   assert.match(step, /不在对话里/);
   assert.match(step, /不改用[^。]*网页抓取/);
+});
+
+test('a redirect in the synthetic Skland world is seen and never followed: the installed reader stops with risk control and the next read sends nothing', async (t) => {
+  const scenario = communityScenarios.find((item) => item.id === 'account-skland-community-read')!;
+  const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)),
+    companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) }, jsonInputs: scenario.jsonInputs, networkFixtures: scenario.networkFixtures ?? {} });
+  t.after(() => fixture.dispose());
+  const run = (file: string, verb: string, input?: unknown) => spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', file), verb],
+    { cwd: fixture.workspace, env: offline(fixture.env), input: input === undefined ? '' : JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+  assert.equal(run('preferences.ts', 'read', { currentLanguage: 'zh-CN' }).status, 0);
+  const redirected = run('skland-community.ts', 'read', { post: '7654321' });
+  const result = JSON.parse(redirected.stdout).result;
+  assert.equal(redirected.status, 1);
+  assert.deepEqual([result.status, result.pages[0].reason, result.requests, result.repair], ['risk-control', 'http-302', 3, 'retry-later'], 'exchange, cred, then the redirected post');
+  assert.ok(result.stoppedUntil, 'the source is paused');
+  const next = JSON.parse(run('skland-community.ts', 'read', post).stdout).result;
+  assert.deepEqual([next.status, next.requests], ['risk-stopped', 0], 'nothing is sent again with the user\'s token while paused');
+  assert.equal(JSON.parse(run('skland-community.ts', 'status').stdout).status.stopReason, 'risk-control');
 });

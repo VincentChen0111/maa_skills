@@ -42,11 +42,16 @@ async function bodyText(response: Response): Promise<string> {
   }
   return Buffer.concat(chunks).toString('utf8');
 }
-/** One request: fixed host, no redirects, bounded time and size. Errors carry only a fixed code, never the URL or the reply. */
+/**
+ * One request: fixed host, no redirects, bounded time and size. Errors carry only a fixed code, never the URL or the reply.
+ * The session asks for `redirect: 'error'`; a caller's fetcher may see a redirect itself instead (the community reader
+ * asks for `manual`, so it can classify one as risk control), and a 3xx answer is then never read as data.
+ */
 async function call(fetcher: SklandFetch, url: string, init: RequestInit): Promise<Record<string, unknown>> {
   let response: Response; let text: string;
   try {
     response = await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(sklandRequestTimeoutMs) });
+    if (response.status >= 300 && response.status < 400) { await response.body?.cancel().catch(() => undefined); throw new SklandReadFailure('service-error'); }
     text = await bodyText(response);
   } catch (error) { throw error instanceof SklandReadFailure ? error : new SklandReadFailure('network-failed'); }
   if (response.status === 429 || response.status >= 500) throw new SklandReadFailure('service-error');

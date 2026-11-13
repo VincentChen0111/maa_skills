@@ -133,12 +133,17 @@ function validPost(value: unknown): value is StoredPost {
 // ---- one read ------------------------------------------------------------------------------------
 
 type Watch = { requests: number; seen: Seen };
-/** Counts the requests the session sends and keeps the status and type of the last answer; it reads no body and no other header. */
+/**
+ * Counts the requests the session sends and keeps the status and type of the last answer; it reads no body and no other
+ * header. It asks for `redirect: 'manual'` instead of the session's `error`: Node's fetch then returns the 3xx itself, so
+ * a redirect (often a captcha or login page) is classified as risk control and pauses the source, instead of ending as a
+ * network failure that a retry a few seconds later would repeat with the user's token. A redirect is never followed.
+ */
 function observed(fetcher: SklandFetch, watch: Watch): SklandFetch {
   return async (url, init) => {
     watch.seen = undefined;
     watch.requests += 1;
-    const response = await fetcher(url, init);
+    const response = await fetcher(url, { ...init, redirect: 'manual' });
     watch.seen = { status: response.status, html: /text\/html/i.test(response.headers.get('content-type') ?? '') };
     return response;
   };

@@ -1,5 +1,8 @@
+import './fixtures/offline-network.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,7 +65,7 @@ function assertAllowed(trace: Trace) {
     refresh: 'GET zonai.skland.com/api/v1/auth/refresh', item: 'GET zonai.skland.com/web/v2/item' };
   for (const entry of trace) {
     assert.equal(`${entry.method} ${entry.host}${entry.path}`, allowed[entry.kind], `${entry.kind} is an allowed request`);
-    assert.equal(entry.redirect, 'error', 'redirects are never followed with a credential');
+    assert.equal(entry.redirect, 'manual', 'the reader sees every redirect itself and never follows one with a credential');
     if (entry.kind === 'item') { assert.equal(entry.signed, true, 'the post request carries a valid signature'); assert.deepEqual(entry.query, ['id']); }
   }
 }
@@ -138,7 +141,10 @@ const riskSignals: [string, Steps, string][] = [
   ['HTTP 500 on the post', { item: [{ http: 500 }] }, 'http-500'],
   ['HTTP 429 on the exchange', { grant: [{ http: 429 }] }, 'http-429'],
   ['an HTML page instead of data', { item: ['not-json'] }, 'page-instead-of-data'],
-  ['a redirect', { item: [{ http: 302 }] }, 'http-302'],
+  // The double answers a 3xx as Node's fetch does: it rejects under `redirect: 'error'` and returns the 3xx under `manual`.
+  ['a redirect on the post', { item: [{ http: 302 }] }, 'http-302'],
+  ['a redirect on the exchange', { grant: [{ http: 302 }] }, 'http-302'],
+  ['a redirect on the cred issue', { cred: [{ http: 307 }] }, 'http-307'],
   ['a frequency message', { item: [{ code: 10429, message: '访问过于频繁，请稍后再试' }] }, 'site-message'],
   ['code 10003', { item: [{ code: 10003, message: '请求异常', httpStatus: 401 }] }, 'site-code-10003'],
   ['a refused cred issue', { cred: [{ code: 1 }] }, 'service-error'],
@@ -155,6 +161,55 @@ for (const [name, steps, reason] of riskSignals) {
     assert.equal(await state(f.privateDirectory), 'unverified');
   });
 }
+
+/**
+ * The real Node fetch against a loopback server that stands in for the Skland hosts: whatever the shared session asks
+ * for, a redirect must reach the reader's classifier rather than end as a network failure that a retry repeats.
+ */
+async function loopbackSkland(t: { after(fn: () => unknown): void }, redirectOn: string) {
+  const seen: string[] = [];
+  const server = createServer((request, response) => {
+    const path = new URL(request.url ?? '/', 'http://loopback').pathname;
+    seen.push(`${request.method} ${path}`);
+    request.resume();
+    request.on('end', () => {
+      const json = (value: unknown) => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
+      if (path === redirectOn) { response.writeHead(302, { Location: 'https://www.skland.com/captcha?from=api' }); response.end(); }
+      else if (path === '/user/oauth2/v2/grant') json({ status: 0, type: 'A', msg: 'OK', data: { code: 'synthetic-loopback-grant' } });
+      else if (path === '/api/v1/user/auth/generate_cred_by_code') json({ code: 0, message: 'OK', data: { cred: 'synthetic-loopback-cred', ['token']: 'synthetic-loopback-key' } });
+      else { response.writeHead(404); response.end(); }
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  t.after(() => { server.closeAllConnections(); return new Promise((done) => server.close(done)); });
+  const port = (server.address() as AddressInfo).port;
+  const fetcher: SklandFetch = (url, init) => { const target = new URL(url); return fetch(`http://127.0.0.1:${port}${target.pathname}${target.search}`, init); };
+  return { seen, fetcher };
+}
+for (const [where, redirectOn, expected] of [
+  ['the post', '/web/v2/item', ['POST /user/oauth2/v2/grant', 'POST /api/v1/user/auth/generate_cred_by_code', 'GET /web/v2/item']],
+  ['the exchange', '/user/oauth2/v2/grant', ['POST /user/oauth2/v2/grant']],
+] as const) {
+  test(`with the real Node fetch a redirect on ${where} is seen and never followed: risk control, a 30-minute pause, and the next read sends nothing`, async (t) => {
+    const f = await setup(t);
+    const skland = await loopbackSkland(t, redirectOn);
+    const outcome = await readSklandPost({ post: '1234567' }, { privateDirectory: f.privateDirectory, fetcher: skland.fetcher, protector, clock: f.clock });
+    assert.deepEqual([outcome.status, outcome.pages[0]!.reason, outcome.repair, outcome.credential], ['risk-control', 'http-302', 'retry-later', 'unchanged']);
+    assert.equal(outcome.stoppedUntil, new Date(f.clock.now() + sklandCommunityLimits.riskStopMs).toISOString());
+    assert.deepEqual(skland.seen, expected, 'nothing after the redirect, and the redirect target is never requested');
+    assert.equal(await state(f.privateDirectory), 'unverified', 'a redirect says nothing about the token');
+    f.advance(3_000);
+    const next = await readSklandPost({ post: '1234567' }, { privateDirectory: f.privateDirectory, fetcher: skland.fetcher, protector, clock: f.clock });
+    assert.deepEqual([next.status, next.requests], ['risk-stopped', 0]);
+    assert.deepEqual(skland.seen, expected, 'a retry a few seconds later sends no grant, cred or post request with the user\'s token');
+  });
+}
+
+test('the test guard makes real network fail in this process while loopback servers still answer', async () => {
+  // A documentation address (RFC 5737): even without the guard nothing could answer it.
+  await assert.rejects(fetch('http://192.0.2.1/', { signal: AbortSignal.timeout(5_000) }),
+    (error: Error) => String((error.cause as Error | undefined)?.message ?? error.message).includes('offline-test-real-network'));
+});
 
 test('credential states: unset, unreadable and refused each give an actionable status with the user-run input command; unset and unreadable send nothing', async (t) => {
   const unset = await setup(t, false);
@@ -181,6 +236,20 @@ test('credential states: unset, unreadable and refused each give an actionable s
   assert.equal(await state(refused.privateDirectory), 'expired', 'only an explicit grant refusal records expiry, as for the account reader');
   for (const language of ['zh', 'en'] as const) assert.match(formatResearchMarkdown(outcome, language), /credentials\.ts input skland/);
   assert.equal((await sklandCommunityStatus({ privateDirectory: refused.privateDirectory, clock: refused.clock })).stopped, false);
+});
+
+test('a credential that cannot be opened on this machine says what its repair says: retry later, or use Windows, and never asks to re-enter it', async (t) => {
+  for (const [failure, repair, zh, en] of [['protection-failed', 'retry-later', /稍后再试/, /try again later/i], ['windows-required', 'use-windows', /Windows/, /Windows/]] as const) {
+    const f = await setup(t);
+    const failing: Protector = { protect: protector.protect, unprotect: async () => { throw new Error(failure); } };
+    const double = doubles.createSklandDouble();
+    const outcome = await readSklandPost({ post: '1234567' }, { privateDirectory: f.privateDirectory, fetcher: double.fetch, protector: failing, clock: f.clock });
+    assert.deepEqual([outcome.status, outcome.requests, outcome.credential, outcome.repair, double.trace.length], ['credential-unreadable', 0, 'unchanged', repair, 0], failure);
+    assert.equal(await state(f.privateDirectory), 'unverified', `${failure} leaves the saved credential as it was`);
+    const markdown = { zh: formatResearchMarkdown(outcome, 'zh'), en: formatResearchMarkdown(outcome, 'en') };
+    for (const text of Object.values(markdown)) assert.doesNotMatch(text, /credentials\.ts input|重新|re-?enter|again in your own terminal/i, `${failure}: no re-entry when the repair is ${repair}`);
+    assert.match(markdown.zh, zh); assert.match(markdown.en, en);
+  }
 });
 
 test('requests are validated before anything is read or sent; deleted posts, unreadable replies and network failures are told apart without pausing', async (t) => {

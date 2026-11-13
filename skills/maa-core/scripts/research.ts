@@ -239,6 +239,16 @@ const laterLimits: Record<Language, Record<string, string>> = {
     'machine-subtitle': 'subtitles generated automatically by Bilibili; may contain recognition errors', 'login-not-recognized': 'Bilibili did not treat this request as signed in, so subtitles were not read; the SESSDATA may have expired: run credentials.ts input bilibili yourself again',
     'text-order-approximate': 'body joined from text fragments; paragraphs and layout may differ from the post' },
 };
+/**
+ * A saved credential that could not be opened on this machine although it may still be valid (ticket 19). Its repair is
+ * to retry later or to use Windows, not to enter it again, so the text says that instead of the re-entry wording.
+ */
+const unopenedCredential: Record<Language, Record<string, string>> = {
+  zh: { 'protection-failed': '解开已保存的凭据时出错（Windows 加密没有完成），本次没有发请求，凭据状态不变；请稍后再试',
+    'windows-required': '凭据只能在 Windows 上由保存它的用户解开，本次没有发请求，凭据状态不变；请在保存凭据的 Windows 用户下使用' },
+  en: { 'protection-failed': 'opening the saved credential failed (Windows encryption did not complete); nothing was sent and its state is unchanged. Try again later',
+    'windows-required': 'the credential can only be opened on Windows by the user who saved it; nothing was sent and its state is unchanged. Use it as that Windows user' },
+};
 /** The saved credential a source reads with: the Skland community reader uses the user's Skland account credential. */
 const credentialOf = (source: string) => source === 'skland-community' ? 'skland' : source;
 const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? laterLimits[language][code] ?? inline(code)).join(language === 'zh' ? '；' : '; ');
@@ -253,15 +263,17 @@ export function formatResearchMarkdown(result: ResearchResult, language: Languag
   const sep = language === 'zh' ? '：' : ': ';
   const aside = (text: string) => language === 'zh' ? `（${text}）` : ` (${text})`;
   const comma = language === 'zh' ? '，' : ', ';
+  const said = (status: ResearchStatus, reason: string | undefined) =>
+    (status === 'credential-unreadable' && reason !== undefined ? unopenedCredential[language][reason] : undefined) ?? w.statuses[status];
   const lines = [`# ${inline(result.sourceLabel)}${result.experimental ? aside(language === 'zh' ? '实验性' : 'experimental') : ''}`, '', `> ${w.notice}`, '',
-    `- ${w.status}${sep}${w.statuses[result.status]}${result.stoppedUntil ? aside(`${w.stoppedUntil} ${inline(result.stoppedUntil)}`) : ''}`,
+    `- ${w.status}${sep}${said(result.status, result.pages.find((page) => page.outcome === result.status)?.reason)}${result.stoppedUntil ? aside(`${w.stoppedUntil} ${inline(result.stoppedUntil)}`) : ''}`,
     `- ${w.requests}${sep}${result.requests}`, `- ${w.generated}${sep}${inline(result.generatedAt)}`,
     `- ${w.reliability}${sep}${describe([result.reliability.level], language)}`];
   if (result.limitations.length) lines.push(`- ${w.limitations}${sep}${describe(result.limitations, language)}`);
   for (const page of result.pages) {
     const served = page.served === 'network' ? w.network : page.served === 'cache' ? w.cached : page.served === 'stale-cache' ? w.stale : '-';
     const outcome = page.outcome === 'fresh' || page.outcome === 'cached' ? 'ok' : page.outcome;
-    lines.push(`  - ${inline(page.target)}${sep}${w.statuses[outcome]}${aside(`${served}${page.readAt ? `${comma}${w.read} ${inline(page.readAt)}` : ''}`)}`);
+    lines.push(`  - ${inline(page.target)}${sep}${said(outcome, page.reason)}${aside(`${served}${page.readAt ? `${comma}${w.read} ${inline(page.readAt)}` : ''}`)}`);
   }
   lines.push('');
   if (!result.items.length) lines.push(w.none);

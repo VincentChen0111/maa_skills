@@ -264,9 +264,14 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
         try {
           const saved = await readCredential(source, { privateDirectory, ...(options.protector ? { protector: options.protector } : {}) });
           credential = { revision: saved.revision, sessdata: saved.values.sessdata! };
-        } catch (error) { blocked = { outcome: error instanceof CredentialError && error.message === 'credential-unset' ? 'credential-required' : 'credential-unreadable' }; }
+        } catch (error) {
+          const code = error instanceof CredentialError ? error.message : '';
+          // A protection failure or another OS is not a damaged value: the reason makes the text say retry or use Windows.
+          blocked = code === 'credential-unset' ? { outcome: 'credential-required' }
+            : { outcome: 'credential-unreadable', ...(code === 'protection-failed' || code === 'windows-required' ? { reason: code } : {}) };
+        }
       }
-      if (blocked) subtitle = log.offer(target, blocked.outcome, cached);
+      if (blocked) subtitle = log.offer(target, blocked.outcome, cached, blocked.reason);
       else {
         const params = new URLSearchParams({ bvid: video.value.bvid, cid: String(cid) });
         const attempt = await gatedGet(context, { url: `${bilibiliApiOrigin}/x/player/wbi/v2?${params}`, headers: { ...headers, ...sessionHeader(credential!.sessdata) } }, classifyApi);

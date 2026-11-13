@@ -32,7 +32,9 @@ if (entry && entries[entry[2]].includes(process.argv[2])) {
  * scenario's synthetic Skland token with a test protection instead of Windows DPAPI, and fetch answers the
  * session's exchange, refresh and one signed post read. Only tokens starting with `synthetic-` are accepted;
  * every other address fails with eval-network-unlisted, so nothing reaches a real service. Scenarios encrypt
- * their token with the same transform (eval/maa-account/community-scenarios.ts).
+ * their token with the same transform (eval/maa-account/community-scenarios.ts). Redirects behave as in Node's
+ * fetch: post 7654321 answers 302 to a captcha page, which rejects under `redirect: 'error'` and comes back as the
+ * 3xx under `manual`; a request that would follow a redirect is refused like an unlisted address.
  */
 function sklandWorld(scripts) {
   const canonical = (url) => { try { return pathToFileURL(realpathSync.native(fileURLToPath(url))).href; } catch { return undefined; } };
@@ -76,7 +78,12 @@ function sklandWorld(scripts) {
     const method = (init.method ?? 'GET').toUpperCase();
     const headers = new Headers(init.headers);
     const route = `${method} ${url.host}${url.pathname}`;
-    if (init.redirect !== 'error') throw new Error('eval-network-unlisted');
+    const redirect = init.redirect ?? 'follow';
+    if (redirect !== 'error' && redirect !== 'manual') throw new Error('eval-network-unlisted');
+    const redirected = () => {
+      if (redirect === 'error') throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+      return new Response('', { status: 302, headers: { Location: 'https://www.skland.com/captcha?from=api' } });
+    };
     if (route === 'POST as.hypergryph.com/user/oauth2/v2/grant') {
       const body = JSON.parse(String(init.body));
       return reply(typeof body.token === 'string' && body.token.startsWith('synthetic-')
@@ -93,6 +100,7 @@ function sklandWorld(scripts) {
     }
     if (route === 'GET zonai.skland.com/web/v2/item') {
       if (!signed(url, headers)) return reply({ code: 10000, message: 'synthetic signature mismatch' });
+      if (url.searchParams.get('id') === '7654321') return redirected();
       return reply(url.searchParams.get('id') === post.item.id ? { code: 0, message: 'OK', data: post } : { code: 10404, message: '内容不存在' });
     }
     throw new Error('eval-network-unlisted');

@@ -1,3 +1,4 @@
+import './fixtures/offline-network.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -12,7 +13,9 @@ import { biliError, playerPayload, subtitleFile, videoPayload } from './fixtures
 import { sklandSecrets } from './fixtures/skland-data.ts';
 
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
-const loaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/community-boundary.mjs', import.meta.url).href];
+/** Every spawned CLI also loads the test guard, so a request that no double answers fails instead of reaching a real service. */
+const guard = ['--import', new URL('./fixtures/offline-network.mjs', import.meta.url).href];
+const loaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/community-boundary.mjs', import.meta.url).href, ...guard];
 
 async function setup(t: { after(fn: () => Promise<unknown>): void }, language: string) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'maa-community-cli-')));
@@ -51,7 +54,7 @@ const bvid = 'BV1Sy4y1x7Kt';
 test('the Bilibili CLI marks every answer experimental, sends the user\'s SESSDATA only to the player request and offers no search', { timeout: 180_000 }, async (t) => {
   const f = await setup(t, 'zh-CN');
   const sessdata = `synthetic-sessdata-${randomUUID()}`;
-  const input = spawnSync(process.execPath, [loaders[0]!, loaders[1]!, join(core, 'scripts/credentials.ts'), 'input', 'bilibili', '--stdin'],
+  const input = spawnSync(process.execPath, [loaders[0]!, loaders[1]!, ...guard, join(core, 'scripts/credentials.ts'), 'input', 'bilibili', '--stdin'],
     { env: f.env, input: `y\n${sessdata}\n`, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
   assert.equal(input.status, 0, input.stdout + input.stderr);
   await f.routes({
@@ -86,7 +89,7 @@ test('the Bilibili CLI marks every answer experimental, sends the user\'s SESSDA
   assert.equal((await everything(join(f.privateDirectory, 'research'))).includes(sessdata), false, 'cache and gate files hold no credential');
 });
 
-const sklandLoaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/skland-network.mjs', import.meta.url).href];
+const sklandLoaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/skland-network.mjs', import.meta.url).href, ...guard];
 /** One Skland community CLI run against the Skland network double; returns the run and the requests the double saw. */
 function sklandCli(f: { root: string; env: NodeJS.ProcessEnv }, action: string, request: unknown, steps: Record<string, unknown[]> = {}) {
   const scenario = join(f.root, `skland-${randomUUID()}.json`), trace = `${scenario}.trace`;
@@ -103,7 +106,7 @@ test('the Skland community CLI reads one named post with the user\'s own Skland 
   assert.equal(unset.code, 1);
   assert.match(unset.stdout, /credentials\.ts input skland/, 'an unset credential says how the user sets it');
   assert.deepEqual(unset.requests, [], 'no anonymous attempt');
-  const input = spawnSync(process.execPath, [sklandLoaders[0]!, sklandLoaders[1]!, join(core, 'scripts/credentials.ts'), 'input', 'skland', '--stdin'],
+  const input = spawnSync(process.execPath, [sklandLoaders[0]!, sklandLoaders[1]!, ...guard, join(core, 'scripts/credentials.ts'), 'input', 'skland', '--stdin'],
     { env: f.env, input: `y\n${sklandSecrets.userValue}\n`, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
   assert.equal(input.status, 0, input.stdout + input.stderr);
   assert.match(input.stdout, /community/, 'the consent text says the token also reads community posts the user links');
