@@ -12,6 +12,8 @@ const roster: [string, string, string[]][] = [
   ['char_rec1', '合成记一', ['mfg_record']], ['char_trade1', '合成贸一', ['trade_gen']], ['char_trade2', '合成贸二', ['trade_gen']], ['char_trade3', '合成贸三', ['trade_gen']],
   ['char_dorm1', '合成宿一', ['dorm_rec']], ['char_form1', '合成形态', ['trade_gen']], ['char_form2', '合成形态异', ['trade_gen']],
   ['char_fia', '合成菲', ['dorm_recExcludeOther[000]', 'dorm_exchangeAp[000]']], ['char_ghost', '合成未观察', ['trade_gen']],
+  // One display name, two game IDs (the real table has such pairs); the default snapshot owns only the second.
+  ['char_dup_a', '合成同名', []], ['char_dup_b', '合成同名', ['trade_gen']],
 ];
 const phases = (...sizes: number[]) => sizes.map(maxStationedNum => ({ maxStationedNum }));
 export function planTables() {
@@ -51,7 +53,7 @@ export function planNetworkFixtures(): Record<string, unknown> {
   const tables = planTables();
   return Object.fromEntries(Object.entries(planTableSources).map(([key, source]) => [raw(source), tables[key as keyof typeof tables]]));
 }
-export function planSnapshot(exclude: string[] = ['char_ghost']) {
+export function planSnapshot(exclude: string[] = ['char_ghost', 'char_dup_a']) {
   return parseMaaSnapshot(JSON.stringify({ taskchain: 'OperBox', what: 'OperBoxInfo', details: { done: true,
     own_opers: roster.filter(([id]) => !exclude.includes(id)).map(([id, name]) => ({ id, name, own: true, elite: 2, level: 1, potential: 1, rarity: 5 })) } }), '2026-11-13T00:00:00.000Z');
 }

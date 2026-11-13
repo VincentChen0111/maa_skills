@@ -131,6 +131,23 @@ test('names are checked against the local MAA name table, separately from owners
   assert.equal(parseNameTable('{"chars":{}}').status, 'unavailable');
 });
 
+test('a display name shared by two game IDs resolves to the form the snapshot owns; otherwise its skills stay pending', () => {
+  const place = (plan: Plan) => { plan.plans[0]!.rooms.trading[0].operators = ['合成同名']; };
+  const owned = checked(place);
+  assert.equal(owned.operators['合成同名']!.id, 'char_dup_b');
+  assert.equal(owned.operators['合成同名']!.ownership, 'owned');
+  assert.ok(!owned.warnings.some(entry => entry.includes('合成同名')));
+  assert.equal(gate(owned, 9).verdict, 'pass', JSON.stringify(gate(owned, 9)));
+  const neither = checked(place, { snapshot: planSnapshot(['char_ghost', 'char_dup_a', 'char_dup_b']) });
+  assert.ok(neither.warnings.includes('operator-unowned:合成同名'), 'neither form observed: not owned as far as the snapshot shows');
+  assert.equal(gate(neither, 9).verdict, 'unverified', 'which form, and so which skills, is unknown');
+  const both = checked(place, { snapshot: planSnapshot(['char_ghost']) });
+  assert.equal(both.operators['合成同名']!.ownership, 'ambiguous');
+  assert.ok(!both.warnings.includes('operator-unowned:合成同名'), 'both forms are owned, so the name is owned');
+  assert.ok(both.unverified.includes('ownership-ambiguous:合成同名'));
+  assert.equal(gate(both, 9).verdict, 'unverified');
+});
+
 test('periods use hh:mm, split across midnight, and overlap or mixing is an error', () => {
   const spec = parsePlanSpec({ ...planInput(), shifts: [{ ...shifts()[0], period: [['22:00', '06:00']] }, { ...shifts()[1], period: '06:00-22:00' }] });
   assert.deepEqual(spec.spec!.shifts.map(shift => shift.period), [[['22:00', '23:59'], ['00:00', '06:00']], [['06:00', '22:00']]]);

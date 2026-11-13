@@ -42,6 +42,7 @@
 
 - `errors`：房间容量 `room-capacity`、布局外的房间 `room-missing`、计划数 `plan-count`、同一计划重复 `plan-duplicate`、键名大小写 `key-case`、产物 `product-invalid` / `product-switch`、名字不在本机 MAA 名表 `name-unknown`、时间段 `period-format` / `period-overlap` / `period-mixed`、布局超过固定表 `layout-count` / `layout-level`。
 - `warnings`：快照里没观察到的干员 `operator-unowned`（和 `name-unknown` 分开），不认识的设施键 `facility-unknown`。
+- 显示名对应多个游戏 ID 时取快照里持有的那个形态；快照里都有时记 `ownership-ambiguous:<名字>` 为未核实，技能按未知处理。
 - `gates`：15 项验收门，每项 `pass`、`fail` 或 `unverified` 加证据；清单见工单 22，判定条件见仓库里的 `docs/base-plan-verification.md`。
 - `unverified`：未核实的验收门（`gate-N`）和不能核对的规则（如 `names:maa-directory-unset`、`ownership`）。未核实不算通过，由用户决定是否仍然应用。
 - `applicable`：没有错误、没有不通过的验收门才是 `true`。

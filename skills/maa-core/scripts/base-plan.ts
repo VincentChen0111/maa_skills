@@ -255,20 +255,28 @@ export async function readMaaNameTable(maaDirectory: string | null): Promise<Nam
 
 export type OperatorFacts = { id: string | null; ownership: 'owned' | 'unobserved' | 'ambiguous' | 'not-found' | 'unknown'; elite: number | null; level: number | null;
   skills: { id: string; name: string; room: string | null; status: string; text: string }[] };
-/** Ownership and effective skills from the shared base skill query (ticket 21); nothing is re-derived here. */
+/**
+ * Ownership and effective skills from the shared base skill query (ticket 21); nothing is re-derived here. A plan names
+ * operators by display name, which a few game IDs share: the one form the snapshot owns is used; when the snapshot owns
+ * none the name is unobserved, and when it owns several the name is owned but which skills apply stays unknown.
+ * `id: null` always means the skills are unknown.
+ */
 export function operatorFacts(names: string[], snapshot: unknown, tables: PlanTables | null): Record<string, OperatorFacts> {
   const result: Record<string, OperatorFacts> = {};
+  const query = (operator: string) => queryBaseSkills(snapshot, { characters: tables!.characters, building: tables!.building }, { operators: [operator] }).operators[0];
   for (const name of [...new Set(names)].sort()) {
-    if (snapshot === null || !tables) { result[name] = { id: null, ownership: 'unknown', elite: null, level: null, skills: [] }; continue; }
-    try {
-      const found = queryBaseSkills(snapshot, { characters: tables.characters, building: tables.building }, { operators: [name] }).operators[0];
-      result[name] = found ? { id: found.id, ownership: found.ownership === 'owned' ? 'owned' : 'unobserved', elite: found.elite, level: found.level,
-        skills: found.skills.filter(skill => skill.status === 'active' || skill.status === 'unknown').map(skill => ({ id: skill.id, name: skill.name, room: skill.room, status: skill.status, text: skill.text })) }
-        : { id: null, ownership: 'not-found', elite: null, level: null, skills: [] };
-    } catch (error) {
+    if (snapshot === null || snapshot === undefined || !tables) { result[name] = { id: null, ownership: 'unknown', elite: null, level: null, skills: [] }; continue; }
+    let found;
+    try { found = query(name); }
+    catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith('base-name-ambiguous')) throw error;
-      result[name] = { id: null, ownership: 'ambiguous', elite: null, level: null, skills: [] };
+      const owned = list(object(snapshot).operators).map(object).filter(row => row.name === name);
+      if (owned.length === 1) found = query(String(owned[0]!.id));
+      else { result[name] = { id: null, ownership: owned.length ? 'ambiguous' : 'unobserved', elite: null, level: null, skills: [] }; continue; }
     }
+    result[name] = found ? { id: found.id, ownership: found.ownership === 'owned' ? 'owned' : 'unobserved', elite: found.elite, level: found.level,
+      skills: found.skills.filter(skill => skill.status === 'active' || skill.status === 'unknown').map(skill => ({ id: skill.id, name: skill.name, room: skill.room, status: skill.status, text: skill.text })) }
+      : { id: null, ownership: 'not-found', elite: null, level: null, skills: [] };
   }
   return result;
 }
@@ -512,9 +520,10 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
     else if (current !== entry.product) errors.push(`product-switch:${entry.path}:${current}>${entry.product}`);
   }
   // Rule: unowned operators are a warning; names MAA cannot match are an error, reported apart.
-  const unowned = mentioned.filter(name => operators[name]!.ownership !== 'owned' && operators[name]!.ownership !== 'unknown');
+  const unowned = mentioned.filter(name => ['unobserved', 'not-found'].includes(operators[name]!.ownership));
+  const ambiguous = mentioned.filter(name => operators[name]!.ownership === 'ambiguous');
   if (context.snapshot === null || context.snapshot === undefined || !context.tables) open.push('ownership');
-  else warnings.push(...unowned.map(name => `operator-unowned:${name}`));
+  else { warnings.push(...unowned.map(name => `operator-unowned:${name}`)); open.push(...ambiguous.map(name => `ownership-ambiguous:${name}`)); }
   if (context.names.status === 'available') { const table = new Set(context.names.names); errors.push(...mentioned.filter(name => !table.has(name)).map(name => `name-unknown:${name}`)); }
   else open.push(`names:${context.names.reason}`);
   if (dynamic) open.push('assignments-chosen-by-maa');
@@ -529,9 +538,9 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
     else {
       const groups = new Map<string, string[]>();
       for (const name of stationed) {
-        const ids = facts.ids[name] ?? [];
-        if (ids.length !== 1) { unsure.push(`${name} 不能唯一对应游戏 ID`); continue; }
-        const group = facts.forms[ids[0]!];
+        const ids = facts.ids[name] ?? [], id = operators[name]?.id ?? (ids.length === 1 ? ids[0]! : null);
+        if (id === null) { unsure.push(`${name} 不能唯一对应游戏 ID`); continue; }
+        const group = facts.forms[id];
         if (group) groups.set(group, [...groups.get(group) ?? [], name]);
       }
       for (const group of groups.values()) if (group.length > 1) failures.push(`同一周期用了同一干员的不同形态：${group.join('、')}`);
@@ -541,7 +550,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
   // 2. Owned, the room exists, within capacity.
   {
     const unsure = [...(capacityOpen ? ['房间容量没有从固定游戏表得到'] : []), ...(open.includes('ownership') ? ['没有账号快照或技能表，持有未核对'] : []),
-      ...unowned.map(name => `${name} 不在账号快照的已观察干员里（警告）`)];
+      ...unowned.map(name => `${name} 不在账号快照的已观察干员里（警告）`), ...ambiguous.map(name => `${name} 对应多个游戏 ID，快照里都有，用的是哪个形态待核`)];
     add(2, capacityFailures, unsure, ['所有名字都已持有，房间存在且不超容量']);
   }
   // 3. Plans equal shifts; rooms equal the layout.
@@ -648,7 +657,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       if (!product) { if (entry.operators.length) unsure.push(`${entry.path} 的产物没有在布局里给出`); continue; }
       for (const name of entry.operators) {
         const skills = operators[name]!.skills.filter(skill => skill.room === gameRoom[entry.facility]);
-        if (operators[name]!.ownership === 'unknown') { unsure.push(`${name} 的技能未知`); continue; }
+        if (operators[name]!.id === null) { unsure.push(`${name} 的技能未知（没有快照、名字对不上唯一形态或游戏表里没有）`); continue; }
         const active = skills.filter(skill => skill.status === 'active');
         if (active.some(skill => !mismatched(skill.text, product))) continue;
         if (active.length) failures.push(`${entry.path} ${name} 的技能只作用于 ${specificTo(active[0]!.text).join('、')}，房间产物是 ${product}`);
@@ -669,7 +678,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
       if (size !== null && entry.operators.length < size && !entry.dynamic) failures.push(`${plan.path} 控制中枢 ${entry.operators.length} 人，容量 ${size}`);
       const auras = new Map<string, string[]>();
       for (const name of entry.operators) {
-        if (operators[name]!.ownership === 'unknown') { unsure.push(`${name} 的技能未知`); continue; }
+        if (operators[name]!.id === null) { unsure.push(`${name} 的技能未知（没有快照、名字对不上唯一形态或游戏表里没有）`); continue; }
         const skills = operators[name]!.skills.filter(skill => skill.room === 'CONTROL');
         if (skills.some(skill => skill.status === 'unknown')) unsure.push(`${name} 的控制中枢技能是否生效待核`);
         for (const skill of skills.filter(skill => skill.status === 'active')) auras.set(skill.id, [...auras.get(skill.id) ?? [], name]);

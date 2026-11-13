@@ -49,7 +49,7 @@
 
 ## 规则和验收门的判定（实现时定）
 
-六条规则：房间容量（`room-capacity`，布局外的房间 `room-missing`）、计划数（`plan-count`）、同一计划内不重复（`plan-duplicate`，宿舍也算）、键名大小写（`key-case`）、不依赖 MAA 切换生产线（`product-invalid`、`product-switch`）、未持有警告（`operator-unowned`）。另外：名字不在用户本机 MAA 名表里是错误 `name-unknown`，和未持有警告分开；名表读不到时记为未核实 `names:<原因>`；时间段格式错误 `period-format`、重叠 `period-overlap`、只有部分计划带时间段 `period-mixed`。
+六条规则：房间容量（`room-capacity`，布局外的房间 `room-missing`）、计划数（`plan-count`）、同一计划内不重复（`plan-duplicate`，宿舍也算）、键名大小写（`key-case`）、不依赖 MAA 切换生产线（`product-invalid`、`product-switch`）、未持有警告（`operator-unowned`）。另外：名字不在用户本机 MAA 名表里是错误 `name-unknown`，和未持有警告分开；名表读不到时记为未核实 `names:<原因>`；排班文件按显示名写人，固定表里有 9 个显示名对应两个游戏 ID（8 个是预备干员，只有「暮落」带基建技能），这时取快照里持有的那个形态；快照里一个都没有就是未持有警告，两个都有就记未核实 `ownership-ambiguous:<名字>`，技能按未知处理；时间段格式错误 `period-format`、重叠 `period-overlap`、只有部分计划带时间段 `period-mixed`。
 
 15 项验收门，每一项都给出通过、不通过或未核实，并附证据；任何一项不通过或有错误，方案就不可应用；未核实的项单独列出，不算通过：
 
@@ -109,7 +109,7 @@
 
 - `npm ci --ignore-scripts`：通过。
 - `npm run typecheck`：通过。
-- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。
+- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。再加「同名两个游戏 ID」一条：在旧实现上运行失败（没有按快照取持有的形态，ID 为空），改后 12/12 通过。
 - `node --test tests/base-report.test.ts`：7/7 通过。
 - `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。
 - 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
