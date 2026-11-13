@@ -1,6 +1,6 @@
 # 宿主与原生安装
 
-当前提供文字帮助 maa-help、账号识别导入/培养成本与加工材料券缺口/基建技能查询 maa-account、已有队列/提醒/定时维护 maa-daily、配置与遗留锁核对 maa-doctor，以及共享载荷 maa-core。07 候选新增已有环境接入 maa-setup，验收状态见 [setup](setup-verification.md)；其他包见 [doctor](doctor-verification.md)、[help](help-verification.md)、[account](account-verification.md)、[成本](operator-cost-verification.md)、[加工缺口](crafting-verification.md)、[基建](base-verification.md)和 [daily](daily-verification.md)。setup 当前不自动下载程序。每次新增载荷的临时目录验证与远程固定版本原生安装验收分开记录，不能把此前功能的安装证据当成新候选已验证。根目录的 `.claude-plugin/plugin.json` 描述插件，`marketplace.json` 用 `./` 指向同一插件。入口放在 `skills/<名称>/SKILL.md`，参考文件和脚本随入口目录复制。
+当前提供文字帮助 maa-help、账号识别导入/培养成本与加工材料券缺口/基建技能查询/NGA 资料检索 maa-account、已有队列/提醒/定时维护 maa-daily、配置与遗留锁核对 maa-doctor，以及共享载荷 maa-core。07 候选新增已有环境接入 maa-setup，验收状态见 [setup](setup-verification.md)；其他包见 [doctor](doctor-verification.md)、[help](help-verification.md)、[account](account-verification.md)、[成本](operator-cost-verification.md)、[加工缺口](crafting-verification.md)、[基建](base-verification.md)、[NGA](nga-verification.md)和 [daily](daily-verification.md)。setup 当前不自动下载程序。每次新增载荷的临时目录验证与远程固定版本原生安装验收分开记录，不能把此前功能的安装证据当成新候选已验证。根目录的 `.claude-plugin/plugin.json` 描述插件，`marketplace.json` 用 `./` 指向同一插件。入口放在 `skills/<名称>/SKILL.md`，参考文件和脚本随入口目录复制。
 
 Claude Code 使用原生插件市场：`/plugin marketplace add VincentChen0111/maa_skills`，再用 `/plugin install maa-skills@maa-skills`；开发时可在隔离环境用 `claude --plugin-dir <clone>`。结构依据 [插件描述](https://code.claude.com/docs/en/plugins-reference)和[市场说明](https://code.claude.com/docs/en/plugin-marketplaces)。实际安装验证单独核对固定提交的完整载荷及调用结果。
 
