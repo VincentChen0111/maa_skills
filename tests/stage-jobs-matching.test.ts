@@ -130,3 +130,60 @@ test('search results distinguish no jobs, unrelated fallback results and insuffi
   }
   assert.throws(() => matchStageJobs(snapshot, stageTables, stageRequest, jobs, [{ stageId: 'synthetic_01', mode: 'offline', pages: 0, truncated: false, ids: [1] }]), /search-coverage-invalid/);
 });
+
+const characters = {
+  char_synthetic_a: { name: '合成甲', profession: 'CASTER' }, char_synthetic_c: { name: '合成丙', profession: 'SNIPER' },
+  trap_synthetic_device: { name: '合成装置', profession: 'TRAP' }, token_synthetic_summon: { name: '合成召唤物', profession: 'TOKEN' },
+  char_synthetic_twin: { name: '合成双名', profession: 'MEDIC' }, trap_synthetic_twin: { name: '合成双名', profession: 'TRAP' },
+  char_unrelated: { name: '无关干员', profession: 'MEDIC' },
+};
+const catalogTables = { ...stageTables, characters };
+const acting = (id: number, actions: unknown[], extra: Record<string, unknown> = {}) => withOpers(id, [{ name: '合成甲', requirements: { elite: 2, level: 40 } }], { actions, ...extra });
+
+test('operators referenced by actions but not declared in opers or groups keep the job 待核', () => {
+  const deployed = [{ type: 'Deploy', name: '合成甲', location: [1, 1], direction: 'Left' }];
+  const undeclared = first([acting(61, [...deployed, { type: 'Deploy', name: '合成丙', location: [2, 1], direction: 'Left' }])], catalogTables).candidates[0]!;
+  assert.equal(undeclared.status, 'unknown'); assert.ok(undeclared.reasons.includes('action-operator-undeclared'));
+  assert.deepEqual(undeclared.actionNames, { undeclared: ['合成丙'], unrecognized: [] });
+  // Group names, group members, summons and devices (TOKEN/TRAP in the pinned character table) are not undeclared operators.
+  const grouped = withOpers(62, [], { groups: [{ name: '合成组', opers: [{ name: '合成甲', requirements: { elite: 2 } }] }],
+    actions: [{ type: 'Deploy', name: '合成组', location: [1, 1], direction: 'Left' }, { type: 'Skill', name: '合成甲' }, { type: '部署', name: '合成装置', location: [3, 3], direction: 'None' }, { type: 'Retreat', name: '合成召唤物' }] });
+  const groupedCandidate = first([grouped], catalogTables).candidates[0]!;
+  assert.equal(groupedCandidate.status, 'ready'); assert.deepEqual(groupedCandidate.actionNames, { undeclared: [], unrecognized: [] });
+  // A name that is both an operator and a device is treated as an operator.
+  assert.deepEqual(first([acting(63, [...deployed, { type: 'Skill', name: '合成双名' }])], catalogTables).candidates[0]!.actionNames.undeclared, ['合成双名']);
+  // Names the catalog does not know stay 待核 unless the job registers them as a unit with SetUnitLocation.
+  const unknownUnit = first([acting(64, [...deployed, { type: 'Skill', name: '神秘单位' }])], catalogTables).candidates[0]!;
+  assert.equal(unknownUnit.status, 'unknown'); assert.deepEqual(unknownUnit.actionNames.unrecognized, ['神秘单位']); assert.ok(unknownUnit.reasons.includes('action-name-unrecognized'));
+  const registered = acting(65, [...deployed, { type: 'SetUnitLocation', name: '神秘单位', location: [4, 4] }, { type: 'SkillUsage', name: '神秘单位', skill_usage: 1 }]);
+  assert.equal(first([registered], catalogTables).candidates[0]!.status, 'ready');
+  // Without a character catalog the same operator name cannot be classified and stays 待核.
+  const offline = first([acting(66, [{ type: 'Deploy', name: '合成丙', location: [2, 1], direction: 'Left' }])]).candidates[0]!;
+  assert.equal(offline.status, 'unknown'); assert.deepEqual(offline.actionNames.unrecognized, ['合成丙']);
+  // The report keeps only the catalog entries it used, so preparation can re-verify the same classification.
+  const report = matchStageJobs(snapshot, catalogTables, stageRequest, [acting(61, [...deployed, { type: 'Deploy', name: '合成丙', location: [2, 1], direction: 'Left' }, { type: 'Skill', name: '合成召唤物' }])]);
+  assert.deepEqual(Object.keys(report.tables.characters).sort(), ['char_synthetic_c', 'token_synthetic_summon']);
+  assert.equal(matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search).hash, report.hash);
+  assert.match(formatStageJobs(report), /动作引用了未声明的干员：合成丙（待核）/);
+  assert.match(formatStageJobs(matchStageJobs(snapshot, catalogTables, stageRequest, [acting(64, [{ type: 'Skill', name: '神秘单位' }])])), /动作引用了无法识别的名字：神秘单位（待核）/);
+});
+
+test('online table loading reads the pinned character table for queries and degrades to unclassified names when it is unavailable', async () => {
+  const { loadStageTables, characterTableSource } = await import('../skills/maa-core/scripts/stage-jobs.ts');
+  const urls: string[] = [];
+  const serve = (failCharacters: boolean): typeof fetch => async url => {
+    urls.push(String(url));
+    if (String(url).endsWith('character_table.json')) return failCharacters ? new Response('no', { status: 503 }) : Response.json(characters);
+    return Response.json(stageTables);
+  };
+  const loaded = await loadStageTables(undefined, true, serve(false)) as Record<string, any>;
+  assert.equal(loaded.characters.char_synthetic_c.name, '合成丙'); assert.equal(loaded.charactersSource.file, characterTableSource.file);
+  assert.ok(urls.some(url => url.includes('6f63c14e27b847ef74b53b00fe51fc322b3cd7ff/zh_CN/gamedata/excel/character_table.json')));
+  const degraded = await loadStageTables(undefined, true, serve(true)) as Record<string, any>;
+  assert.equal(degraded.characters, undefined); assert.deepEqual(degraded.charactersSource, { kind: 'unavailable' });
+  urls.length = 0; await loadStageTables(undefined, false, serve(false));
+  assert.ok(urls.every(url => !url.endsWith('character_table.json')));
+  const report = matchStageJobs(snapshot, degraded, stageRequest, [acting(66, [{ type: 'Deploy', name: '合成丙', location: [2, 1], direction: 'Left' }])]);
+  assert.deepEqual(report.stages[0]!.candidates[0]!.actionNames.unrecognized, ['合成丙']);
+  assert.match(formatStageJobs(report), /干员名表来源：\{"kind":"unavailable"\}/);
+});

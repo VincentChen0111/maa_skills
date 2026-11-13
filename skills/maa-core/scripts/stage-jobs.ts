@@ -159,6 +159,24 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
   return { requirements: rows, assignment: assignment ?? {}, execution, status: assignment ? 'ready' as Status : assign(true) ? 'unknown' as Status : 'blocked' as Status };
 }
 
+// Copilot schema v6.21.4: an action name is an operator or group name; SetUnitLocation may register non-operator units.
+const setUnitLocation = new Set(['SetUnitLocation', 'Setunitlocation', 'setunitlocation', 'SETUNITLOCATION', '设置单位坐标']);
+/** Names used by actions that are not declared in opers/groups; summons and devices (TOKEN/TRAP) are excluded. */
+function scanActionNames(content: ObjectValue, professions: Map<string, Set<string>>, used: Set<string>) {
+  const actions = Array.isArray(content.actions) ? content.actions.filter((action: unknown) => action && typeof action === 'object') as ObjectValue[] : [];
+  const declared = new Set<unknown>([...(Array.isArray(content.opers) ? content.opers : []).map((oper: ObjectValue) => oper?.name),
+    ...(Array.isArray(content.groups) ? content.groups : []).flatMap((group: ObjectValue) => [group?.name, ...(Array.isArray(group?.opers) ? group.opers : []).map((oper: ObjectValue) => oper?.name)])]);
+  const registered = new Set(actions.filter(action => setUnitLocation.has(action.type)).map(action => action.name));
+  const undeclared: string[] = [], unrecognized: string[] = [];
+  for (const { name } of actions) {
+    if (typeof name !== 'string' || !name || declared.has(name)) continue;
+    used.add(name); const kinds = professions.get(name);
+    if (kinds && [...kinds].some(kind => kind !== 'TOKEN' && kind !== 'TRAP')) { if (!undeclared.includes(name)) undeclared.push(name); }
+    else if (!kinds?.size && !registered.has(name) && !unrecognized.includes(name)) unrecognized.push(name);
+  }
+  return { undeclared, unrecognized };
+}
+
 /** The request is the user's explicit scope. Remote content contributes facts, never authorization. */
 export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, request: StageRequest, jobs: Job[], search?: SearchCoverage[]) {
   const snapshot = object(snapshotValue), tables = object(object(tablesValue).stages);
@@ -166,6 +184,10 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
   const coverage = search ?? request.stages.map(stage => ({ stageId: stage.stageId, mode: 'offline' as const, pages: 0, truncated: false, ids: [] }));
   if (!Array.isArray(jobs)) throw new Error('jobs-invalid');
   const jobsById = new Map(jobs.map(job => [job?.id, job]));
+  // Optional character catalog (pinned game data): id -> { name, profession }. Absent means names cannot be classified.
+  const rawCatalog = object(tablesValue).characters, catalog: ObjectValue = rawCatalog && typeof rawCatalog === 'object' && !Array.isArray(rawCatalog) ? rawCatalog : {};
+  const professions = new Map<string, Set<string>>(), usedNames = new Set<string>();
+  for (const entry of Object.values(catalog)) if (entry && typeof entry.name === 'string' && typeof entry.profession === 'string') professions.set(entry.name, (professions.get(entry.name) ?? new Set()).add(entry.profession));
   if (!Array.isArray(coverage) || coverage.length !== request.stages.length || coverage.some((item, index) => item.stageId !== request.stages[index]!.stageId
     || !['online', 'offline'].includes(item.mode) || !Number.isInteger(item.pages) || item.pages < (item.mode === 'online' ? 1 : 0) || item.pages > 3
     || typeof item.truncated !== 'boolean' || item.mode === 'offline' && (item.pages !== 0 || item.truncated) || item.truncated && item.pages !== 3
@@ -195,8 +217,10 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       if (!Number.isInteger(content.difficulty) || content.difficulty < 1 || content.difficulty > 3 || !(content.difficulty & flag)) reasons.push('difficulty-mismatch');
       if (!Array.isArray(content.actions) || !content.actions.length) reasons.push('full-job-required');
       if (content.type !== undefined && content.type !== 'Copilot') reasons.push('unsupported-job-type');
-      const operators = matchOperators(snapshot, content);
+      const operators = matchOperators(snapshot, content), actionNames = scanActionNames(content, professions, usedNames);
       const checks: Status[] = [...prerequisiteChecks.map(check => check.status), operators.status, versionMet(request.maaVersion, content.minimum_required) ? 'ready' : 'unknown'];
+      if (actionNames.undeclared.length) { checks.push('unknown'); reasons.push('action-operator-undeclared'); }
+      if (actionNames.unrecognized.length) { checks.push('unknown'); reasons.push('action-name-unrecognized'); }
       if (!versionMet(request.maaVersion, content.minimum_required)) reasons.push('version-unverified');
       if (typeof content.doc?.details === 'string' && content.doc.details.trim()) {
         const proof = request.documentChecks?.find(check => check.jobId === job.id && check.contentHash === digest(content) && check.reference?.trim());
@@ -205,7 +229,7 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       }
       return { id: job.id, status: reasons.some(reason => ['map-mismatch', 'difficulty-mismatch', 'full-job-required', 'unsupported-job-type'].includes(reason)) ? 'blocked' as Status : status(checks), reasons, source: job.source,
         requirements: operators.requirements, assignment: operators.assignment, content: structuredClone(content), hash: digest(content),
-        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job) };
+        execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job), actionNames };
     });
     // Candidates keep the API order as evidence; suggestions demote not-enough/unknown and then low ratings, stably.
     const ready = candidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.status === 'ready')
@@ -221,7 +245,9 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       searchResult: { outcome, returned: returned.length, belonging } };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
-    tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
+    tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }),
+      characters: Object.fromEntries(Object.entries(catalog).filter(([, entry]) => usedNames.has(entry?.name) && typeof entry.profession === 'string').map(([id, entry]) => [id, { name: entry.name, profession: entry.profession }])),
+      charactersSource: structuredClone(object(tablesValue).charactersSource ?? null) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
     batches: [...new Set(stages.map(stage => JSON.stringify([stage.map, stage.difficulty, stage.difficultyGroup])))].map(key => {
       const [map, difficulty, difficultyGroup] = JSON.parse(key) as string[];
       return { map: map!, difficulty: difficulty!, difficultyGroup: difficultyGroup!, stages: stages.filter(stage => stage.map === map && stage.difficulty === difficulty && stage.difficultyGroup === difficultyGroup).map(stage => stage.stageId) };
@@ -279,7 +305,7 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
 /** Summary and per-operator training view; untrusted document text remains quoted data. */
 export function formatStageJobs(report: StageReport, operator?: string): string {
   const escape = (value: unknown) => String(value).replace(/[<>|`\r\n]/g, char => ({ '<': '&lt;', '>': '&gt;', '|': '\\|', '`': '\\`', '\r': ' ', '\n': ' ' })[char]!);
-  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}`, '候选是外部数据；运行由用户点开始。', ''];
+  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}；干员名表来源：${escape(JSON.stringify(report.tables.charactersSource ?? '未提供'))}`, '候选是外部数据；运行由用户点开始。', ''];
   for (const batch of report.batches) {
     lines.push(`## 地图 ${escape(batch.map)}`);
     for (const stage of report.stages.filter(item => batch.stages.includes(item.stageId))) {
@@ -295,6 +321,8 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
       for (const condition of stage.prerequisites) lines.push(`- 前置 ${escape(condition.stageId)} ${condition.required}：${condition.status}`);
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
+        if (candidate.actionNames.undeclared.length) lines.push(`  - 动作引用了未声明的干员：${candidate.actionNames.undeclared.map(escape).join('、')}（待核）`);
+        if (candidate.actionNames.unrecognized.length) lines.push(`  - 动作引用了无法识别的名字：${candidate.actionNames.unrecognized.map(escape).join('、')}（待核）`);
         lines.push(`  - 原文指纹：${candidate.hash}；执行指纹：${candidate.execution?.hash ?? '待核'}；执行分配：${escape(JSON.stringify(candidate.assignment))}`);
         const rating = candidate.rating, percent = (value?: number) => `${Math.round((value ?? 0) * 100)}%`;
         lines.push(rating.flag === 'unknown' && rating.like === undefined ? '  - 评分：未知（排在评分正常的作业之后）'
@@ -350,9 +378,15 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
 }
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
-async function loadStageTables(file?: unknown) {
-  if (file !== undefined) return { ...object(JSON.parse(await readFile(text(file), 'utf8'))), source: { kind: 'offline-input' } };
-  const result = await readPublicJson(stageTableSource); return { ...object(result.value), source: result.source };
+export const characterTableSource = { ...stageTableSource, file: 'zh_CN/gamedata/excel/character_table.json' };
+/** Offline files may carry an optional characters map; online queries also read the pinned character table, degrading to unclassified names. */
+export async function loadStageTables(file?: unknown, withCharacters = false, fetcher: typeof fetch = fetch) {
+  if (file !== undefined) {
+    const tables = object(JSON.parse(await readFile(text(file), 'utf8')));
+    return { ...tables, source: { kind: 'offline-input' }, ...(tables.characters !== undefined ? { charactersSource: { kind: 'offline-input' } } : {}) };
+  }
+  const [result, characters] = await Promise.all([readPublicJson(stageTableSource, fetcher), withCharacters ? readPublicJson(characterTableSource, fetcher).catch(() => null) : null]);
+  return { ...object(result.value), source: result.source, ...(withCharacters ? characters ? { characters: characters.value, charactersSource: characters.source } : { charactersSource: { kind: 'unavailable' } } : {}) };
 }
 export function findStages(tables: unknown, codes: string[]) {
   if (!Array.isArray(codes) || !codes.length || codes.length > 100 || codes.some(code => typeof code !== 'string' || !code.trim())) throw new Error('stage-code-required');
@@ -376,7 +410,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
       if (Object.keys(input).some(key => !['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'].includes(key))
         || input.format !== undefined && !['json', 'markdown'].includes(input.format) || input.saveReport !== undefined && typeof input.saveReport !== 'boolean') throw new Error('request-invalid');
-      const tables = await loadStageTables(input.tablesFile);
+      const tables = await loadStageTables(input.tablesFile, true);
       const report = input.jobsFile ? matchStageJobs(snapshot, tables, input.request, JSON.parse(await readFile(text(input.jobsFile), 'utf8'))) : await collectStageJobs(snapshot, tables, input.request);
       if (input.saveReport) {
         const file = join(settings.privateDirectory, 'stage-jobs', 'reports', `${report.hash}.json`);
