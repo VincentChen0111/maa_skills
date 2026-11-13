@@ -403,7 +403,9 @@ test('the applied copy has a way back: a deleted copy is installed again by a co
   const stale = fakeMaa();
   const outdated = await applyBasePlan({ ...(await request(h, { decision: accept(['maa-timers']) })), expectedRevision: '0'.repeat(64) }, stale.maa, { home: h.home });
   assert.equal(outdated.status, 'rejected'); assert.equal(outdated.reason, 'configuration-changed'); assert.deepEqual(stale.calls, []);
-  // The user edited the copy (for example while hand-tuning in MAA): refused by name; MAA, the configuration and the edits are untouched.
+  // MAA saved its configuration again in its own layout (same values). Then the user edited the copy (for example while
+  // hand-tuning in MAA): refused by name; MAA, the configuration bytes and the edits are untouched.
+  await writeFile(h.configFile, JSON.stringify(JSON.parse(await readFile(h.configFile, 'utf8'))));
   const edits = '{"title":"synthetic hand-tuned"}', configBefore = await readFile(h.configFile);
   await writeFile(copy, edits);
   const changed = await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
