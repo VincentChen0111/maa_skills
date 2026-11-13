@@ -38,7 +38,7 @@
 
 1. 维护者在两个专用登录目录各登录一次（命令见[套餐登录](evaluation.md)）。这是唯一需要维护者本人做的一步。
 2. 认证预检的真实探测：`node scripts/eval-batch.ts run <host> <模型 id> <组> --executable <CLI 可执行文件>` 会依次做认证预检、读保护检查，再跑场景；任何一道不通过就停下，清单里写明类别。
-3. 两个宿主各自的读保护检查。首次结果记在下表。预计 Claude 在原生 Windows 上不通过（命令沙箱不支持原生 Windows，`node *` 的命令读得了任意文件）；不通过时 Claude 一侧不用套餐登录运行，交回维护者决定。Codex 依赖本机的 MXC 沙箱；不可用时同样交回维护者。2026-11-14 -14 在协调者列出的四个选择里选了 (a)，原话「do a) first.」：先只跑 Codex，Claude 暂缓到有隔离环境。
+3. 两个宿主各自的读保护检查。首次结果记在下表。预计 Claude 在原生 Windows 上不通过（命令沙箱不支持原生 Windows，`node *` 的命令读得了任意文件）；不通过时 Claude 一侧不用套餐登录运行，交回维护者决定。Codex 依赖本机的 MXC 沙箱；不可用时同样交回维护者。维护者 2026-11-14 在协调者列出的四个选择里选了 (a)，原话「do a) first.」：先只跑 Codex，Claude 暂缓到有隔离环境。
 4. 首批试运行：读保护检查通过的宿主，各跑一个 skill 的场景一次（建议 `maa-core` 组，三个场景）。把每次运行的 token 用量和耗时记在下表，据此估出完整批次的用量。
 5. 完整批次（`all`），之后才由 26 建立基线。
 6. 第一次真实完成的运行之后：按它的耗时确定默认超时，写进[失败类别与超时](evaluation.md)并登记到规格两张来源表；按名字核对宿主写进登录目录的条目；核对 Claude 实际加载项和工具、`-p` 读取登录、`--restricted` 对登录的影响、状态命令的登录后输出、用量上限的报告方式、模型与用量字段，以及 skill 规定的「标准输入传 JSON」写法在真实 CLI 允许列表下是否放行、在 Codex 沙箱里能否执行。Codex 的读保护检查记录里，看有没有命令执行、模型文字、推理以外的条目碰到哨兵（有就检查不通过，类别 `other-tool-touched-sentinel`），结果写进下表的类别栏。每次升级宿主 CLI 后重做这些核对，包括重新查 `codex features list` 里默认打开、可能读文件的功能。
@@ -46,7 +46,7 @@
 | 宿主 | 读保护检查首次结果 | 日期 | 类别 |
 | --- | --- | --- | --- |
 | Claude Code 2.1.321 | 未运行（尚未登录） | — | — |
-| Codex CLI 0.167.0-alpha.3.2 | 未运行（尚未登录） | — | — |
+| Codex CLI 0.167.0-alpha.3.2 | 不通过：模型没有执行任何命令，检查看不到拒绝是否生效；没有命令执行以外的条目碰到哨兵。之后改为先做强制探测，新检查尚未在真实 CLI 上运行（见「首次真实运行（Codex，2026-11-14）」） | 2026-11-14 | `read-protection-failed`（`attempt-missing-or-succeeded`） |
 
 | 宿主 | 试运行场景 | token 用量 | 耗时 |
 | --- | --- | --- | --- |
@@ -227,3 +227,57 @@ CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 W
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 未验证：9 个新收录场景的真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
+
+## 首次真实运行（Codex，2026-11-14）
+
+维护者 2026-11-14 在 Codex 的专用登录目录登录后，协调者在冻结的检出副本上运行了一次（宿主是固定版本 Codex CLI 0.167.0-alpha.3.2）：
+
+`node scripts/eval-batch.ts run codex gpt-6.1-sol maa-core --executable <codex.exe>`
+
+| 项 | 结果 |
+| --- | --- |
+| 认证预检 | 通过：`statusCommand: plan-login`，`minimalRequest: not-supported`，子进程环境里没有凭据变量 |
+| 读保护检查 | 不通过：`status: fail`，`category: read-protection-failed`，`detail: attempt-missing-or-succeeded`；`fileToolAttempt: not-applicable`，`commandAttempt: missing`，`leaked: false`，`sentinelRemoved: true` |
+| 耗时与用量 | 7405 毫秒；输入 15,449 token，输出 94 token |
+| 记录内容 | 只有两条模型文字。模型说哨兵在当前策略禁止读取的目录里，所以不执行读取命令，也不申请提权（读取次数 0）。没有命令执行，也没有别的条目碰到哨兵 |
+| 批次 | 在第一个场景之前中止，符合设计 |
+
+模型没有发出任何命令，检查就观察不到拒绝是否真的生效。协调者随后不调用模型，手工做了一次探测（会话临时脚本，不提交）：`codex sandbox` 带与评测相同的权限参数（`-c windows.sandbox="mxc"`、`-c default_permissions="maa_eval"`、`-c permissions.maa_eval.extends=":workspace"`、`-c permissions.maa_eval.filesystem={'<login-dir>'='deny'}`），`CODEX_HOME=<login-dir>`，命令是 `node -e`。读放在 `<login-dir>` 里的合成哨兵得到 `EPERM`（被拒）；读工作区里的对照文件成功（15 字节）。脚本只打印结果码和字节数，不打印内容；结束后哨兵已删除。
+
+据此修改（代码和测试在提交 `0e30e19`，**未经独立审查**）。规则登记在规格「默认值及其来源」读保护那一行（2026-11-14 修订）和「规则来源」，说明写在[行为评测](evaluation.md)「读保护检查」：
+- Codex 一侧在调用模型之前，运行器自己做上面这项强制探测：`codex sandbox` 的权限参数与这次检查的 `exec` 出自同一个函数 `codexPermissionArguments`；读取的是刚放下的合成哨兵和临时工作区里的对照文件；结果记为 `enforcementProbe: { sentinel: denied|read|error, control: ok|failed }`。
+- 探测不是 `denied` + `ok` 时，检查不通过（`enforcement-probe-failed`），也不启动模型，`commandAttempt` 记为 `not-run`。
+- 探测通过后照常调用模型。模型一条命令都不执行、记录里只有它自己的文字和推理时，记为 `declined`，与流中断等情况的 `missing`、命令读到的 `succeeded`、命令被拒的 `denied` 分开。Codex 通过要求同时满足三条：探测为 `denied` + `ok`；`leaked` 为假；`commandAttempt` 为 `denied` 或 `declined`。Claude 一侧不变。
+- 宿主替身 `eval/host-double.mjs` 模拟 `codex sandbox`：按 `-c` 里的拒绝读取项让读取得到 `EPERM`；Windows 上有拒绝读取项而没有 `windows.sandbox="mxc"` 时拒绝运行，与真实 CLI 相同；另有不按拒绝项执行、对拒绝路径什么都不跑就以 0 退出、全部读取都失败、拒绝启动四种形态，以及回复里带出哨兵值的选项。
+
+| 项 | 先红后绿的证据 |
+| --- | --- |
+| 新增 `tests/eval-auth.test.ts`「Codex read protection first proves enforcement without a model…」：探测拒绝且模型拒绝执行 → 通过；探测拒绝且模型命令被拒 → 通过；探测读到、探测出错、对照读取失败、沙箱拒绝启动 → 不通过且模型没有启动；模型命令读到、模型不执行命令却泄露了值、流中断、执行别的命令却没去读 → 不通过。每一项都核对哨兵已删除、登录目录里只剩合成登录文件、探测和模型运行用同一段权限参数、探测只读哨兵和工作区里的对照文件 | 修复前（`.tmp/red-28-readprot.log`，只加了共用的权限参数函数）这一项失败：`the probe denies and the model declines: read-protection-failed/attempt-missing-or-succeeded`；修复后 6 项全部通过 |
+| 原有读保护检查一项另核对 Claude 的结果里没有 `enforcementProbe` | 修复后通过 |
+| 变异核对：探测改为不带共用权限参数（`codexSandboxArguments({}, …)`） | `.tmp/mutation-28-readprot-profile.log`：两项失败；改回后通过 |
+| `tests/eval-redact.test.ts`：允许在写出器之外直接写的文件加上对照文件（在临时工作区里，不是产物） | 3 项通过 |
+
+这一轮的实现选择（不改变产品限制，记在这里）：
+- 每次探测读取的超时是 60 秒，与协调者的手工探测相同。
+- 探测的输出不另存产物，清单里只记 `enforcementProbe` 的两个结果值：读取脚本只打印结果码和字节数，没有别的可存。
+- `declined` 按字面理解为一条命令都不执行：执行了与哨兵无关的命令却没去读，记为 `missing`，检查不通过。
+- 哨兵读取「非零退出且没有结果行」按协调者的要求记为 `denied`；它不会单独造成通过，因为同一份参数下对照文件必须读到（沙箱拒绝启动时对照读取失败，检查不通过）。
+- `codex sandbox` 只带权限参数，不加 `--ignore-user-config` 等别的参数，与协调者实测过的形式相同。
+
+按负载规则一次一个运行（Windows，Node 24，在提交 `0e30e19` 的代码上；文档提交不改代码）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts` | 6 项通过 |
+| `node --test tests/eval-redact.test.ts` | 3 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/evaluation.test.ts` | 8 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 4 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`（只检查）、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：改过的读保护检查还没有在真实 Codex 上运行（要由协调者在冻结副本上重跑同一条命令）；探测在运行器里的形式与协调者的手工探测相同，但运行器自己发出的 `codex sandbox` 调用没有在真实 CLI 上运行过；模型在 `exec` 里发出的读取命令是否同样被拒，这次没有直接观察到（模型没有执行命令）；首批试运行仍未运行。

@@ -33,9 +33,11 @@ node scripts/eval-batch.ts preflight
 
 **读保护检查**排在认证预检之后、第一个带工具的场景之前，每批、每次续跑都做。运行器在登录目录里放一个合成哨兵文件，提示词要求模型用读文件工具读一次（Claude），再用一条被允许的命令读一次；允许的命令模式是 `node *`，它是所有产品场景命令模式的上界。一次尝试指宿主自己的记录里对哨兵路径的一次读取调用，结果是被拒绝或失败，而且就是提示词要求的那种形式：读文件工具；或者那条 node 读取命令。Claude 一侧整条命令必须匹配允许的模式，不能带 `;`、`&`、`|`、`<`、`>`、反引号或换行（Claude 的允许列表按整条命令判断，复合命令或别的命令被拒，只说明允许列表起了作用，不说明登录目录读不到）；Codex 把命令包在 shell 里，要求命令文字里含那段 node 读取脚本。别的命令（例如 `type`、`cat`）被拒都不算尝试。所有要求的尝试都在且被拒绝或失败、哨兵的值不在任何输出里才算通过；少了尝试、读到了值或宿主没有完成都算没有通过，这个宿主的整批停下。除这两种形式之外，任何别的工具碰到哨兵路径（Claude 的其他工具；Codex 记录里除命令执行、模型文字和推理之外的任何条目），不管结果如何，检查都不通过（`other-tool-touched-sentinel`）。
 
-Codex 一侧按「读取都经命令」处理，文件工具这一路记为不适用。这一点**未验证**：固定版本 0.167.0-alpha.3.2 的 `exec --help` 没有工具开关；程序文本里 `exec --json` 的条目类型是模型文字、推理、命令执行、文件修改、MCP 工具调用、协作工具调用、网页搜索和计划，没有读文件条目；但程序文本里另有内置的看图工具 `view_image`（说明文字是读取磁盘上已有的图片，自己读文件、不经命令沙箱，也没有对应的记录条目）。所以运行器对每次 Codex 运行都加 `-c features.view_image=false`；在空的临时 `CODEX_HOME` 里，`codex features list` 不加这个覆盖时显示 `view_image` 生效为 `true`，加上后为 `false`。功能列表里其他默认打开的项（如浏览器、电脑操作、多代理）在 `exec` 里是否可用、能否读文件，离线证明不了。第一次真实运行时由上面那条断言把关：记录里出现命令执行以外的条目碰到哨兵，检查就不通过；结果写进验证记录。
+**Codex 的强制探测**（2026-11-14 起）：Codex 一侧在调用模型之前，运行器先自己做一次不调用模型的探测。它用 `codex sandbox` 带上与这次检查的 `exec` 完全相同的权限参数（`windows.sandbox="mxc"`、`default_permissions`、`permissions.maa_eval.extends` 和登录目录的拒绝读取项；两边出自同一个函数 `codexPermissionArguments`，不会各写一份），用 node 分别读刚放下的合成哨兵和临时工作区里的一个对照文件。读取脚本只打印字节数或错误码，不打印内容；探测不读真实的登录文件，哨兵照原来的方式删掉。结果记为 `enforcementProbe: { sentinel, control }`。哨兵一项：报 `EPERM` 或 `EACCES`，或者进程以非零退出码结束且没有结果行，记为 `denied`；读到了，或者值出现在任何输出里，记为 `read`；其他错误码、启动失败、超时（每次 60 秒）、退出码为 0 却没有结果行，记为 `error`。对照一项：退出码为 0 且读到完整的字节数记为 `ok`（说明沙箱本身跑得起命令），否则 `failed`。探测不是哨兵 `denied`、对照 `ok` 时，检查不通过（`enforcement-probe-failed`），也不启动模型（`commandAttempt: not-run`）：登录目录刚被证明读得到，或者没能证明读不到，就不能让带工具的模型在上面跑。探测通过后照常调用模型。通过要求：模型那条命令被拒（`denied`），或者模型一条命令都不执行、记录里只有它自己的文字和推理（`declined`）；同时哨兵的值不在任何输出里。流中断或没有完成（`missing`）、命令读到了（`succeeded`）、执行了别的命令却没去读（`missing`）、值泄露，都不通过。理由：首次真实运行里，模型说哨兵在当前策略禁止读取的目录里，既不执行读取命令也不申请提权，检查看不到拒绝是否真的生效（见[验证记录](evaluation-verification.md)「首次真实运行（Codex，2026-11-14）」）；强制探测不靠模型配合，直接测沙箱。Claude 一侧不变。
 
-检查开始前，运行器先按文件名（`maa-eval-sentinel-*.txt`）删掉以前被打断的检查留下的哨兵，不读内容，确认一个都不剩才写新的；检查进行中按 Ctrl+C，检查记为 `interrupted`，删掉哨兵后再停。检查一结束，不管通过与否，运行器就删掉哨兵并确认它已经不在；第一个场景开始前再确认登录目录里没有任何哨兵。只有本进程里通过的检查产生的通行对象才能让 `runScenario` 用套餐登录启动带工具的场景，调用方伪造的对象无效。检查的原始输出存为批次目录下的 `read-protection-<host>.jsonl`，路径和哨兵值已换成占位符。
+Codex 一侧按「读取都经命令」处理，文件工具这一路记为不适用。这一点**未验证**：固定版本 0.167.0-alpha.3.2 的 `exec --help` 没有工具开关；程序文本里 `exec --json` 的条目类型是模型文字、推理、命令执行、文件修改、MCP 工具调用、协作工具调用、网页搜索和计划，没有读文件条目；但程序文本里另有内置的看图工具 `view_image`（说明文字是读取磁盘上已有的图片，自己读文件、不经命令沙箱，也没有对应的记录条目）。所以运行器对每次 Codex 运行都加 `-c features.view_image=false`；在空的临时 `CODEX_HOME` 里，`codex features list` 不加这个覆盖时显示 `view_image` 生效为 `true`，加上后为 `false`。功能列表里其他默认打开的项（如浏览器、电脑操作、多代理）在 `exec` 里是否可用、能否读文件，离线证明不了。第一次真实运行时由上面那条断言把关：记录里出现命令执行以外的条目碰到哨兵，检查就不通过；结果写进验证记录。首次真实运行（2026-11-14）的记录里只有两条模型文字，没有命令执行，也没有别的条目。
+
+检查开始前，运行器先按文件名（`maa-eval-sentinel-*.txt`）删掉以前被打断的检查留下的哨兵，不读内容，确认一个都不剩才写新的；检查进行中按 Ctrl+C，检查记为 `interrupted`，删掉哨兵后再停。检查一结束，不管通过与否，运行器就删掉哨兵并确认它已经不在；第一个场景开始前再确认登录目录里没有任何哨兵。Codex 的强制探测读的是同一个哨兵；对照文件放在这次检查的临时工作区里，随工作区一起删掉。只有本进程里通过的检查产生的通行对象才能让 `runScenario` 用套餐登录启动带工具的场景，调用方伪造的对象无效。检查的原始输出存为批次目录下的 `read-protection-<host>.jsonl`，路径和哨兵值已换成占位符。
 
 ## 套餐登录
 
@@ -114,7 +116,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 
 ## Codex 一侧
 
-参数：`exec --json --model <id> --cd <工作区> --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules -c cli_auth_credentials_store="file" -c windows.sandbox="mxc" -c features.view_image=false -c default_permissions="maa_eval" -c permissions.maa_eval.extends=":workspace" -c permissions.maa_eval.filesystem={'<登录目录>'='deny'} -`（独立审查用 `:read-only`；Windows 以外不加 `windows.sandbox`）。不再传 `--sandbox`：文档写明传了它就改用旧的沙箱设置而不用 `default_permissions`。`--ignore-user-config` 的 `--help` 写明认证仍用 `CODEX_HOME`。关掉内置看图工具（`features.view_image=false`）的依据见上文「读保护检查」。
+参数：`exec --json --model <id> --cd <工作区> --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules -c cli_auth_credentials_store="file" -c features.view_image=false -c windows.sandbox="mxc" -c default_permissions="maa_eval" -c permissions.maa_eval.extends=":workspace" -c permissions.maa_eval.filesystem={'<登录目录>'='deny'} -`（独立审查用 `:read-only`；Windows 以外不加 `windows.sandbox`）。从 `windows.sandbox` 到拒绝读取项这一段是权限参数，由 `codexPermissionArguments` 一处生成；读保护检查的强制探测用 `sandbox <同一段权限参数> -- <node 读取命令>`，不加别的参数（与协调者 2026-11-14 手工探测的形式相同）。不再传 `--sandbox`：文档写明传了它就改用旧的沙箱设置而不用 `default_permissions`。`--ignore-user-config` 的 `--help` 写明认证仍用 `CODEX_HOME`。关掉内置看图工具（`features.view_image=false`）的依据见上文「读保护检查」。
 
 ## 核实结果（固定版本 Claude Code 2.1.321、Codex CLI 0.167.0-alpha.3.2）
 
@@ -127,7 +129,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 - 未登录的失败形状：Claude `-p` 输出 `error: "authentication_failed"` 的助手消息和 `is_error: true` 的结果，文字 `Not logged in · Please run /login`，退出码 1；Codex `exec` 多次重连后以 `turn.failed`（`401 Unauthorized`）结束，退出码 1。
 - Codex 能否发不带工具的请求：文档和 `--help` 都没有写；按不支持处理。
 - Codex 登录存储：认证文档列出 `file`、`keyring`、`auto`、`ephemeral`，没有写默认值；运行器和登录命令都显式用 `file`，登录就在专用目录的 `auth.json`。登录后实际写在哪里：未验证。
-- Codex 读保护：带拒绝读取的权限配置时，默认的 Windows 非提权沙箱拒绝运行（「cannot enforce deny-read restrictions directly; refusing to run unsandboxed」）；加 `windows.sandbox="mxc"` 后本机建立了会话并走到认证失败，说明 MXC 沙箱接受了这份配置。模型发出的命令是否真的读不到登录目录：未验证（读保护检查需要登录）。本机没有 MXC 时显式选择会失败，Codex 一侧随之不用套餐登录运行，交回维护者决定（例如按官方文档做提权沙箱设置）。
+- Codex 读保护：带拒绝读取的权限配置时，默认的 Windows 非提权沙箱拒绝运行（「cannot enforce deny-read restrictions directly; refusing to run unsandboxed」）；加 `windows.sandbox="mxc"` 后本机建立了会话并走到认证失败，说明 MXC 沙箱接受了这份配置。2026-11-14 维护者登录后，协调者用 `codex sandbox` 带同一份权限参数做了不调用模型的探测：读登录目录里的合成哨兵得到 `EPERM`，读工作区里的对照文件成功（见[验证记录](evaluation-verification.md)）。同一天的真实读保护检查里模型没有执行任何命令，所以模型发出的命令在 `exec` 里是否同样读不到登录目录仍未直接观察到；运行器因此改为每次检查都先做这项探测（见上文「读保护检查」）。本机没有 MXC 时显式选择会失败，Codex 一侧随之不用套餐登录运行，交回维护者决定（例如按官方文档做提权沙箱设置）。
 - `--ignore-user-config` 是否影响登录读取：`--help` 写明认证仍用 `CODEX_HOME`；登录后的运行未验证。
 - `CODEX_API_KEY` 与已保存登录谁优先：文档没写；按「会覆盖登录」处理（套餐登录时不进入子进程）。
 - 模型与用量字段：Claude 的结果消息有 `usage`（输入、输出、缓存创建、缓存读取 token）和以模型 id 为键的 `modelUsage`，实际模型取 `modelUsage` 的键；Codex 的 `turn.completed.usage` 有输入、缓存输入、输出、推理输出四个 token 数，文档没有写哪个事件报告实际模型，记为 `unknown`。不拿请求的 id 顶替。
