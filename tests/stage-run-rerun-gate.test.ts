@@ -184,15 +184,17 @@ test('errors unrelated to a stage retry are reported but do not block it; a conn
   await writeFile(join(c.batch.privateDirectory, 'credentials', 'nga.json'), '{"damaged":true}');
   await writeFile(join(c.batch.privateDirectory, 'doctor-analysis-latest.json'), '{ damaged');
   const unrelated = await verify(c);
-  assert.deepEqual(unrelated.verification.checks.filter(check => check.status === 'error').map(check => check.id), ['credential-nga', 'private-files']);
+  // On a non-Windows test machine the platform check is an error too; it is not relevant to a retry either.
+  const reported = [...(process.platform === 'win32' ? [] : ['platform']), 'credential-nga', 'private-files'];
+  assert.deepEqual(unrelated.verification.checks.filter(check => check.status === 'error').map(check => check.id), reported);
   assert.equal(unrelated.verification.clear, true);
-  assert.deepEqual([unrelated.verification.blocking, unrelated.verification.notBlocking], [[], ['credential-nga', 'private-files']]);
-  assert.deepEqual(unrelated.verifications.at(-1)!.notBlocking, ['credential-nga', 'private-files'], 'the summary reports them too');
+  assert.deepEqual([unrelated.verification.blocking, unrelated.verification.notBlocking], [[], reported]);
+  assert.deepEqual(unrelated.verifications.at(-1)!.notBlocking, reported, 'the summary reports them too');
   assert.deepEqual(unrelated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
 
   const offline = await verify(c, adbListing('offline'));
   assert.equal(offline.verification.clear, false);
-  assert.deepEqual([offline.verification.blocking, offline.verification.notBlocking], [['connection'], ['credential-nga', 'private-files']]);
+  assert.deepEqual([offline.verification.blocking, offline.verification.notBlocking], [['connection'], reported]);
   assert.deepEqual(offline.allowedDecisions, ['stop-and-tell-user']);
   await assert.rejects(decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
 
