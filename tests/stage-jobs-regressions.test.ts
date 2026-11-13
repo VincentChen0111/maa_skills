@@ -209,13 +209,13 @@ test('prepare persists native-compatible S1 elite zero and binds it separately f
 test('derived groups preserve the globally unique allocation and the exact chosen alternative requirements', () => {
   const input = { ...stageJob(7), content: { ...stageJob(7).content, opers: [], groups: [
     { name: '二选一', opers: [{ name: '合成甲' }, { name: '合成乙', requirements: { potentiality: 6 } }, { name: '合成乙', requirements: { potentiality: 1 } }] },
-    { name: '仅甲', opers: [{ name: '合成甲' }] },
+    { name: '仅甲', opers: [{ name: '合成甲', requirements: { elite: 0 } }] },
   ], actions: [{ type: 'Deploy', name: '二选一', location: [1, 1], direction: 'Right' }] } };
   const candidate = matchStageJobs(accountSnapshot, stageTables, stageRequest, [input]).stages[0]!.candidates[0]!;
   assert.equal(candidate.status, 'ready');
   assert.deepEqual(candidate.assignment, { '仅甲': '合成甲', '二选一': '合成乙' });
   assert.deepEqual(candidate.execution!.content.groups.map((group: any) => group.opers), [
-    [{ name: '合成乙', requirements: { potentiality: 1 } }], [{ name: '合成甲' }],
+    [{ name: '合成乙', requirements: { potentiality: 1 } }], [{ name: '合成甲', requirements: { elite: 0 } }],
   ]);
   assert.deepEqual(candidate.execution!.content.actions, input.content.actions);
 });
@@ -229,7 +229,7 @@ test('approval binds displayed execution and search coverage as well as original
   const maa: MaaProcess = { inspect: async () => { inspections++; throw new Error('must-not-inspect'); }, close: async () => {}, start: async () => {} };
   const changed = structuredClone(report); changed.stages[0]!.candidates[0]!.execution!.content.groups[0].opers[0].name = '合成甲';
   await assert.rejects(() => prepareStageJobs({ ...base, report: changed }, maa), /approval/);
-  const searchChanged = structuredClone(report); searchChanged.search[0] = { stageId: 'synthetic_01', mode: 'online', pages: 3, truncated: true };
+  const searchChanged = structuredClone(report); searchChanged.search[0] = { stageId: 'synthetic_01', mode: 'online', pages: 3, truncated: true, ids: [] };
   await assert.rejects(() => prepareStageJobs({ ...base, report: searchChanged }, maa), /approval/);
   assert.equal(inspections, 0);
 });

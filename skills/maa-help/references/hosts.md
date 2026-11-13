@@ -27,3 +27,5 @@
 ## 建议报告的独立审查
 
 Codex 用新的 `codex exec` 进程，Claude 用全新上下文，提供任务、规格、固定版本和报告全文的自包含说明。仅一名审查员，只审一轮，只报告真实错误；接受的错误改正后不再复审，在报告里列出这些改动；不能运行时写明未验证。用户当次明确跳过报告审查时标为「未审查」。maa-help 本身不创建建议报告。
+
+两个宿主用同一份审查说明：maa-account 生成培养报告后由 `cultivation-report.ts brief` 写出，里面是共用模板、报告正文和报告全文。Claude Code 开一个全新上下文的子代理读取它；Codex 把它经标准输入交给新的 `codex exec --sandbox read-only --ephemeral --skip-git-repo-check -` 进程。宿主开不了子代理或 `codex exec` 时，报告标「审查未完成」，不能批准，也不会说成已审查。

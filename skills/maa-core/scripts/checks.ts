@@ -27,6 +27,54 @@ export function groupOf(id: string): CheckGroup {
   if (!group) throw new Error('check-group-unknown');
   return group;
 }
+/** Every check id the shared checks produce; a new id must be added here and classified in `purposeRules`. */
+export const knownCheckIds: readonly string[] = Object.freeze(Object.keys(groupOfCheck));
+
+/**
+ * The consumers of check results, each deciding through `blockingChecks`. Only an error ever blocks. An `every-error`
+ * purpose counts every error. Otherwise every check id is classified as blocking or not relevant, and an id in neither
+ * list (a new or unknown check) blocks until it is classified: fail closed. Reasons: spec 「默认值及其来源」, 2026-11-14.
+ */
+export const checkPurposes = ['doctor-exit', 'setup-exit', 'credentials-exit', 'stage-retry'] as const;
+export type CheckPurpose = typeof checkPurposes[number];
+export type PurposeRule = 'every-error' | { blocks: readonly string[]; notRelevant: readonly string[] };
+export const purposeRules: Readonly<Record<CheckPurpose, PurposeRule>> = Object.freeze({
+  // Exit codes: 1 means "there is an error" (spec 「检查与修法」), so every error counts.
+  'doctor-exit': 'every-error',
+  'setup-exit': 'every-error',
+  'credentials-exit': 'every-error',
+  // Retrying or switching a stage run after an environment failure (ticket 16): what MAA needs to run the approved list
+  // again under the approval, on top of the verification's own process, list and job-file checks.
+  'stage-retry': Object.freeze({
+    blocks: Object.freeze([
+      'maa', 'server', // the MAA installation and current profile the batch was prepared in, on the CN client it was approved for
+      'settings', 'private-directory', // where the MAA directory, the run records and the approved job files are found
+      'connection', // adb lists the device offline or unauthorized, or the configured adb is missing
+      'configuration', 'configuration-fields', 'remote-control', // MAA's configuration, its task, medicine and timer fields, remote tasks
+      'write-lock', // a configuration write whose result is not reconciled
+    ]),
+    notRelevant: Object.freeze([
+      'platform', // only Windows can show MAA running, which the verification already requires
+      'node', // runs only this project's scripts; MAA does not use it
+      'version', // MAA version reminders only warn (spec 「检查与修法」)
+      'credential-nga', 'credential-skland', 'credential-bilibili', // used only by research and the account snapshot
+      'private-files', // other records; the batch's own preparation and job files are verified directly
+      'skill-version', 'skill-links', // the host's copies of these skills; MAA runs without them
+    ]),
+  }),
+});
+
+/**
+ * The one predicate for "which check results block this purpose": ids of the error checks that block it, and of the
+ * errors that do not (still reported to the user). Warnings and normal results never block.
+ */
+export function blockingChecks(checks: readonly Pick<CheckResult, 'id' | 'status'>[], purpose: CheckPurpose): { blocking: string[]; notBlocking: string[] } {
+  const rule = Object.hasOwn(purposeRules, purpose) ? purposeRules[purpose] : undefined;
+  if (!rule) throw new Error('check-purpose-unknown');
+  const errors = checks.filter(check => check.status === 'error').map(check => check.id);
+  const blocks = (id: string) => rule === 'every-error' || !rule.notRelevant.includes(id);
+  return { blocking: errors.filter(blocks), notBlocking: errors.filter(id => !blocks(id)) };
+}
 
 export const checkMessages: Record<string, string> = {
   windows: 'The host is Windows.', 'windows-required': 'This workflow requires Windows.',

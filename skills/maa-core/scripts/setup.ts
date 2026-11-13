@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
-import { libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
+import { blockingChecks, libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
 import { assessMaaVersion, readMaaVersion, readVerificationRecord, versionRepair, type MaaVersionReader } from './maa-version.ts';
 import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
@@ -63,7 +63,7 @@ export async function checkSetup(context: SetupContext = {}, versionReader: MaaV
   const checks: (CheckResult & { message: string })[] = [...installation.checks];
   // Shared with doctor: presence and known state only, never a value; an unknown private directory is not guessed.
   checks.push(...(await inspectCredentials(settings ? settings.privateDirectory : null)).checks);
-  return { checkedAt: new Date().toISOString(), exitCode: checks.some(item => item.status === 'error') ? 1 : 0, checks,
+  return { checkedAt: new Date().toISOString(), exitCode: blockingChecks(checks, 'setup-exit').blocking.length ? 1 : 0, checks,
     language: settings?.language ?? null, needsLanguagePrompt: !!settings && !settings.languageAsked && settings.language === null,
     needsDirectoryPrompt: !!settings && !installation.settingsPresent, version: installation.version };
 }

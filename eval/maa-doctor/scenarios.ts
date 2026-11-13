@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { credentialCheck, credentialServices } from '../../skills/maa-core/scripts/credentials.ts';
-import { groupOf, libraryCheck } from '../../skills/maa-core/scripts/checks.ts';
+import { blockingChecks, groupOf, libraryCheck, type CheckStatus } from '../../skills/maa-core/scripts/checks.ts';
 import { connectionCheck } from '../../skills/maa-core/scripts/setup-connection.ts';
 import { assessMaaVersion, readVerificationRecord, versionRepair } from '../../skills/maa-core/scripts/maa-version.ts';
 
@@ -55,7 +55,7 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
     libraryCheck('private-files', 'normal', 'private-files-readable', 'no-private-file-action'),
     libraryCheck('skill-version', 'normal', 'skill-update-not-checked', 'check-skill-update'),
     libraryCheck('skill-links', 'normal', 'skill-links-intact', 'no-link-repair-needed'),
-  ];
+  ] satisfies { id: string; status: CheckStatus; [key: string]: unknown }[];
   return rows.map(item => ({ ...item, group: groupOf(item.id) }));
 }
 
@@ -66,7 +66,7 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
     configuration: mode === 'corrupt' ? 'invalid' : 'valid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [], versions: null };
   recovery.evidenceRevision = createHash('sha256').update(JSON.stringify([retained ? JSON.stringify(retained) : null, JSON.stringify(configuration), null, null, recovery])).digest('hex');
   const checks = expectedChecks(mode, !!retained, skland);
-  const exitCode = checks.some(item => item.status === 'error') ? 1 : 0;
+  const exitCode = blockingChecks(checks, 'doctor-exit').blocking.length ? 1 : 0;
   const version = packagedVersion.evidence;
   const skills = { version: { installed, latest: null, lookup: 'not-requested' }, links: [{ name: 'maa-core', kind: 'directory', state: 'ok' }] };
   const values = { $exists: true, exitCode, checks, recovery, version, skills };

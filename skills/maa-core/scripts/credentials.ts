@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readSettings, settingsHome } from './preferences.ts';
 import { windowsProtector, type Protector } from './credential-protection.ts';
 import type { CheckResult } from './doctor.ts';
+import { blockingChecks } from './checks.ts';
 
 /**
  * Credentials the user enters in a local script for NGA, the Skland account and experimental Bilibili.
@@ -355,7 +356,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       let privateDirectory: string | null = null;
       try { privateDirectory = (await readSettings()).privateDirectory; } catch { /* Unreadable settings leave the location unknown. */ }
       const result = await inspectCredentials(privateDirectory);
-      const value = { checkedAt: new Date().toISOString(), exitCode: result.checks.some(item => item.status === 'error') ? 1 : 0, ...result };
+      const value = { checkedAt: new Date().toISOString(), exitCode: blockingChecks(result.checks, 'credentials-exit').blocking.length ? 1 : 0, ...result };
       console.log(args[1] === '--json' ? JSON.stringify(value) : JSON.stringify(value, null, 2));
       process.exitCode = value.exitCode;
     } catch (error) {

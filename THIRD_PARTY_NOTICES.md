@@ -59,6 +59,8 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 
 专精计算及排程独立实现，复用共享成本和基建查询。固定公开游戏表与 MAA 原生字段/回调的核对见[训练来源记录](docs/training-sources.md)；未复制 MAA 的 AGPL 实现、游戏表或私人训练原型，不引入第三方排程算法。仅保留接口事实、指纹及必要的技能描述匹配条件；游戏数据权利不因本仓库许可而转移。
 
+NGA 读取（`skills/maa-core/scripts/nga.ts`）与调研共用层（`research.ts`、`research-transport.ts`）独立实现，没有读取或移植维护者的私人 NGA 工具，也没有复制第三方代码。接口和返回格式的事实来自公开资料：ludoux/ngapost2md、JackBoosY/dsh-nga（均为 MIT）只读事实；UNICKON/StealthReader、tyro668/harmony-open-nga（未声明正式许可）只读事实，不取代码或样例。固定提交与逐条事实见 [NGA 来源核对](docs/nga-sources.md)。测试里的帖子、用户名和凭据都是合成数据。
+
 游戏表运行时读取 [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData/tree/6f63c14e27b847ef74b53b00fe51fc322b3cd7ff) 的固定提交，数据权利归原权利人，本仓库不再分发。交叉核对运行时读取 [KayChung17/arknights-base-skill](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/skills/ark-base-schedule/assets/operator-skills.json) 的 `operator-skills.json`，固定提交 `368ea6d83d14409a3e7354df4359960adba6b36b`；不采用其算法或衍生加成，不复制其数据文件。该仓库 [MIT 许可](https://github.com/KayChung17/arknights-base-skill/blob/368ea6d83d14409a3e7354df4359960adba6b36b/LICENSE) 全文如下，注明引用来源不表示上游背书：
 
 ```text
