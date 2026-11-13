@@ -6,7 +6,8 @@ import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
 import { blockingChecks, libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
 import { assessMaaVersion, readMaaVersion, readVerificationRecord, type MaaVersionReader } from './maa-version.ts';
-import { executeSetupConfigWrite, type MaaProcess } from './maa-config.ts';
+import { executeSetupConfigWrite, inspectConfigRecovery, type MaaProcess } from './maa-config.ts';
+import { configurationCheck, writeLockCheck } from './doctor-checks.ts';
 import { currentConfiguration, discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
 import { DownloadError, downloadStatus, executeDownload, installDownload, planDownload, type DownloadContext } from './setup-download.ts';
 export { discoverSetupConnections, testSetupConnection, type AdbBoundary, type ConnectionContext, type ConnectionSelection, type SetupWriteRequest } from './setup-connection.ts';
@@ -114,18 +115,30 @@ const connectionReasons = new Set(['maa-directory-unset', 'cn-client-required', 
  * the adb path and address, so it survives the connection write and MAA rewriting its configuration, while a
  * discovery revision would not. Complete only when nothing is pending: `pending` lists the check errors the
  * `setup-recheck` purpose of `blockingChecks` names (what setup installs or configures) plus the connection when
- * its test did not pass; other errors, such as a credential, are reported in `notBlocking`.
+ * its test did not pass; other errors, such as a credential, are reported in `notBlocking`. The `configuration`
+ * and `write-lock` rows come from the producer doctor uses, so a connection write whose result is unknown (its
+ * lock retained) keeps setup pending until doctor reconciles it. `maa` only inspects the MAA process, read-only.
  */
 export type RecheckRequest = { candidate?: string };
-export async function recheckSetup(request: RecheckRequest = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary) {
+export async function recheckSetup(request: RecheckRequest = {}, context: ConnectionContext = {}, versionReader: MaaVersionReader = readMaaVersion, adb?: AdbBoundary, maa?: MaaProcess) {
   if (!request || typeof request !== 'object' || Array.isArray(request) || Object.keys(request).some(key => key !== 'candidate')
     || request.candidate !== undefined && (typeof request.candidate !== 'string' || !/^[a-f0-9]{64}$/.test(request.candidate))) throw new Error('request-invalid');
   const home = resolve(context.home ?? settingsHome());
   if (!await isFile(join(home, 'config.json'))) throw new Error('set-preferences-first');
   const settings = await readSettings(home);
   const result = await checkSetup(context, versionReader);
+  const checks: CheckResult[] = [...result.checks];
+  // Without an MAA directory there is no configuration to read or lock, and the `maa` row already blocks.
+  const maaDirectory = context.maaDirectory ?? settings.maaDirectory;
+  if (maaDirectory) {
+    let created: MaaProcess | undefined;
+    const boundary: MaaProcess = maa ?? { inspect: async () => (created ??= (await import('./maa-process.ts')).createMaaProcess(maaDirectory)).inspect(),
+      close: async () => { throw new Error('recheck-never-closes-maa'); }, start: async () => { throw new Error('recheck-never-starts-maa'); } };
+    const recovery = await inspectConfigRecovery({ maaDirectory, privateDirectory: settings.privateDirectory }, boundary);
+    checks.push(configurationCheck(recovery), writeLockCheck(recovery));
+  }
   const downloads = (await downloadStatus({ home })).items;
-  const { blocking, notBlocking } = blockingChecks(result.checks, 'setup-recheck');
+  const { blocking, notBlocking } = blockingChecks(checks, 'setup-recheck');
   let connection: Record<string, unknown>;
   // These three rows are only normal or error: discovery needs the MAA GUI, its CN profile and readable settings.
   if (['maa', 'server', 'settings'].some(id => blocking.includes(id))) connection = { status: 'not-checked', reason: 'maa-check-required' };
@@ -142,8 +155,9 @@ export async function recheckSetup(request: RecheckRequest = {}, context: Connec
     connection = { status: 'unavailable', reason: error instanceof Error && connectionReasons.has(error.message) ? error.message : 'connection-check-failed' };
   }
   const pending = [...new Set([...blocking, ...(connection.status === 'connected' ? [] : ['connection'])])];
-  // The exit code keeps meaning "there is an error" (`setup-exit`, from checkSetup); completion is `complete`.
-  const record = { ...result, exitCode: (result.exitCode || pending.length) ? 1 : 0, downloads, connection, complete: pending.length === 0, pending, notBlocking };
+  // The exit code keeps meaning "there is an error" (`setup-exit`, over every row here); completion is `complete`.
+  const record = { ...result, checks, exitCode: (blockingChecks(checks, 'setup-exit').blocking.length || pending.length) ? 1 : 0, downloads, connection,
+    complete: pending.length === 0, pending, notBlocking };
   await mkdir(settings.privateDirectory, { recursive: true });
   await writeEnvironmentRecord(settings.privateDirectory, record);
   return record;

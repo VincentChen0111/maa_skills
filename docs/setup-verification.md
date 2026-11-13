@@ -158,6 +158,20 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 6/6、setup-download 20/20、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2、eval-network 3/3；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。未验证：真模型对 `notBlocking` 的说明（行为评测待 26；复检要真实 adb 传输，离线评测没有它的替身，没有新增场景）；非 Windows 机器上的这些用例只按代码推断，本机未跑。
 
+### 合并适配审查后修复（2026-11-14，协调者已接受一项 P2）
+
+问题：用途 `setup-recheck` 写了 `write-lock` 和 `configuration` 出错挡住完成，但 `recheckSetup` 只把 `checkSetup` 的各行（安装组和三项凭据）交给 `blockingChecks`，从来没有这两行。setup 的 apply 写入连接后以未知结束、`config/.maa-skills.lock` 留着时，复检仍返回 `complete: true`、退出码 0、`pending` 为空并存进环境记录；下一次日常或培养写入才以 `lock-requires-reconciliation` 被拒。审查员的离线复现在本仓库之外，未改动。
+
+修复：
+- 把 doctor 产生 `configuration`、`write-lock` 两行的代码原样移到 `doctor-checks.ts` 的 `configurationCheck`、`writeLockCheck`（都基于一次 `inspectConfigRecovery`），doctor 和复检都调用它们，编号、状态（没有锁正常、持锁进程仍在提醒、遗留或认不出错误）和修法不变。复检在设置里有 MAA 目录时追加这两行再交给 `blockingChecks`；`pending` 在锁未核对时带 `write-lock`。复检的退出码改为对全部行算 `setup-exit`。遗留锁要看 MAA 进程时，复检只读查看（`recheckSetup` 新增可选参数 `maa`，命令行用延迟创建的真实进程边界，它的关闭和启动一律抛错）。
+- `configuration` 的核对：`maa` 一行只读 `Current`、`Configurations` 和当前配置的 `Gui`，而 doctor 的 `configuration`（各写入方读配置的 `inspectConfiguration`）还要求 `Timers` 是对象、各配置和任务条目是对象，二者不等价（例：`Timers` 为 null 时 `maa` 正常、`configuration` 出错，各写入方都读不了）。所以不说成「由 `maa` 代为挡住」，而是按 write-lock 同样产生。复检用例里的合成配置因此补上 `Timers: { List: [] }`（MAA 自己写的配置带这一项）。
+- 同类缺陷防护：`check-purposes` 新增用例，按使用方登记每个用途拿到的检查编号（doctor、setup、凭据、复检各跑一次核对登记表），用途挡住的编号必须在其中、或登记为另行提供（复检的 `connection`）、或登记为这个使用方不产生。
+- 文档：规格「08 下载与补齐」「检查与修法」正文、「规则来源」08 行、「默认值及其来源」的复检行（设计默认值，2026-11-14）；`setup.md` 的 `recheck` 一行；SKILL 第 6 步写明 `pending` 带 `write-lock` 时转 maa-doctor 核对后再复检。工单正文未改。
+
+测试先行：先改测试，`check-purposes` 7 项中 1 项失败（复检的检查编号缺 `configuration`、`write-lock`），`setup-download` 新增三项失败（复检结果里没有这两行）；改代码后这三项通过，原有两项复检用例因编号表和缺 `Timers` 的合成配置失败，补齐后通过。新用例：遗留锁（不存在的 pid）和认不出的锁各一次，`complete: false`、退出码 1、`pending` 为 `['write-lock']`、环境记录同样保存，且两行与同一现场 `runChecks` 的同名行逐字相同；持锁进程仍在（本进程 pid）为提醒、仍完成；没有锁时照旧完成；`Timers` 为 null 时 `maa` 正常、`configuration` 出错并挡住。
+
+实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 7/7、setup-download 23/23、setup-download-scenarios 20/20、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、审查员的复现脚本（它不传进程替身，遗留锁会调用真实进程边界）、真实下载和网络。未验证：真模型在 `pending` 带 `write-lock` 时是否转 maa-doctor（行为评测待 26；复检要真实 adb 传输，离线评测没有替身，没有新增场景）；非 Windows 机器上的用例只按代码推断。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

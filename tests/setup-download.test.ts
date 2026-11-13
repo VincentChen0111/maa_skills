@@ -7,6 +7,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { planSetupDownload, downloadSetupProgram, setupDownloadStatus, installSetupDownload, recheckSetup, discoverSetupConnections, type AdbBoundary } from '../skills/maa-core/scripts/setup.ts';
 import type { Fetcher } from '../skills/maa-core/scripts/setup-download.ts';
+import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { runChecks } from '../skills/maa-core/scripts/doctor.ts';
 import { storedZip } from './fixtures/zip.ts';
 
 const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -415,8 +417,9 @@ test('a record whose file name points outside the downloads folder is ignored an
 test('final recheck covers Node, MAA, adb and the connection, finds the chosen candidate afresh after the connection is saved, and updates the environment record', async t => {
   const f = await fixture(t, { maa: true });
   const configFile = join(f.maaDirectory, 'config/gui.new.json');
+  // MAA writes `Timers` in its own configuration; the writers' read (doctor's `configuration` check) requires it.
   const config = { Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { Gui: {
-    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } } };
+    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } }, Timers: { List: [] } };
   await writeFile(configFile, JSON.stringify(config));
   const adbPath = join(f.maaDirectory, 'adb/platform-tools/adb.exe'); await mkdir(join(f.maaDirectory, 'adb/platform-tools'), { recursive: true }); await writeFile(adbPath, 'synthetic adb');
   const calls: string[][] = [];
@@ -440,7 +443,8 @@ test('final recheck covers Node, MAA, adb and the connection, finds the chosen c
   assert.equal(tested.connection.status, 'connected');
   assert.deepEqual(calls.slice(-2), [['connect', '127.0.0.1:16384'], ['-s', '127.0.0.1:16384', 'get-state']]);
   assert.deepEqual(tested.checks.map((item: { id: string }) => item.id), ['platform', 'maa', 'server', 'node', 'settings', 'private-directory', 'version',
-    'credential-nga', 'credential-skland', 'credential-bilibili']);
+    'credential-nga', 'credential-skland', 'credential-bilibili', 'configuration', 'write-lock']);
+  assert.deepEqual(tested.checks.filter((item: { id: string }) => ['configuration', 'write-lock'].includes(item.id)).map((item: { status: string }) => item.status), ['normal', 'normal']);
   // On a non-Windows test machine the platform check is an error; the recheck command itself refuses to run there, so it is reported, not
   // pending. The exit code still means "there is an error".
   const windows = process.platform === 'win32';
@@ -457,7 +461,7 @@ test('final recheck covers Node, MAA, adb and the connection, finds the chosen c
 test('recheck reports a chosen candidate that no longer exists instead of a generic failure, and opens no connection', async t => {
   const f = await fixture(t, { maa: true });
   await writeFile(join(f.maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'P', Configurations: { P: { Gui: {
-    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } } }));
+    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } }, Timers: { List: [] } }));
   const adbPath = join(f.root, 'tools/adb.exe'); await mkdir(join(f.root, 'tools')); await writeFile(adbPath, 'synthetic adb');
   const calls: string[][] = [];
   let devices = 'List of devices attached\n127.0.0.1:16384\tdevice\n';
@@ -478,7 +482,7 @@ test('recheck completes despite an unreadable NGA credential, which it still rep
   const f = await fixture(t, { maa: true });
   const configFile = join(f.maaDirectory, 'config/gui.new.json');
   const gui = (client: string) => JSON.stringify({ Current: 'P', Configurations: { P: { Gui: {
-    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: client } } } } });
+    ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: client } } } }, Timers: { List: [] } });
   await writeFile(configFile, gui('Official'));
   const adbPath = join(f.root, 'tools/adb.exe'); await mkdir(join(f.root, 'tools')); await writeFile(adbPath, 'synthetic adb');
   const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : 'device\n' }) };
@@ -497,4 +501,64 @@ test('recheck completes despite an unreadable NGA credential, which it still rep
   await writeFile(configFile, gui('YoStarEN'));
   const blocked = await recheckSetup({ candidate: chosen }, context, async () => null, adb) as Record<string, any>;
   assert.deepEqual([blocked.complete, blocked.exitCode, blocked.pending, blocked.notBlocking, blocked.connection.status], [false, 1, ['server', 'connection'], reported, 'not-checked']);
+});
+
+/** The connection is already written (by setup apply) and the chosen candidate tests connected; only the configuration write lock varies. */
+async function writeLockFixture(t: { after: (fn: () => Promise<unknown>) => void }, lock?: string) {
+  const f = await fixture(t, { maa: true });
+  const adbPath = join(f.root, 'tools/adb.exe'); await mkdir(join(f.root, 'tools')); await writeFile(adbPath, 'synthetic adb');
+  await writeFile(join(f.maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'P', Configurations: { P: { Gui: {
+    ConnectSettings: { AdbPath: adbPath, Address: '127.0.0.1:16384', AddressHistory: [], AutoDetect: false, AlwaysAutoDetect: false }, RuntimeSettings: { ClientType: 'Official' } } } },
+    Timers: { List: [] } }));
+  if (lock !== undefined) await writeFile(join(f.maaDirectory, 'config/.maa-skills.lock'), lock);
+  const adb: AdbBoundary = { run: async (_file, args) => ({ exitCode: 0, stdout: args[0] === 'devices' ? 'List of devices attached\n127.0.0.1:16384\tdevice\n' : 'device\n' }) };
+  const context = { home: f.home, adbPaths: [adbPath] };
+  const chosen = (await discoverSetupConnections(context, adb)).candidates[0]!.id;
+  // MAA process boundary: read-only inspection; the recheck never closes or starts MAA.
+  const maa: MaaProcess = { inspect: async () => ({ running: false, treeExited: true, idle: true, ready: false }),
+    close: async () => { throw new Error('unexpected close'); }, start: async () => { throw new Error('unexpected start'); } };
+  return { ...f, adb, context, chosen, maa };
+}
+const lockFile = (pid: number) => JSON.stringify({ id: randomUUID(), skill: 'maa-setup', host: 'claude', pid, startedAt: new Date().toISOString(), phase: 'restart' });
+const row = (result: Record<string, any>, id: string) => result.checks.find((item: { id: string }) => item.id === id);
+
+test('recheck keeps setup pending while a configuration write is unreconciled (stale or unknown lock), with the write-lock row doctor shows', async t => {
+  // setup apply wrote the connection but its restart ended unknown, so the lock stays; a pid that cannot exist on Windows (not a multiple of 4).
+  for (const [state, lock] of [['stale', lockFile(999999)], ['unknown', 'interrupted lock']] as const) {
+    const f = await writeLockFixture(t, lock);
+    const result = await recheckSetup({ candidate: f.chosen }, f.context, async () => null, f.adb, f.maa) as Record<string, any>;
+    assert.equal(result.connection.status, 'connected', state);
+    assert.deepEqual([row(result, 'write-lock').status, row(result, 'configuration').status], ['error', 'normal'], state);
+    assert.deepEqual([result.complete, result.exitCode, result.pending], [false, 1, ['write-lock']], state);
+    const saved = JSON.parse(await readFile(join(f.privateDirectory, 'setup-environment.json'), 'utf8'));
+    assert.deepEqual([saved.complete, saved.exitCode, saved.pending], [false, 1, ['write-lock']], state);
+    // The same producer as doctor: identical rows, including the repair doctor offers.
+    const doctor = await runChecks({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, home: f.home, skillsRoot: join(f.root, 'skills') }, f.maa,
+      { versionReader: async () => null, adb: f.adb });
+    for (const id of ['configuration', 'write-lock']) {
+      const { group: _group, ...doctorRow } = doctor.checks.find(item => item.id === id)!;
+      assert.deepEqual(row(result, id), doctorRow, `${state}: ${id}`);
+    }
+  }
+});
+
+test('recheck reports a write lock whose holder is still alive as a warning and still completes; with no lock it completes as before', async t => {
+  const windows = process.platform === 'win32';
+  for (const [state, lock, status] of [['active', lockFile(process.pid), 'warning'], ['none', undefined, 'normal']] as const) {
+    const f = await writeLockFixture(t, lock);
+    const result = await recheckSetup({ candidate: f.chosen }, f.context, async () => null, f.adb, f.maa) as Record<string, any>;
+    assert.deepEqual([row(result, 'write-lock').status, row(result, 'configuration').status], [status, 'normal'], state);
+    assert.deepEqual([result.connection.status, result.complete, result.exitCode, result.pending, result.notBlocking],
+      ['connected', true, windows ? 0 : 1, [], windows ? [] : ['platform']], state);
+  }
+});
+
+test('recheck blocks on a configuration every writer refuses even when the MAA row reads it', async t => {
+  const f = await writeLockFixture(t);
+  const configFile = join(f.maaDirectory, 'config/gui.new.json');
+  const config = JSON.parse(await readFile(configFile, 'utf8')); config.Timers = null;
+  await writeFile(configFile, JSON.stringify(config));
+  const result = await recheckSetup({ candidate: f.chosen }, f.context, async () => null, f.adb, f.maa) as Record<string, any>;
+  assert.deepEqual([row(result, 'maa').status, row(result, 'configuration').status], ['normal', 'error']);
+  assert.deepEqual([result.connection.status, result.complete, result.exitCode, result.pending], ['connected', false, 1, ['configuration']]);
 });
