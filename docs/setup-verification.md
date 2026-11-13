@@ -202,6 +202,27 @@ R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typeche
 
 未验证：新提交上的 Windows CI（windows-latest，代码页 1252）尚未运行，是这次修复的最终核对；真实 MAA 包和 platform-tools 包从未下载、解压（包内是否带 UTF-8 标志、最长路径都未核实）；真实英文或日文系统只用强制进程代码页的副本模拟；受约束语言模式（WDAC／AppLocker）下会失败只按文档推断；`setup.md` 是 skill 文字，行为评测未运行（待 26）。
 
+### 第八轮审查后修复（2026-11-14，协调者已接受两项 P3）
+
+1. 目标路径名字末尾的点或空格绕过「目标必须为空」。Node 经扩展长度形式（`\\?\`）检查和创建文件夹，名字原样保留；解压脚本用 `GetFullPath` 规范化，会去掉最后一级末尾的点或空格、中间一级末尾的单个点。用户的 `root\MAA` 里已有 `keep.txt` 时，目标 `root\MAA ` 被当成不存在、新建了空的 `MAA `，脚本却解压进 `root\MAA`；结果是 `failed`／`extract-failed`，清理只删 `MAA `，写进去的文件留在用户文件夹里（只新建、不覆盖）。修复两层：
+   - `installDownload` 在 `resolve` 之后、其他目标检查之前调用新的唯一判定 `plainTargetPath`：每一级名字（UNC 的服务器名和共享名也算，所以 `\\?\`、`\\.\` 前缀也被拒绝）非空、不以点或空格结尾、不含 `<>:"|?*` 和控制字符、不含孤立代理项、不是设备名，否则返回 `rejected`／`target-path-invalid`。仓库里没有可复用的 TS 判定（setup 其他用户路径只查 `isAbsolute`；条目名规则只在 PowerShell 脚本里），设备名清单与脚本相同，另加 Windows 也当设备名的上标 ¹²³。放在提权和私有目录检查之前，因为那两项也按 Node 读到的路径比较（系统盘上的 `Program Files \x`（文件夹名末尾多一个空格）在 Node 看来不在 Program Files 下）。
+   - 解压脚本在 `GetFullPath` 之后，把规范化结果与传入的目标（都去掉末尾 `\`）做序数比较，不同即退出 3、什么都不写。
+2. 条目表读取吞掉异常。`foreach ($entry in $zip.Entries)` 读属性出错时 PowerShell 不报错、循环零次，名字含 `|` 或没有 UTF-8 标志的 GBK 名时脚本以 0 退出、什么都没解出（产品层仍因找不到 `MAA.exe` 而失败）。修复：`$entries = $zip.get_Entries()` 再遍历，异常进入 `catch` 退出 1；计划为空时也退出 1。
+
+测试先行（先写、确认失败，再改实现）：
+
+- 「a chosen folder path that Windows would read as another folder is refused, and the folder it would mean stays as it was」（全平台；只有 Windows 解压）：`chosen\games\MAA` 里有 `keep.txt`，普通路径仍为 `target-not-empty`；12 种目标 `games\MAA `、`games\MAA.`、`games\MAA. .`、`games.\MAA`、`games \MAA`、`games..\MAA`、`games\MAA\NUL`、`games\MAA\com1.txt`、`games\MAA:stream`、`games\M<A>`、含制表符、含孤立代理项，都要求 `rejected`／`target-path-invalid`，之后 `chosen` 下只有原来的三项、`keep.txt` 不变、下载记录的 `install` 仍为 `null`。旧代码：第一项得到 `failed`／`extract-failed`，即审查发现的现象。
+- 「the Windows extraction boundary refuses a target that Windows reads as another folder」三个子项（Windows 专用）：字面的 `MAA `、`MAA.`、`games.\MAA` 和用户自己的 `MAA`／`games\MAA`（内有 `keep.txt`）同时存在，直接调用解压边界，要求退出 3、用户文件夹只有 `keep.txt`、字面文件夹为空。旧代码：三项都退出 0。
+- 「the Windows extraction boundary fails, writing nothing, when the archive's entry list cannot be read or is empty」三个子项（Windows 专用）：`MAA.exe` 加 `a|b`、两个都不带 UTF-8 标志且其一是 GBK 字节名、没有条目的压缩包，要求非零退出、目标内外都没写任何东西。旧代码：三项都退出 0。`tests/fixtures/zip.ts` 为此新增 `utf8: false`（不写 UTF-8 标志）。
+
+变异核对（改坏、只跑这一项、恢复）：只去掉「计划为空退出 1」，`a|b` 和 GBK 两项仍非零退出（方法调用让异常进入 `catch`），只有空压缩包一项失败；不改脚本的目标比对时，边界三项退出 0（即上面的旧代码结果）。
+
+文档：规格「检查与修法」08 一条的解压句、「规则来源」08 行、「默认值及其来源」的「08 skill 可执行的安装步骤」和「08 解压」两行（设计默认值，2026-11-14）；`skills/maa-setup/references/setup.md` 的解压说明（新拒绝原因 `target-path-invalid` 和空包）；`setup-sources.md`「解压方式」。工单正文未改。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、check-purposes 7/7、help-installation 6/6、metadata 2/2；之后判定改为先去掉末尾分隔符（UNC 共享根和盘符根一样交给提权检查，仍报 `target-requires-elevation`），重跑 typecheck 通过、setup-download 47/47；`node scripts/privacy.ts` 无发现，`node scripts/tracker.ts` 无错误。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。
+
+未验证：新提交上的 Windows CI；Windows 10 是否把最后一级名为 `NUL` 的目标路径读成设备（本机为 Windows 11；Node 一层不论哪种都拒绝，脚本一层规范化后改变即退出 3）；`setup.md` 改了 skill 文字，行为评测未运行（待 26）。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。
