@@ -341,6 +341,7 @@ test('the writer binds a base grant to the approved bytes and route: even the fu
     ['a wrong hash with its own copy path', { basePlan: grant(forged) }, derivedChanges(h, forged)],
     ['a medicine grant alongside', { basePlan: grant(sha), medicineCount: 0 }, derivedChanges(h, sha)],
     ['the current-request source', { source: 'current-request', basePlan: grant(sha) }, derivedChanges(h, sha)],
+    ['an authorization field the base route does not know', { basePlan: grant(sha), extra: true }, derivedChanges(h, sha)],
   ];
   for (const [name, authorization, changes] of cases) {
     const { maa, calls } = fakeMaa();
@@ -352,7 +353,8 @@ test('the writer binds a base grant to the approved bytes and route: even the fu
   const folder = join(h.home, 'reports', 'base', h.reportHash, 'approvals'), [name] = await readdir(folder), file = join(folder, name!);
   const raw = await readFile(file, 'utf8'), record = JSON.parse(raw);
   record.items[0].scope.note = 'synthetic edit after approval'; await writeFile(file, JSON.stringify(record));
-  assert.deepEqual((await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home })).reasons, ['base-approval-scope-mismatch']);
+  const mismatch = await checkBaseApply({ reference: h.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+  assert.deepEqual(mismatch.reasons, ['base-approval-scope-mismatch']); assert.equal(mismatch.plan, null, 'refused at the approval, before anything of the plan is read');
   const edited = fakeMaa();
   assert.equal((await writeDirect(h, { basePlan: grant(sha) }, derivedChanges(h, sha), edited.maa)).status, 'rejected'); assert.deepEqual(edited.calls, []);
   await nothingWritten(h, before);
@@ -364,6 +366,32 @@ test('the writer binds a base grant to the approved bytes and route: even the fu
   const empty = fakeMaa(), configAfter = await readFile(h.configFile);
   assert.equal((await writeDirect(h, { basePlan: grant(sha) }, [], empty.maa)).status, 'rejected'); assert.deepEqual(empty.calls, []);
   assert.deepEqual(await readFile(h.configFile), configAfter);
+});
+
+test('the writer proves the approved hash again from the report: a version whose plan, scope hash or permitted action disagrees is refused', async (t) => {
+  // Each report version is saved by the real store and approved; each disagrees in exactly one place the writer checks.
+  const h = await home(t), before = await readFile(h.configFile), sha = await approvedSha(h);
+  const cases: [string, (content: Record<string, any>) => string][] = [
+    ['the saved plan no longer hashes to the approved SHA-256', content => { content.plan.json.title = '合成两班（改）'; return sha; }],
+    ['the permitted action names another SHA-256', content => {
+      for (const item of content.items) for (const entry of item.scope.dailyMayArrange) entry.sha256 = 'e'.repeat(64);
+      return sha; }],
+    ['the scope keeps the old SHA-256 while the plan and the permitted action name a new one', content => {
+      content.plan.json.title = '合成两班（改）';
+      const other = digest(`${JSON.stringify(content.plan.json, null, 2)}\n`); content.plan.sha256 = other;
+      for (const item of content.items) for (const entry of item.scope.dailyMayArrange) entry.sha256 = other;
+      return other; }],
+  ];
+  for (const [name, edit] of cases) {
+    let granted = '';
+    const reference = await crafted(h, content => { granted = edit(content); });
+    const checked = await checkBaseApply({ reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: h.home });
+    assert.equal(checked.status, 'refused', `${name}: ${JSON.stringify(checked.reasons)}`);
+    const { maa, calls } = fakeMaa();
+    const result = await writeDirect(h, { reference, basePlan: grant(granted) }, derivedChanges(h, granted), maa);
+    assert.equal(result.status, 'rejected', `${name}: ${JSON.stringify(result)}`); assert.deepEqual(calls, [], name);
+  }
+  await nothingWritten(h, before);
 });
 
 test('the applied copy has a way back: a deleted copy is installed again by a copy-only transaction, an edited copy is never overwritten', async (t) => {

@@ -169,12 +169,11 @@ export async function applyBasePlan(value: unknown, maa: MaaProcess, options: Op
     return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: checked.status === 'needs-decision' ? 'base-unverified-decision-required' : checked.reasons[0] ?? 'base-apply-check-failed',
       reasons: checked.reasons, check: checked.check, ...summary };
   if (!internal.changes.length) {
-    // The four fields already point at the approved copy. Unchanged only when the copy is there too; a missing copy (for
-    // example moved away by the user) is installed again by a copy-only transaction below, so check and apply agree.
+    // The four fields already point at the approved copy. Unchanged only when the copy is there too (a changed copy was
+    // refused above); a missing copy (for example moved away by the user) is installed again by a copy-only transaction
+    // below, so check and apply agree. The writer checks the copy again under its lock.
     if ((await inspectConfiguration(internal.maaDirectory)).revision !== input.expectedRevision) return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'configuration-changed', ...summary };
-    const copy = await copyState(internal.asset, internal.privateDirectory);
-    if (copy === 'changed') return { status: 'rejected', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'base-plan-copy-changed', ...summary };
-    if (copy === 'matching') return { status: 'unchanged', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'plan-already-applied', ...summary };
+    if (checked.configuration!.copy === 'matching') return { status: 'unchanged', phase: 'check', operation: null, changedKeys: [], backup: null, copyInstalled: null, readback: null, reason: 'plan-already-applied', ...summary };
   }
   // The single writer: lock, MAA shutdown, backup, timer window, the derived changes (none for a copy-only transaction),
   // the copy installed while MAA is closed, read-back.
