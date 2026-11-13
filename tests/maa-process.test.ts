@@ -176,7 +176,11 @@ test('a stopped command cannot wake up later to perform a process action after i
   assert.equal(lateAction, false);
 });
 
-test('Windows launches and normally closes a temporary GUI and completes a CLI configuration transaction', { skip: process.platform !== 'win32', timeout: 60_000 }, async (t) => {
+// Every native observation or request is a fresh PowerShell helper (about 1 s each on an idle desktop, several seconds
+// under CPU contention), so this test grants each step the product's own budget instead of a tighter test-only one.
+// The test limit is the sum of those bounded steps: compile 15 s, start 60 s, close 30 s twice, configuration read 10 s,
+// write 150 s and four single observations of at most 5 s each. See docs/diagnostics/2026-11-13-maa-process-close-timeout.md.
+test('Windows launches and normally closes a temporary GUI and completes a CLI configuration transaction', { skip: process.platform !== 'win32', timeout: 315_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "maa-native-'quoted-$()-"));
   const shell = join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const executable = join(root, 'MAA.exe');
@@ -189,7 +193,7 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   });
   const compile = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', "Add-Type -TypeDefinition ([IO.File]::ReadAllText($env:MAA_TEST_SOURCE)) -ReferencedAssemblies System.Windows.Forms,System.Drawing -OutputAssembly $env:MAA_TEST_EXE -OutputType WindowsApplication -ErrorAction Stop"], { env, windowsHide: true, encoding: 'utf8', timeout: 15_000 });
   assert.equal(compile.status, 0, 'synthetic Windows GUI compilation succeeds');
-  const maa = createMaaProcess(root, { startTimeoutMs: 10_000, closeTimeoutMs: 5000, pollMs: 50 });
+  const maa = createMaaProcess(root, { pollMs: 50 });
   await maa.start();
   assert.deepEqual(await maa.inspect(), { running: true, treeExited: false, idle: true, ready: true });
   await maa.close();
@@ -205,7 +209,7 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   assert.equal(read.status, 0, read.stdout);
   const expectedRevision = JSON.parse(read.stdout).configuration.revision;
   assert.match(expectedRevision, /^[a-f0-9]{64}$/);
-  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 40_000, input: JSON.stringify({ host: 'codex', expectedRevision, closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }) });
+  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 150_000, input: JSON.stringify({ host: 'codex', expectedRevision, closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }) });
   assert.equal(result.status, 0, result.stdout);
   assert.deepEqual(Object.fromEntries(Object.entries(JSON.parse(result.stdout)).filter(([key]) => key !== 'operation')), { ok: true, status: 'complete', phase: 'complete', changedKeys: ['Timers.NotifyBeforeScheduledStart'], reason: null });
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-private-value|Synthetic|MAA_TEST_EXE/);
