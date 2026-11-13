@@ -174,20 +174,28 @@ test('an unchanged stable release opens one PR adding it to the source-verified 
 });
 
 test('a refused PR fails the run every day until it can be opened from the existing branch; a partly written branch is completed', async () => {
-  const state = world(base, { pullsDenied: true }), { fetcher, calls } = github(state);
+  // The newest stable is unchanged (a PR) and a newer beta has a change (an early-warning issue) in the same run.
+  const betaCommit = 'f'.repeat(40);
+  const state = world(base, { pullsDenied: true, releases: [release('v6.23.0-beta.1', true), release('v6.22.0'), release('v6.21.4')],
+    commits: { 'v6.22.0': 'c'.repeat(40), 'v6.23.0-beta.1': betaCommit } });
+  state.files[betaCommit] = { ...base, 'src/Config/Fields.cs': 'synthetic field declarations v2\n' };
+  const { fetcher, calls } = github(state);
   const run = () => runDailyCheck({ registry: registry(), record: record(), fetcher, token, publish: true, repository });
+  const betaIssues = () => calls.filter(call => call.method === 'POST' && call.url.endsWith(`/repos/${repository}/issues`) && /提前预警/.test(String(call.body!.title))).length;
   await assert.rejects(run, /github-request-failed/, 'day 1: the branch and both files are written, then the PR is refused');
   assert.deepEqual([calls.filter(call => call.url.endsWith('/git/refs')).length, calls.filter(call => call.method === 'PUT').length], [1, 2]);
+  assert.equal(betaIssues(), 1, 'day 1: the refused PR does not hold back the beta early-warning issue');
   let mark = calls.length;
   await assert.rejects(run, /github-request-failed/, 'day 2: still no PR, so the run still fails instead of counting the branch as notified');
-  assert.deepEqual(calls.slice(mark).filter(call => call.method !== 'GET').map(call => call.url.split(repository + '/')[1]), ['pulls'], 'no second branch, the files already match');
+  assert.deepEqual(calls.slice(mark).filter(call => call.method !== 'GET').map(call => call.url.split(repository + '/')[1]), ['pulls'], 'no second branch, the files already match, the beta issue is not repeated');
+  assert.equal(betaIssues(), 1);
   state.pullsDenied = false; mark = calls.length;
   const opened = await run();
-  assert.deepEqual(opened.actions.map(action => [action.kind, action.state]), [['pull-request', 'created']]);
+  assert.deepEqual(opened.actions.map(action => [action.kind, action.state]), [['pull-request', 'created'], ['issue', 'already-notified']]);
   assert.deepEqual(calls.slice(mark).filter(call => call.method !== 'GET').map(call => call.url.split(repository + '/')[1]), ['pulls', `issues/${state.pulls![0]!.number}/labels`]);
   assert.equal(calls.slice(mark).find(call => call.url.endsWith('/pulls'))!.body!.head, 'maa-version-check/v6.22.0');
   mark = calls.length;
-  assert.deepEqual((await run()).actions.map(action => action.state), ['already-notified']);
+  assert.deepEqual((await run()).actions.map(action => action.state), ['already-notified', 'already-notified']);
   assert.equal(calls.slice(mark).some(call => call.method !== 'GET'), false);
   // A branch whose second file was never written (a failed update) gets only that file before the PR is opened.
   const registryText = JSON.stringify(addSourceVerified(registry(), '6.22.0'), null, 2) + '\n';

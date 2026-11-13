@@ -321,10 +321,7 @@ export async function runDailyCheck(options: DailyOptions): Promise<DailyReport>
       else if (found.status !== 200) throw new Error('github-request-failed');
       labelReady = true;
     };
-    for (const candidate of candidates) {
-      const action: ActionReport = { kind: candidate.kind, key: candidate.key, title: candidate.title, state: 'planned' };
-      if (existing.has(candidate.key)) action.state = 'already-notified';
-      else if (publish) {
+    const publishOne = async (candidate: Candidate, action: ActionReport) => {
         await ensureLabel();
         if (candidate.kind === 'issue') {
           const created = await github.json('POST', `https://api.github.com/repos/${repository}/issues`, { title: candidate.title, body: candidate.body, labels: [notificationLabel] }) as Record<string, unknown>;
@@ -343,7 +340,7 @@ export async function runDailyCheck(options: DailyOptions): Promise<DailyReport>
             if (pull) {
               const labelled = Array.isArray(pull.labels) && pull.labels.some(label => isObject(label) && label.name === notificationLabel);
               if (!labelled) await github.json('POST', `https://api.github.com/repos/${repository}/issues/${pull.number}/labels`, { labels: [notificationLabel] });
-              action.state = 'already-notified'; action.url = String(pull.html_url); actions.push(action); continue;
+              action.state = 'already-notified'; action.url = String(pull.html_url); return;
             }
           } else if (existingBranch.status === 404) {
             let base = options.baseCommit;
@@ -370,9 +367,19 @@ export async function runDailyCheck(options: DailyOptions): Promise<DailyReport>
           action.url = String(pull.html_url);
         }
         action.state = 'created';
+    };
+    // Each notification is published on its own: a refused PR (for example while Actions may not open PRs) does not hold back
+    // an issue, which needs only issue permissions. Any failure still fails the run afterwards, so it is retried the next day.
+    let failed = false;
+    for (const candidate of candidates) {
+      const action: ActionReport = { kind: candidate.kind, key: candidate.key, title: candidate.title, state: 'planned' };
+      if (existing.has(candidate.key)) action.state = 'already-notified';
+      else if (publish) {
+        try { await publishOne(candidate, action); } catch { failed = true; }
       }
       actions.push(action);
     }
+    if (failed) throw new Error('github-request-failed');
   }
   return { checkedAt: (options.now ?? new Date()).toISOString(), stable: stableReport, beta: betaReport, actions };
 }
