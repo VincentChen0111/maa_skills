@@ -7,8 +7,8 @@ import { readSettings } from './preferences.ts';
 import type { ResearchTransport, TransportResponse } from './research-transport.ts';
 import { cacheKey, contentNotice, formatResearchMarkdown, getCached, putCached, readGateState, researchDirectory, systemClock, type Clock, type PageOutcome,
   type ResearchItem, type ResearchResult } from './research.ts';
-import { assembleResult, blockedOutcome, cacheAnswers, chinaTime, clip, decodeJson, defaultTransport, displayName, gatedGet, haltingOutcomes, httpSignal, integer,
-  object, researchUserAgent, RunLog, tidy, type Attempt, type Classified, type Served, type SourceContext } from './research-fetch.ts';
+import { assembleResult, blockedOutcome, cacheAnswers, clip, contentShapes, decodeJson, defaultTransport, displayName, gatedGet, haltingOutcomes, httpSignal, integer,
+  object, readContents, researchUserAgent, RunLog, tidy, type Attempt, type Classified, type Served, type SourceContext } from './research-fetch.ts';
 
 /**
  * Experimental, read-only Bilibili reader: the public information of one user-named video and, when the
@@ -91,16 +91,47 @@ function classifyApi(response: TransportResponse): Classified<Record<string, unk
   const data = object(value.data);
   return data ? { kind: 'data', data } : { kind: 'incomplete', reason: 'data-unrecognized' };
 }
+/** A subtitle file is any JSON object; whether its content has the known shape is decided by `readContents`. */
 function classifyFile(response: TransportResponse): Classified<Record<string, unknown>> {
   const signal = httpSignal(response);
   if (signal) return signal;
   if (response.status >= 500) return { kind: 'network-failed', reason: `http-${response.status}` };
   if (response.status !== 200) return { kind: 'unavailable', reason: `http-${response.status}` };
-  const value = decodeJson(response.body).value!;
-  return Array.isArray(value.body) ? { kind: 'data', data: value } : { kind: 'incomplete', reason: 'data-unrecognized' };
+  return { kind: 'data', data: decodeJson(response.body).value! };
 }
 
-// ---- parsing into whitelisted, cacheable values -----------------------------------------------------
+// ---- content fields and parsing into whitelisted, cacheable values ------------------------------------
+
+type Track = { language: string; url: string };
+const partRow = (value: unknown) => {
+  const row = object(value);
+  const page = integer(row?.page), cid = integer(row?.cid);
+  return positive(page) && positive(cid) ? { page, cid } : undefined;
+};
+const trackRow = (value: unknown): Track | undefined => {
+  const row = object(value);
+  return typeof row?.lan === 'string' && /^[A-Za-z0-9-]{1,20}$/.test(row.lan) && typeof row.subtitle_url === 'string' && row.subtitle_url.length <= 2_000
+    ? { language: row.lan, url: row.subtitle_url } : undefined;
+};
+const lineRow = (value: unknown) => {
+  const row = object(value);
+  const from = typeof row?.from === 'number' && Number.isFinite(row.from) && row.from >= 0 ? Math.round(row.from * 10) / 10 : undefined;
+  const text = typeof row?.content === 'string' ? tidy(row.content).replace(/\n/g, ' ') : '';
+  return from !== undefined && text ? { from, text } : undefined;
+};
+/**
+ * Every content field this reader takes from Bilibili, per answer, with its shape. Fields are read only
+ * through `readContents`, so an unrecognised one makes the answer incomplete instead of an empty read.
+ * tests/community-content.test.ts enumerates exactly these.
+ */
+export const bilibiliContent = {
+  video: { title: { path: ['title'], shape: contentShapes.text }, author: { path: ['owner'], shape: contentShapes.named('name') },
+    published: { path: ['pubdate'], shape: contentShapes.seconds }, description: { path: ['desc'], shape: contentShapes.text },
+    parts: { path: ['pages'], shape: contentShapes.list(partRow) } },
+  session: { signedIn: { path: ['login_mid'], shape: contentShapes.positiveFlag } },
+  subtitleList: { tracks: { path: ['subtitle', 'subtitles'], shape: contentShapes.list(trackRow) } },
+  subtitleFile: { lines: { path: ['body'], shape: contentShapes.list(lineRow) } },
+};
 
 type StoredVideo = { bvid: string; aid: number; title: string | null; author: string | null; publishedAt: string | null; description: string; descriptionTruncated: boolean;
   durationSeconds: number | null; parts: { page: number; cid: number }[] };
@@ -110,22 +141,16 @@ function parseVideoData(data: Record<string, unknown>, id: VideoId): StoredVideo
   const bvid = typeof data.bvid === 'string' && bvPattern.test(data.bvid) ? data.bvid : undefined;
   const aid = integer(data.aid);
   if (!bvid || aid === undefined || aid <= 0 || (id.kind === 'bvid' ? bvid !== id.value : aid !== id.value)) return undefined;
-  const parts = (Array.isArray(data.pages) ? data.pages : []).map(object).flatMap((row) => {
-    const page = integer(row?.page), cid = integer(row?.cid);
-    return positive(page) && positive(cid) ? [{ page, cid }] : [];
-  });
-  const description = clip(tidy(typeof data.desc === 'string' ? data.desc : ''), bilibiliLimits.storedDescriptionChars);
+  const content = readContents(data, bilibiliContent.video);
+  if (!content) return undefined;
+  const description = clip(tidy(content.description ?? ''), bilibiliLimits.storedDescriptionChars);
   const duration = integer(data.duration);
-  return { bvid, aid, title: displayName(data.title), author: displayName(object(data.owner)?.name), publishedAt: chinaTime(data.pubdate),
-    description: description.text, descriptionTruncated: description.truncated, durationSeconds: duration !== undefined && duration >= 0 ? duration : null, parts };
+  return { bvid, aid, title: displayName(content.title), author: displayName(content.author), publishedAt: content.published,
+    description: description.text, descriptionTruncated: description.truncated, durationSeconds: duration !== undefined && duration >= 0 ? duration : null, parts: content.parts ?? [] };
 }
-type Track = { language: string; url: string };
 /** The subtitle track to read: Chinese first, then machine Chinese, then the first listed. */
-function chooseTrack(data: Record<string, unknown>): Track | undefined {
-  const rows = object(data.subtitle)?.subtitles;
-  const tracks = (Array.isArray(rows) ? rows : []).map(object).flatMap((row) => typeof row?.lan === 'string' && /^[A-Za-z0-9-]{1,20}$/.test(row.lan)
-    && typeof row.subtitle_url === 'string' && row.subtitle_url.length <= 2_000 ? [{ language: row.lan, url: row.subtitle_url }] : []);
-  return tracks.find((track) => track.language.startsWith('zh')) ?? tracks.find((track) => track.language.startsWith('ai-zh')) ?? tracks[0];
+function chooseTrack(tracks: Track[]): Track {
+  return tracks.find((track) => track.language.startsWith('zh')) ?? tracks.find((track) => track.language.startsWith('ai-zh')) ?? tracks[0]!;
 }
 /** The track address as a request URL, or undefined when it is not an https address on a Bilibili subtitle host. */
 function subtitleAddress(raw: string): string | undefined {
@@ -136,22 +161,18 @@ function subtitleAddress(raw: string): string | undefined {
   return /^[\x21-\x7e]+$/.test(url.href) ? url.href : undefined;
 }
 function parseSubtitle(data: Record<string, unknown>, video: StoredVideo, part: number, language: string): StoredSubtitle | undefined {
+  const content = readContents(data, bilibiliContent.subtitleFile);
+  if (!content) return undefined;
   const lines: { from: number; text: string }[] = [];
   let used = 0, truncated = false;
-  const rows = data.body as unknown[];
-  for (const row of rows.map(object)) {
-    const from = typeof row?.from === 'number' && Number.isFinite(row.from) && row.from >= 0 ? row.from : undefined;
-    const text = typeof row?.content === 'string' ? tidy(row.content).replace(/\n/g, ' ') : '';
-    if (from === undefined || !text) continue;
-    const size = [...text].length;
+  for (const line of content.lines ?? []) {
+    const size = [...line.text].length;
     if (used + size > bilibiliLimits.storedSubtitleChars) {
-      if (!lines.length) lines.push({ from: Math.round(from * 10) / 10, text: clip(text, bilibiliLimits.storedSubtitleChars).text });
+      if (!lines.length) lines.push({ from: line.from, text: clip(line.text, bilibiliLimits.storedSubtitleChars).text });
       truncated = true; break;
     }
-    lines.push({ from: Math.round(from * 10) / 10, text }); used += size;
+    lines.push(line); used += size;
   }
-  // A file that has lines but none in the known shape is a format change, not an empty subtitle: report it, never cache it.
-  if (rows.length && !lines.length) return undefined;
   return { bvid: video.bvid, part, language, machine: language.startsWith('ai-'), lines, truncated };
 }
 
@@ -252,11 +273,14 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
         settle(attempt);
         if (attempt.kind === 'answered' && attempt.classified.kind === 'data') {
           const data = attempt.classified.data;
-          const signedIn = (integer(data.login_mid) ?? 0) > 0;
-          const track = signedIn ? chooseTrack(data) : undefined;
+          // `login_mid` is an account identifier: only whether it is positive is read, in memory.
+          const session = readContents(data, bilibiliContent.session);
+          const list = session?.signedIn ? readContents(data, bilibiliContent.subtitleList) : undefined;
+          const track = list?.tracks ? chooseTrack(list.tracks) : undefined;
           const address = track ? subtitleAddress(track.url) : undefined;
-          if (signedIn) credentialResult = 'usable';
-          if (!signedIn) { extra.push('login-not-recognized'); subtitle = log.offer(target, 'unavailable', cached, 'login-not-recognized'); }
+          if (session?.signedIn) credentialResult = 'usable';
+          if (!session || (session.signedIn && !list)) subtitle = log.offer(target, 'incomplete', cached, 'data-unrecognized');
+          else if (!session.signedIn) { extra.push('login-not-recognized'); subtitle = log.offer(target, 'unavailable', cached, 'login-not-recognized'); }
           else if (!track) subtitle = log.offer(target, 'unavailable', cached, 'no-subtitles');
           else if (!address) subtitle = log.offer(target, 'unavailable', cached, 'subtitle-host-refused');
           else {

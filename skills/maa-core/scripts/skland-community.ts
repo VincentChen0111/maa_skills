@@ -5,8 +5,8 @@ import { readSettings } from './preferences.ts';
 import type { ResearchTransport, TransportResponse } from './research-transport.ts';
 import { cacheKey, contentNotice, formatResearchMarkdown, getCached, putCached, readGateState, researchDirectory, systemClock, type Clock, type PageOutcome,
   type ResearchItem, type ResearchResult } from './research.ts';
-import { assembleResult, blockedOutcome, cacheAnswers, chinaTime, clip, decodeJson, defaultTransport, displayName, gatedGet, httpSignal, integer, object,
-  researchUserAgent, RunLog, tidy, type Classified, type Served, type SourceContext } from './research-fetch.ts';
+import { assembleResult, blockedOutcome, cacheAnswers, clip, contentShapes, decodeJson, defaultTransport, displayName, gatedGet, httpSignal, integer, object,
+  readContents, researchUserAgent, RunLog, tidy, type Classified, type Served, type SourceContext } from './research-fetch.ts';
 
 /**
  * Read-only reader for public Skland community posts. It is separate from the Skland account snapshot
@@ -74,16 +74,25 @@ function classify(response: TransportResponse): Classified<Record<string, unknow
 }
 
 type StoredPost = { id: string; title: string | null; author: string | null; publishedAt: string | null; text: string; textTruncated: boolean };
+const sliceRow = (value: unknown) => { const text = object(value)?.c; return typeof text === 'string' ? text : undefined; };
+/**
+ * Every content field this reader takes from a post answer, with its shape. Fields are read only through
+ * `readContents`, so an unrecognised one makes the answer incomplete instead of an empty read.
+ * tests/community-content.test.ts enumerates exactly these.
+ */
+export const sklandCommunityContent = {
+  post: { title: { path: ['item', 'title'], shape: contentShapes.text }, author: { path: ['user'], shape: contentShapes.named('nickname') },
+    published: { path: ['item', 'publishedAtTs'], shape: contentShapes.seconds }, text: { path: ['item', 'textSlice'], shape: contentShapes.list(sliceRow) } },
+};
 /** Title, author nickname, publish time and the text fragments of the post; never the author's account id or other blocks. */
 function parsePost(data: Record<string, unknown>, id: string): StoredPost | undefined {
   const item = object(data.item);
   const itemId = typeof item?.id === 'string' || typeof item?.id === 'number' ? String(item.id) : undefined;
-  if (!item || itemId !== id || !Array.isArray(item.textSlice)) return undefined;
-  const slices = item.textSlice.map(object).flatMap((slice) => typeof slice?.c === 'string' ? [slice.c] : []);
-  // Fragments present but none in the known shape is a format change, not an empty post: report it, never cache it.
-  if (item.textSlice.length && !slices.length) return undefined;
-  const text = clip(tidy(slices.join('\n')), sklandCommunityLimits.storedChars);
-  return { id, title: displayName(item.title), author: displayName(object(data.user)?.nickname), publishedAt: chinaTime(item.publishedAtTs), text: text.text, textTruncated: text.truncated };
+  if (!item || itemId !== id) return undefined;
+  const content = readContents(data, sklandCommunityContent.post);
+  if (!content) return undefined;
+  const text = clip(tidy((content.text ?? []).join('\n')), sklandCommunityLimits.storedChars);
+  return { id, title: displayName(content.title), author: displayName(content.author), publishedAt: content.published, text: text.text, textTruncated: text.truncated };
 }
 const isText = (value: unknown) => value === null || typeof value === 'string';
 function validPost(value: unknown): value is StoredPost {

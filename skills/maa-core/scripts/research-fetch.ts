@@ -121,6 +121,53 @@ export function chinaTime(seconds: unknown): string | null {
   return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}+08:00`;
 }
 
+// ---- fetched content: the one rule for "present but unrecognised" ---------------------------------
+
+/** How one content field looks: the site's own way of saying "none", and how the known shape is read. */
+export type ContentShape<T> = { empty: (value: unknown) => boolean; read: (value: unknown) => T | undefined };
+export type ContentField<T> = { path: readonly string[]; shape: ContentShape<T> };
+type ShapeValue<S> = S extends ContentShape<infer T> ? T : never;
+
+/**
+ * The single owner of "content present but unrecognised" for the readers after NGA. A field is read only
+ * through its declared shape: the site's explicit "none" (per shape: an empty string, an empty list,
+ * null, a zero time) is an honest empty result (`null`); the known shape is read; anything else — the
+ * field missing, renamed, of another type, or a list none of whose entries has the known shape — makes
+ * the whole answer unrecognised, and the caller reports `incomplete` / `data-unrecognized` and caches
+ * nothing. Every content field each reader takes is declared in one table that
+ * tests/community-content.test.ts enumerates.
+ */
+export function readContents<F extends Record<string, ContentField<unknown>>>(root: unknown, fields: F): { [K in keyof F]: ShapeValue<F[K]['shape']> | null } | undefined {
+  const values: Record<string, unknown> = {};
+  for (const [name, field] of Object.entries(fields)) {
+    const value = field.path.reduce<unknown>((node, key) => object(node)?.[key], root);
+    if (field.shape.empty(value)) { values[name] = null; continue; }
+    const read = field.shape.read(value);
+    if (read === undefined) return undefined;
+    values[name] = read;
+  }
+  return values as { [K in keyof F]: ShapeValue<F[K]['shape']> | null };
+}
+/** The shapes the community readers use; a new kind of field gets a shape here, not a check in a reader. */
+export const contentShapes = {
+  /** A string; an empty string or null is "none". */
+  text: { empty: (value) => value === '' || value === null, read: (value) => typeof value === 'string' ? value : undefined } as ContentShape<string>,
+  /** Unix seconds; 0 or null is "no time". Milliseconds, text and other numbers are not recognised. */
+  seconds: { empty: (value) => value === null || integer(value) === 0, read: (value) => chinaTime(value) ?? undefined } as ContentShape<string>,
+  /** An object carrying a display name under `key`; null is "no such person". */
+  named: (key: string): ContentShape<string> => ({ empty: (value) => value === null,
+    read: (value) => { const name = object(value)?.[key]; return typeof name === 'string' ? name : undefined; } }),
+  /** A non-negative integer count or id; 0 is "none". Only whether it is positive is kept. */
+  positiveFlag: { empty: (value) => integer(value) === 0, read: (value) => { const number = integer(value); return number !== undefined && number > 0 ? true : undefined; } } as ContentShape<true>,
+  /** A list; [] is "none"; a non-empty list must have at least one entry in the known row shape, and only those are kept. */
+  list: <T>(row: (value: unknown) => T | undefined): ContentShape<T[]> => ({ empty: (value) => Array.isArray(value) && value.length === 0,
+    read: (value) => {
+      if (!Array.isArray(value)) return undefined;
+      const rows = value.flatMap((item) => { const read = row(item); return read === undefined ? [] : [read]; });
+      return rows.length ? rows : undefined;
+    } }),
+};
+
 /** Plain text with whitespace runs collapsed and blank-line runs limited; hidden and direction characters removed. */
 export const tidy = (text: string) => plainText(text).replace(/[ \t\f\v 　]+/g, ' ').split('\n').map((line) => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 /** A display name: one line, at most 80 characters, or null. */

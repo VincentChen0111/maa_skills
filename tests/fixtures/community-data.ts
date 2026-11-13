@@ -2,6 +2,7 @@ import type { Route } from './nga-data.ts';
 
 // Synthetic Skland community and Bilibili payloads shaped after the public facts in docs/community-sources.md.
 // Every name, number, identifier and text here is invented; nothing comes from a real account, post or video.
+// `null` options send the site's explicit "none" (a null field), never an omitted field: an omitted field is a format change.
 
 export const json = (payload: unknown, status = 200): Route => ({ status, body: Buffer.from(JSON.stringify(payload)), contentType: 'application/json; charset=utf-8' });
 
@@ -11,8 +12,8 @@ export function videoPayload(options: { bvid: string; aid: number; title: string
   const parts = options.parts ?? [{ cid: 5001, page: 1, part: '合成分P' }];
   return { code: 0, message: '0', ttl: 1, data: {
     bvid: options.bvid, aid: options.aid, title: options.title, desc: options.desc ?? '合成简介',
-    ...(options.pubdate === null ? {} : { pubdate: options.pubdate ?? 1_780_000_000 }), ctime: 1_779_999_000, duration: 300,
-    ...(options.owner === null ? {} : { owner: { mid: 424242, name: options.owner ?? '合成UP主', face: 'https://i0.hdslb.com/bfs/face/synthetic.jpg' } }),
+    pubdate: options.pubdate === undefined ? 1_780_000_000 : options.pubdate, ctime: 1_779_999_000, duration: 300,
+    owner: options.owner === null ? null : { mid: 424242, name: options.owner ?? '合成UP主', face: 'https://i0.hdslb.com/bfs/face/synthetic.jpg' },
     cid: parts[0]!.cid, pages: parts.map((part) => ({ ...part, duration: 300, from: 'vupload', vid: '', weblink: '', dimension: { width: 1920, height: 1080, rotate: 0 }, ctime: 1_779_999_000 })),
     subtitle: { allow_submit: false, list: [] },
   } };
@@ -40,8 +41,8 @@ export const biliError = (code: number, message: string) => ({ code, message, tt
 export function sklandItemPayload(options: { id: string; title: string; nickname?: string | null; publishedAtTs?: number | string | null; slices: string[] }) {
   return { code: 0, message: 'OK', timestamp: '1780000500', data: {
     item: { id: options.id, title: options.title, viewKind: 1, format: '{"version":2}', textSlice: options.slices.map((c, index) => ({ id: String(index), c })),
-      ...(options.publishedAtTs === null ? {} : { publishedAtTs: options.publishedAtTs ?? 1_780_000_000 }), createdAtTs: 1_779_999_000, userId: '987654321' },
-    ...(options.nickname === null ? {} : { user: { id: '987654321', nickname: options.nickname ?? '合成博士', avatar: 'https://bbs.hycdn.cn/avatar/synthetic.png' } }),
+      publishedAtTs: options.publishedAtTs === undefined ? 1_780_000_000 : options.publishedAtTs, createdAtTs: 1_779_999_000, userId: '987654321' },
+    user: options.nickname === null ? null : { id: '987654321', nickname: options.nickname ?? '合成博士', avatar: 'https://bbs.hycdn.cn/avatar/synthetic.png' },
   } };
 }
 export const sklandError = (code: number, message: string) => ({ code, message, timestamp: '1780000500' });

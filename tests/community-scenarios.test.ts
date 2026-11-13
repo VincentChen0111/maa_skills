@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -41,4 +42,15 @@ test('Skland community and Bilibili scenarios run the installed readers offline 
     assert.deepEqual(evidence.changes, [], 'reading research changes no file');
     assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence).status, 'pass', scenario.id);
   }
+});
+
+test('the Skland scenario and the skill agree: a request that already asks to read the post gets one honest read in the same turn', async () => {
+  const scenario = communityScenarios.find((item) => item.id === 'account-skland-community-stopped')!;
+  assert.match(scenario.prompt, /读一下森空岛帖子/, 'the single-turn prompt already asks to read the post');
+  assert.deepEqual(scenario.policy.expectedInvocations?.filter((call) => call.file.endsWith('skland-community.ts')),
+    [{ file: 'maa-core/scripts/skland-community.ts', action: 'read', exitCode: 1 }]);
+  const skill = await readFile(new URL('../skills/maa-account/SKILL.md', import.meta.url), 'utf8');
+  const step = skill.split('\n').find((line) => line.includes('skland-community.ts read'))!;
+  assert.match(step, /用户已要求读这一帖时，先说明这一点，再运行一次 `skland-community\.ts read` 并如实报告/);
+  assert.match(step, /用户还没要求读[^。]*先说明这一点，用户仍要试再运行/, 'the tell-first behaviour stays for a user who has not asked to read');
 });
