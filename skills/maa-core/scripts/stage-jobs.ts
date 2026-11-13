@@ -451,7 +451,7 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
 export const characterTableSource = { ...stageTableSource, file: 'zh_CN/gamedata/excel/character_table.json' };
-/** Offline files may carry an optional characters map; online queries also read the pinned character table, degrading to unclassified names. */
+/** The read-only entry's stage tables; the cultivation report reuses it for job-site evidence. Offline files may carry an optional characters map; online queries also read the pinned character table, degrading to unclassified names. */
 export async function loadStageTables(file?: unknown, withCharacters = false, fetcher: typeof fetch = fetch) {
   if (file !== undefined) {
     const tables = object(JSON.parse(await readFile(text(file), 'utf8')));

@@ -187,16 +187,17 @@ export function plainText(value: string): string {
  * No link, autolink, image, HTML, entity, fence or table can form: every `scheme://` (`hxxps[:]//`,
  * `ftp[:]//`), every `www.` (`www[.]`) and every `@` (`[@]`) is rewritten whatever precedes it, and
  * Markdown punctuation, `<`, `>` and `&` are backslash-escaped. tests/research.test.ts enumerates the
- * triggers, preceding characters and fields this must hold for.
+ * triggers, preceding characters and fields this must hold for. Advice reports (advice-report.ts,
+ * cultivation-report.ts) use this same function for their values; tests/cultivation-report.test.ts covers them.
  */
-function inert(value: string): string {
+export function inert(value: string): string {
   return plainText(value).replace(/(h)(ttps?)(:\/\/)/gi, (_all, h: string, rest: string) => `${h === 'H' ? 'HXX' : 'hxx'}${rest.slice(2)}[:]//`)
     .replace(/:\/\//g, '[:]//').replace(/(www)\./gi, '$1[.]').replace(/@/g, '[@]')
     .replace(/[\\`*_[\]()<>|#!~&]/g, (char) => `\\${char}`);
 }
-const inline = (value: string) => inert(value).replace(/\s+/g, ' ').trim();
+export const inline = (value: string) => inert(value).replace(/\s+/g, ' ').trim();
 /** Only a plain https address stays a clickable citation link; anything else is rendered inert. */
-const citationLink = (url: string) => /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[A-Za-z0-9\-._~%/?=&+,:]*)?$/.test(url) ? url : inline(url);
+export const citationLink = (url: string) => /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[A-Za-z0-9\-._~%/?=&+,:]*)?$/.test(url) ? url : inline(url);
 
 type Language = 'zh' | 'en';
 const words = {
