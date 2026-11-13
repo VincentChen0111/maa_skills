@@ -25,6 +25,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/nga.ts`、`scripts/research.ts`、`scripts/research-transport.ts` | NGA 只读检索与读帖；调研共用的引用结果格式、缓存、跨进程限速与风控停止、按平台的传输 | [社区调研接口](references/research.md) |
 | `scripts/advice-report.ts`、`scripts/cultivation-report.ts` | 建议报告的保存、默认独立审查（两个宿主共用一份审查说明模板）、明确跳过、改正与逐项批准；培养报告复用共享缺口计算和调研资料 | [建议报告接口](references/advice-report.md)、[培养报告接口](../maa-account/references/cultivation-report.md) |
 | `scripts/base-plan.ts`、`scripts/base-report.ts` | 基建排班的生成与检查（六条规则、MAA 干员名表、15 项验收门、数据新鲜度），只在私有目录写排班文件；基建报告复用基建技能查询和建议报告协议 | [排班生成与检查接口](references/base-plan.md)、[基建报告接口](../maa-account/references/base-report.md) |
+| `scripts/base-apply.ts`、`scripts/base-config.ts` | 应用已批准的基建排班：重新核对批准、数据新鲜度和全部验收门，经唯一配置事务写所选基建任务并安装排班副本 | [基建排班应用](../maa-daily/references/base-apply.md) |
 
 调用方的约定：
 
