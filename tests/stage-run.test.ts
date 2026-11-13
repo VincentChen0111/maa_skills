@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { observeStageRun, readStageRun, recordStageProgress, startStageRun, verifyStageRun, decideStageRun, summarizeStageRun } from '../skills/maa-core/scripts/stage-run.ts';
 import { attempt, chainEnd, connection, copilotStart, core, drops, gui, medicineConfirm, medicineUsed, offlinePopup, preparedBatch, syntheticAdb, syntheticDevice, type PreparedBatch }
   from './fixtures/stage-run-data.ts';
+import './fixtures/maa-version-guard.ts';
 
 async function tracked(t: test.TestContext) {
   const batch = await preparedBatch(); t.after(() => batch.dispose());

@@ -11,6 +11,7 @@ import { matchStageJobs, collectStageJobs, formatStageJobs, prepareStageJobs } f
 import { inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import './fixtures/maa-version-guard.ts';
 
 const snapshot = (elite: number | null = 2) => parseMaaSnapshot(JSON.stringify({ operBox: { done: true, own_opers: [
   { id: 'char_synthetic_a', name: '合成甲', own: true, elite, level: 50, potential: 1 },

@@ -21,7 +21,9 @@ export type WriteRequest = {
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
 /**
  * The only replaceable boundary: the MAA process and its runtime observations. `version` reads the installed
- * MAA.exe product version (maa-version.ts); a boundary without it records the version as unknown.
+ * MAA.exe product version (maa-version.ts). A boundary without it falls back to the real MAA.exe reader
+ * (`readMaaVersion`, which starts PowerShell on Windows): stage-run's `switch` boundary relies on that, and a test
+ * double must supply its own `version` (tests/fixtures/maa-version-guard.ts fails a test file that reaches the real reader).
  */
 export interface MaaProcess {
   inspect(): Promise<MaaState>;
@@ -29,7 +31,10 @@ export interface MaaProcess {
   start(): Promise<void>;
   version?(): Promise<string | null>;
 }
-/** The version stamp written into a pending record or plan, read through the process boundary; no MAA directory reads as unknown. */
+/**
+ * The version stamp written into a pending record or plan, read through the process boundary (or, without `version`,
+ * the real MAA.exe reader); no MAA directory or no MAA.exe reads as unknown.
+ */
 export function versionStampOf(maaDirectory: string | null | undefined, maa: MaaProcess): Promise<MaaVersionStamp> {
   return readVersionStamp(maaDirectory, maa.version ? () => maa.version!() : undefined);
 }

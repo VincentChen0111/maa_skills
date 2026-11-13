@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import './fixtures/maa-version-guard.ts';
 
 async function executeConfigWrite(request: Omit<WriteRequest, 'expectedRevision'> & { expectedRevision?: string }, maa: MaaProcess) {
   const expectedRevision = request.expectedRevision ?? (await inspectConfiguration(request.maaDirectory)).revision;

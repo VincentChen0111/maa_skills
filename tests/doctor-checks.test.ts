@@ -13,6 +13,7 @@ import { checkGroups, skillRepairChannels } from '../skills/maa-core/scripts/che
 import { assessMaaVersion } from '../skills/maa-core/scripts/maa-version.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { discoverSetupConnections, isAdbExecutablePath, type AdbBoundary } from '../skills/maa-core/scripts/setup-connection.ts';
+import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
 const coreDirectory = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
 const windows = process.platform === 'win32';
@@ -283,7 +284,7 @@ test('doctor CLI check accepts --online, keeps 0/1/2 exit codes and resolves the
   const f = await fixture(t);
   const env = { ...process.env, MAA_SKILLS_HOME: f.home, USERPROFILE: f.root, HOME: f.root };
   const cli = join(f.skillsRoot, 'maa-core/scripts/doctor.ts');
-  const invoke = (args: string[]) => spawnSync(process.execPath, [cli, ...args], { env, input: '{}', encoding: 'utf8', windowsHide: true });
+  const invoke = (args: string[]) => spawnSync(process.execPath, ['--import', versionDoublePreload, cli, ...args], { env, input: '{}', encoding: 'utf8', windowsHide: true });
   const checked = invoke(['check', '--json']);
   assert.equal(checked.status, windows ? 0 : 1, checked.stdout + checked.stderr);
   const result = JSON.parse(checked.stdout);

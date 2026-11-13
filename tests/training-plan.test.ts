@@ -10,6 +10,7 @@ import { plan, log } from './fixtures/training-runtime.ts';
 import { nativeTask, log as nativeLog } from './fixtures/training-evidence.ts';
 import { reconcileTraining } from '../skills/maa-core/scripts/training-state.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import './fixtures/maa-version-guard.ts';
 
 test('a prepared authorized target persists pending state and a repeated apply cannot arm it twice', async t => {
   const f = await configFixture(t), data = trainingFixture();

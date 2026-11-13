@@ -13,13 +13,15 @@ import { loadAdviceReport, recordReviewSkip, saveAdviceReport } from '../skills/
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import { applyHome, goals, infrastConfig, type ApplyHome } from './fixtures/base-apply-data.ts';
 import { nameTable, planInput, planSnapshot, planTables } from './fixtures/base-plan-data.ts';
+import './fixtures/maa-version-guard.ts';
 
 // Ticket 23: applying an approved base plan. Real temporary homes and the real report, plan and configuration tools;
 // only the MAA process is replaced (it records calls). No device, adb or game is involved in any test.
 const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 /**
  * onClose / onStart run inside the fake GUI's close and start: something else touching the private directory meanwhile.
- * `version` is the MAA.exe metadata boundary (ticket 25's version stamp); without it the version is unknown.
+ * `version` is the MAA.exe metadata boundary (ticket 25's version stamp). Without it the writer falls back to the real
+ * MAA.exe reader, which the guard imported above fails; it is reached only when the MAA directory holds an MAA.exe.
  */
 function fakeMaa(options: { startFails?: boolean; closeFails?: boolean; onClose?: () => Promise<unknown>; onStart?: () => Promise<unknown>; version?: () => Promise<string | null> } = {}) {
   let running = true; const calls: string[] = [];

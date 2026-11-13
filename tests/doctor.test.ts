@@ -10,6 +10,7 @@ import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
 import { type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
 const windows = process.platform === 'win32';
 // MAA.exe metadata and adb are system boundaries; the other checks read the real temporary directories.
@@ -28,7 +29,7 @@ async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
   await writeFile(file, JSON.stringify(config));
   const actions: string[] = []; let running = true;
   const maa: MaaProcess = { inspect: async () => ({ running, ready: running, treeExited: !running, idle: true }),
-    close: async () => { actions.push('close'); running = false; }, start: async () => { actions.push('start'); running = true; } };
+    close: async () => { actions.push('close'); running = false; }, start: async () => { actions.push('start'); running = true; }, version: quiet.versionReader };
   return { root, home, maaDirectory, privateDirectory, config, file, maa, actions, setRunning: (value: boolean) => { running = value; } };
 }
 
@@ -102,7 +103,7 @@ test('doctor CLI provides human and JSON reports with 0/1/2 exit codes and refus
   const f = await fixture(t); const settingsHome = f.home;
   const env = { ...process.env, MAA_SKILLS_HOME: settingsHome, USERPROFILE: f.root, HOME: f.root };
   const cli = fileURLToPath(new URL('../skills/maa-core/scripts/doctor.ts', import.meta.url));
-  const invoke = (args: string[], input: unknown = {}) => spawnSync(process.execPath, [cli, ...args], { env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+  const invoke = (args: string[], input: unknown = {}) => spawnSync(process.execPath, ['--import', versionDoublePreload, cli, ...args], { env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
   const healthy = invoke(['check', '--json']); assert.equal(healthy.status, windows ? 0 : 1, healthy.stdout); assert.equal(JSON.parse(healthy.stdout).exitCode, windows ? 0 : 1);
   const human = invoke(['check']); assert.equal(human.status, windows ? 0 : 1); assert.match(human.stdout, /configuration/); assert.match(human.stdout, /正常|normal/);
   const invalid = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all' }); assert.equal(invalid.status, 1); assert.equal(JSON.parse(invalid.stdout).status, 'rejected');

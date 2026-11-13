@@ -10,6 +10,7 @@ import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { approvedJobFile, approvedJobSourceFile, approvedJobList, type ApprovedJobPlan } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { buildTrainingChanges } from '../skills/maa-core/scripts/training-config.ts';
 import { configFixture, trainingGrant } from './fixtures/training-runtime.ts';
+import './fixtures/maa-version-guard.ts';
 
 async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
   const f = await configFixture(t), home = join(f.root, 'settings'), adbPath = join(f.maaDirectory, 'adb.exe');
