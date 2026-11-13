@@ -277,6 +277,36 @@ test('recovery reports a changed MAA or record version since the pending record 
   });
 });
 
+/**
+ * Merge of 27 with 23 and 25 (2026-11-14): the strict pending-record table accepts exactly 25's optional `versions` stamp and
+ * 27's three consumption grants beside the original fields. 23's `baseManifest` and `basePlan` stay unsupported evidence (a base
+ * plan's unknown outcome is reported, never restored), and a grant from an approved report is invalid as in 27.
+ */
+test('the pending-record table accepts the version stamp with all three consumption grants, and nothing else new', async (t) => {
+  const recordVersion = (await readVerificationRecord()).recordVersion;
+  const grants = { medicineCount: 1, stoneCount: 2, expiringMedicine: { days: 2, forActivity: false } };
+  for (const mode of ['versions-and-grants', 'base-manifest', 'base-plan', 'report-grant', 'unknown-field']) await t.test(mode, async (t) => {
+    const f = await fixture(t); const retained = await abandoned(f);
+    const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
+    const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
+    pending.versions = { maaVersion: '6.22.0', recordVersion };
+    Object.assign(pending.authorization, grants);
+    if (mode === 'base-manifest') pending.baseManifest = { file: 'base-applied/synthetic.json', before: 'absent', sha256: 'a'.repeat(64), immutable: true };
+    if (mode === 'base-plan') pending.authorization.basePlan = { sha256: 'a'.repeat(64), binding: { profile: 0, task: 0 }, decision: { unverified: [], userWords: null } };
+    if (mode === 'report-grant') pending.authorization.source = 'approved-report';
+    if (mode === 'unknown-field') pending.authorization.grantedBy = 'synthetic';
+    await writeFile(pendingFile, JSON.stringify(pending) + '\n');
+    f.maa.version = async () => '6.22.0';
+    const checked = await runChecks(f, f.maa, quiet);
+    const supported = mode === 'versions-and-grants';
+    assert.equal(checked.recovery.canReconcile, supported); assert.equal(checked.recovery.canRestore, supported);
+    if (!supported) return;
+    assert.equal(checked.recovery.versions?.state, 'same');
+    const result = await executeRepairs({ ...f, host: 'codex', evidenceRevision: checked.recovery.evidenceRevision, approved: ['reconcile-lock'], reference: 'synthetic reconcile approval' }, f.maa);
+    assert.equal(result.status, 'complete'); assert.ok(retained.id);
+  });
+});
+
 test('a restoration writes the current version stamp into its own pending record', async (t) => {
   const f = await fixture(t); await abandoned(f);
   f.maa.version = async () => '6.22.0';

@@ -266,3 +266,8 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
    - 授权字段白名单正好是两边的并集：`source`、`reference`、`medicineCount`、`stoneCount`、`expiringMedicine`、`jobPlan`、`trainingPlan`、`basePlan`。17 的「CLI 拒绝带 `continuation` 的作业计划」和 23 的「CLI 拒绝 `basePlan`，只能经 `base-apply.ts`」都在命令行入口，原样保留。
    - 设计默认值（已登记在规格两张表和「MAA 配置写入」正文）：基建排班是和作业计划、专精计划互斥的第三种计划；它不碰消耗字段，所以理智药、碎石和临期药授权都不能和它同请求。拒绝由谓词负责：`ConsumptionContext.plan` 加 `'base'`，带任何消耗授权都返回 `conflicting-authorizations`；写入器的基建范围检查放行这三个授权键，让它们走到谓词。
    - 先红后绿：`tests/base-apply.test.ts` 的「a base plan carries no consumption grant: medicine, stone or expiring medicine alongside it is refused by the consumption predicate」。改之前三种授权都被基建范围检查以 `request-invalid` 拒绝（测试要求谓词的原因码，失败）；改之后三种都以 `conflicting-authorizations` 在访问进程之前拒绝，不写任何文件，同一份基建授权不带消耗授权时照常完成。
+
+2. 待执行记录（25 的 `versions`、23 的 `baseManifest`）：
+   - 严格字段表合并后接受的新字段正好是 25 可选的 `versions` 和 27 的三种消耗授权；校验仍是两边各自的：消耗授权交谓词（`pending-record`），版本标记交 `isVersionStamp`。恢复保留 27 的规则（不复用原事务授权；改回备份值的放行只给 `doctor-restore`）和 25 的规则（版本差异只报告，不拒绝）。
+   - 23 的 `baseManifest` 和 `basePlan` 不加进表：main 上带它们的记录就不能自动恢复（25 的审查记录第五轮「带 `baseManifest` 的待执行记录照旧不能自动恢复」，规格 23 一节「结果未知时 maa-doctor 只能报告证据，不能自动恢复排班副本」），合并后照旧。
+   - `tests/doctor.test.ts` 的「the pending-record table accepts the version stamp with all three consumption grants, and nothing else new」，5 个子项：带版本标记和三种授权的记录可以核对和恢复，版本报告为 same，清锁完成；带 `baseManifest`、带 `basePlan`、授权来源为已批准报告、授权里有未知字段的记录都不能核对或恢复。这些是合并后的现状，测试一写就通过；用两个变异确认它能抓到：把 `baseManifest` 加进可选字段、从授权表里去掉 `stoneCount`，各有 2 个子项失败，变异已撤回。
