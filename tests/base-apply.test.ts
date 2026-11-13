@@ -431,6 +431,25 @@ test('a base plan carries no consumption grant: medicine, stone or expiring medi
   assert.equal(control.status, 'complete', JSON.stringify(control));
 });
 
+/**
+ * Merge of 27 with 23 (2026-11-14), registered in tests/consumption-grant.test.ts's writer callers: base-apply writes through the
+ * unified writer, whose indirect-consumption check runs on every write. A base apply changes four fields of the Infrast task
+ * only, so it never activates a Fight task, whatever medicine, stone or expiring medicine that task holds.
+ */
+test('a base apply never activates a consuming task: an enabled Fight task with medicine, stone and expiring medicine on is left alone', async (t) => {
+  const config = infrastConfig(), queue: Record<string, unknown>[] = config.Configurations.synthetic.TaskQueue;
+  const consuming = { ...queue[0]!, IsEnable: true, UseMedicine: true, MedicineCount: 2, UseStone: true, UseStoneAllowSave: true, StoneCount: 3,
+    UseExpiringMedicine: true, MedicineExpireDays: 2 };
+  queue[0] = consuming;
+  const h = await home(t, { config });
+  const result = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), fakeMaa().maa, { home: h.home });
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  assert.deepEqual(JSON.parse(await readFile(h.configFile, 'utf8')).Configurations.synthetic.TaskQueue[0], consuming);
+  // The writer's indirect-consumption decision for this write has nothing activated; the same task activated needs a grant.
+  assert.equal(decideConsumption({ source: 'approved-report' }, [], { consumer: 'indirect-consumption', plan: 'base' }).allowed, true);
+  assert.equal(decideConsumption({ source: 'approved-report' }, [{ task: consuming, activated: true }], { consumer: 'indirect-consumption', plan: 'base' }).allowed, false);
+});
+
 test('the writer proves the approved hash again from the report: a version whose plan, scope hash or permitted action disagrees is refused', async (t) => {
   // Each report version is saved by the real store and approved; each disagrees in exactly one place the writer checks.
   const h = await home(t), before = await readFile(h.configFile), sha = await approvedSha(h);

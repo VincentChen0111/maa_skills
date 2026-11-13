@@ -432,6 +432,48 @@ for (const [consumer, sample] of Object.entries(conformance)) {
   test(`${consumer} refuses what the predicate refuses`, async t => { await sample.refuse(t); });
 }
 
+/**
+ * Every caller of the unified writer's entries (merge of 27 with 10, 17, 23 and 25, 2026-11-14). None calls the predicate
+ * itself: each write reaches it inside the writer (`writer-whitelist`, `indirect-consumption` and `quantity-budget` above; doctor's
+ * recovery also `doctor-recovery` and `doctor-restore`). `plan` is the plan its authorization carries, which decides what grant
+ * the predicate lets through: none for a base plan, only expiring medicine for a job or training plan, none for setup. Each row
+ * names the tests that show, through that caller's own route, that it activates nothing without a grant and that a grant the
+ * predicate refuses for its plan is refused.
+ */
+const writerCallers: Record<string, { plan: 'request' | 'job' | 'training' | 'base' | 'setup' | 'recovery'; evidence: [file: string, title: string][] }> = {
+  'skills/maa-core/scripts/maa-config.ts': { plan: 'request', evidence: [
+    ['tests/base-apply.test.ts', 'the base grant is only reachable through base-apply: the writer CLI refuses it and a forged grant is rejected'],
+    ['tests/stage-run-alternates.test.ts', 'the unified writer accepts only the continuation list of approved jobs; the generic write CLI refuses any continuation']] },
+  'skills/maa-core/scripts/stage-jobs.ts': { plan: 'job', evidence: [
+    ['tests/training-integration.test.ts', 'a job plan write enables nothing: open Fight consumption is left byte for byte, with or without an expiring grant']] },
+  'skills/maa-core/scripts/stage-run.ts': { plan: 'job', evidence: [
+    ['tests/stage-run-alternates.test.ts', 'an alternate switch never activates a consuming task, and no quantity grant can ride along its job plan']] },
+  'skills/maa-core/scripts/training-plan.ts': { plan: 'training', evidence: [
+    ['tests/training-integration.test.ts', 'a training timer write that reaches open expiring medicine needs the current expiring grant, and open stone refuses it']] },
+  'skills/maa-core/scripts/base-apply.ts': { plan: 'base', evidence: [
+    ['tests/base-apply.test.ts', 'a base plan carries no consumption grant: medicine, stone or expiring medicine alongside it is refused by the consumption predicate'],
+    ['tests/base-apply.test.ts', 'a base apply never activates a consuming task: an enabled Fight task with medicine, stone and expiring medicine on is left alone']] },
+  'skills/maa-core/scripts/setup.ts': { plan: 'setup', evidence: [
+    ['tests/setup-integration.test.ts', 'setup rejects complete job, training and medicine grants in request or context without creating a transaction']] },
+  'skills/maa-core/scripts/doctor.ts': { plan: 'recovery', evidence: [
+    ['tests/consumption-grant.test.ts', 'doctor recovery never reuses the interrupted transaction grant when restoring would reopen stone or expiring medicine'],
+    ['tests/doctor.test.ts', 'the pending-record table accepts the version stamp with all three consumption grants, and nothing else new']] },
+};
+
+test('every caller of the unified writer is registered with its plan and with tests through its own route', async () => {
+  const callers = new Set<string>();
+  for (const directory of ['skills', 'scripts', 'eval']) for (const path of await codeFiles(join(repository, directory))) {
+    const text = await readFile(path, 'utf8');
+    if (text.split('\n').some(line => /\b(?:executeConfigWrite|executeSetupConfigWrite|executeConfigRecovery)\(/.test(line) && !/\bfunction\s+execute/.test(line))) {
+      callers.add(relative(repository, path).replaceAll('\\', '/'));
+    }
+  }
+  assert.deepEqual([...callers].sort(), Object.keys(writerCallers).sort(), 'the registry lists exactly the files that call the writer');
+  for (const [caller, { evidence }] of Object.entries(writerCallers)) for (const [file, title] of evidence) {
+    assert.ok((await readFile(join(repository, file), 'utf8')).includes(`test('${title}'`), `${caller}: ${file} has the test «${title}»`);
+  }
+});
+
 test('scenario forbidden-key lists name only settings no grant can open, and every declared grant is one the predicate accepts', async () => {
   const { scenarioCatalog } = await import('../scripts/eval-scenarios.ts');
   const { consumptionFields } = await import('../skills/maa-core/scripts/consumption-grant.ts');
