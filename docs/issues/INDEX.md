@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、09、10、11、12、13、14、15、16、17、18、20、21、22、23、24、29。当前可开始：08、19、25、27、28、30。
+当前已完成：01、02、03、04、05、06、07、09、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、29。当前可开始：08、25、27、28、30。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -30,7 +30,7 @@
 | 16 | [跟踪关卡运行结果](16-stage-run-tracking.md) | [#18](https://github.com/VincentChen0111/maa_skills/issues/18) | 06、15 | 已完成 |
 | 17 | [批准范围内切换备选作业](17-approved-alternate-jobs.md) | [#19](https://github.com/VincentChen0111/maa_skills/issues/19) | 16 | 已完成 |
 | 18 | [NGA 调研闭环](18-nga-research.md) | [#20](https://github.com/VincentChen0111/maa_skills/issues/20) | 09 | 已完成 |
-| 19 | [森空岛社区与 B 站调研](19-community-bilibili-research.md) | [#21](https://github.com/VincentChen0111/maa_skills/issues/21) | 09 | 进行中 |
+| 19 | [森空岛社区与 B 站调研](19-community-bilibili-research.md) | [#21](https://github.com/VincentChen0111/maa_skills/issues/21) | 09 | 已完成 |
 | 20 | [带独立审查的培养建议](20-reviewed-cultivation-report.md) | [#22](https://github.com/VincentChen0111/maa_skills/issues/22) | 14、18 | 已完成 |
 | 21 | [基建技能查询](21-base-skill-query.md) | [#23](https://github.com/VincentChen0111/maa_skills/issues/23) | 11 | 已完成 |
 | 22 | [基建建议与排班生成](22-base-report-and-plan.md) | [#24](https://github.com/VincentChen0111/maa_skills/issues/24) | 20、21 | 已完成 |
