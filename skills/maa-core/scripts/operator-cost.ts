@@ -73,7 +73,7 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
   if (request.mode !== undefined && !['raw', 'no-craft'].includes(String(request.mode))) issue('mode:invalid');
   if (!Object.keys(target).length) issue('target:missing');
   if (Object.keys(supplied).length && supplied.source !== 'user-confirmed') issue('current:confirmation-required');
-  if (snapshot.version !== 1 || snapshot.source !== 'maa' || !Array.isArray(snapshot.operators) || !['complete', 'partial'].includes(String(object(coverage.operators).status))) issue('snapshot:invalid-or-incomplete');
+  if (snapshot.version !== 1 || !['maa', 'skland'].includes(String(snapshot.source)) || !Array.isArray(snapshot.operators) || !['complete', 'partial'].includes(String(object(coverage.operators).status))) issue('snapshot:invalid-or-incomplete');
   const catalog = operatorCatalog(tables);
   const matches = Object.entries(catalog).filter(([id, value]) => {
     const char = object(value); return id.startsWith('char_') && char.isNotObtainable !== true && char.name === request.name && (request.operatorId === undefined || id === request.operatorId);
