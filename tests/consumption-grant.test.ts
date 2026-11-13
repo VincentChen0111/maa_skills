@@ -202,21 +202,61 @@ async function abandoned(f: Fixture, grant: Record<string, unknown>) {
 }
 /** An interrupted transaction that closed stone; restoring it reopens stone. Returns the evidence revision. */
 async function abandonedClose(f: Fixture) {
+  const field = (name: string) => ['Configurations', profile, 'TaskQueue', 0, name];
+  return abandonedTransaction(f, {}, [{ path: field('UseStone'), value: false }, { path: field('UseStoneAllowSave'), value: false }]);
+}
+/**
+ * An interrupted writer transaction whose pending record carries the original request's `grant` and whose `changes` (task
+ * fields by profile name) were applied before the lock holder died. Returns the evidence revision.
+ */
+async function abandonedTransaction(f: Fixture, grant: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[]) {
   const dead = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
   const id = randomUUID(), original = await readFile(f.file, 'utf8');
   const metadata = { id, skill: 'maa-daily', host: 'codex', pid: dead.pid, startedAt: new Date().toISOString(), phase: 'restart' };
-  const changes = [{ path: ['Configurations', profile, 'TaskQueue', 0, 'UseStone'], value: false }, { path: ['Configurations', profile, 'TaskQueue', 0, 'UseStoneAllowSave'], value: false }];
   await mkdir(join(f.privateDirectory, 'maa-config-backups'), { recursive: true });
   await writeFile(join(f.privateDirectory, 'maa-config-backups', id + '.json'), original);
   await writeFile(join(f.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, phase: 'check',
-    authorization: { source: 'current-request', reference: 'close stone' }, changes }) + '\n');
+    authorization: { source: 'current-request', reference: 'the original request', ...grant }, changes }) + '\n');
   await writeFile(join(f.maaDirectory, 'config', '.maa-skills.lock'), JSON.stringify(metadata));
-  const applied = JSON.parse(original); Object.assign(applied.Configurations[profile].TaskQueue[0], { UseStone: false, UseStoneAllowSave: false });
+  const applied = JSON.parse(original);
+  for (const { path, value } of changes) (path.slice(0, -1).reduce((node, key) => node[key], applied) as Record<string | number, unknown>)[path.at(-1)!] = value;
   await writeFile(f.file, JSON.stringify(applied));
   const summary = await inspectConfigRecovery(f, f.maa);
   assert.equal(summary.canRestore, true, JSON.stringify(summary));
   return summary.evidenceRevision;
 }
+
+test('doctor recovery never reuses the interrupted transaction grant when restoring would reopen stone or expiring medicine', async t => {
+  const field = (index: number, name: string) => ['Configurations', profile, 'TaskQueue', index, name];
+  const cases = [
+    // The interrupted request moved three approved stones from the first task to the second; restoring moves them back.
+    { name: 'stone', reason: 'stone-grant-required', grant: { stoneCount: 3 },
+      tasks: [fight({ IsEnable: true, UseStone: true, UseStoneAllowSave: true, StoneCount: 3 }), fight()],
+      changes: [{ path: field(0, 'UseStone'), value: false }, { path: field(0, 'UseStoneAllowSave'), value: false },
+        { path: field(1, 'UseStone'), value: true }, { path: field(1, 'UseStoneAllowSave'), value: true }, { path: field(1, 'StoneCount'), value: 3 }] },
+    // The interrupted request moved approved expiring medicine (3 days) from the first task to the second.
+    { name: 'expiring medicine', reason: 'expiring-grant-required', grant: { expiringMedicine: { days: 3, forActivity: false } },
+      tasks: [fight({ IsEnable: true, UseExpiringMedicine: true, MedicineExpireDays: 3 }), fight({ MedicineExpireDays: 3 })],
+      changes: [{ path: field(0, 'UseExpiringMedicine'), value: false }, { path: field(1, 'UseExpiringMedicine'), value: true }] },
+  ];
+  for (const sample of cases) await t.test(sample.name, async t => {
+    const original = config(sample.tasks);
+    const f = await maaFixture(t, original);
+    const evidenceRevision = await abandonedTransaction(f, sample.grant, sample.changes);
+    const lockFile = join(f.maaDirectory, 'config', '.maa-skills.lock');
+    const before = await readFile(f.file); const lock = await readFile(lockFile);
+    const repair = (grant: Record<string, unknown>) => executeRepairs({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
+      approved: ['restore-config'], reference: 'restore the earlier settings', evidenceRevision, closedConfirmed: true, ...grant }, f.maa);
+    const refused = await repair({});
+    assert.equal(refused.status, 'rejected'); assert.equal(refused.reason, sample.reason);
+    assert.deepEqual(await readFile(f.file), before); assert.deepEqual(await readFile(lockFile), lock);
+    assert.deepEqual((await readdir(join(f.maaDirectory, 'config'))).sort(), ['.maa-skills.lock', 'gui.new.json']);
+    const restored = await repair(sample.grant);
+    assert.equal(restored.status, 'complete', JSON.stringify(restored));
+    assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), original);
+    assert.deepEqual(await readdir(join(f.maaDirectory, 'config')), ['gui.new.json']);
+  });
+});
 
 async function codeFiles(directory: string): Promise<string[]> {
   const result: string[] = [];

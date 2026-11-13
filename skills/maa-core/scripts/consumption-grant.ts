@@ -34,12 +34,21 @@ export const consumptionFields: Readonly<Record<string, Kind>> = {
 };
 const kinds: Kind[] = ['medicine', 'stone', 'expiring', 'activity'];
 const quantityKinds: Kind[] = ['medicine', 'stone'];
+/**
+ * The only values a request may write without the class's grant: a switch set to false or a quantity set to 0. Every other
+ * value (a switch set to true or null, a non-zero quantity, any expiring-days value) needs the class's current grant.
+ */
+const closingValue = (field: string, value: unknown) =>
+  field === 'MedicineCount' || field === 'StoneCount' ? value === 0 : field !== 'MedicineExpireDays' && value === false;
+/** How a request changes one kind: not at all, only with closing values, or otherwise. */
+type KindChange = 'none' | 'closing' | 'other';
 
 export type ExpiringMedicineGrant = { days: number; forActivity: boolean };
 /** The consumption part of a request's authorization; other authorization keys are ignored here. */
 export type ConsumptionGrant = { source: unknown; medicineCount?: unknown; stoneCount?: unknown; expiringMedicine?: unknown };
 /**
- * `before`: the task before this request, given when the request changes it (changed kinds need authority even to close).
+ * `before`: the task before this request, given when the request changes it (a changed kind needs a current request even to
+ * close, and its own grant for any value other than a switch set to false or a quantity set to 0).
  * `activated`: the request makes the task run (enable, reorder of an enabled task, timer). `counted`: an enabled task whose
  * medicine and stone count against the grant. `runs`: scheduled single runs (an explicit allocation counts at least once).
  * `recurring`: reached by a daily-repeating timer.
@@ -90,15 +99,27 @@ function readGrant(value: unknown, plan: ConsumptionContext['plan']): Grant | Co
     expiring: expiring ? { days: Number(expiring.days), forActivity: expiring.forActivity as boolean } : undefined };
 }
 
-/** One kind of one Fight task. `changed`: this request changes the kind's fields. */
-function checkKind(kind: Kind, task: Settings, state: TaskConsumption, grant: Grant, changed: boolean, plan: ConsumptionContext['plan']): ConsumptionRefusal | null {
+/** One kind of one Fight task. `change`: how this request changes the kind's fields. */
+function checkKind(kind: Kind, task: Settings, state: TaskConsumption, grant: Grant, change: KindChange, plan: ConsumptionContext['plan']): ConsumptionRefusal | null {
   if (!consumes(state, kind)) {
-    // Closing needs only an ordinary current request; the medicine fields keep their existing rule (a current quantity).
-    if (!changed) return null;
+    // A kind that ends closed: closing values need only an ordinary current request, for medicine as for stone and expiring
+    // medicine, and a remaining quantity is not compared. Any other value written to it, even while it stays closed, needs the
+    // kind's own current grant: a quantity within it, expiring days equal to it.
+    if (change === 'none') return null;
     if (!grant.current) return 'current-request-required';
-    if (kind !== 'medicine') return null;
-    if (grant.medicine === undefined) return 'medicine-grant-required';
-    return state.medicine.count !== null && state.medicine.count > grant.medicine ? 'medicine-quantity-exceeded' : null;
+    if (change === 'closing') return null;
+    if (kind === 'medicine') {
+      if (grant.medicine === undefined) return 'medicine-grant-required';
+      if (state.medicine.count === null) return 'medicine-settings-invalid';
+      return state.medicine.count > grant.medicine ? 'medicine-quantity-exceeded' : null;
+    }
+    if (kind === 'stone') {
+      if (grant.stone === undefined) return 'stone-grant-required';
+      if (state.stone.count === null) return 'stone-settings-invalid';
+      return state.stone.count > grant.stone ? 'stone-quantity-exceeded' : null;
+    }
+    if (!grant.expiring) return 'expiring-grant-required';
+    return kind === 'expiring' && task.MedicineExpireDays !== grant.expiring.days ? 'expiring-days-mismatch' : null;
   }
   if (plan === 'training' && kind === 'stone') return 'training-stone-enabled';
   if (plan === 'training' && (kind === 'expiring' || kind === 'activity') && !grant.expiring) return 'training-expiring-grant-required';
@@ -140,14 +161,18 @@ export function decideConsumption(grantValue: ConsumptionGrant, targets: Consump
     const task = typed(target.task, 'Fight'); const state = tasks[index];
     if (!task || !state) continue;
     const before = target.before === undefined ? undefined : record(target.before) ?? {};
-    const changed = new Set(before ? kinds.filter(kind => Object.entries(consumptionFields)
-      .some(([field, owner]) => owner === kind && JSON.stringify(before[field]) !== JSON.stringify(task[field]))) : []);
-    const evaluated = new Set<Kind>(changed);
+    const changed = new Map<Kind, KindChange>();
+    if (before) for (const [field, owner] of Object.entries(consumptionFields)) {
+      if (JSON.stringify(before[field]) === JSON.stringify(task[field])) continue;
+      if (!closingValue(field, task[field])) changed.set(owner, 'other');
+      else if (!changed.has(owner)) changed.set(owner, 'closing');
+    }
+    const evaluated = new Set<Kind>(changed.keys());
     if (target.activated) for (const kind of kinds) evaluated.add(kind);
     if (target.counted) for (const kind of quantityKinds) evaluated.add(kind);
     for (const kind of kinds) {
       if (!evaluated.has(kind)) continue;
-      const reason = checkKind(kind, task, state, grant, changed.has(kind), context.plan);
+      const reason = checkKind(kind, task, state, grant, changed.get(kind) ?? 'none', context.plan);
       if (reason) return refuse(reason);
     }
     const runs = Math.max(1, Number.isSafeInteger(target.runs) ? Number(target.runs) : 0);

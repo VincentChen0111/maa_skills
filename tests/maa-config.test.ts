@@ -758,3 +758,117 @@ test('stone and expiring medicine are refused before process access, a lock or a
     await assert.rejects(readFile(join(f.privateDirectory, 'daily-pending.jsonl')), { code: 'ENOENT' });
   });
 });
+
+// 27 round-1 fix. Each case runs on a fresh fixture: a completed write saved every requested value; a refusal happened before process
+// access, a lock, a pending record or a write.
+type ConsumptionCase = [string, Record<string, unknown>[], Record<string, unknown>, { path: (string | number)[]; value: unknown }[], string];
+/** A case with an optional authorization source. */
+type SourcedCase = [...ConsumptionCase, string?];
+async function consumptionOutcome(t: Parameters<typeof fixture>[0], [, tasks, grant, changes, expected]: ConsumptionCase,
+  options: { source?: string; timers?: Record<string, unknown>[]; append?: Record<string, unknown>[] } = {}) {
+  const f = await consumptionFixture(t, tasks, options.timers);
+  if (options.append) {
+    const config = JSON.parse(await readFile(f.file, 'utf8'));
+    config.Configurations['Synthetic profile'].TaskQueue.push(...options.append);
+    await writeFile(f.file, JSON.stringify(config));
+  }
+  const before = await readFile(f.file);
+  const result = await f.write(grant, changes, options.source);
+  if (expected === 'complete') {
+    assert.equal(result.status, 'complete', JSON.stringify(result));
+    const saved = JSON.parse(await readFile(f.file, 'utf8'));
+    for (const { path, value } of changes) {
+      let node: unknown = saved;
+      for (const key of path[0] === 'Configurations' ? ['Configurations', 'Synthetic profile', ...path.slice(2)] : path) node = (node as Record<string | number, unknown>)[key];
+      assert.deepEqual(node, value, JSON.stringify(path));
+    }
+  } else {
+    assert.equal(result.status, 'rejected'); assert.equal(result.phase, 'check'); assert.equal(result.reason, expected);
+    assert.equal(f.processCalls(), 0); assert.deepEqual(await readFile(f.file), before);
+    assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+    await assert.rejects(readFile(join(f.privateDirectory, 'daily-pending.jsonl')), { code: 'ENOENT' });
+  }
+  return f;
+}
+const fightChange = (field: string, value: unknown, index = 0) => ({ path: fightPath(index, field), value });
+
+test('closing medicine needs only a current request and leaves the remaining count; reopening that count needs the current quantity', async (t) => {
+  const open = { IsEnable: true, UseMedicine: true, MedicineCount: 2 };
+  const closed = { ...open, UseMedicine: false };
+  const cases: SourcedCase[] = [
+    ['closing without a quantity', [open], {}, [fightChange('UseMedicine', false)], 'complete'],
+    ['closing with a zero quantity, not compared with the remaining count', [open], { medicineCount: 0 }, [fightChange('UseMedicine', false)], 'complete'],
+    ['closing and setting the count to 0', [open], {}, [fightChange('UseMedicine', false), fightChange('MedicineCount', 0)], 'complete'],
+    ['closing from an approved report', [open], {}, [fightChange('UseMedicine', false)], 'current-request-required', 'approved-report'],
+    ['reopening the remaining count without a grant', [closed], {}, [fightChange('UseMedicine', true)], 'medicine-grant-required'],
+    ['reopening the remaining count above the grant', [closed], { medicineCount: 1 }, [fightChange('UseMedicine', true)], 'medicine-quantity-exceeded'],
+    ['reopening the remaining count within the grant', [closed], { medicineCount: 2 }, [fightChange('UseMedicine', true)], 'complete'],
+    ['enabling a task that holds open medicine without a grant', [{ ...open, IsEnable: false }], {}, [fightChange('IsEnable', true)], 'medicine-grant-required'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => {
+    const f = await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { source: sample[5] });
+    // Only the switch was requested: the remaining count stays as it was.
+    if (sample[4] === 'complete' && sample[3].length === 1 && sample[0].startsWith('closing')) assert.equal((await f.saved())[0]!.MedicineCount, 2);
+  });
+});
+
+test('without a class grant a request may only set that class switches to false and its quantities to 0', async (t) => {
+  const enabled = { IsEnable: true };
+  const allOpen = { IsEnable: true, UseMedicine: true, MedicineCount: 2, UseStone: true, UseStoneAllowSave: true, StoneCount: 2, UseExpiringMedicine: true, UseExpireMedicineForActivity: true };
+  const cases: SourcedCase[] = [
+    // The stone save switch alone while stone stays off.
+    ['the stone save switch without a grant', [enabled], {}, [fightChange('UseStoneAllowSave', true)], 'stone-grant-required'],
+    ['the stone save switch from an approved report', [enabled], {}, [fightChange('UseStoneAllowSave', true)], 'current-request-required', 'approved-report'],
+    ['the stone save switch with a stone grant', [enabled], { stoneCount: 1 }, [fightChange('UseStoneAllowSave', true)], 'complete'],
+    // A stone quantity alone while stone stays off: a later switch in the MAA window would spend it.
+    ['a stone quantity without a grant', [enabled], {}, [fightChange('StoneCount', 2147483647)], 'stone-grant-required'],
+    ['a stone quantity above the grant', [enabled], { stoneCount: 5 }, [fightChange('StoneCount', 2147483647)], 'stone-quantity-exceeded'],
+    ['a stone quantity within the grant', [enabled], { stoneCount: 2147483647 }, [fightChange('StoneCount', 2147483647)], 'complete'],
+    ['closing stone while raising its quantity', [{ ...enabled, UseStone: true, UseStoneAllowSave: true, StoneCount: 2 }], {},
+      [fightChange('UseStone', false), fightChange('UseStoneAllowSave', false), fightChange('StoneCount', 9)], 'stone-grant-required'],
+    // Expiring days alone while expiring medicine stays off.
+    ['expiring days without a grant', [enabled], {}, [fightChange('MedicineExpireDays', 30)], 'expiring-grant-required'],
+    ['expiring days other than approved', [enabled], { expiringMedicine: { days: 3, forActivity: false } }, [fightChange('MedicineExpireDays', 30)], 'expiring-days-mismatch'],
+    ['expiring days as approved', [enabled], { expiringMedicine: { days: 30, forActivity: false } }, [fightChange('MedicineExpireDays', 30)], 'complete'],
+    // A medicine quantity alone while medicine stays off.
+    ['a medicine quantity without a grant', [enabled], {}, [fightChange('MedicineCount', 3)], 'medicine-grant-required'],
+    ['a medicine quantity above the grant', [enabled], { medicineCount: 2 }, [fightChange('MedicineCount', 3)], 'medicine-quantity-exceeded'],
+    ['a medicine quantity within the grant', [enabled], { medicineCount: 3 }, [fightChange('MedicineCount', 3)], 'complete'],
+    ['every switch false and every quantity 0', [allOpen], {}, [...['UseMedicine', 'UseStone', 'UseStoneAllowSave', 'UseExpiringMedicine', 'UseExpireMedicineForActivity']
+      .map(field => fightChange(field, false)), fightChange('MedicineCount', 0), fightChange('StoneCount', 0)], 'complete'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { source: sample[5] }); });
+});
+
+test('null consumption switches count as on, and a grant accepts only exact switches with a positive count', async (t) => {
+  // The pinned MAA GUI stores UseMedicine null with MedicineCount 999 when stone is switched on without its save switch, and
+  // passes a quantity to MaaCore whenever the switch is not false.
+  const medicineNull = { UseMedicine: null, MedicineCount: 999 };
+  const stoneNull = { UseStone: null, UseStoneAllowSave: true, StoneCount: 5 };
+  const timer = [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }];
+  const cases: [...ConsumptionCase, Record<string, unknown>[]?][] = [
+    ['enabling a task with a null medicine switch without a grant', [medicineNull], {}, [fightChange('IsEnable', true)], 'medicine-grant-required'],
+    ['enabling a timer that runs a null medicine switch without a grant', [{ IsEnable: true, ...medicineNull }], {}, timer, 'medicine-grant-required', [{}]],
+    ['enabling a task with a null stone switch without a grant', [stoneNull], {}, [fightChange('IsEnable', true)], 'stone-grant-required'],
+    ['enabling a timer that runs a null stone switch without a grant', [{ IsEnable: true, ...stoneNull }], {}, timer, 'stone-grant-required', [{}]],
+    ['a medicine grant for a null medicine switch', [medicineNull], { medicineCount: 999 }, [fightChange('IsEnable', true)], 'medicine-settings-invalid'],
+    ['a medicine grant for a zero medicine count', [{}], { medicineCount: 5 }, [fightChange('UseMedicine', true)], 'medicine-settings-invalid'],
+    ['a stone grant for a null stone switch', [stoneNull], { stoneCount: 5 }, [fightChange('IsEnable', true)], 'stone-settings-invalid'],
+    ['the same stone settings with the switch on', [{ ...stoneNull, UseStone: true }], { stoneCount: 5 }, [fightChange('IsEnable', true)], 'complete'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { timers: sample[5] }); });
+});
+
+test('a counted quantity write checks every enabled task of its profile for gacha, packs and unsafe task types', async (t) => {
+  const award = { $type: 'AwardTask', TaskType: 'Award', IsEnable: true, FreeGacha: false, SpecialAccess: false };
+  const startUp = { $type: 'StartUpTask', TaskType: 'StartUp', IsEnable: true };
+  const cases: [string, Record<string, unknown>[], string][] = [
+    ['an enabled free gacha', [{ ...award, FreeGacha: true }], 'forbidden-setting'],
+    ['an enabled special pack', [{ ...award, SpecialAccess: true }], 'forbidden-setting'],
+    ['an enabled StartUp task', [startUp], 'request-invalid'],
+    ['the same tasks disabled', [{ ...award, FreeGacha: true, SpecialAccess: true, IsEnable: false }, { ...startUp, IsEnable: false }], 'complete'],
+  ];
+  for (const [name, append, expected] of cases) await t.test(name, async (t) => {
+    await consumptionOutcome(t, [name, [{}], { stoneCount: 2 }, openStone(0, 2), expected], { append });
+  });
+});
