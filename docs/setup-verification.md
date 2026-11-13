@@ -23,7 +23,7 @@
 | `node --test tests/setup-download-scenarios.test.ts` | 17 pass / 0 fail |
 | `node --test tests/setup.test.ts tests/setup-scenarios.test.ts tests/eval-network.test.ts tests/setup-integration.test.ts` | 52 pass / 0 fail |
 | `node --test tests/help-installation.test.ts` | 6 pass / 0 fail |
-| 完整离线入口 `node scripts/check.ts` | 见下方「完整离线入口」 |
+| 完整离线入口 `node scripts/check.ts`（提交 `60697a6`，工作树干净） | 首次运行（文档未定稿时）测试 414 项全过，但隐私检查报 3 处盘符路径（步骤说明、来源文档、测试数据），改写后通过。最终：415 项，414 pass、0 fail、1 skip（非 Windows 进程适配器用例在 Windows 跳过）；tracker、隐私、元数据为空，评分规则 7 条／样例 14 个通过；`npm run typecheck` 通过。已知偶发的「关闭 MAA」用例本次通过，未需重跑 |
 
 测试先行的实际顺序如实记录：`setup-download.ts` 的主体先于其行为测试写成；先写 `tests/setup-download.test.ts`，经 `setup.ts` 接缝运行时观察到红（`does not provide an export named 'downloadSetupProgram'`），补上 `setup.ts` 的导出和 `recheck` 后，最初 13 项一次全部通过。为确认这些测试确实约束行为，另在临时副本上做了变异核对（每次改一处产品代码、跑该测试文件、恢复原字节）：
 
