@@ -133,7 +133,7 @@
 - `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。再加「同名两个游戏 ID」一条：在旧实现上运行失败（没有按快照取持有的形态，ID 为空），改后 12/12 通过。路径一条加了「私有目录里的链接指向外面」：旧实现先建目录再核对，外面留下一个空目录，测试失败；改成先核对最近的已有上级目录后通过，仍是 12/12。
 - `node --test tests/base-report.test.ts`：7/7 通过。
 - `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。
-- 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
+- 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/report-scenarios.test.ts` 1/1（审查说明模板改动后）、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
 - `node scripts/tracker.ts`（含文档相对链接）、`node scripts/privacy.ts` 和插件元数据检查：没有错误。
 - 完整离线检查 `node scripts/check.ts` 按维护者 2026-11-13 的机器负载规则由调度者在冻结提交上统一运行，本记录不代替它。
 
