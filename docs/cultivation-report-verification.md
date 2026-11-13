@@ -69,6 +69,15 @@
 - P3-3：maa-help 里「用到凭据的读取和调研是后续能力」与已交付的 NGA 读取矛盾，改为：NGA 凭据已用于 account 的只读检索和读帖，森空岛账号和 B 站凭据目前只能设置和检查状态（12、19 不在本分支）。这是 agent 可见文字，没有离线测试，模型评测未验证。
 - 先写失败测试：新增和修改的断言在修复前运行，`tests/advice-report.test.ts` 5 项中 2 项失败（新测试，以及原测试对 `changedResults: []` 的断言），`tests/report-scenarios.test.ts` 失败（观察器给出 `reviewed` 而不是 `needs-correction`）。修复后：`npm run typecheck` 通过；`tests/advice-report.test.ts` 5 项、`tests/report-scenarios.test.ts` 1 项、`tests/cultivation-report.test.ts` 8 项通过。审查员的两个离线复现脚本重新运行：改正版本顶部出现未审查变化的提示；待改正的报告在默认审查场景里评为 `report-review` 失败。
 
+## 第 2 轮审查后的修复
+
+协调者对第 2 轮的两项 P3 全部接受。两项都关于改正版本的变化清单（第 1 轮是漏报，这一轮是误报和原因写错），按维护者的复发规则改成一个判断函数、一处负责，并加一致性测试：
+
+- 一个函数：`cultivation-report.ts` 的 `changedReportResults` 和它逐个列出的 `resultProducers`，依次是快照、每步数字、支持到第几步、NGA 引用、作业站引用、转交的调研条目、共享缺口结果、公开表。只比较内容：读取时间、过期标记、缓存来源和原始响应的哈希不算。快照只比较覆盖状态（快照读取时间和 MAA 扫描时间是时间，库存变化会体现在每步数字里）。作业站引用比较作业编号、关卡、链接、标题、状态、原因、干员要求和检索覆盖，不比较读取时间和响应哈希（P3-1，响应里有浏览计数之类的字段）。
+- 一致性测试：`tests/cultivation-report.test.ts`「conformance: every re-read or recomputed producer …」。它列出的来源必须与 `resultProducers` 完全一致，每个来源两种情况：晚些重读到相同内容时清单为空，内容真的变化时只列出该来源的字段；还核对报告内容的每个顶层字段都归属某个来源、agent 输入或版本信息。端到端部分：引用作业的报告在改正时重新读取作业（读取时间和响应哈希都变了，内容没变），清单为空，也没有未审查变化的提示。
+- P3-2：顶部提示改为中性的「改正后重新读取或重新计算的结果与原版本不同（见「审查后的改动」），这些变化没有经过审查，请先看再批准」。`tests/advice-report.test.ts` 断言旧说法已经不在，并加了只交换步骤顺序的改正（什么都没重读，结果重算了）也用中性说法。
+- 先写失败测试：新测试在实现前运行，因缺少导出失败；把判断函数先按旧的比较方式接上后再运行，一致性测试在第一个来源「快照：晚些重读到相同内容」处失败；`tests/advice-report.test.ts` 因旧说法失败（neutral banner）。修复后：`npm run typecheck` 通过；`tests/cultivation-report.test.ts` 9 项、`tests/advice-report.test.ts` 5 项、`tests/report-scenarios.test.ts` 1 项通过。审查员的两个离线复现重新运行：作业重读后清单为空、没有提示；交换顺序时提示为中性说法。
+
 ## 未验证
 
 - 真实模型评测（交给工单 26）：四个新场景在两个宿主上的基线、改动前后比较；本票改了 maa-account、maa-core、maa-help 的 agent 可见文字，改动前后的同场景比较也没有运行。原因：28 的运行器还没有合并，评测专用登录目录还没有由维护者登录。
