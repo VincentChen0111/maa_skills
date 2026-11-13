@@ -156,7 +156,7 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。策略里以 `{{workspace}}` 开头的字符串在评分前渲染成工作区内的真实路径。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 
-13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，2026-11-13 起，20 的 `maa-core/scripts/cultivation-report.ts draft` 读取同一批固定公开表，也在此列；其他文件名、动作和目录保持原行为。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。
+13、14 的成本场景可声明 `networkFixtures: { "https://raw.githubusercontent.com/owner/repo/<40位小写提交>/table.json": <合成 JSON> }`。只接受固定 HTTPS raw 地址与规范 `.json` 路径，不接受分支、查询串或跳转；未列出的请求立即拒绝。运行器冻结映射和独立预加载器，仅在两个临时原生目录内 `maa-core/scripts/operator-cost.ts query` 或 `maa-core/scripts/cultivation-gaps.ts query` 进程替代 `fetch`，2026-11-13 起，20 的 `maa-core/scripts/cultivation-report.ts draft` 读取同一批固定公开表，也在此列；2026-11-14 起，22 在不给 `tablesFile` 时读取固定公开表的 `maa-core/scripts/base-plan.ts generate`、`check`、`candidates` 和 `maa-core/scripts/base-report.ts draft`、`freshness` 也在此列；其他文件名、动作和目录保持原行为。这是网络回归夹具，不是抵御恶意模型的安全边界，不随产品安装。
 
 需要 adb 的 setup 场景声明 `setupBoundary: true`：运行器把 `eval/setup-boundary.mjs` 复制进工作区并预加载，只替代 adb 和 MAA 进程，setup 与统一写入器照常运行（测试也用这一份实现）。带 `maaProcess` 的场景除 daily 的写入外，doctor 和关卡准备脚本的 MAA 进程边界同样换成合成边界。
 

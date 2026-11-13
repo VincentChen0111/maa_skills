@@ -142,7 +142,7 @@
 - 第 1 轮修正后：`npm run typecheck` 通过；`tests/base-plan.test.ts` 12/12、`tests/base-report.test.ts` 7/7、`tests/base-report-scenarios.test.ts` 2/2 通过；审查员的 `repro.ts` 和 `fill.ts` 按上节结果运行。
 - `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。再加「同名两个游戏 ID」一条：在旧实现上运行失败（没有按快照取持有的形态，ID 为空），改后 12/12 通过。路径一条加了「私有目录里的链接指向外面」：旧实现先建目录再核对，外面留下一个空目录，测试失败；改成先核对最近的已有上级目录后通过，仍是 12/12。
 - `node --test tests/base-report.test.ts`：7/7 通过。
-- `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。
+- `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。2026-11-14 更正：当时评测网络夹具没有覆盖基建的 `draft`、`generate`、`candidates`，这个测试实际读了公开 GitHub 上的固定表；23 第一轮修复补上这些入口，测试另加让真实 fetch 一律失败的预加载器（`tests/fixtures/offline-fetch.mjs`），见 [23 验证记录](base-apply-verification.md)。
 - 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/report-scenarios.test.ts` 1/1（审查说明模板改动后）、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
 - `node scripts/tracker.ts`（含文档相对链接）、`node scripts/privacy.ts` 和插件元数据检查：没有错误。
 - 第 2 轮修正后：`npm run typecheck` 通过；`tests/base-plan.test.ts` 15/15、`tests/base-plan-conformance.test.ts` 2/2（117 份方案，第 4 项 43 通过 74 不通过，第 5 项 65/52，第 11 项 70/47，第 14 项 11/106）、`tests/base-report.test.ts` 7/7、`tests/base-report-scenarios.test.ts` 2/2 通过，逐个文件依次运行。

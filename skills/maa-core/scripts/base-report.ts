@@ -8,7 +8,7 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkPlanText, gateTitles, generateBasePlan, loadPlanTables, parsePlanSpec, planFreshness, readMaaNameTable, readPrivateFile, readSnapshot, snapshotFingerprint,
-  specChecks, suppliedPlanTables, tablesFingerprint, type Fill, type GenerateOptions, type GenerateResult, type OperatorFacts, type PlanCheck, type PlanInputs, type Freshness } from './base-plan.ts';
+  specChecks, specTexts, suppliedPlanTables, tablesFingerprint, type Fill, type GenerateOptions, type GenerateResult, type OperatorFacts, type PlanCheck, type PlanInputs, type Freshness } from './base-plan.ts';
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
 import { readSettings } from './preferences.ts';
@@ -138,6 +138,18 @@ export async function approveBaseReportItems(privateDirectory: string, hash: str
 export async function baseReportFreshness(privateDirectory: string, hash: string, options: { home?: string; fetcher?: typeof fetch } = {}):
   Promise<{ states: Record<keyof PlanInputs | 'check', Freshness>; recheck: PlanCheck | null }> {
   const content = (await loadAdviceReport(privateDirectory, kind, hash)).content as BaseContent;
+  const current = await currentInputs(privateDirectory, content, options);
+  if (current.states.check === 'fresh' || current.text === null) return { states: current.states, recheck: null };
+  return { states: current.states, recheck: recheckPlan(content, current, current.text) };
+}
+
+/** The approved plan bytes: the report keeps the exported plan, and exporting writes exactly this text (gate 13). */
+export const reportPlanText = (content: BaseContent) => `${JSON.stringify(content.plan.json, null, 2)}\n`;
+
+type CurrentInputs = { states: Record<keyof PlanInputs | 'check', Freshness>; snapshot: unknown; tables: Awaited<ReturnType<typeof loadPlanTables>> | null;
+  names: Awaited<ReturnType<typeof readMaaNameTable>>; text: string | null };
+/** Reads every input again now and compares each with what the report recorded: fresh, stale or unknown. */
+async function currentInputs(privateDirectory: string, content: BaseContent, options: { home?: string; fetcher?: typeof fetch }): Promise<CurrentInputs> {
   const settings = await readSettings(options.home), root = await realpath(resolve(privateDirectory));
   const recorded: PlanInputs = { snapshot: content.snapshot.fingerprint, tables: tablesFingerprint(content.sources.files), names: content.sources.names.sha256, plan: content.plan.sha256 };
   const snapshot = await readSnapshot(root, content.input.snapshotFile).catch(() => null);
@@ -146,11 +158,26 @@ export async function baseReportFreshness(privateDirectory: string, hash: string
   const text = await readPrivateFile(root, content.plan.file).catch(() => null);
   const states = planFreshness(recorded, { snapshot: snapshot === null ? null : snapshotFingerprint(snapshot), tables: tables ? tablesFingerprint(tables.files) : null,
     names: names.status === 'available' ? names.sha256 : null, plan: text === null ? null : createHash('sha256').update(text).digest('hex') });
-  if (states.check === 'fresh' || text === null || snapshot === null || !tables) return { states, recheck: null };
+  return { states, snapshot, tables, names, text };
+}
+/** The shared check on the current inputs, auditing the same agent-written texts the draft audited for gate 15. */
+function recheckPlan(content: BaseContent, current: CurrentInputs, text: string): PlanCheck | null {
+  if (current.snapshot === null || !current.tables) return null;
   const spec = parsePlanSpec(Object.fromEntries(Object.entries(content.input).filter(([key]) => !reportKeys.includes(key))), ['target', 'base', 'snapshotFile', 'tablesFile', 'format']).spec;
-  if (!spec) return { states, recheck: null };
-  return { states, recheck: checkPlanText(text, { layout: spec.layout, snapshot, tables: tables.tables, names, ...specChecks(spec), shifts: spec.shifts.length,
-    reexport: `${JSON.stringify(content.plan.json, null, 2)}\n`, texts: [] }) };
+  if (!spec) return null;
+  const texts = [...specTexts(spec), ...content.assumptions, ...content.summary ? [content.summary] : [], ...content.goals.source === 'assumed' ? [content.goals.text] : []];
+  return checkPlanText(text, { layout: spec.layout, snapshot: current.snapshot, tables: current.tables.tables, names: current.names, ...specChecks(spec), shifts: spec.shifts.length,
+    reexport: reportPlanText(content), texts });
+}
+
+/**
+ * Ticket 23 (maa-daily, right before applying): the same three freshness states, and the shared check run again now,
+ * always, on the current inputs and on the approved plan bytes. The report's own check result is never reused as proof.
+ */
+export async function baseApplyRecheck(privateDirectory: string, content: BaseContent, options: { home?: string; fetcher?: typeof fetch } = {}):
+  Promise<{ states: Record<keyof PlanInputs | 'check', Freshness>; recheck: PlanCheck | null }> {
+  const current = await currentInputs(privateDirectory, content, options);
+  return { states: current.states, recheck: recheckPlan(content, current, reportPlanText(content)) };
 }
 
 // ---- Markdown (Chinese template; the agent translates for other languages) ------------------------------------

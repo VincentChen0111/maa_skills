@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
+import { planTableSources } from '../skills/maa-core/scripts/base-plan.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
 import { observeReports, withReportEvidence } from '../eval/report-observer.ts';
@@ -22,6 +24,8 @@ const runs: Record<string, (hash: () => string, sha: () => string) => Step[]> = 
   'base-plan-casual-candidates': () => [['base-plan.ts', 'candidates', { layout: layout().slice(0, 2) }]],
 };
 const skills = { skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)), companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) } };
+/** Every product call runs with a real fetch that throws: the pinned tables come only from the scenario's network fixtures. */
+const offline = (env: NodeJS.ProcessEnv) => ({ ...env, NODE_OPTIONS: `--import=${new URL('./fixtures/offline-fetch.mjs', import.meta.url).href} ${env.NODE_OPTIONS ?? ''}`.trim() });
 
 test('base report scenarios run the installed product CLIs offline; the report-named plan file is graded with the report, nothing else changes', async (t) => {
   assert.deepEqual(baseReportScenarios.map(scenario => scenario.id).sort(), Object.keys(runs).sort());
@@ -31,14 +35,19 @@ test('base report scenarios run the installed product CLIs offline; the report-n
     t.after(() => fixture.dispose());
     const policy = { ...scenario.policy, secrets: fixture.policy.secrets };
     const call = (script: string, action: string, input: unknown) => spawnSync(process.execPath, [join(fixture.workspace, host, 'skills/maa-core/scripts', script), action],
-      { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+      { cwd: fixture.workspace, env: offline(fixture.env), input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
     let hash = '', sha = '';
     const outputs = [call('preferences.ts', 'read', { currentLanguage: 'zh-CN' }).stdout];
     for (const [script, action, input] of runs[scenario.id]!(() => hash, () => sha)) {
       const result = call(script, action, input);
       assert.equal(result.status, 0, `${scenario.id} ${action}: ${result.stdout}${result.stderr}`);
       const output = JSON.parse(result.stdout);
-      if (action === 'draft') { hash = output.reportHash; assert.ok(output.unverified.includes('names:maa-directory-unset'), 'without a MAA directory the name check is listed as unverified'); }
+      if (action === 'draft') {
+        hash = output.reportHash; assert.ok(output.unverified.includes('names:maa-directory-unset'), 'without a MAA directory the name check is listed as unverified');
+        // The public-mirror path a model run takes, answered by the scenario's pinned-table fixtures (real fetch throws here).
+        const sources = JSON.parse(await readFile(join(fixture.workspace, 'private/reports/base', hash, 'report.json'), 'utf8')).sources;
+        assert.equal(sources.mode, 'public'); assert.deepEqual(sources.files.map((entry: { file: string }) => entry.file).sort(), Object.values(planTableSources).map(source => source.file).sort());
+      }
       if (action === 'brief') sha = output.sha256;
       outputs.push(result.stdout);
     }
@@ -59,7 +68,7 @@ test('the same policies fail a report left pending and a plan file written outsi
   t.after(() => fixture.dispose());
   const policy = { ...scenario.policy, secrets: fixture.policy.secrets };
   const call = (script: string, action: string, input: unknown) => spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', script), action],
-    { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+    { cwd: fixture.workspace, env: offline(fixture.env), input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
   const drafted = call('base-report.ts', 'draft', draft);
   assert.equal(drafted.status, 0, drafted.stdout);
   const observe = async (outputs: string[]) => withBasePlanEvidence(withReportEvidence(await collectEvidence(fixture, { completed: true, calls: [], outputs }),
