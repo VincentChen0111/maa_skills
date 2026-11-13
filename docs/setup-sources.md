@@ -39,19 +39,29 @@ MAA 固定 [v6.21.4 / 52d0b2acaca116585b02e1e6a9da303460f81a24](https://github.c
 - MAA 发行包结构：MAA 仓库 [ci.yml](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/dev/.github/workflows/ci.yml) 把 GUI 发布到 `install` 目录（`-o install`），再在该目录内执行 `Compress-Archive -Destination MAA-<tag>-win-<arch>.zip -Path ./*`，所以 zip 的顶层就是 `install` 目录的内容。`MAA.exe` 在顶层是由此得出的推断（审查员与本作者均只读查看了 ci.yml），没有用真实发行包核实。
 - 雷电：官网首页的安装包来自 `lddl01.ldmnq.com`，属于已放行的 `ldmnq.com`。
 
-### R3 下载链路核对（2026-11-13）
+### 下载链路核对（R3 2026-11-13，R4 2026-11-14 复核）
 
-R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主机，和 R1 的 MuMu 是同一类问题。脚本改为只从一张厂商表判断：官网域名（含子域名，沿用原有范围）加上下表记录的链路里出现的确切主机（不含子域名）。下表每条链路由本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对，没有下载任何安装包；签名参数已省略。表中的起点地址和主机与 `skills/maa-core/scripts/setup-download.ts` 的 `emulatorVendors` 一一对应，`tests/setup-download-vendors.test.ts` 检查两边一致。
+R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主机，和 R1 的 MuMu 是同一类问题。脚本改为只从一张厂商表判断：官网域名（含子域名，沿用原有范围）加上下表记录的链路里出现的确切主机（不含子域名）。每条链路由本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对；R4 审查发现蓝叠 5 的起点已返回 403 之后，本作者 2026-11-14 又逐跳复核全部链路：用 Node 的 fetch 只发 HEAD、`redirect: 'manual'` 不跟随跳转、只带脚本自己的 User-Agent `maa-skills-setup`，每个 Location 单独再发一次 HEAD；夜神后两条起点当时 Node 连接超时，改用同样只发 HEAD、不跟随跳转、同一 User-Agent 的 `curl -I` 核对。两次都没有下载任何安装包，没有发送 Referer 或任何模仿浏览器的请求头；签名参数已省略。
 
-| 厂商 | 起点（官方页面使用的地址） | 跳转与文件主机（HEAD 结果） |
-| --- | --- | --- |
-| MuMu | `https://mumu.nie.netease.com/api/dl/win`（官网下载按钮的脚本调用；浏览器下载列表里的文件地址也可作起点） | 302 → `a11.gdl.netease.com` 的 `MuMu_6.0.6_apinochannel_zh-Hans_<编号>.exe?n=…`；文件主机 HEAD 200，约 6.5 MB |
-| 雷电 | `https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe`；`https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe`（官网首页按钮） | 起点即文件主机，HEAD 200，约 1.6 MB 在线安装器 |
-| 蓝叠 5 | `https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` | 起点即文件主机，HEAD 200，约 0.8 MB。官网 downloads.html 另列出的 `BlueStacksMicroInstallerForWin7.exe` 当日 HEAD 返回 403，没有记录 |
-| 蓝叠 5 国际版 | `https://cloud.bluestacks.com/api/getdownloadnow?platform=win`（官网 tw/download.html 的 Windows 下载按钮） | 302 → `ak-build.bluestacks.com` 的 `BlueStacksMicroInstaller_5.22.290.1031_native.exe`；HEAD 200，约 0.9 MB。两个主机都在原已放行的 `bluestacks.com` 内，此处仍逐一记录 |
-| 夜神 | `https://www.yeshen.com/cn/download/fullPackage/win_64?formal`、`https://www.yeshen.com/cn/download/fullPackage/win_64_9?formal`、`https://www.yeshen.com/cn/download/fullPackage?formal` | 302 → `res06.bignox.com` 上以十六进制命名的 `.exe`（`filename=nox_setup_v7.0.6.2_full.exe`）；HEAD 200，约 572 MB。`fullPackage/win_64_12?formal` 跳到 `.7z` 包，脚本只接受 exe／msi／zip，没有记录 |
-| 逍遥 | `https://www.xyaz.cn/download.php?file_name=XYAZ-Installer` | 303 → `download.microvirt.com` 的 `XYAZ-Installer.exe`；HEAD 200，约 19.9 MB |
+下表是 2026-11-14 的结果。表中的起点地址、主机、每一跳的 HEAD 状态（`observed`，每个地址一个）和核对日期（`checked`）与 `skills/maa-core/scripts/setup-download.ts` 的 `emulatorVendors` 一一对应，`tests/setup-download-vendors.test.ts` 检查两边一致，并按记录的状态逐条回放。
+
+| 厂商 | 起点（官方页面使用的地址） | 逐跳 HEAD 状态与文件（2026-11-14） | 表中 `observed` |
+| --- | --- | --- | --- |
+| MuMu | `https://mumu.nie.netease.com/api/dl/win`（官网下载按钮的脚本调用；浏览器下载列表里的文件地址也可作起点） | 302 → `a11.gdl.netease.com` 的 `MuMu_6.0.6_apinochannel_zh-Hans_<编号>.exe?n=…`：200，6,466,544 字节 | `[302, 200]` |
+| 雷电 | `https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe`；`https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe`（官网首页按钮） | 起点即文件主机：两条都是 200，各 1,594,848 字节（在线安装器） | 各 `[200]` |
+| 蓝叠 5 | `https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` | 起点即文件主机：**403**，响应头 `x-oss-ec: 0003-00000501`（阿里云 OSS 防盗链：没有 Referer 的请求被拒）。2026-11-13 R3 时这一地址 HEAD 200、约 0.8 MB；R4 审查员 2026-11-14 用脚本 User-Agent 和 curl User-Agent 三次 HEAD 都是 403，本作者同日用 Node fetch 和 `curl -I` 复核也都是 403。官网 downloads.html 另列的 `BlueStacksMicroInstallerForWin7.exe` 在 2026-11-13 已是 403，没有收进表里 | `[403]`：脚本不能下载 |
+| 蓝叠 5 国际版 | `https://cloud.bluestacks.com/api/getdownloadnow?platform=win`（官网 tw/download.html 的 Windows 下载按钮） | 302 → `ak-build.bluestacks.com` 的 `BlueStacksMicroInstaller_5.22.290.1031_native.exe`：200，955,232 字节。两个主机都在原已放行的 `bluestacks.com` 内，此处仍逐一记录 | `[302, 200]` |
+| 夜神 | 三条起点，是三个不同的安装包：`https://www.yeshen.com/cn/download/fullPackage/win_64?formal`、`https://www.yeshen.com/cn/download/fullPackage/win_64_9?formal`、`https://www.yeshen.com/cn/download/fullPackage?formal` | 每条都是 302 → `res06.bignox.com` 上以十六进制命名的 `.exe`，再 200：`win_64` 跳到路径日期 20241211 的文件，572,471,032 字节；`win_64_9` 跳到路径日期 20250226 的文件，600,709,368 字节；`fullPackage?formal` 跳到路径日期 20250317 的文件，431,437,560 字节。三者的 Content-Disposition 都是 `filename="nox_setup_v7.0.6.2_full.exe"`，但大小不同。`fullPackage/win_64_12?formal` 跳到 `.7z` 包，脚本只接受 exe／msi／zip，没有记录 | 各 `[302, 200]` |
+| 逍遥 | `https://www.xyaz.cn/download.php?file_name=XYAZ-Installer` | 303 → `download.microvirt.com` 的 `XYAZ-Installer.exe`：200，19,919,104 字节 | `[303, 200]` |
 
 新增放行的确切主机只有 `res06.bignox.com` 和 `download.microvirt.com`；同公司的其他主机（例如 `bignox.com`、`microvirt.com` 的其他子域名）一律拒绝。厂商更换 CDN 主机时下载会以 `unofficial-source` 失败，需要重新核对并更新这张表。夜神按路径名命名的文件是十六进制串，方案原样显示该文件名。
 
-未核实、需要真实发行包才能确认的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）；蓝叠、夜神、逍遥安装包的真实下载主机。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。Windows 自带 `tar.exe`（bsdtar）解压 zip、拒绝含 `..` 的条目，本机用合成 zip 实测过（见 [setup 验证记录](setup-verification.md)）。
+### 官方服务器拒绝脚本请求（R4，2026-11-14）
+
+脚本只发自己的 User-Agent（读 GitHub 索引时另加 Accept），不发 Referer、Cookie 或任何模仿浏览器的请求头，也不为了绕过厂商的防盗链换请求头重试。由此定下（设计默认值，2026-11-14，见[规格](spec.md)「默认值及其来源」）：
+
+- 任何一跳返回 401 或 403，表示官方服务器拒绝脚本的请求：出方案时不出方案，结果是 `source-refused`；下载时记为 `failed`，原因 `source-refused`。不重试，不换请求头。判断只有一处：`setup-download.ts` 的 `chainScriptable`，厂商表的记录状态和每一次实际请求都用它。
+- 记录状态里有 401／403 的厂商，出方案和下载都直接返回 `source-refused`，不向它发任何请求。脚本不能下载的厂商：`bluestacks-cn`（蓝叠 5）。用户在自己的浏览器里从官方页面 `https://www.bluestacks.cn/` 下载安装包，然后从方案里的 `run-emulator-installer` 这一步继续：由用户自己运行安装程序，不需要把文件交给脚本；之后照常是模拟器首次设置、游戏客户端（用户）和 adb 连接、复检（skill）。
+- 若维护者同意带官网页面作 Referer，需作为新规则登记：这是维护者才能做的决定，要在规格两张来源表登记来源，重新只读核对后再改厂商表。目前没有这个授权。
+
+未核实的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。上表的模拟器下载主机和状态已由 HEAD 核对，但只代表核对当日：没有下载任何安装包，安装包内容和完整性没有核对（大小只来自 HEAD 的 Content-Length）；蓝叠 5 的 403 以后是否解除未知，解除后也要重新核对并改表，脚本才会下载它。Windows 自带 `tar.exe`（bsdtar）解压 zip、拒绝含 `..` 的条目，本机用合成 zip 实测过（见 [setup 验证记录](setup-verification.md)）。

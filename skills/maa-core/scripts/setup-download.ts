@@ -32,31 +32,47 @@ export const officialSources = {
     downloadPrefix: 'https://dl.google.com/android/repository/', hosts: ['dl.google.com'], terms: 'https://developer.android.com/studio/terms' },
 } as const;
 /**
- * One recorded official download chain, verified read-only (HEAD, no redirect following) and listed in
- * docs/setup-sources.md: the start address the vendor's official page uses, then the host of every redirect hop
- * in order, the last one serving the file. An empty `hops` means the start address serves the file itself.
+ * One recorded official download chain, verified read-only (HEAD only, redirects not followed, only the script's
+ * User-Agent) and listed in docs/setup-sources.md: the start address the vendor's official page uses, then the host
+ * of every redirect hop in order, the last one serving the file. An empty `hops` means the start address serves the
+ * file itself. `observed` is the HEAD status seen at the start and at each hop (one per address) on the vendor's
+ * `checked` date; the conformance test replays these statuses.
  */
-export type DownloadChain = { start: string; hops: string[] };
+export type DownloadChain = { start: string; hops: string[]; observed: number[] };
+type EmulatorVendor = { name: string; officialPage: string; domains: string[]; checked: string; chains: DownloadChain[] };
 /**
  * The single source of truth for emulator downloads: fully supported emulators from MAA's Windows emulator page.
  * Every plan, HEAD and download hop is checked only against this table: the vendor's official site `domains`
- * (subdomains included) and the exact hosts of its recorded `chains` (no subdomains).
+ * (subdomains included) and the exact hosts of its recorded `chains` (no subdomains). Whether the script may
+ * download a vendor at all is decided by `vendorScriptable` from the recorded statuses.
  */
-export const emulatorVendors: Record<string, { name: string; officialPage: string; domains: string[]; chains: DownloadChain[] }> = {
-  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'],
-    chains: [{ start: 'https://mumu.nie.netease.com/api/dl/win', hops: ['a11.gdl.netease.com'] }] },
-  ldplayer: { name: '雷电模拟器', officialPage: 'https://www.ldmnq.com/', domains: ['ldmnq.com'],
-    chains: [{ start: 'https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe', hops: [] }, { start: 'https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe', hops: [] }] },
-  'bluestacks-cn': { name: '蓝叠模拟器 5', officialPage: 'https://www.bluestacks.cn/', domains: ['bluestacks.cn'],
-    chains: [{ start: 'https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe', hops: [] }] },
-  bluestacks: { name: '蓝叠模拟器 5 国际版', officialPage: 'https://www.bluestacks.com/tw/index.html', domains: ['bluestacks.com'],
-    chains: [{ start: 'https://cloud.bluestacks.com/api/getdownloadnow?platform=win', hops: ['ak-build.bluestacks.com'] }] },
-  nox: { name: '夜神模拟器', officialPage: 'https://www.yeshen.com/', domains: ['yeshen.com'],
-    chains: ['win_64?formal', 'win_64_9?formal'].map(path => ({ start: `https://www.yeshen.com/cn/download/fullPackage/${path}`, hops: ['res06.bignox.com'] }))
-      .concat({ start: 'https://www.yeshen.com/cn/download/fullPackage?formal', hops: ['res06.bignox.com'] }) },
-  memu: { name: '逍遥模拟器', officialPage: 'https://www.xyaz.cn/', domains: ['xyaz.cn'],
-    chains: [{ start: 'https://www.xyaz.cn/download.php?file_name=XYAZ-Installer', hops: ['download.microvirt.com'] }] },
+export const emulatorVendors: Record<string, EmulatorVendor> = {
+  mumu: { name: 'MuMu 模拟器', officialPage: 'https://mumu.163.com/', domains: ['mumu.163.com'], checked: '2026-11-14',
+    chains: [{ start: 'https://mumu.nie.netease.com/api/dl/win', hops: ['a11.gdl.netease.com'], observed: [302, 200] }] },
+  ldplayer: { name: '雷电模拟器', officialPage: 'https://www.ldmnq.com/', domains: ['ldmnq.com'], checked: '2026-11-14',
+    chains: ['ldplayerinst14.exe', 'ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe'].map(path => ({ start: `https://lddl01.ldmnq.com/downloader/${path}`, hops: [], observed: [200] })) },
+  // The file host's hotlink protection answers 403 (x-oss-ec 0003-00000501) to a request without a browser Referer.
+  // The script sends no Referer or other browser-imitating header, so it cannot download this vendor.
+  'bluestacks-cn': { name: '蓝叠模拟器 5', officialPage: 'https://www.bluestacks.cn/', domains: ['bluestacks.cn'], checked: '2026-11-14',
+    chains: [{ start: 'https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe', hops: [], observed: [403] }] },
+  bluestacks: { name: '蓝叠模拟器 5 国际版', officialPage: 'https://www.bluestacks.com/tw/index.html', domains: ['bluestacks.com'], checked: '2026-11-14',
+    chains: [{ start: 'https://cloud.bluestacks.com/api/getdownloadnow?platform=win', hops: ['ak-build.bluestacks.com'], observed: [302, 200] }] },
+  nox: { name: '夜神模拟器', officialPage: 'https://www.yeshen.com/', domains: ['yeshen.com'], checked: '2026-11-14',
+    chains: ['fullPackage/win_64?formal', 'fullPackage/win_64_9?formal', 'fullPackage?formal']
+      .map(path => ({ start: `https://www.yeshen.com/cn/download/${path}`, hops: ['res06.bignox.com'], observed: [302, 200] })) },
+  memu: { name: '逍遥模拟器', officialPage: 'https://www.xyaz.cn/', domains: ['xyaz.cn'], checked: '2026-11-14',
+    chains: [{ start: 'https://www.xyaz.cn/download.php?file_name=XYAZ-Installer', hops: ['download.microvirt.com'], observed: [303, 200] }] },
 };
+/**
+ * The one rule for "this official source lets the script download from it": no status in the chain is 401 or 403.
+ * Those mean the server refuses the script's plain request (for example hotlink protection that wants a browser
+ * Referer). The script never retries with other headers and never sends a Referer or browser-imitating headers: a
+ * refused source ends as `source-refused`, and the user downloads from the official page in their own browser.
+ * Consumers: `vendorScriptable` (recorded statuses) and `request` (every live hop of every index read, plan and download).
+ */
+export function chainScriptable(statuses: readonly number[]) { return statuses.every(status => status !== 401 && status !== 403); }
+/** A vendor is downloadable by the script only when every recorded chain is; otherwise plan and download refuse it before any request. */
+export function vendorScriptable(vendor: EmulatorVendor) { return vendor.chains.every(chain => chainScriptable(chain.observed)); }
 /** Exact hosts a vendor's downloads may touch besides its official site domains: start and hop hosts of its chains. */
 export function vendorHosts(vendor: { chains: DownloadChain[] }) {
   return [...new Set(vendor.chains.flatMap(chain => [new URL(chain.start).hostname, ...chain.hops]))];
@@ -91,14 +107,20 @@ function parseUrl(value: unknown) {
   try { return new URL(value); } catch { return fail('unofficial-source'); }
 }
 
-/** Follows at most five redirects itself so that every hop is checked against the official hosts. */
+/**
+ * The only place that talks to the network. Follows at most five redirects itself so that every hop is checked
+ * against the official hosts, and every hop's status against `chainScriptable` (a refusal is never retried).
+ */
 async function request(fetcher: Fetcher, start: string, method: 'GET' | 'HEAD', allowed: (url: URL) => boolean, signal: AbortSignal, accept?: string) {
   let current = start;
+  const statuses: number[] = [];
   for (let hop = 0; hop <= maxRedirects; hop++) {
     if (!allowed(new URL(current))) fail('unofficial-source');
     let response: Response;
     try { response = await fetcher(current, { method, redirect: 'manual', signal, headers: { 'User-Agent': userAgent, ...(accept ? { Accept: accept } : {}) } }); }
     catch { return fail('source-unavailable'); }
+    statuses.push(response.status);
+    if (!chainScriptable(statuses)) { await response.body?.cancel().catch(() => undefined); fail('source-refused'); }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location');
       await response.body?.cancel().catch(() => undefined);
@@ -208,6 +230,8 @@ const safeFileName = (value: string | undefined) => value !== undefined && /^[A-
 async function resolveEmulator(fetcher: Fetcher, vendorId: unknown, link: unknown, version: unknown): Promise<Release> {
   if (typeof vendorId !== 'string' || !Object.hasOwn(emulatorVendors, vendorId)) return fail('emulator-vendor-unsupported');
   const vendor = emulatorVendors[vendorId]!;
+  // Plan and download both pass here first: a vendor whose official source refuses the script is never contacted.
+  if (!vendorScriptable(vendor)) fail('source-refused');
   const url = parseUrl(link);
   if (!allowedHost(url, vendorHosts(vendor), vendor.domains)) fail('unofficial-source');
   if (typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/.test(version)) fail('version-required');

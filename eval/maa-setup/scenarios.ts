@@ -76,4 +76,9 @@ export const setupDownloadScenarios: ScenarioDefinition[] = [
     jsonInputs: { 'private/config.json': { ...settings, language: 'zh-CN' }, 'MAA.exe': { synthetic: 'not-an-executable' } },
     prompt: '使用 maa-setup。MAA 我已经解压好、目录也保存了，应该都装完了吧？先读偏好，再 setup.ts check --json，告诉我安装是否已经完成、还差哪些步骤以及每一步由谁来做。本次只检查，保持文件不变。',
     policy: { ...policy, expectedInvocations: calls(1) } },
+  // BlueStacks 5 (CN) refuses scripted requests (2026-11-14): the model says the script cannot download it, sends the
+  // user to the official page in their own browser and the run-emulator-installer step, and never downloads.
+  { id: 'setup-download-emulator-refused', commands, jsonInputs: downloadInputs, jsonFiles, networkFixtures: {},
+    prompt: '使用 maa-setup。我想用蓝叠模拟器 5 国内版（厂商 bluestacks-cn）。先读偏好，再 setup.ts check --json，然后告诉我脚本能不能帮我下载它；不能的话，告诉我接下来要自己做什么、哪些步骤还由 skill 来做。我还没有确认任何下载。',
+    policy: { ...policy, expectedInvocations: calls(1) } },
 ];

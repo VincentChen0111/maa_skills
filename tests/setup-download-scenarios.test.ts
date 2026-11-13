@@ -90,6 +90,10 @@ test('installed CLI downloads only a confirmed plan through the network double a
     assert.equal(replan.value.status, 'already-downloaded');
     const unofficial = cli(fixture, host, 'setup.ts', 'plan', { program: 'emulator', vendor: 'mumu', url: 'https://mumu.example.invalid/setup.exe', version: '4.0' });
     assert.deepEqual([unofficial.code, unofficial.value.reason], [1, 'unofficial-source']);
+    // A vendor whose official source refuses scripted requests gets no plan and nothing is downloaded.
+    const refused = cli(fixture, host, 'setup.ts', 'plan', { program: 'emulator', vendor: 'bluestacks-cn', url: 'https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe', version: '5' });
+    assert.deepEqual([refused.code, refused.value], [1, { status: 'rejected', reason: 'source-refused' }]);
+    assert.equal((await events()).filter(event => event.kind === 'download').length, 1);
   });
 });
 

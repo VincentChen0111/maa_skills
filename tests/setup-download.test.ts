@@ -169,6 +169,26 @@ test('unofficial sources are refused at planning and at every redirect, and noth
   assert.deepEqual((await setupDownloadStatus({ home: f.home })).items.map(item => [item.status, item.reason]), [['failed', 'unofficial-source']]);
 });
 
+test('an official server that answers 401 or 403 refuses the script: no plan, or a failed download, as source-refused without a retry', async t => {
+  const f = await fixture(t); const bytes = Buffer.from('synthetic MAA archive');
+  const refusing = (url: string, status: number) => network({ ...maaRelease('v9.1.0', bytes).routes, [url]: { status, body: 'refused' } });
+  await assert.rejects(planSetupDownload({ program: 'maa' }, { home: f.home, arch: 'x64', fetch: refusing(maaIndexUrl, 403).fetch }), { message: 'source-refused' });
+  await assert.rejects(planSetupDownload({ program: 'adb' }, { home: f.home, fetch: network({ 'https://dl.google.com/android/repository/repository2-1.xml': { status: 401 } }).fetch }),
+    { message: 'source-refused' });
+  const node = network({ 'https://nodejs.org/dist/index.json': { body: JSON.stringify([{ version: 'v24.12.3' }]) },
+    'https://nodejs.org/dist/v24.12.3/SHASUMS256.txt': { body: `${sha256('x')}  node-v24.12.3-x64.msi\n` }, 'https://nodejs.org/dist/v24.12.3/node-v24.12.3-x64.msi': { status: 403 } });
+  await assert.rejects(planSetupDownload({ program: 'node' }, { home: f.home, arch: 'x64', fetch: node.fetch, nodeVersion: '22.20.0' }), { message: 'source-refused' });
+  // At download time: the plan was made, then the file host refuses the download request.
+  const release = maaRelease('v9.1.0', bytes); const routes = { ...release.routes }; const net = network(routes);
+  const context = { home: f.home, arch: 'x64', fetch: net.fetch };
+  const plan = await planSetupDownload({ program: 'maa' }, context) as Record<string, any>;
+  routes[release.storage] = { status: 403, body: 'refused' };
+  const result = await downloadSetupProgram({ program: 'maa', planId: plan.planId, fingerprint: plan.fingerprint, reference: 'Download it' }, context);
+  assert.deepEqual([result.status, result.reason], ['failed', 'source-refused']);
+  assert.deepEqual(net.calls.filter(call => call.url === release.storage), [{ url: release.storage, method: 'GET' }], 'one request, no retry');
+  assert.deepEqual(await files(join(f.privateDirectory, 'downloads')), ['records', `records/${plan.planId}.json`]);
+});
+
 test('Node 24 plan reports an unknown size honestly and still verifies the official SHASUMS256 checksum', async t => {
   const f = await fixture(t); const bytes = Buffer.from('synthetic node installer');
   const file = 'node-v24.12.3-x64.msi'; const url = `https://nodejs.org/dist/v24.12.3/${file}`;
