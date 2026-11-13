@@ -3,10 +3,11 @@ import { plainText, readGateState, summarizePages, withResearchGate, type Clock,
   type ResearchResult } from './research.ts';
 
 /**
- * Request steps shared by the community readers that came after NGA (Skland community, experimental
- * Bilibili): one gated GET through the shared cross-process gate, one way to read a JSON body, the
- * HTTP-level risk signals, cache offers and result assembly. Each reader keeps its own classifier for
- * the site's own envelope; the gate, cache and Markdown stay in research.ts.
+ * Steps shared by the community readers that came after NGA. Experimental Bilibili uses all of them: one
+ * gated GET through the shared cross-process gate, one way to read a JSON body, the HTTP-level risk
+ * signals, cache offers and result assembly. The Skland community reader sends its requests through the
+ * shared Skland session instead (skland-session.ts) and uses only the content, cache and result steps.
+ * Each reader keeps its own classifier for the site's own envelope; the gate, cache and Markdown stay in research.ts.
  */
 export const researchUserAgent = 'maa-skills-research (read-only; +https://github.com/VincentChen0111/maa_skills)';
 export type SourceLimits = { minIntervalMs: number; riskStopMs: number; lockStaleMs: number; maxWaitMs: number; timeoutMs: number; maxResponseBytes: number };

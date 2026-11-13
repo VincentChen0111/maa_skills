@@ -12,7 +12,7 @@ export type Clock = { now(): number; sleep(ms: number): Promise<void> };
 export const systemClock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((done) => setTimeout(done, ms)) };
 
 /** What happened to one requested page or target. */
-export type PageOutcome = 'fresh' | 'cached' | 'not-cached' | 'credential-required' | 'credential-rejected' | 'credential-unreadable'
+export type PageOutcome = 'fresh' | 'cached' | 'not-cached' | 'credential-required' | 'credential-rejected' | 'credential-unreadable' | 'signature-rejected'
   | 'risk-control' | 'risk-stopped' | 'unavailable' | 'incomplete' | 'network-failed' | 'busy' | 'skipped';
 export type ResearchStatus = 'ok' | Exclude<PageOutcome, 'fresh' | 'cached'>;
 export type ResearchPage = { target: string; outcome: PageOutcome; served: 'network' | 'cache' | 'stale-cache' | 'none'; readAt: string | null; reason?: string };
@@ -30,7 +30,7 @@ export type ResearchResult = {
 };
 
 /** Most serious first: the result status is the first of these that any page reports. */
-const statusPriority: ResearchStatus[] = ['risk-control', 'risk-stopped', 'credential-rejected', 'credential-required', 'credential-unreadable',
+const statusPriority: ResearchStatus[] = ['risk-control', 'risk-stopped', 'credential-rejected', 'signature-rejected', 'credential-required', 'credential-unreadable',
   'busy', 'network-failed', 'incomplete', 'unavailable', 'not-cached', 'skipped'];
 export function summarizePages(pages: ResearchPage[]): { status: ResearchStatus; complete: boolean } {
   const status = statusPriority.find((value) => pages.some((page) => page.outcome === value)) ?? 'ok';
@@ -206,7 +206,8 @@ const words = {
     status: '状态', requests: '本次网络请求', generated: '生成时间', reliability: '可信度', limitations: '局限', source: '来源', author: '作者', published: '发布时间',
     unknown: '未知', anonymous: '匿名', read: '读取时间', cached: '缓存', stale: '过期缓存', network: '网络', stoppedUntil: '停止到', none: '（没有可引用的资料）',
     floor: (value: string) => `第 ${value} 楼`, page: (value: string) => `第 ${value} 页`, time: (value: string) => `时间点 ${value}`,
-    statuses: { 'ok': '正常', 'risk-control': '遇到风控，已立即停止，本来源暂停请求', 'risk-stopped': '风控暂停中，未发请求', 'credential-rejected': '凭据被拒绝或已知过期',
+    statuses: { 'ok': '正常', 'risk-control': '遇到风控，已立即停止，本来源暂停请求', 'risk-stopped': '风控暂停中，未发请求', 'credential-rejected': '凭据被拒绝或已知过期：请你自己取得新的值，在终端重新运行 credentials.ts input nga，不要贴到对话里',
+      'signature-rejected': '森空岛在本次读取中接受了 token，却仍拒绝请求签名，所以不是 token 过期，凭据状态不变；请检查电脑的系统时间和时区，时间正确仍失败时接口可能已经变化，请报告问题',
       'credential-required': '需要凭据：请你自己在终端运行 credentials.ts input nga 输入，不要贴到对话里', 'credential-unreadable': '凭据无法读取，请你自己重新运行 credentials.ts input nga',
       'busy': '其他调研进程占用请求通道，稍后再试', 'network-failed': '网络失败，未重试', 'incomplete': '响应不完整或格式无法识别，没有读到全文', 'unavailable': '站点不提供该内容（已删除、超出期限或无权限）',
       'not-cached': '只用缓存，但缓存里没有', 'skipped': '因前面的停止而未请求' } as Record<ResearchStatus, string>,
@@ -219,7 +220,8 @@ const words = {
     status: 'Status', requests: 'Network requests this run', generated: 'Generated', reliability: 'Reliability', limitations: 'Limitations', source: 'Source', author: 'Author', published: 'Published',
     unknown: 'unknown', anonymous: 'anonymous', read: 'Read at', cached: 'cache', stale: 'stale cache', network: 'network', stoppedUntil: 'stopped until', none: '(nothing citable)',
     floor: (value: string) => `floor ${value}`, page: (value: string) => `page ${value}`, time: (value: string) => `at ${value}`,
-    statuses: { 'ok': 'ok', 'risk-control': 'risk control hit; stopped at once and this source is paused', 'risk-stopped': 'paused after risk control; no request sent', 'credential-rejected': 'credential rejected or known expired',
+    statuses: { 'ok': 'ok', 'risk-control': 'risk control hit; stopped at once and this source is paused', 'risk-stopped': 'paused after risk control; no request sent', 'credential-rejected': 'credential rejected or known expired: obtain a new value yourself and run credentials.ts input nga again in your own terminal; never paste it into the chat',
+      'signature-rejected': 'Skland accepted the token in this read but still refused the request signature, so the token has not expired and its state is unchanged; check the computer clock and time zone, and if they are correct the interface may have changed, so please report it',
       'credential-required': 'credential needed: run credentials.ts input nga yourself in your own terminal; never paste it into the chat', 'credential-unreadable': 'credential unreadable: run credentials.ts input nga yourself again',
       'busy': 'another research process holds the request gate; try later', 'network-failed': 'network failure; not retried', 'incomplete': 'response incomplete or unrecognized; the full text was not read', 'unavailable': 'the site does not provide this content (deleted, too old or no permission)',
       'not-cached': 'cache only, and nothing is cached', 'skipped': 'not requested because of an earlier stop' } as Record<ResearchStatus, string>,
@@ -232,11 +234,13 @@ const words = {
 const laterLimits: Record<Language, Record<string, string>> = {
   zh: { 'experimental-source': 'B 站支持是实验性的，随时可能失效，不要依赖', 'subtitles-not-read': '没有读到字幕，只有标题和简介',
     'machine-subtitle': '字幕由 B 站自动生成，可能有识别错误', 'login-not-recognized': 'B 站没有把这次请求认作已登录，字幕未读；SESSDATA 可能已失效，可以自己在终端重新运行 credentials.ts input bilibili',
-    'client-signature-required': '森空岛要求官方客户端的请求签名，本工具不伪装官方客户端，所以没有读到内容', 'text-order-approximate': '正文按片段顺序拼接，段落和排版可能与原帖不同' },
+    'text-order-approximate': '正文按片段顺序拼接，段落和排版可能与原帖不同' },
   en: { 'experimental-source': 'Bilibili support is experimental; it may stop working at any time; do not rely on it', 'subtitles-not-read': 'subtitles not read; title and description only',
     'machine-subtitle': 'subtitles generated automatically by Bilibili; may contain recognition errors', 'login-not-recognized': 'Bilibili did not treat this request as signed in, so subtitles were not read; the SESSDATA may have expired: run credentials.ts input bilibili yourself again',
-    'client-signature-required': 'Skland requires the official client\'s request signature; this tool does not imitate the official client, so nothing was read', 'text-order-approximate': 'body joined from text fragments; paragraphs and layout may differ from the post' },
+    'text-order-approximate': 'body joined from text fragments; paragraphs and layout may differ from the post' },
 };
+/** The saved credential a source reads with: the Skland community reader uses the user's Skland account credential. */
+const credentialOf = (source: string) => source === 'skland-community' ? 'skland' : source;
 const describe = (codes: string[], language: Language) => codes.map((code) => words[language].limits[code] ?? laterLimits[language][code] ?? inline(code)).join(language === 'zh' ? '；' : '; ');
 
 /**
@@ -245,7 +249,7 @@ const describe = (codes: string[], language: Language) => codes.map((code) => wo
  */
 export function formatResearchMarkdown(result: ResearchResult, language: Language): string {
   const w = { ...words[language], statuses: Object.fromEntries(Object.entries(words[language].statuses)
-    .map(([key, text]) => [key, text.replaceAll('input nga', `input ${result.source}`)])) as Record<ResearchStatus, string> };
+    .map(([key, text]) => [key, text.replaceAll('input nga', `input ${credentialOf(result.source)}`)])) as Record<ResearchStatus, string> };
   const sep = language === 'zh' ? '：' : ': ';
   const aside = (text: string) => language === 'zh' ? `（${text}）` : ` (${text})`;
   const comma = language === 'zh' ? '，' : ', ';

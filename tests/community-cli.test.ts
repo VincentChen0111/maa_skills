@@ -4,10 +4,12 @@ import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
-import { biliError, playerPayload, sklandError, sklandItemPayload, subtitleFile, videoPayload } from './fixtures/community-data.ts';
+import { biliError, playerPayload, subtitleFile, videoPayload } from './fixtures/community-data.ts';
+import { sklandSecrets } from './fixtures/skland-data.ts';
 
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
 const loaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/community-boundary.mjs', import.meta.url).href];
@@ -84,28 +86,61 @@ test('the Bilibili CLI marks every answer experimental, sends the user\'s SESSDA
   assert.equal((await everything(join(f.privateDirectory, 'research'))).includes(sessdata), false, 'cache and gate files hold no credential');
 });
 
-test('the Skland community CLI reads one named public post anonymously and reports a signature demand without imitating the client', { timeout: 180_000 }, async (t) => {
+const sklandLoaders = ['--import', new URL('./fixtures/credential-boundary.mjs', import.meta.url).href, '--import', new URL('./fixtures/skland-network.mjs', import.meta.url).href];
+/** One Skland community CLI run against the Skland network double; returns the run and the requests the double saw. */
+function sklandCli(f: { root: string; env: NodeJS.ProcessEnv }, action: string, request: unknown, steps: Record<string, unknown[]> = {}) {
+  const scenario = join(f.root, `skland-${randomUUID()}.json`), trace = `${scenario}.trace`;
+  writeFileSync(scenario, JSON.stringify({ steps }));
+  const run = spawnSync(process.execPath, [...sklandLoaders, join(core, 'scripts/skland-community.ts'), action], { env: { ...f.env, MAA_SKLAND_TEST_SCENARIO: scenario, MAA_SKLAND_TEST_TRACE: trace },
+    input: JSON.stringify(request), encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  let requests: { kind: string; method: string; path: string }[] = [];
+  try { requests = JSON.parse(readFileSync(trace, 'utf8')); } catch { /* no process exit record */ }
+  return { code: run.status, stdout: run.stdout ?? '', stderr: run.stderr ?? '', requests };
+}
+test('the Skland community CLI reads one named post with the user\'s own Skland credential, reports refusals with a repair and prints no secret', { timeout: 180_000 }, async (t) => {
   const f = await setup(t, 'en');
-  await f.routes({
-    'https://zonai.skland.com/web/v2/item?id=1234567': { status: 200, payload: sklandItemPayload({ id: '1234567', title: '合成干员培养心得', slices: ['合成干员建议先专精三技能。'] }) },
-    'https://zonai.skland.com/web/v2/item?id=7654321': { status: 401, payload: sklandError(10000, '请求异常') },
-  });
-  const read = await cli(f, 'skland-community.ts', 'read', { post: 'https://www.skland.com/article?id=1234567', format: 'markdown' });
+  const unset = sklandCli(f, 'read', { post: '1234567', format: 'markdown' });
+  assert.equal(unset.code, 1);
+  assert.match(unset.stdout, /credentials\.ts input skland/, 'an unset credential says how the user sets it');
+  assert.deepEqual(unset.requests, [], 'no anonymous attempt');
+  const input = spawnSync(process.execPath, [sklandLoaders[0]!, sklandLoaders[1]!, join(core, 'scripts/credentials.ts'), 'input', 'skland', '--stdin'],
+    { env: f.env, input: `y\n${sklandSecrets.userValue}\n`, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  assert.equal(input.status, 0, input.stdout + input.stderr);
+  assert.match(input.stdout, /community/, 'the consent text says the token also reads community posts the user links');
+
+  const read = sklandCli(f, 'read', { post: 'https://www.skland.com/article?id=1234567' });
   assert.equal(read.code, 0, read.stdout + read.stderr);
-  assert.match(read.stdout, /^# 森空岛社区 \/ Skland community$/m);
-  assert.match(read.stdout, /- Source: https:\/\/www\.skland\.com\/article\?id=1234567/); assert.match(read.stdout, /> 合成干员建议先专精三技能。/);
-  assert.deepEqual((await f.journal()).map((request) => request.headers), [['Accept', 'User-Agent']], 'no credential, cookie, signature or device header');
+  const result = JSON.parse(read.stdout).result;
+  assert.deepEqual([result.status, result.requests, result.credential, result.repair], ['ok', 3, 'usable', null]);
+  assert.deepEqual(read.requests.map((request) => `${request.kind} ${request.method} ${request.path}`),
+    ['grant POST /user/oauth2/v2/grant', 'cred POST /api/v1/user/auth/generate_cred_by_code', 'item GET /web/v2/item']);
+  const markdown = sklandCli(f, 'read', { post: '1234567', format: 'markdown' });
+  assert.equal(markdown.code, 0, markdown.stdout + markdown.stderr);
+  assert.match(markdown.stdout, /^# 森空岛社区 \/ Skland community$/m);
+  assert.match(markdown.stdout, /- Source: https:\/\/www\.skland\.com\/article\?id=1234567/); assert.match(markdown.stdout, /> 合成干员建议先专精三技能。/);
+  assert.deepEqual(markdown.requests, [], 'the second run is served from cache');
   for (const action of ['post', 'like', 'comment', 'search']) {
-    const run = await cli(f, 'skland-community.ts', action, { post: '1234567' });
-    assert.deepEqual([run.code, JSON.parse(run.stdout)], [1, { ok: false, error: 'request-invalid' }], action);
+    const run = sklandCli(f, action, { post: '1234567' });
+    assert.deepEqual([run.code, JSON.parse(run.stdout), run.requests], [1, { ok: false, error: 'request-invalid' }, []], action);
   }
-  const refused = await cli(f, 'skland-community.ts', 'read', { post: '7654321' });
+  const refused = sklandCli(f, 'read', { post: '7654321' }, { item: [{ code: 10000 }] });
   assert.equal(refused.code, 1);
-  const result = JSON.parse(refused.stdout).result;
-  assert.deepEqual([result.status, result.pages[0].reason, result.items.length], ['risk-control', 'signature-required', 0]);
-  const status = JSON.parse((await cli(f, 'skland-community.ts', 'status')).stdout).status;
-  assert.deepEqual([status.stopped, status.stopReason], [true, 'risk-control']);
-  assert.equal((await f.journal()).length, 2);
+  const rejected = JSON.parse(refused.stdout).result;
+  assert.deepEqual([rejected.status, rejected.repair, rejected.credential, rejected.items.length], ['signature-rejected', 'check-system-time', 'unchanged', 0]);
+  const throttled = sklandCli(f, 'read', { post: '7654321', format: 'markdown' }, { item: [{ http: 429 }] });
+  assert.equal(throttled.code, 1);
+  assert.match(throttled.stdout, /risk control hit/);
+  const status = JSON.parse(sklandCli(f, 'status', {}).stdout).status;
+  assert.deepEqual([status.stopped, status.stopReason, status.credential], [true, 'risk-control', 'usable']);
+  for (const run of [unset, read, markdown, refused, throttled]) {
+    for (const value of [sklandSecrets.userValue, sklandSecrets.grantCode, sklandSecrets.cred, sklandSecrets.signKey, sklandSecrets.userId]) {
+      assert.equal((run.stdout + run.stderr).includes(value), false);
+    }
+  }
+  const saved = await everything(join(f.privateDirectory, 'research'));
+  for (const value of [sklandSecrets.userValue, sklandSecrets.grantCode, sklandSecrets.cred, sklandSecrets.signKey, sklandSecrets.userId, '987654321']) {
+    assert.equal(saved.includes(value), false, 'cache and gate files hold no secret or account identifier');
+  }
 });
 
 test('every user entry for Bilibili research says it is experimental', async () => {

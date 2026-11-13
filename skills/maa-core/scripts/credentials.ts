@@ -24,7 +24,7 @@ type ServiceDefinition = { fields: readonly string[]; kind: 'opaque' | 'cookie';
 const services: Record<CredentialService, ServiceDefinition> = {
   nga: { fields: ['cookie'], kind: 'cookie', experimental: false, label: 'NGA', purpose: 'NGA research', value: 'Cookie header value' },
   skland: { fields: ['token'], kind: 'opaque', experimental: false, label: 'Skland account',
-    purpose: 'reading your own account data from Skland (public Skland community pages never use it)', value: 'token' },
+    purpose: 'reading your own account data and the Skland community posts you link', value: 'token' },
   bilibili: { fields: ['sessdata'], kind: 'opaque', experimental: true, label: 'Bilibili (experimental)', purpose: 'experimental Bilibili research', value: 'SESSDATA value' },
 };
 const protection = 'windows-dpapi-current-user';
@@ -226,9 +226,9 @@ const text = {
       '请在你自己已登录 NGA 的浏览器里复制 Cookie 请求头的值。不要把它发到对话里，也不要交给任何人。', '失效后重新运行本脚本，输入新的值即可。'],
     skland: ['森空岛账号凭据（token）设置', '粘贴前请了解：',
       '1. 截至 2026-11-13，没有找到鹰角网络对第三方调用森空岛接口的公开表态。是否使用，由你自己决定。',
-      '2. 这个 token 只用来读取账号数据（干员、仓库、基建等），不用于任何写入、签到或修改。',
+      '2. 这个 token 只用来读取你的账号数据（干员、仓库、基建等）和你给出链接的森空岛社区帖子，不用于任何写入、签到、发帖、点赞、评论或修改。',
       'token 由你自己取得；本脚本只接收你粘贴的 token，不会替你登录。不要把它发到对话里，也不要交给任何人。',
-      '森空岛社区公开内容的调研不会使用这个 token。token 过期后，重新运行本脚本粘贴新的 token。'],
+      'token 过期后，重新运行本脚本粘贴新的 token。'],
     bilibili: ['B 站凭据（SESSDATA）设置——实验性功能', 'B 站相关功能是实验性的，随时可能失效，请不要依赖它。',
       '只用于只读调研：不发评论、不点赞，也不会替你登录。',
       '请在你自己已登录 B 站的浏览器里复制名为 SESSDATA 的 Cookie 值。不要把它发到对话里，也不要交给任何人。', '失效后重新运行本脚本，输入新的值即可。'],
@@ -253,9 +253,9 @@ const text = {
       'When it stops working, run this script again and enter a new value.'],
     skland: ['Skland account credential (token)', 'Before you paste, please note:',
       '1. As of 2026-11-13, we found no public statement from Hypergryph about third parties calling the Skland API. Whether to use it is your decision.',
-      '2. This token is used only to read your account data (operators, depot, base); it is never used to write, check in or change anything.',
+      '2. This token is used only to read your account data (operators, depot, base) and the Skland community posts you link; it is never used to write, check in, post, like, comment or change anything.',
       'You obtain the token yourself; this script only accepts the token you paste and never signs in for you. Do not paste it into a chat or give it to anyone.',
-      'Research on public Skland community pages never uses this token. When the token expires, run this script again and paste a new one.'],
+      'When the token expires, run this script again and paste a new one.'],
     bilibili: ['Bilibili credential (SESSDATA) - experimental', 'Bilibili features are experimental and may stop working at any time; do not rely on them.',
       'Used only for read-only research: it never comments or likes and never signs in for you.',
       'Copy the value of the cookie named SESSDATA from your own browser where you are signed in to Bilibili. Do not paste it into a chat or give it to anyone.',

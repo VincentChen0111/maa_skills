@@ -45,4 +45,3 @@ export function sklandItemPayload(options: { id: string; title: string; nickname
     user: options.nickname === null ? null : { id: '987654321', nickname: options.nickname ?? '合成博士', avatar: 'https://bbs.hycdn.cn/avatar/synthetic.png' },
   } };
 }
-export const sklandError = (code: number, message: string) => ({ code, message, timestamp: '1780000500' });

@@ -11,6 +11,11 @@ import * as bilibiliReader from '../skills/maa-core/scripts/bilibili.ts';
 import * as sklandReader from '../skills/maa-core/scripts/skland-community.ts';
 import { transportDouble } from './fixtures/nga-data.ts';
 import { json, playerPayload, sklandItemPayload, subtitleFile, videoPayload } from './fixtures/community-data.ts';
+import { sklandSecrets } from './fixtures/skland-data.ts';
+import type { SklandFetch } from '../skills/maa-core/scripts/skland-session.ts';
+
+const sklandDoubles = await import(new URL('./fixtures/skland-double.mjs', import.meta.url).href) as {
+  createSklandDouble(scenario?: { steps?: Record<string, unknown[]> }): { fetch: SklandFetch; trace: { kind: string }[] } };
 
 // Conformance for the one rule on fetched content (research-fetch.ts `readContents`): for every content field
 // either reader takes from a site, the site's explicit "none" is an honest empty result, the known shape is read,
@@ -101,15 +106,19 @@ async function run(reader: Case['reader'], edit: (p: Payloads) => void) {
   try {
     const privateDirectory = join(root, 'private');
     if (reader === 'bilibili') await saveCredential('bilibili', `synthetic-sessdata-${randomUUID()}`, { privateDirectory, protector });
+    else await saveCredential('skland', sklandSecrets.userValue, { privateDirectory, protector });
     const payloads = base(); edit(payloads);
+    // The Skland post is read with the user's own Skland session through the account network double.
+    const skland = sklandDoubles.createSklandDouble({ steps: { item: [{ data: payloads.post.data }] } });
     const { transport, calls } = transportDouble((url) => { const kind = requestOf(url); return kind ? json(payloads[kind === 'view' ? 'video' : kind]) : undefined; });
     const { clock, advance } = manualClock();
     const read = () => reader === 'bilibili' ? bilibiliReader.readBilibiliVideo({ video: bvid }, { privateDirectory, transport, protector, clock })
-      : sklandReader.readSklandPost({ post: '1234567' }, { privateDirectory, transport, clock });
+      : sklandReader.readSklandPost({ post: '1234567' }, { privateDirectory, fetcher: skland.fetch, protector, clock });
     const first = await read();
     advance(60_000);
     const second = await read();
-    return { first, second, sent: (kind: Case['request']) => calls.filter((call) => requestOf(new URL(call.url)) === kind).length };
+    return { first, second, sent: (kind: Case['request']) => kind === 'post' ? skland.trace.filter((entry) => entry.kind === 'item').length
+      : calls.filter((call) => requestOf(new URL(call.url)) === kind).length };
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
