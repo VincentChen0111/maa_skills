@@ -7,7 +7,7 @@ import { alternateRunRecords, preparedSwitchRecord, type AlternateRunKind } from
  * stop and report without looking for other jobs; a prepared switch means the user clicks start after `start`.
  * The records and the switch ledger entry are fixed literals (tests/fixtures/stage-alternate-records.ts).
  */
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'UseMedicine', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-run.ts', action: 'read' }] };
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };

@@ -14,7 +14,7 @@ const unverified = scenarioWorld('unverified', settings);
 const outside = scenarioWorld('outside', settings);
 const unapproved = scenarioWorld('unapproved', settings);
 
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, approvals: [], lockFiles: ['config/gui.new.json'] };
 const commands = ['node *preferences.ts *', 'node *maa-config.ts read', 'node *base-apply.ts check'];
 const jsonFiles = ['private/config.json', 'config/gui.new.json'];

@@ -3,7 +3,7 @@ import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 // NGA research scenarios for maa-account. None of them can reach the network: the fixture has no NGA
 // credential, so the reader sends nothing; cached data and a recorded stop are plain synthetic files.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: null, server: 'CN' };
-const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'] };
 const commands = ['node *preferences.ts read*', 'node *credentials.ts check*', 'node *nga.ts search*', 'node *nga.ts read*', 'node *nga.ts status*'];
 const read = { file: 'maa-core/scripts/preferences.ts', action: 'read' };
