@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { matchStageJobs, prepareStageJobs } from '../../skills/maa-core/scripts/stage-jobs.ts';
 import { inspectConfiguration, type MaaProcess, type MaaState } from '../../skills/maa-core/scripts/maa-config.ts';
 import { approvedJobFile } from '../../skills/maa-core/scripts/stage-job-plan.ts';
-import { applyCoreLines, applyGap, applyGuiLines, emptyRunState, fileKey, type RunList } from '../../skills/maa-core/scripts/stage-run-state.ts';
+import { applyCoreLines, applyGap, applyGuiLines, emptyRunState, fileKey, type RunList, type Verification } from '../../skills/maa-core/scripts/stage-run-state.ts';
 import type { StageRunRecord } from '../../skills/maa-core/scripts/stage-run.ts';
 import { stageSnapshot, stageTables, stageJob } from './stage-data.ts';
 
@@ -78,8 +78,10 @@ export async function preparedBatch(): Promise<PreparedBatch> {
     const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
     await mkdir(join(maaDirectory, 'config'), { recursive: true }); await mkdir(join(maaDirectory, 'debug'), { recursive: true });
     await writeFile(join(maaDirectory, 'config/gui.new.json'), JSON.stringify({ Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { TaskQueue: [], Copilot: { TaskList: [], EnableUserAdditional: true } } }, Timers: { List: [] } }));
-    await writeFile(join(maaDirectory, 'debug/asst.log'), `${core(-600, 'TaskChainError', { taskchain: 'Copilot', taskid: 9 })}\n`);
-    await writeFile(join(maaDirectory, 'debug/gui.log'), `${gui(-600, '任务出错: 自动战斗', 'ERR')}\n`);
+    /** Older than the preparation whenever the tests run: the logs reach back before it, and these lines are never the batch's. */
+    const older = -30 * 86400;
+    await writeFile(join(maaDirectory, 'debug/asst.log'), `${core(older, 'TaskChainError', { taskchain: 'Copilot', taskid: 9 })}\n`);
+    await writeFile(join(maaDirectory, 'debug/gui.log'), `${gui(older, '任务出错: 自动战斗', 'ERR')}\n`);
     const snapshot = stageSnapshot(), report = matchStageJobs(snapshot, runTables, runRequest, runJobs());
     const state: MaaState = { running: false, treeExited: true, idle: true, ready: false };
     const maa: MaaProcess = { inspect: async () => ({ ...state }), close: async () => { Object.assign(state, { running: false, treeExited: true, ready: false }); },
@@ -97,12 +99,17 @@ export async function preparedBatch(): Promise<PreparedBatch> {
 }
 
 /** A finished run record built with the same pure classifier, for read-only behaviour scenarios (no logs needed). */
-export type SyntheticRunKind = 'not-three-star' | 'disconnect' | 'evidence-gap' | 'unapproved-medicine' | 'native-takeover';
+export type SyntheticRunKind = 'not-three-star' | 'disconnect' | 'evidence-gap' | 'unapproved-medicine' | 'native-takeover' | 'ask-progress';
+/** A verification after the disconnect that found MAA running, the prepared list unchanged and every check passing. */
+const clearVerification: Verification = { at: '2026-11-13T02:12:00.000Z', process: { running: true, idle: true }, preparedList: 'matches', checks: [],
+  unknown: ['sanity', 'medicine-inventory', 'originium', 'stage-progress'], accountSnapshotReadAt: null, clear: true };
 export function syntheticRunRecord(kind: SyntheticRunKind, runId: string): StageRunRecord {
   const files = ['jobs/synthetic-1.json', 'jobs/synthetic-1.json', 'jobs/synthetic-4.json'];
   const list: RunList = files.map((file, index) => ({ index, stageId: index < 2 ? 'synthetic_01' : 'synthetic_02', code: index < 2 ? 'SYN-1' : 'SYN-2', jobId: index < 2 ? 1 : 4, fileKey: fileKey(file) }));
   const state = emptyRunState(), at = '2026-11-13T02:10:00.000Z';
-  const lines = kind === 'disconnect' ? [...copilotStart(0, { files }), ...attempt(10, 0, files[0]!, 'open', [connection(20, 'Reconnecting'), connection(40, 'Disconnect')]), ...chainEnd(41, 'TaskChainError')]
+  const settledThenDisconnect = [processTask(80, 'SubTaskStart', 'Copilot@EndOfAction'), connection(81, 'Reconnecting'), connection(85, 'Disconnect')];
+  const lines = kind === 'ask-progress' ? [...copilotStart(0, { files }), ...attempt(10, 0, files[0]!, 'open', settledThenDisconnect), ...chainEnd(86, 'TaskChainError')]
+    : kind === 'disconnect' ? [...copilotStart(0, { files }), ...attempt(10, 0, files[0]!, 'open', [connection(20, 'Reconnecting'), connection(40, 'Disconnect')]), ...chainEnd(41, 'TaskChainError')]
     : kind === 'unapproved-medicine' ? [...copilotStart(0, { files, medicine: true }), ...attempt(10, 0, files[0]!, 'three-star', [medicineConfirm(12), medicineUsed(13, 2)]),
       ...attempt(60, 1, files[1]!, 'not-three-star'), ...chainEnd(100, 'TaskChainError')]
     : kind === 'native-takeover' ? [...copilotStart(0, { files }), ...attempt(10, 0, files[0]!, 'three-star'), core(102, 'TaskChainStopped', { taskchain: 'Copilot', taskid: 1 }),
@@ -123,5 +130,5 @@ export function syntheticRunRecord(kind: SyntheticRunKind, runId: string): Stage
     batch: { operation: '6f3d8a52-0c1e-4b7a-9d2f-1a2b3c4d5e6f', reportHash: 'c'.repeat(64), map: 'synthetic_map', profile: 0, listCheck: 'matches',
       stages: [{ stageId: 'synthetic_01', code: 'SYN-1', loops: 2, primary: 1, alternates: [2] }, { stageId: 'synthetic_02', code: 'SYN-2', loops: 1, primary: 4, alternates: [] }], list },
     anchors: structuredClone(cursors), cursors, state, userReports: [], screenshots: kind === 'not-three-star' ? ['debug/interface/synthetic-failure.png'] : [],
-    verifications: [], decisions: [], lastObservedAt: at, lastActivityAt: at, processExitCode: null };
+    verifications: kind === 'ask-progress' ? [clearVerification] : [], decisions: [], lastObservedAt: at, lastActivityAt: at, processExitCode: null };
 }

@@ -338,56 +338,181 @@ function assessRun(view: RunView) {
   /** An unknown outcome may have spent sanity or finished the stage once the attempt entered battle or reached settlement. */
   const unresolved = counted.filter(item => finalResult(item) === 'unknown' && (item.flags.battle || item.flags.endOfAction) && !stated.has(stageOf(item.index) ?? ''))
     .map(item => item.index);
-  return { execution, reason, ended, stageResults, medicine, verdict, guiErrors, blocking, verified, verification, hardBlock, unresolved,
+  /** Attempts whose battle provably ended (settlement screen, 3 stars, a failed battle, or a result that implies one). */
+  const settled = counted.filter(item => item.flags.endOfAction || item.flags.threeStar || item.flags.missionFailed || settledResults.has(finalResult(item)))
+    .map(item => stageOf(item.index) ?? '');
+  return { execution, reason, ended, stageResults, medicine, verdict, guiErrors, blocking, verified, verification, hardBlock, unresolved, settled,
     chainStarted: !!state.chain, jobFailureSeen: stageResults.some(stage => stage.result === 'failed' || stage.result === 'not-three-star') };
 }
+const settledResults = new Set<BusinessResult>(['success', 'failed', 'not-three-star']);
 
-export type RerunRequest = { kind: 'decide'; runId: string; decision: Decision } | { kind: 'start'; retryOf: string | null };
+/**
+ * Batch-wide log evidence, independent of which run record attributed what: every Copilot task chain that started in
+ * MAA's Core log since the batch's earliest anchor, Copilot callbacks whose chain start was never seen there, and log
+ * gaps over that span. `beforeTracking` is set only while the batch has no record yet: `null` when nothing since the
+ * preparation began submitted or loaded one of the batch's approved job files, otherwise the reason. `ticks` is the
+ * current GUI list (`IsChecked` per list index).
+ */
+export type BatchEvidence = { chains: { processId: string; taskId: number; at: string }[]; loose: number; gaps: string[];
+  beforeTracking: 'batch-may-have-run' | 'batch-evidence-incomplete' | null; ticks: { index: number; checked: boolean }[] | null };
+export type BatchView = { records: RunView[]; evidence: BatchEvidence | null };
+export function emptyBatchEvidence(): BatchEvidence { return { chains: [], loose: 0, gaps: [], beforeTracking: null, ticks: null }; }
+/** Producer of "a chain may have run" once the batch has records: scans Core log lines from the earliest anchor, in order. */
+export function scanBatchLines(evidence: BatchEvidence, lines: string[]) {
+  for (const line of lines) {
+    const entry = parseCoreLogLine(line);
+    if (!entry || entry.method !== 'append_callback') continue;
+    const callback = parseCallbackBody(entry.body);
+    if (!callback || callback.payload.taskchain !== 'Copilot') continue;
+    const taskId = callback.payload.taskid;
+    if (callback.message === 'TaskChainStart' && Number.isSafeInteger(taskId)) evidence.chains.push({ processId: entry.processId, taskId: taskId as number, at: entry.time });
+    else if (!evidence.chains.some(chain => chain.processId === entry.processId && chain.taskId === taskId)) evidence.loose++;
+  }
+}
+/**
+ * Producer before the batch's first record: whether any Core line (current and rotated log) submitted or loaded one of the
+ * batch's approved job files. The files exist only for this approval, so a mention at any time means the batch may have
+ * run. `earliest` is the first readable line time, to tell whether the logs reach back to the preparation.
+ */
+export function scanBeforeTracking(lines: string[], files: ReadonlySet<string>) {
+  let earliest = Infinity, mentioned = false;
+  const approved = (value: unknown) => typeof value === 'string' && files.has(fileKey(value));
+  for (const line of lines) {
+    const at = time(/^\[([^\]]+)\]/.exec(line)?.[1] ?? '');
+    if (Number.isFinite(at)) earliest = Math.min(earliest, at);
+    const entry = parseCoreLogLine(line);
+    if (!entry) continue;
+    if (entry.method === 'append_task') {
+      const params = record(parseTaskSubmission(entry.body)?.params);
+      if (approved(params.filename) || (Array.isArray(params.copilot_list) && params.copilot_list.some(item => approved(record(item).filename)))) mentioned = true;
+    } else if (entry.method === 'append_callback') {
+      const callback = parseCallbackBody(entry.body);
+      if (callback && approved(record(callback.payload.details).file_name)) mentioned = true;
+    }
+  }
+  return { earliest, mentioned };
+}
+
+export type RerunRequest = { kind: 'decide'; runId: string; decision: Decision }
+  | { kind: 'progress'; runId: string; stages: { stageId: string; completedRuns: number }[] }
+  | { kind: 'start'; retryOf: string | null };
 export type GateResult = { allowed: boolean; reason: string };
 const allow = (reason: string): GateResult => ({ allowed: true, reason });
 const deny = (reason: string): GateResult => ({ allowed: false, reason });
-function judge(assessment: ReturnType<typeof assessRun>, decision: Decision): GateResult {
+type Assessment = ReturnType<typeof assessRun>;
+/** The record's own evidence. A MAA-reported job failure is never retried with the same job, only switched or stopped. */
+function judge(assessment: Assessment, decision: Decision): GateResult {
   if (!assessment.ended) return decision === 'stop-and-tell-user' && !assessment.chainStarted ? allow('close-before-start') : deny('tracking');
   if (decision === 'stop-and-tell-user') return allow('stop');
   if (assessment.hardBlock) return deny(assessment.hardBlock);
-  if (assessment.unresolved.length) return deny('outcome-unknown');
   const environment = assessment.blocking.length > 0;
-  if (decision === 'retry-within-approval') return environment && assessment.verified ? allow('environment-verified') : deny(environment ? 'not-verified' : 'no-environment-failure');
-  return assessment.jobFailureSeen ? allow('maa-reported-failure') : environment && assessment.verified ? allow('environment-verified') : deny('no-reported-failure');
+  if (environment && !assessment.verified) return deny('not-verified');
+  if (assessment.unresolved.length) return deny('outcome-unknown');
+  if (decision === 'retry-within-approval') return assessment.jobFailureSeen ? deny('job-failure-reported') : environment ? allow('environment-verified') : deny('no-environment-failure');
+  return assessment.jobFailureSeen ? allow('maa-reported-failure') : environment ? allow('environment-verified') : deny('no-reported-failure');
 }
+const sameChain = (a: { processId: string; taskId: number; at: string }, b: { processId: string; taskId: number; at: string }) =>
+  a.processId === b.processId && a.taskId === b.taskId && a.at === b.at;
 /**
- * The one owner of "may this batch be fought again". Every entry point asks it: the decisions offered in a summary,
- * `decide`, and `start` with or without `retryOf`. A retry or alternate needs every unknown attempt to have stayed out of
- * battle (or the user to have stated the stage progress); a new start without `retryOf` needs no record of the batch to
- * have started a task chain and none to be still tracking; a retry needs the recorded decision, the gate still open for
- * that record, and no later record that started a chain.
+ * Batch-wide hold: anything in the logs that no record has resolved. `ignoreUnresolvedOf` lets a summary ask whether the
+ * user's statement for that record is the only thing missing.
  */
-export function rerunGate(views: RunView[], request: RerunRequest): GateResult {
-  if (request.kind === 'decide') {
-    const view = views.find(item => item.runId === request.runId);
-    return view ? judge(assessRun(view), request.decision) : deny('run-not-found');
+function batchHold(batch: BatchView, ignoreUnresolvedOf?: string): string | null {
+  const { evidence } = batch;
+  if (!evidence) return 'batch-evidence-unavailable';
+  if (evidence.gaps.length || batch.records.some(record => record.state.gaps.length)) return 'evidence-incomplete';
+  if (evidence.loose) return 'chain-without-start';
+  if (evidence.chains.some(chain => !batch.records.some(record => record.state.chain && sameChain(record.state.chain, chain)))) return 'untracked-chain';
+  if (batch.records.some(record => record.state.chain && !evidence.chains.some(chain => sameChain(chain, record.state.chain!)))) return 'evidence-inconsistent';
+  for (const record of batch.records) {
+    const assessment = assessRun(record);
+    if (!assessment.ended) return 'run-unresolved';
+    if (!record.state.chain) continue;
+    if (assessment.hardBlock) return assessment.hardBlock;
+    if (assessment.unresolved.length && record.runId !== ignoreUnresolvedOf) return 'outcome-unknown';
   }
-  const assessed = views.map(view => ({ view, assessment: assessRun(view) }));
-  if (assessed.some(item => !item.assessment.ended)) return deny('run-unresolved');
-  if (request.retryOf === null) return assessed.some(item => item.assessment.chainStarted) ? deny('run-unresolved') : allow('no-earlier-chain');
-  const previous = assessed.find(item => item.view.runId === request.retryOf);
-  if (!previous || previous.view.decisions.at(-1)?.decision !== 'retry-within-approval' || !judge(previous.assessment, 'retry-within-approval').allowed) return deny('retry-not-decided');
-  if (assessed.some(item => item !== previous && item.assessment.chainStarted && item.view.createdAt >= previous.view.createdAt)) return deny('run-unresolved');
+  return null;
+}
+const latestChainOwner = (batch: BatchView) => {
+  const last = batch.evidence?.chains.at(-1);
+  return last ? batch.records.find(record => record.state.chain && sameChain(record.state.chain, last)) : undefined;
+};
+const stageRuns = (batch: BatchView) => {
+  const proven = new Map<string, number>(), stated = new Map<string, { at: string; runs: number }>();
+  for (const record of batch.records) {
+    for (const stageId of assessRun(record).settled) proven.set(stageId, (proven.get(stageId) ?? 0) + 1);
+    for (const statement of record.state.progress) for (const stage of statement.stages) {
+      if ((stated.get(stage.stageId)?.at ?? '') <= statement.at) stated.set(stage.stageId, { at: statement.at, runs: stage.completedRuns });
+    }
+  }
+  return { proven: (stageId: string) => proven.get(stageId) ?? 0, completed: (stageId: string) => Math.max(proven.get(stageId) ?? 0, stated.get(stageId)?.runs ?? 0) };
+};
+/**
+ * The one owner of "may this batch be fought again". Every consumer asks it: the decisions offered in a summary, `decide`,
+ * `progress`, and `start` with or without `retryOf`. It answers from the batch-wide log evidence, not from one record:
+ * - retry or alternate: the record's own evidence allows it, nothing in the batch is unresolved (untracked or
+ *   unattributed chains, log gaps, records that are still tracking, hard blocks, battles with unknown outcome and no user
+ *   statement), and the record owns the batch's latest chain;
+ * - a progress statement never undercuts what callbacks prove;
+ * - the first start of a batch: nothing since the preparation submitted or loaded the batch's approved job files, and
+ *   the logs reach back to the preparation;
+ * - start without `retryOf`: no record is tracking and no Copilot chain, callback or gap is in the batch's logs;
+ * - start with `retryOf`: the recorded retry decision still passes, no chain started since (one chain per decision), and
+ *   the GUI list has no more ticked entries per stage than approved minus completed (user-stated or callback-proven).
+ */
+export function rerunGate(batch: BatchView, request: RerunRequest): GateResult {
+  if (request.kind === 'decide' || request.kind === 'progress') {
+    const view = batch.records.find(item => item.runId === request.runId);
+    if (!view) return deny('run-not-found');
+    const assessment = assessRun(view);
+    if (request.kind === 'progress') {
+      if (!assessment.ended) return deny('run-tracking');
+      const { proven } = stageRuns(batch);
+      return request.stages.some(stage => stage.completedRuns < proven(stage.stageId)) ? deny('progress-contradicts-evidence') : allow('progress');
+    }
+    const verdict = judge(assessment, request.decision);
+    if (!verdict.allowed || request.decision === 'stop-and-tell-user') return verdict;
+    const hold = batchHold(batch);
+    if (hold) return deny(hold);
+    return latestChainOwner(batch)?.runId === view.runId ? verdict : deny('not-latest-run');
+  }
+  if (!batch.evidence) return deny('batch-evidence-unavailable');
+  if (!batch.records.length) return request.retryOf !== null ? deny('retry-not-decided') : batch.evidence.beforeTracking ? deny(batch.evidence.beforeTracking) : allow('nothing-before-tracking');
+  if (batch.records.some(record => !assessRun(record).ended)) return deny('run-unresolved');
+  if (request.retryOf === null) {
+    const ran = batch.evidence.chains.length || batch.evidence.loose || batch.evidence.gaps.length
+      || batch.records.some(record => record.state.chain || record.state.gaps.length);
+    return ran ? deny('run-unresolved') : allow('no-earlier-chain');
+  }
+  const previous = batch.records.find(record => record.runId === request.retryOf);
+  if (!previous || previous.decisions.at(-1)?.decision !== 'retry-within-approval') return deny('retry-not-decided');
+  const verdict = rerunGate(batch, { kind: 'decide', runId: previous.runId, decision: 'retry-within-approval' });
+  if (!verdict.allowed) return deny(verdict.reason === 'not-latest-run' ? 'chain-already-started' : verdict.reason);
+  const ticks = batch.evidence.ticks;
+  if (!ticks) return deny('list-unreadable');
+  const { completed } = stageRuns(batch);
+  for (const stage of previous.stages) {
+    const indexes = new Set(previous.list.filter(item => item.stageId === stage.stageId).map(item => item.index));
+    const ticked = ticks.filter(item => item.checked && indexes.has(item.index)).length;
+    if (ticked > Math.max(0, stage.loops - completed(stage.stageId))) return deny('finished-items-ticked');
+  }
   return allow('retry-decided');
 }
 
 const decisionOrder: Decision[] = ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user'];
-export function deriveRun(view: RunView) {
+export function deriveRun(view: RunView, batch: BatchView | null) {
   const assessment = assessRun(view), { state } = view;
-  const allowedDecisions = decisionOrder.filter(decision => judge(assessment, decision).allowed);
+  const context: BatchView = batch && batch.records.some(item => item.runId === view.runId) ? batch : { records: [view], evidence: batch?.evidence ?? null };
+  const allowedDecisions = decisionOrder.filter(decision => rerunGate(context, { kind: 'decide', runId: view.runId, decision }).allowed);
   const latestInput = [assessment.verification?.at, state.progress.at(-1)?.at].filter((value): value is string => !!value).sort().at(-1);
+  const otherHold = batchHold(context, view.runId);
   const next = assessment.reason === 'closed-before-start' ? 'report'
     : assessment.blocking.length && !assessment.verified ? 'verify'
     : !assessment.ended ? 'keep-observing'
     : !assessment.hardBlock && assessment.unresolved.length ? 'ask-progress'
     : allowedDecisions.includes('retry-within-approval') && !view.decisions.some(item => !latestInput || item.at >= latestInput) ? 'decide' : 'report';
   return { execution: assessment.execution, executionReason: assessment.reason, stages: assessment.stageResults, medicine: assessment.medicine, allowedDecisions, next,
-    unresolvedAttempts: assessment.unresolved, progress: state.progress,
+    unresolvedAttempts: assessment.unresolved, progress: state.progress, rerunHold: otherHold,
     gui: { verdict: assessment.verdict, errors: assessment.guiErrors.map(marker => marker.marker) },
     evidence: { complete: !state.gaps.length && !state.takeover, gaps: state.gaps.map(gap => ({ log: gap.log, reason: gap.reason })), rotated: state.rotated },
     environment: state.environment.map(item => ({ at: item.at, category: item.category, message: item.message, what: item.what, transient: item.transient, diagnosis: environmentDiagnosis(item.category) })),

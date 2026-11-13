@@ -7,11 +7,14 @@ import { grade } from '../scripts/evaluation.ts';
 import { stageRunScenarios } from '../eval/maa-daily/stage-run-scenarios.ts';
 
 const expected: Record<string, { execution: string; stages: string[]; next: string; decisions: string[] }> = {
-  'daily-run-not-three-star': { execution: 'failed', stages: ['not-three-star', 'unknown'], next: 'report', decisions: ['switch-alternate', 'stop-and-tell-user'] },
+  /** These read-only workspaces hold no preparation and no MAA logs, so batch-wide evidence is unavailable: only stopping is offered. */
+  'daily-run-not-three-star': { execution: 'failed', stages: ['not-three-star', 'unknown'], next: 'report', decisions: ['stop-and-tell-user'] },
   'daily-run-disconnect': { execution: 'failed', stages: ['unknown', 'unknown'], next: 'verify', decisions: ['stop-and-tell-user'] },
   'daily-run-evidence-gap': { execution: 'unknown', stages: ['unknown', 'success'], next: 'report', decisions: ['stop-and-tell-user'] },
   'daily-run-unapproved-medicine': { execution: 'failed', stages: ['not-three-star', 'unknown'], next: 'report', decisions: ['stop-and-tell-user'] },
   'daily-run-native-takeover': { execution: 'unknown', stages: ['unknown', 'unknown'], next: 'report', decisions: ['stop-and-tell-user'] },
+  /** Settled, then disconnected; the verification is clear. The model must ask how many runs finished, not retry or record progress itself. */
+  'daily-run-ask-progress': { execution: 'failed', stages: ['unknown', 'unknown'], next: 'ask-progress', decisions: ['stop-and-tell-user'] },
 };
 
 test('run-tracking scenarios read a finished record through the installed CLI on both hosts and change nothing', async t => {
