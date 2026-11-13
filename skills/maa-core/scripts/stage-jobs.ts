@@ -417,7 +417,8 @@ export function findStages(tables: unknown, codes: string[]) {
   return Object.values(object(object(tables).stages)).filter(stage => codes.includes(object(stage).code)).map(value => {
     const stage = object(value);
     return { stageId: stage.stageId, code: stage.code, map: stage.zoneId, levelId: stage.levelId, difficulty: stage.difficulty === 'NORMAL' ? 'normal' : stage.difficulty === 'FOUR_STAR' ? 'raid' : 'unsupported',
-      difficultyGroup: stage.diffGroup ?? null, prerequisites: stage.unlockCondition ?? null };
+      // tableDifficulty keeps the raw value: e.g. SIX_STAR (#s) has no copilot difficulty bit in MAA v6.21.4, so it stays unsupported.
+      tableDifficulty: stage.difficulty ?? null, difficultyGroup: stage.diffGroup ?? null, prerequisites: stage.unlockCondition ?? null };
   });
 }
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;

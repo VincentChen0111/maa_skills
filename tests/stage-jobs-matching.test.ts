@@ -267,3 +267,18 @@ test('reports in the earlier match structure no longer verify, so their approval
   await assert.rejects(() => prepareStageJobs({ report: older, approval, snapshot, maaDirectory: 'unused', privateDirectory: 'unused', profile: 0, host: 'codex', expectedRevision: 'unused' }, maa), /approval-mismatch/);
   assert.notEqual(older.hash, report.hash);
 });
+
+test('the six-star #s stage spelling is listed but not matched: the pinned copilot protocol has no difficulty bit for it', async () => {
+  const { findStages } = await import('../skills/maa-core/scripts/stage-jobs.ts');
+  const tables = { stages: { ...stageTables.stages,
+    synthetic_02: { stageId: 'synthetic_02', code: 'SYN-2', levelId: 'Obt/Synthetic/level_synthetic_02', zoneId: 'synthetic_map', difficulty: 'NORMAL', unlockCondition: [] },
+    'synthetic_02#s': { stageId: 'synthetic_02#s', code: 'SYN-2', levelId: 'Obt/Synthetic/level_synthetic_02', zoneId: 'synthetic_map', difficulty: 'SIX_STAR', unlockCondition: [] } } };
+  assert.deepEqual(findStages(tables, ['SYN-2']).map(stage => [stage.stageId, stage.difficulty, stage.tableDifficulty]), [['synthetic_02', 'normal', 'NORMAL'], ['synthetic_02#s', 'unsupported', 'SIX_STAR']]);
+  const request = (stageId: string, difficulty: 'normal' | 'raid') => ({ ...stageRequest, stages: [{ stageId, code: 'SYN-2', difficulty, loops: 1 }] });
+  for (const difficulty of ['normal', 'raid'] as const) assert.throws(() => matchStageJobs(snapshot, tables, request('synthetic_02#s', difficulty), []), /stage-identity-mismatch/);
+  const sixStarJob = { ...stageJob(91), content: { ...stageJob(91).content, stage_name: 'synthetic_02#s' } };
+  const normalJob = { ...stageJob(92), content: { ...stageJob(92).content, stage_name: 'synthetic_02' } };
+  const stage = matchStageJobs(snapshot, tables, request('synthetic_02', 'normal'), [sixStarJob, normalJob]).stages[0]!;
+  assert.deepEqual(stage.candidates.map(candidate => [candidate.id, candidate.status]), [[91, 'blocked'], [92, 'ready']]);
+  assert.ok(stage.candidates[0]!.reasons.includes('map-mismatch'));
+});
