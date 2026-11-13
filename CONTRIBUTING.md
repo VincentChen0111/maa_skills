@@ -4,13 +4,13 @@
 
 ## 本地验证
 
-Node 24 直接运行 TypeScript。干净检出无需下载依赖即可运行 `node scripts/check.ts`（或 `npm run check`），覆盖脚本测试、tracker、相对文档链接、插件描述和隐私检查。入口给测试创建临时 home；测试数据只来自临时目录和合成样例，不操作真实 MAA、用户私有目录或已安装 skill。入口也运行 `scripts/eval-selftest.ts` 的评分规则自检；真模型运行、证据留存及未验证项见[行为评测](docs/evaluation.md)。
+Node 24 直接运行 TypeScript。干净检出无需下载依赖即可运行 `node scripts/check.ts`（或 `npm run check`），覆盖脚本测试、tracker、相对文档链接、插件描述和隐私检查。入口给测试创建临时 home；测试数据只来自临时目录和合成样例，不操作真实 MAA、用户私有目录或已安装 skill。入口也运行 `scripts/eval-selftest.ts` 的评分规则自检和不调用模型的评测环境预检（宿主替身，记录带替身标记，不算模型基线）；真模型运行、证据留存及未验证项见[行为评测](docs/evaluation.md)。
 
 开发类型检查先运行 `npm ci --ignore-scripts`，再运行 `npm run typecheck`。依赖由 lockfile 固定；离线检查入口本身没有第三方运行依赖。定向测试用 `node --test tests/privacy.test.ts` 等，完整验证用离线入口。CI 的依赖准备阶段联网，检查阶段没有网络或模型调用；Linux job 只验证可移植的开发检查工具，不代表支持非 Windows 的 MAA。
 
 新增脚本行为前，在工具 CLI/导出函数或 skill 外部行为接缝写一个失败测试，再实现该行为。用真实临时目录，只替代 MAA 进程、adb、网络。每个改动包由一名新上下文审查员审查完整任务、规格和 diff，原则上最多三轮；达到上限后的修复复核按 [AGENTS.md](AGENTS.md) 由执行代理决定追加，并优先完整审查以减少轮次。记录在 `docs/reviews/日期-工单-主题.md`，包括基点、范围、逐条意见、接受/拒绝理由、轮次授权、最终结论和未验证项。无意见也要记录；不能把未审查写成通过。
 
-改 skill 前后固定模型、宿主和场景比较；新 skill 建基线。pass→fail 单独重跑三次再判断。真模型仅本机运行；不可用的宿主记录为未验证。安装和试跑使用临时 home；[宿主说明](docs/hosts.md)描述原生安装及开发模式。
+改 skill 前后固定模型、宿主和场景比较；新 skill 建基线。pass→fail 单独重跑三次再判断。真模型仅本机运行，经 `scripts/eval-batch.ts` 先过环境预检、认证预检和读保护检查；不可用的宿主记录为未验证。安装和试跑使用临时 home；真模型评测的登录状态只放在两个专用登录目录里，这是临时 home 之外唯一持久的评测状态，由维护者自己登录，运行器不复制现有登录；[宿主说明](docs/hosts.md)描述原生安装及开发模式。
 
 ## 工单和镜像
 
