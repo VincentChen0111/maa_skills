@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "repository": "MaaAssistantArknights/MaaAssistantArknights",
+  "entries": [
+    {
+      "id": "gui-config-structure",
+      "behaviour": "gui.new.json 根上 Current 选当前配置、Configurations 是命名配置集合；单个配置有 Gui，Gui 下有 ConnectSettings、RuntimeSettings、StartUpSettings、RemoteControl",
+      "skills": ["maa-core", "maa-daily", "maa-doctor", "maa-setup"],
+      "tickets": ["05", "07", "10"],
+      "evidence": ["docs/setup-sources.md", "docs/daily-verification.md", "docs/doctor-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Root.cs", "blob": "247118236d6a3350ea8c495c76c03759efbf83b8" },
+        { "path": "src/MaaWpfGui/Configuration/Single/SpecificConfig.cs", "blob": "f0764db882ea6fdfec200cadb62decbd7721cee4" },
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/Gui.cs", "blob": "e42bde7e91dfe582567a949ee9111bf976dfaa62" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "connection-settings",
+      "behaviour": "连接字段 AdbPath、Address、AddressHistory、AutoDetect/AlwaysAutoDetect 的类型和默认值，EmulatorPath，RuntimeSettings.ClientType 的国服取值 Official/Bilibili，界面对空和相对 adb 路径的处理",
+      "skills": ["maa-core", "maa-doctor", "maa-setup"],
+      "tickets": ["07", "10"],
+      "evidence": ["docs/setup-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/ConnectSettings.cs", "blob": "7310f8919acac24d7f24ed1a1b7115898f39ad9c" },
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/StartUpSettings.cs", "blob": "0cc7529db8fb09e44c3c12794c8e8ee3bff18cb1" },
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/RuntimeSettings.cs", "blob": "da795016386b66e0d6a29f0f826dd5078cf865a7" },
+        { "path": "src/MaaWpfGui/Constants/Enums/ClientType.cs", "blob": "5d767ae24dbde707bc2612c6d2e296f15473c222" },
+        { "path": "src/MaaWpfGui/ViewModels/UserControl/Settings/ConnectSettingsUserControlModel.cs", "blob": "45f558e182461e2a0c1e2f74a043bb3050e4f637" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "timer-schedule",
+      "behaviour": "定时字段 Id/Config/Hour/Minute/IsEnabled（false 关闭、true 每日、null 或省略为单次）、八个定时槽；按本机本地时间，定时前两分钟切换配置，午夜跨日，单次定时触发后置为 false",
+      "skills": ["maa-core", "maa-daily", "maa-doctor"],
+      "tickets": ["05", "24"],
+      "evidence": ["docs/daily-verification.md", "docs/training-sources.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Global/Timer.cs", "blob": "e65ec2bf0b7c3848604665a8e7d7b8aff5036576" },
+        { "path": "src/MaaWpfGui/Configuration/Global/TimerSettings.cs", "blob": "40adec77314ef1a64371f8aa61f015ae6ef068c2" },
+        { "path": "src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs", "blob": "4dc59356811cef060fa88a246b4bd7e51fd4eddb" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "task-type-set",
+      "behaviour": "任务队列条目按 $type 实例化运行模型（BaseTask 的 JsonDerivedType 列表），TaskType 是界面区分任务的枚举，合法枚举标签不会被改成运行模型；本项目的任务身份核对同时看 $type 和 TaskType",
+      "skills": ["maa-core", "maa-daily", "maa-doctor"],
+      "tickets": ["05", "25"],
+      "evidence": ["docs/daily-verification.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/BaseTask.cs", "blob": "b4dcefcb57a0a39634e318754ca0df5711dba2a7" },
+        { "path": "src/MaaWpfGui/Configuration/Converter/TolerantEnumConverter.cs", "blob": "eda9eb0a80b3407bb5be7ac3020f118b22561194" },
+        { "path": "src/MaaWpfGui/Main/AsstProxy.cs", "blob": "801b556dbcfeb75282cfcd92fa6edcc6f8437ff2" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": [],
+      "facts": {
+        "typeDiscriminators": ["StartUpTask", "CloseDownTask", "FightTask", "OperProgressTask", "AwardTask", "MallTask", "InfrastTask", "RecruitTask", "RoguelikeTask", "CopilotTask", "SSSCopilotTask", "SingleStepTask", "DepotTask", "OperBoxTask", "UserDataUpdateTask", "DepotMaintainTask", "SwitchThemeTask", "CustomTask"],
+        "taskTypes": ["StartUp", "CloseDown", "Fight", "OperProgress", "Recruit", "Infrast", "Mall", "Award", "Roguelike", "RecruitCalc", "Copilot", "Depot", "OperBox", "Gacha", "Reclamation", "UserDataUpdate", "DepotMaintain", "SwitchTheme", "MiniGame", "Custom"]
+      }
+    },
+    {
+      "id": "fight-award-fields",
+      "behaviour": "Fight 任务的理智药、源石字段和 Award 任务的免费抽卡、特殊礼包字段（写入器按类型白名单管理，doctor 核对类型和范围）",
+      "skills": ["maa-core", "maa-daily", "maa-doctor"],
+      "tickets": ["05", "10"],
+      "evidence": ["docs/daily-verification.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs", "blob": "c0a047df055c553410ef417ccf16a614f73337e0" },
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/AwardTask.cs", "blob": "5da83cc608e2006685577c376637adc1a2474cb2" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "config-save-null-omission",
+      "behaviour": "MAA 保存配置时省略 null（DefaultIgnoreCondition = WhenWritingNull）；Timer 的 JsonConstructor 把省略的 IsEnabled 当作 null",
+      "skills": ["maa-core", "maa-daily", "maa-doctor"],
+      "tickets": ["05"],
+      "evidence": ["docs/daily-verification.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs", "blob": "2a33dd8d4c690f7180435c6ea0be8258eb1af724" },
+        { "path": "src/MaaWpfGui/Configuration/Global/Timer.cs", "blob": "e65ec2bf0b7c3848604665a8e7d7b8aff5036576" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "startup-auto-run-skip",
+      "behaviour": "以 --skip-startup-auto-run 启动 MAA 时跳过启动后自动连接目标和自动开始任务（写入器重开 MAA 时使用），不修改保存的设置",
+      "skills": ["maa-core", "maa-daily", "maa-doctor", "maa-setup"],
+      "tickets": ["05"],
+      "evidence": ["docs/daily-verification.md", "docs/maa-version-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Main/Bootstrapper.cs", "blob": "aa206a4dcb0625e83a73b992b7ab14424633894b" },
+        { "path": "src/MaaWpfGui/Main/AsstProxy.cs", "blob": "801b556dbcfeb75282cfcd92fa6edcc6f8437ff2" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "callback-log",
+      "behaviour": "asst.log 每条回调一行：行首时间、级别、进程和线程号，正文 Assistant::append_callback 加消息名和详情 JSON；append_task 先记类型和参数再记 task_id；任务链以 TaskChainCompleted/Error/Stopped 结束；回调协议的消息名、ConnectionInfo 的 what、TaskChainError 的 details.error",
+      "skills": ["maa-core", "maa-daily", "maa-doctor"],
+      "tickets": ["10", "24"],
+      "evidence": ["docs/doctor-sources.md", "docs/training-sources.md"],
+      "sources": [
+        { "path": "src/MaaCore/Assistant.cpp", "blob": "5382d9f3e3f1a37629865e29665a62874aece802" },
+        { "path": "src/MaaCore/Utils/Logger.hpp", "blob": "9faaeec15657d82349c6cad8bed0fb0ddb537656" },
+        { "path": "src/MaaCore/Common/AsstMsg.h", "blob": "861cf34a2436d2bfc61911a4bdd1b7767f841fdd" },
+        { "path": "docs/zh-cn/protocol/callback-schema.md", "blob": "0d77db7b1a562417db2e389dd1339c92c6569b1f" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "debug-images",
+      "behaviour": "调试截图保存在 debug/interface、debug/drops 下，文件名为时间戳加后缀，日志写 Save image 或 Save ... to 行",
+      "skills": ["maa-core", "maa-doctor"],
+      "tickets": ["10"],
+      "evidence": ["docs/doctor-sources.md"],
+      "sources": [
+        { "path": "src/MaaCore/Utils/DebugImageHelper.hpp", "blob": "14c41040a1536e4dcd30cb13cb7a8de3eb7f717d" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "remote-control",
+      "behaviour": "远程控制设置位于 Configurations.<配置名>.Gui.RemoteControl，取任务端点非空时 MAA 轮询并执行远端下发的任务（含抽卡类任务）；非空值加密保存；协议的任务类型和设置类字段",
+      "skills": ["maa-core", "maa-doctor"],
+      "tickets": ["10"],
+      "evidence": ["docs/doctor-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/RemoteControl.cs", "blob": "3605a165f777ee4246e722588a6efadb24f4e36d" },
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/Gui.cs", "blob": "e42bde7e91dfe582567a949ee9111bf976dfaa62" },
+        { "path": "src/MaaWpfGui/Configuration/Single/SpecificConfig.cs", "blob": "f0764db882ea6fdfec200cadb62decbd7721cee4" },
+        { "path": "src/MaaWpfGui/ViewModels/UserControl/Settings/RemoteControlUserControlModel.cs", "blob": "125ea20ea1179603e207eb9a8279fafb3b99103a" },
+        { "path": "src/MaaWpfGui/Helper/SimpleEncryptionHelper.cs", "blob": "dcc3d0e234d787c014d4fff0a3ce5c2cbacf4c20" },
+        { "path": "src/MaaWpfGui/Services/RemoteControl/RemoteControlService.cs", "blob": "a8a697dc94782e9c6dce8ba03084d00b952d4947" },
+        { "path": "docs/zh-cn/protocol/remote-control-schema.md", "blob": "b50a7411b1fd24aef94144b81ee1b82b7f001e3d" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "log-analysis-guide",
+      "behaviour": "MAA 官方日志分析说明（.agents/skills/maa-issue-log-analysis/）的排查顺序、常见误判和输出结构，doctor 的排查与转介对照依此整理",
+      "skills": ["maa-doctor"],
+      "tickets": ["10"],
+      "evidence": ["docs/doctor-sources.md"],
+      "sources": [
+        { "path": ".agents/skills/maa-issue-log-analysis/SKILL.md", "blob": "ae255f7e7fa7ade06ba2007c9b7df7f4436e16b6" },
+        { "path": ".agents/skills/maa-issue-log-analysis/KNOWLEDGE.md", "blob": "11d14cb22cd353ccaf4c10839c6ebae6f8ffb8a1" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "issue-referral-entries",
+      "behaviour": "官方中文问题模板要求在 MAA 设置里生成日志压缩包并先查常见问题；doctor 转介时给出这些入口",
+      "skills": ["maa-doctor"],
+      "tickets": ["10"],
+      "evidence": ["docs/doctor-sources.md"],
+      "sources": [
+        { "path": ".github/ISSUE_TEMPLATE/cn-bug-report.yaml", "blob": "b2b4da7cbe4b628ac8e05b9090d59ac4f9d532e7" },
+        { "path": "docs/zh-cn/manual/faq.md", "blob": "9e213b27289f968e0602862e03d6acbe14d85983" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "account-recognition",
+      "behaviour": "仓库识别 DepotInfo 和干员识别 OperBoxInfo 的回调字段，界面保存的数据键 DepotData/OperBoxData 和位置 BaseDir/data",
+      "skills": ["maa-account", "maa-core"],
+      "tickets": ["11"],
+      "evidence": ["docs/account-sources.md"],
+      "sources": [
+        { "path": "src/MaaCore/Task/Miscellaneous/DepotRecognitionTask.cpp", "blob": "ac98d02b0a57fca1fc75eed366ff0423f55fed60" },
+        { "path": "src/MaaCore/Task/Miscellaneous/OperBoxRecognitionTask.cpp", "blob": "8d2bb62c89fb7e1afaee29ddeb744b98d0f3d7c9" },
+        { "path": "src/MaaWpfGui/ViewModels/UI/ToolboxViewModel.cs", "blob": "c5de1d401a8f3f7b76efb489a6d876a4a948a670" },
+        { "path": "src/MaaWpfGui/Constants/JsonDataKey.cs", "blob": "5f7eb82f635053e3cd371cdec3d9667cde50ee18" },
+        { "path": "src/MaaWpfGui/Helper/PathsHelper.cs", "blob": "8383777c9bcc33f94dafc37dc0b6486ddc6e63c2" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "copilot-jobs",
+      "behaviour": "自动战斗作业列表 Copilot.TaskList 的字段、界面按列表构造多份作业的方式、作业协议与练度要求、最低版本比较、编队与助战设置",
+      "skills": ["maa-core", "maa-daily"],
+      "tickets": ["15"],
+      "evidence": ["docs/stage-jobs-sources.md"],
+      "sources": [
+        { "path": "src/MaaWpfGui/Configuration/Single/Settings/Copilot.cs", "blob": "9d37235a778a2e9cb43f47fa48ed7e2de8b79ca9" },
+        { "path": "src/MaaWpfGui/ViewModels/UI/CopilotViewModel.cs", "blob": "066ca1bbab9a4690950319ed710a04a018095b75" },
+        { "path": "src/MaaWpfGui/ViewModels/Items/CopilotItemViewModel.cs", "blob": "222c05ae2d9520c058acc27c1f1beab5fe50b38b" },
+        { "path": "src/MaaWpfGui/Models/Copilot/CopilotModel.cs", "blob": "475861e15ba6376f9a1850d24e575306904355f3" },
+        { "path": "src/MaaWpfGui/Helper/CopilotHelper.cs", "blob": "26564e008143de86046988ce6ea3595920e269e7" },
+        { "path": "src/MaaWpfGui/MaaWpfGui.csproj", "blob": "d35757575c4f28d15dd55497603bde187dc3728e" },
+        { "path": "docs/zh-cn/protocol/copilot-schema.md", "blob": "6475db63748c3677163345b8434f81566076cc94" },
+        { "path": "src/MaaCore/Task/Interface/CopilotTask.cpp", "blob": "e648ba6fb7dbcbd36ad8c2b9a74797fce117d497" },
+        { "path": "src/MaaCore/Task/Miscellaneous/MultiCopilotTaskPlugin.cpp", "blob": "6478872806ab3c020c204eb874148f88ca320a1e" },
+        { "path": "src/MaaCore/Task/Miscellaneous/BattleFormationTask.cpp", "blob": "d61d7246314a7d9ffe1af3cb396908ae60110360" },
+        { "path": "src/MaaCore/Config/Miscellaneous/CopilotConfig.cpp", "blob": "13339e8cafeb50e9e0b66198ebb31a46f7364b34" },
+        { "path": "src/MaaCore/Config/Miscellaneous/OperBoxDataConfig.cpp", "blob": "98c3da696860664c7ed654facea35e10e721b5e2" }
+      ],
+      "sourceVerified": ["6.21.4", "6.22.0"],
+      "deviceVerified": []
+    },
+    {
+      "id": "mastery-training",
+      "behaviour": "专精训练：OperProgress 任务与计划字段、OperProgressDetail 与 InfrastTrainingTimeLeft 回调、开训确认的组合证据、自定义基建排班的 Training 房间与禁续训、导师评分只是选择策略",
+      "skills": ["maa-core", "maa-daily"],
+      "tickets": ["24"],
+      "evidence": ["docs/training-sources.md"],
+      "sources": [
+        { "path": "src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp", "blob": "df8252f1437c7efd2a5a3c987a44a786aca408af" },
+        { "path": "src/MaaCore/Task/Infrast/InfrastTrainingTask.cpp", "blob": "cae967c966027d78e0002166a7e61aaee2329cee" },
+        { "path": "src/MaaCore/Task/ProcessTask.cpp", "blob": "7560b2f3a4b34f936d0e02bebc218b864ca0f793" },
+        { "path": "src/MaaCore/Task/AbstractTask.cpp", "blob": "b5e0a22d3f3ad6c02e14393fb3e0b1491f6c26c9" },
+        { "path": "src/MaaCore/Assistant.cpp", "blob": "5382d9f3e3f1a37629865e29665a62874aece802" },
+        { "path": "src/MaaCore/Utils/Logger.hpp", "blob": "9faaeec15657d82349c6cad8bed0fb0ddb537656" },
+        { "path": "resource/tasks/tasks.json", "blob": "5241e447c00cd49f19378b4d426eb843f2650894" },
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/OperProgressTask.cs", "blob": "49d8443bf7deded4162a4c71c2df5b8eacb5899f" },
+        { "path": "src/MaaWpfGui/Models/AsstTasks/AsstOperProgressTask.cs", "blob": "5b86b45e3ac9d2f7d9ded1146e1600af3deed098" },
+        { "path": "src/MaaWpfGui/ViewModels/UserControl/TaskQueue/OperProgressTaskUserControlModel.cs", "blob": "23f5256d630976f3a7a4cf81a52fca37f45bd25e" },
+        { "path": "docs/zh-cn/protocol/base-scheduling-schema.md", "blob": "c536a3854929bdf1768df0691d9a501bbac162cc" },
+        { "path": "src/MaaWpfGui/Configuration/Single/MaaTask/InfrastTask.cs", "blob": "e967ea0c782a85bc3cb234eea6d2421e0b99783e" },
+        { "path": "src/MaaWpfGui/Models/AsstTasks/AsstInfrastTask.cs", "blob": "c5a76fae277d4ac609ec187f53230d273db622ee" },
+        { "path": "resource/infrast.json", "blob": "53013442a8c8c9186f5c02ebcd46d552dbe22134" },
+        { "path": "src/MaaCore/Task/Infrast/InfrastScore.cpp", "blob": "b8a81574d235051c4e7181f136946371502c4d3d" }
+      ],
+      "sourceVerified": ["6.22.0"],
+      "deviceVerified": []
+    }
+  ],
+  "pending": [
+    {
+      "ticket": "27",
+      "locations": [
+        "src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs",
+        "src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs",
+        "src/MaaCore/Task/Interface/FightTask.cpp",
+        "src/MaaCore/Task/Fight/MedicineCounterTaskPlugin.cpp",
+        "src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml",
+        "docs/zh-cn/protocol/integration.md"
+      ],
+      "note": "碎石与临期药：FightTask.cs 的 UseStone、StoneCount、UseStoneAllowSave、UseExpiringMedicine、MedicineExpireDays、UseExpireMedicineForActivity 和 OnDeserialized 对 UseStone 的重置；界面设置到 MaaCore 参数的换算；FightTask.cpp 对 medicine_expire_days、stone 的处理和临期药 9999 的确认次数上限；MedicineCounterTaskPlugin.cpp 的临期药处理；界面的临期天数范围；集成文档的参数说明。27 交付时登记为条目"
+    },
+    {
+      "ticket": "16",
+      "locations": [
+        "docs/zh-cn/protocol/callback-schema.md",
+        "src/MaaWpfGui/Res/Localizations/zh-cn.xaml",
+        "src/MaaWpfGui/Main/AsstProxy.cs",
+        "src/MaaCore/Task/Fight/MedicineCounterTaskPlugin.cpp",
+        "src/MaaCore/Utils/Logger.hpp",
+        "src/MaaCore/Task/Interface/CopilotTask.cpp",
+        "src/MaaWpfGui/ViewModels/UI/CopilotViewModel.cs"
+      ],
+      "note": "关卡运行跟踪：回调协议里 StageDrops 的关卡字段、UseMedicine 的 details.count；中文界面文案里任务出错、完成任务等文案键及 gui.log 写法；asst.bak.log 轮换；自动战斗的用药开关与无碎石。16 交付时登记为条目"
+    },
+    {
+      "ticket": "22",
+      "locations": [
+        "docs/zh-cn/protocol/base-scheduling-schema.md",
+        "resource/battle_data.json"
+      ],
+      "note": "基建排班生成：排班协议的 period（hh:mm、跨天拆段，由图形界面处理）和计划重叠时的选择；干员名表。22 交付时登记为条目"
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 {
   "schemaVersion": 2,
-  "recordVersion": 1,
-  "sourceVerified": [],
+  "recordVersion": 2,
+  "sourceVerified": [
+    "6.22.0"
+  ],
   "deviceVerified": []
 }
