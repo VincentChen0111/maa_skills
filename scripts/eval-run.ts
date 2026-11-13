@@ -45,7 +45,11 @@ export type RunOptions = { host: Host; model: string; scenario: ScenarioName | S
   /** The batch's payload fingerprint, recorded in the run so that a side of a comparison holds one candidate. */
   payloadFingerprint?: string };
 export type RunOutcome = { record: RunRecord; reason: RunReason; artifactDirectory: string; fixtureDirectory: string };
-export const defaultTimeoutMs = 45_000;
+/**
+ * How long one scenario run may take: 180 s, about three times the longest real run that completed (55.4 s, Codex on
+ * core-append, 2026-11-14; one run of that scenario timed out at the earlier 45 s). `--timeout-ms` overrides it.
+ */
+export const defaultTimeoutMs = 180_000;
 
 /** A separate CLI invocation always starts a fresh context; no resume/session ID is accepted. */
 export async function runScenario(options: RunOptions): Promise<RunOutcome> {

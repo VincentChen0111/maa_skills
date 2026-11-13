@@ -89,7 +89,7 @@ Codex 的登录必须带 `cli_auth_credentials_store="file"`，登录才写进�
 
 分类只读宿主自己报告的失败文字和字段（Claude 的结果消息、`is_api_error_message` 消息的 `error`、被拒绝的 `rate_limit_event`；Codex 最后的 `turn.failed` 或 `error`），不读模型的回复。
 
-默认超时仍是 45 秒：还没有一次真实完成的运行可以作为依据。第一次真实完成的运行之后，记下它的场景、宿主和耗时，默认值取在它之上留有余量的值，写进本节并登记到规格两张来源表；在此之前超时只单独归类。
+场景运行的默认超时是 180 秒（`scripts/eval-run.ts` 的 `defaultTimeoutMs`，管一个场景的整个宿主进程），2026-11-14 按首批真实运行定出：Codex（codex-cli 0.167.0-alpha.3.2，`gpt-6.1-sol`，套餐登录，原生 Windows，冻结副本 `1612cca`）跑 `maa-core` 组，`core-language` 43.8 秒、`core-boundary` 33.6 秒完成，`core-append` 在原来的 45 秒超时（模型在反复重试 PowerShell 命令，看起来是文本编码的问题）；`core-append` 用 `--timeout-ms 180000` 重跑三次都完成，分别是 53.5、55.4、49.3 秒。默认值取完成过的最长一次（55.4 秒）的约三倍。认证预检和读保护检查的模型调用仍是 45 秒（`scripts/eval-auth.ts` 的 `hostCheckTimeoutMs`）：这两道检查在两次真实运行里都约 6 秒完成。批次的 `--timeout-ms` 同时改这三处。超时照旧单独归类为 `timeout`，记为未验证。两个默认值写在运行器源码里，所以改动它们也改变运行器指纹和每个场景的场景摘要：改动之前的记录不能与之后的比较。
 
 ## Claude 一侧的隔离（不带 `--bare`）
 

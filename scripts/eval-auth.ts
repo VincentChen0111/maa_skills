@@ -143,7 +143,7 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
     const args = hostArguments(host, { model: options.model, workspace: fixture.workspace, toolless: true, ...(auth === 'plan' ? { loginDirectory: options.loginDirectory! } : {}) });
     const started = Date.now();
     const execution = spawnSync(options.executable, [...executableArgs, ...args], { cwd: fixture.workspace, env, input: 'Reply with the single word OK. Use no tools.',
-      encoding: 'utf8', timeout: options.timeoutMs ?? 45_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+      encoding: 'utf8', timeout: options.timeoutMs ?? hostCheckTimeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     result.durationMs = Date.now() - started;
     const raw = execution.stdout ?? '';
     Object.assign(result, reportedUsage(host, raw));
@@ -179,6 +179,8 @@ export type ReadProtectionResult = {
 };
 /** The broadest command pattern every product scenario's allowlist is a subset of. */
 export const readProtectionCommands = ['node *'];
+/** The model call of the auth preflight and of the read-protection check: both finished in about 6 s in the real Codex runs. */
+export const hostCheckTimeoutMs = 45_000;
 /** The read the prompt asks for; a command attempt must be exactly this kind of call. */
 const readScript = 'readFileSync(process.argv[1]';
 const sentinelPattern = /^maa-eval-sentinel-.*\.txt$/;
@@ -265,7 +267,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     const args = hostArguments(host, { model: options.model, workspace: fixture.workspace, commands: readProtectionCommands, ...profile });
     const started = Date.now();
     const execution = spawnSync(options.executable, [...executableArgs, ...args], { cwd: fixture.workspace, env, input: prompt, encoding: 'utf8',
-      timeout: options.timeoutMs ?? 45_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+      timeout: options.timeoutMs ?? hostCheckTimeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     result.durationMs = Date.now() - started;
     const raw = execution.stdout ?? ''; const stderr = execution.stderr ?? '';
     Object.assign(result, reportedUsage(host, raw));
