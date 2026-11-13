@@ -28,7 +28,7 @@
 ```
 
 - `layout`：用户说的布局，按 MAA 扩充协议的写法，`type` 取 `control`、`manufacture`、`trading`、`power`、`meeting`、`hire`、`dormitory`、`processing`、`training`、`recycle`，`level` 是房间等级；制造站和贸易站可以写当前产物 `product`（`Battle Record`、`Pure Gold`、`Originium Shard`、`Dualchip`；`LMD`、`Orundum`）。同类房间的顺序就是排班里的顺序和无人机的间号。账号快照里没有基建布局（MAA 识别不提供），所以布局由用户说，缺了就先问。
-- `shifts`：每个班次一个计划。`period` 写 `hh:mm-hh:mm` 或 MAA 的 `[["hh:mm","hh:mm"]]`；跨天的会拆成两段（`22:00-06:00` 写成 `22:00–23:59` 和 `00:00–06:00`）。每个班次都必须有时间段。`rooms` 里每间房是名字数组或 `{operators, sort}`；`null` 表示这间房跳过；没写的房间不安排，`fill: true` 时由工具按快照顺序填入有该房间生效技能、这个班次没用到、上一班也没上班的已持有干员（不比较收益）。训练室不在这里安排。
+- `shifts`：每个班次一个计划。`period` 写 `hh:mm-hh:mm` 或 MAA 的 `[["hh:mm","hh:mm"]]`；跨天的会拆成两段（`22:00-06:00` 写成 `22:00–23:59` 和 `00:00–06:00`）。每个班次都必须有时间段。`rooms` 里每间房是名字数组或 `{operators, sort}`；`null` 表示这间房跳过；没写的房间不安排，`fill: true` 时由工具按快照顺序填入有该房间生效技能、这个班次没用到、上一班也没上班（最后一班还要避开第一班，班次排成一圈）的已持有干员（不比较收益）。训练室不在这里安排。
 - `fiammetta`：`{target, order}`；`drones`：`{room, index, order}`。
 - `mood`、`moodDefault`：每小时净消耗（上班）和每小时恢复（在宿舍），带依据；`combos`：`{members, dependsOn?, basis}`；`exclusions`：`{members, basis}`；`efficiency`：每间房每个计划的基础、技能、全局三部分，带依据、条件和未建模部分。这些都是推断；没给时对应的验收门是「未核实」，不是通过。
 - `tolerance`：早晚上线的容差，小时，默认 1。

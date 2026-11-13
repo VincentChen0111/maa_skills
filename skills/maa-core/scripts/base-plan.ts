@@ -287,14 +287,16 @@ export type Fill = { plan: number; room: string; operators: string[] };
 const fillOrder: Facility[] = ['control', 'trading', 'manufacture', 'power', 'meeting', 'hire', 'processing', 'recycle'];
 /**
  * Fills only rooms the proposal left out: owned operators, in snapshot order, with an active skill for that room and
- * no product mismatch, not already used in the shift and not on duty in the previous shift. No benefit is compared.
+ * no product mismatch, not already used in the shift and not on duty in the neighbouring shift (the previous one, and
+ * for the last shift also the first, since shifts form a cycle). No benefit is compared.
  */
 function fillShifts(spec: PlanSpec, owned: { name: string; skills: OperatorFacts['skills'] }[], facts: GameFacts): Fill[] {
   const fills: Fill[] = [];
   const working = (shift: ShiftSpec) => new Set(Object.entries(shift.rooms).filter(([facility]) => facility !== 'dormitory').flatMap(([, entries]) => (entries ?? []).flatMap(entry => entry?.operators ?? [])));
   spec.shifts.forEach((shift, index) => {
     const used = new Set(Object.values(shift.rooms).flatMap(entries => (entries ?? []).flatMap(entry => entry?.operators ?? [])));
-    const previous = index ? working(spec.shifts[index - 1]!) : new Set<string>();
+    // The shifts form a cycle: the last shift is also followed by the first one.
+    const previous = new Set([...index ? working(spec.shifts[index - 1]!) : [], ...index && index === spec.shifts.length - 1 ? working(spec.shifts[0]!) : []]);
     for (const facility of fillOrder) spec.layout.filter(room => room.type === facility).forEach((room, k) => {
       const entries = shift.rooms[facility] ??= [];
       const size = facts.capacity[facility]?.[room.level - 1];

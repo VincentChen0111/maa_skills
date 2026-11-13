@@ -97,7 +97,7 @@
 ## 设计默认值（2026-11-13，不是维护者原话）
 
 - 早晚上线的容差默认 1 小时（理由：`hh:mm` 粒度下能发现正好卡在心情上限上的方案，用户可以调大）。
-- 方案由 agent 提出安排；工具只在要求时（`fill`）按快照顺序填补没安排的房间，不比较收益、不排名（理由：21 规定文本百分比不能排名或加总，工具不能证明哪种安排更好）。
+- 方案由 agent 提出安排；工具只在要求时（`fill`）按快照顺序填补没安排的房间（有该房间生效技能、产物不冲突、这一班没用到、上一班没上班，最后一班还要避开第一班），不比较收益、不排名（理由：21 规定文本百分比不能排名或加总，工具不能证明哪种安排更好）。
 - 导出不写产物字段，布局有但没安排的房间写 `skip`，布局没有的设施写空数组（理由：MAA 写了产物会切换生产线，缺设施键会用默认算法换班）。
 - 宿舍按名单显式安排，第 4、6 项按名单计算；未进驻的干员不计恢复（保守，未建模）。
 - 训练室不在排班安排里（训练位由 24 管），导出时保持原样。
@@ -109,10 +109,11 @@
 
 - `npm ci --ignore-scripts`：通过。
 - `npm run typecheck`：通过。
-- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。
+- `node --test tests/base-plan.test.ts`：先在模块不存在时运行，失败（`ERR_MODULE_NOT_FOUND`）；实现后 10/10 通过。之后加了「不同布局和名册」一条：在只避开上一班的旧填补规则上运行失败（记录干员同时排进最后一班和第一班），改成班次排成一圈后 11/11 通过。
 - `node --test tests/base-report.test.ts`：7/7 通过。
 - `node --test tests/base-report-scenarios.test.ts`：2/2 通过（三个评测场景在评测夹具里离线运行已安装的产品脚本并评分）。
-- 改了共享代码后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/base-query.test.ts` 10/10 通过。
+- 改了共享代码和 skill 文字后重跑：`tests/advice-report.test.ts` 5/5、`tests/cultivation-report.test.ts` 9/9、`tests/base-query.test.ts` 10/10、`tests/base-installation.test.ts` 2/2、`tests/help-installation.test.ts` 6/6 通过。
+- `node scripts/tracker.ts`（含文档相对链接）、`node scripts/privacy.ts` 和插件元数据检查：没有错误。
 - 完整离线检查 `node scripts/check.ts` 按维护者 2026-11-13 的机器负载规则由调度者在冻结提交上统一运行，本记录不代替它。
 
 ## 未验证

@@ -180,6 +180,25 @@ test('unassigned rooms are filled from owned operators whose active skills match
   assert.deepEqual((unfilled.plan as Plan).plans[0]!.rooms.trading, [{ skip: true }], 'without fill an unassigned room keeps its operators');
 });
 
+test('a different layout and roster: three shifts and two factories with different products, filled only with skills that fit each product', async (t) => {
+  const layoutB = [{ type: 'control', level: 1 }, { type: 'manufacture', level: 1, product: 'Battle Record' }, { type: 'manufacture', level: 1, product: 'Pure Gold' },
+    { type: 'trading', level: 1, product: 'LMD' }, { type: 'dormitory', level: 1 }];
+  const three = ['00:00-08:00', '08:00-16:00', '16:00-00:00'].map((period, index) => ({ name: `合成第${index + 1}班`, period, rooms: {} }));
+  for (const [snapshot, records] of [[planSnapshot(), [['合成记一']]], [planSnapshot(['char_ghost', 'char_rec1']), []]] as const) {
+    const home = await planHome(snapshot); t.after(() => rm(home, { recursive: true, force: true }));
+    const result = await generateBasePlan({ layout: layoutB, shifts: three, fill: true }, { home, fetcher: planNetwork() });
+    if (result.status !== 'written') return assert.fail(JSON.stringify(result));
+    const plans = (result.plan as Plan).plans;
+    assert.deepEqual(plans.map(plan => plan.period), [[['00:00', '08:00']], [['08:00', '16:00']], [['16:00', '23:59']]]);
+    assert.deepEqual(result.fills.filter(fill => fill.room === 'manufacture[0]').map(fill => fill.operators), records, 'only the record skill goes to the record factory, and nobody works two shifts in a row');
+    assert.deepEqual(plans.map(plan => plan.rooms.manufacture[1].operators), [['合成金一'], ['合成金二'], ['合成金三']], 'the last shift also avoids the first one');
+    assert.deepEqual(plans.map(plan => plan.rooms.control[0].operators), [['合成控一'], ['合成控二'], ['合成控三']]);
+    assert.equal(result.check.applicable, true, JSON.stringify(result.check));
+    for (const id of [1, 3, 5, 9, 10, 11, 13, 15]) assert.equal(gate(result.check, id).verdict, 'pass', `gate ${id}: ${JSON.stringify(gate(result.check, id))}`);
+    for (const id of [4, 7, 8, 12, 14]) assert.equal(gate(result.check, id).verdict, 'unverified', `gate ${id} has no declared rates, combinations, exclusions or figures`);
+  }
+});
+
 test('freshness is fresh, stale or unknown, and an old check is not proof for changed data', () => {
   const snapshot = planSnapshot();
   const recorded = { snapshot: snapshotFingerprint(snapshot), tables: [['owner/repo', 'c'.repeat(40), 'building.json', 'a'.repeat(64)]], names: 'b'.repeat(64), plan: 'd'.repeat(64) };
