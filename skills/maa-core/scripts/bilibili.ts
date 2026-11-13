@@ -164,7 +164,9 @@ function validSubtitle(value: unknown): value is StoredSubtitle {
 
 // ---- one run -----------------------------------------------------------------------------------------
 
-const credentialStates: Record<string, PageOutcome> = { unset: 'credential-required', expired: 'credential-rejected', unreadable: 'credential-unreadable', unknown: 'credential-unreadable' };
+/** The only header that carries the saved value; it is built in memory for the player request and nowhere else. */
+const sessionHeader = (value: string): Record<string, string> => Object.fromEntries([['Cookie', `SESSDATA=${value}`]]);
+const credentialStates: Record<string, PageOutcome> ={ unset: 'credential-required', expired: 'credential-rejected', unreadable: 'credential-unreadable', unknown: 'credential-unreadable' };
 const pad = (value: number) => String(value).padStart(2, '0');
 function timecode(seconds: number) {
   const whole = Math.floor(seconds), hours = Math.floor(whole / 3600);
@@ -238,7 +240,7 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
       if (blocked) log.offer(target, blocked.outcome, cached);
       else {
         const params = new URLSearchParams({ bvid: video.value.bvid, cid: String(cid) });
-        const attempt = await gatedGet(context, { url: `${bilibiliApiOrigin}/x/player/wbi/v2?${params}`, headers: { ...headers, Cookie: `SESSDATA=${credential!.sessdata}` } }, classifyApi);
+        const attempt = await gatedGet(context, { url: `${bilibiliApiOrigin}/x/player/wbi/v2?${params}`, headers: { ...headers, ...sessionHeader(credential!.sessdata) } }, classifyApi);
         settle(attempt);
         if (attempt.kind === 'answered' && attempt.classified.kind === 'data') {
           const data = attempt.classified.data;

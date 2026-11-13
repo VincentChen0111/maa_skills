@@ -108,6 +108,9 @@ test('with the user\'s SESSDATA the subtitles are read: only the player request 
   const markdown = formatResearchMarkdown(result, 'zh');
   assert.match(markdown, /字幕由 B 站自动生成/); assert.match(markdown, /时间点 00:00/);
   await assertNoSecret(f.root, f.sessdata, JSON.stringify(result), markdown, formatResearchMarkdown(result, 'en'));
+  const stored = (await allFiles(join(f.privateDirectory, 'research'))).map(String).join('\n');
+  assert.doesNotMatch(stored, /424242|login_mid|face/, 'neither the uploader\'s account id nor the session\'s account id is stored');
+  assert.equal(JSON.stringify(result).includes('424242'), false);
 
   f.advance(60_000);
   const cached = await readBilibiliVideo({ video: `av9001`, part: 1 }, options);
