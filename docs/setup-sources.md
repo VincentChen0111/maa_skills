@@ -19,3 +19,65 @@ MAA 固定 [v6.21.4 / 52d0b2acaca116585b02e1e6a9da303460f81a24](https://github.c
 官方安装入口已查看 [MAA 安装文档](https://docs.maa.plus/zh-cn/manual/install.html)、[Windows 模拟器支持](https://docs.maa.plus/zh-cn/manual/device/windows.html)、[Node 下载](https://nodejs.org/en/download)。Node 按仓库约束选择 24.x，而不是网页默认主版本。本票不下载发行包；首次错误链接 `manual/initialization.html` 访问失败，已改为文档导航实际给出的 `manual/install.html`。
 
 以上是局部接口来源事实，不是全部依赖自动指纹核对，也不是任何完整版本「源码已核／实机已核」。07 交付时随包 [验证版本记录](../skills/maa-core/references/verified-versions.json) 的两个列表因此均为空；2026-11-13 起它由工单 25 的依赖条目生成，见 [MAA 版本跟踪的来源](maa-version-sources.md)。
+
+## 08 下载来源核对（2026-11-13）
+
+2026-11-13 只读查看下列官方页面和发布索引，确定下载流程使用的官方位置与数据格式；没有下载任何发行包，脚本也没有访问真实网络。测试和评测只用合成索引与下载样例。MAA 为 AGPL：这里只记录事实，没有复制其代码或资源。
+
+| 程序 | 官方位置 | 当日核对到的事实 |
+| --- | --- | --- |
+| MAA | [MAA 下载与安装](https://docs.maa.plus/zh-cn/manual/install.html)；[GitHub Releases](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases)；索引 [releases/latest API](https://api.github.com/repos/MaaAssistantArknights/MaaAssistantArknights/releases/latest) | 文档列出官网、GitHub Releases、Mirror酱（文档写明为第三方付费加速）、QQ 群文件和 winget；Windows 选 `MAA-<版本号>-win-x64.zip`，完整解压到文件夹，不要解压到系统盘根目录或 Program Files 这类需要 UAC 的路径，先以管理员运行 `DependencySetup_依赖库安装.bat`，再双击 `MAA.exe`。当日最新正式发布为 v6.22.0（非草稿、非预发布），资产含 `name`、`size`、`browser_download_url`（`github.com/<仓库>/releases/download/<tag>/<文件>`）和 `digest`（`sha256:` 加 64 位十六进制）。本工具只用 GitHub 正式发布，不用镜像、群文件或 winget |
+| Node | [Node 下载](https://nodejs.org/en/download)；索引 [dist/index.json](https://nodejs.org/dist/index.json)；校验 `dist/v<版本>/SHASUMS256.txt` | index.json 是数组，每项有 `version`、`files`、`lts` 等；当日 v24 最新为 v24.22.3（LTS Krypton）。SHASUMS256.txt 每行为 64 位 sha256、两个空格、文件名，含 `node-v24.22.3-x64.msi` 与 `node-v24.22.3-arm64.msi`。index.json 不给文件大小，大小只能取下载服务器的 Content-Length |
+| adb | [SDK Platform-Tools 发布说明](https://developer.android.com/tools/releases/platform-tools)；索引 [repository2-1.xml](https://dl.google.com/android/repository/repository2-1.xml)；[Android SDK 许可协议](https://developer.android.com/studio/terms) | 发布页写明下载前必须同意条款，条款即 Android Software Development Kit License Agreement（页面日期 2021-07-27）。索引根元素为 `sdk:sdk-repository`；有两个 `platform-tools` 包：channel-2 预览版 37.0.3（`android-sdk-preview-license`）和 channel-0 稳定版 37.0.1（`android-sdk-license`）。包内结构为 `revision/major,minor,micro`、`channelRef ref`、`archives/archive/complete/size,checksum,url` 与 `host-os`；`checksum` 没有 type 属性，值为 40 位十六进制，按该格式默认的 SHA-1 处理；Windows 归档文件名为 `platform-tools_r37.0.1-win.zip` |
+| 模拟器 | [MAA Windows 模拟器支持](https://docs.maa.plus/zh-cn/manual/device/windows.html)（页面由脚本渲染，内容按其[文档源文件](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/dev/docs/zh-cn/manual/device/windows.md)核对） | 「完美支持」为 MuMu（mumu.163.com）、雷电（www.ldmnq.com）、蓝叠 5（www.bluestacks.cn）、蓝叠 5 国际版（www.bluestacks.com）、夜神（www.yeshen.com）、逍遥（www.xyaz.cn）；页面说明排名不分先后，不指定推荐。雷电官网首页的下载按钮指向 `lddl01.ldmnq.com`，页面显示版本但不显示大小。MuMu 下载页的按钮地址由脚本生成，静态页面里没有安装包地址、版本或大小（MuMu 的下载链路见下文 R1 补充）。厂商都没有可机读的发布索引或校验值 |
+
+由此定下的做法（设计默认值见[规格](spec.md)「默认值及其来源」）：MAA、Node、adb 的版本和文件名由上面三个索引决定，模拟器由用户在厂商官方页面点下载、从浏览器下载列表取得实际下载地址并读出版本号，脚本只接受该厂商官方域名下的 https 地址（MuMu 的域名只接受 `mumu.163.com`，另加两个确切主机，见下文），每次跳转都重新检查主机。GitHub 资产下载跳转到 `objects.githubusercontent.com` 或 `release-assets.githubusercontent.com`；GitHub 没有正式文档说明，`release-assets.githubusercontent.com` 由 R1 审查员 2026-11-13 只读核实；其他主机一律拒绝，完整性由 API 给出的 sha256 摘要保证。
+
+### R1 补充（2026-11-13）
+
+- MuMu 下载链路：审查员只读查看 mumu.163.com/download/ 的脚本，下载按钮加载 `adl.netease.com` 上的脚本，再调用下载接口 `https://mumu.nie.netease.com/api/dl/win`。本作者另用不跟随跨主机跳转的只读请求核对：该接口返回 302，Location 指向 `a11.gdl.netease.com` 上的 `MuMu_6.0.6_..._zh-Hans_....exe`，查询串带 `n=` 文件名和两个签名参数；没有下载安装包。因此 MuMu 另放行这两个确切主机，不放行 `adl.netease.com`（只提供脚本）和 netease.com 的其他主机。用户提供接口地址或浏览器下载列表里的文件地址都可以。R2、R3 审查员和本作者 2026-11-13 用 HEAD 只读核对：接口每次调用都给出新的 `n=` 和签名参数；文件主机的 Content-Disposition 文件名等于该地址里的 `n=` 值，同一个文件地址得到同一个名字，名字的变化来自接口每次发新的 `n=`（例如 `MuMu_6.0.6_12g9XL3C.exe` 与 `MuMu_6.0.6_12g9YkKC.exe`）。文件地址的路径名 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe` 和大小在多次调用之间一致。签名参数 key2 的有效期为 48 小时只是 R2 审查员的观察，HEAD 无法证实，记为未核实。所以脚本用最终地址的路径名作文件名，只有路径里没有安装包名时才用 Content-Disposition；这样从接口地址或文件地址开始，方案和下载的指纹都一致。从文件地址开始时，签名一旦失效就需要用户重新取地址、重新出方案。
+- MAA 发行包结构：MAA 仓库 [ci.yml](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/dev/.github/workflows/ci.yml) 把 GUI 发布到 `install` 目录（`-o install`），再在该目录内执行 `Compress-Archive -Destination MAA-<tag>-win-<arch>.zip -Path ./*`，所以 zip 的顶层就是 `install` 目录的内容。`MAA.exe` 在顶层是由此得出的推断（审查员与本作者均只读查看了 ci.yml），没有用真实发行包核实。
+- 雷电：官网首页的安装包来自 `lddl01.ldmnq.com`，属于已放行的 `ldmnq.com`。
+
+### 下载链路核对（R3 2026-11-13，R4 2026-11-14 复核）
+
+R3 审查发现夜神、逍遥的真实下载跳转到官网域名以外的主机，和 R1 的 MuMu 是同一类问题。脚本改为只从一张厂商表判断：官网域名（含子域名，沿用原有范围）加上下表记录的链路里出现的确切主机（不含子域名）。每条链路由本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对；R4 审查发现蓝叠 5 的起点已返回 403 之后，本作者 2026-11-14 又逐跳复核全部链路：用 Node 的 fetch 只发 HEAD、`redirect: 'manual'` 不跟随跳转、只带脚本自己的 User-Agent `maa-skills-setup`，每个 Location 单独再发一次 HEAD；夜神后两条起点当时 Node 连接超时，改用同样只发 HEAD、不跟随跳转、同一 User-Agent 的 `curl -I` 核对。两次都没有下载任何安装包，没有发送 Referer 或任何模仿浏览器的请求头；签名参数已省略。
+
+下表是 2026-11-14 的结果。表中的起点地址、主机、每一跳的 HEAD 状态（`observed`，每个地址一个）和核对日期（`checked`）与 `skills/maa-core/scripts/setup-download.ts` 的 `emulatorVendors` 一一对应，`tests/setup-download-vendors.test.ts` 检查两边一致，并按记录的状态逐条回放。
+
+| 厂商 | 起点（官方页面使用的地址） | 逐跳 HEAD 状态与文件（2026-11-14） | 表中 `observed` |
+| --- | --- | --- | --- |
+| MuMu | `https://mumu.nie.netease.com/api/dl/win`（官网下载按钮的脚本调用；浏览器下载列表里的文件地址也可作起点） | 302 → `a11.gdl.netease.com` 的 `MuMu_6.0.6_apinochannel_zh-Hans_<编号>.exe?n=…`：200，6,466,544 字节 | `[302, 200]` |
+| 雷电 | `https://lddl01.ldmnq.com/downloader/ldplayerinst14.exe`；`https://lddl01.ldmnq.com/downloader/ldplayerinst9.exe?n=ldplayer9_ld_412572_ld.exe`（官网首页按钮） | 起点即文件主机：两条都是 200，各 1,594,848 字节（在线安装器） | 各 `[200]` |
+| 蓝叠 5 | `https://aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` | 起点即文件主机：**403**，响应头 `x-oss-ec: 0003-00000501`（阿里云 OSS 防盗链：没有 Referer 的请求被拒）。2026-11-13 R3 时这一地址 HEAD 200、约 0.8 MB；R4 审查员 2026-11-14 用脚本 User-Agent 和 curl User-Agent 三次 HEAD 都是 403，本作者同日用 Node fetch 和 `curl -I` 复核也都是 403。官网 downloads.html 另列的 `BlueStacksMicroInstallerForWin7.exe` 在 2026-11-13 已是 403，没有收进表里 | `[403]`：脚本不能下载 |
+| 蓝叠 5 国际版 | `https://cloud.bluestacks.com/api/getdownloadnow?platform=win`（官网 tw/download.html 的 Windows 下载按钮） | 302 → `ak-build.bluestacks.com` 的 `BlueStacksMicroInstaller_5.22.290.1031_native.exe`：200，955,232 字节。两个主机都在原已放行的 `bluestacks.com` 内，此处仍逐一记录 | `[302, 200]` |
+| 夜神 | 三条起点，是三个不同的安装包：`https://www.yeshen.com/cn/download/fullPackage/win_64?formal`、`https://www.yeshen.com/cn/download/fullPackage/win_64_9?formal`、`https://www.yeshen.com/cn/download/fullPackage?formal` | 每条都是 302 → `res06.bignox.com` 上以十六进制命名的 `.exe`，再 200：`win_64` 跳到路径日期 20241211 的文件，572,471,032 字节；`win_64_9` 跳到路径日期 20250226 的文件，600,709,368 字节；`fullPackage?formal` 跳到路径日期 20250317 的文件，431,437,560 字节。三者的 Content-Disposition 都是 `filename="nox_setup_v7.0.6.2_full.exe"`，但大小不同。`fullPackage/win_64_12?formal` 跳到 `.7z` 包，脚本只接受 exe／msi／zip，没有记录 | 各 `[302, 200]` |
+| 逍遥 | `https://www.xyaz.cn/download.php?file_name=XYAZ-Installer` | 303 → `download.microvirt.com` 的 `XYAZ-Installer.exe`：200，19,919,104 字节 | `[303, 200]` |
+
+新增放行的确切主机只有 `res06.bignox.com` 和 `download.microvirt.com`；同公司的其他主机（例如 `bignox.com`、`microvirt.com` 的其他子域名）一律拒绝。厂商更换 CDN 主机时下载会以 `unofficial-source` 失败，需要重新核对并更新这张表。夜神按路径名命名的文件是十六进制串，方案原样显示该文件名。
+
+### 官方服务器拒绝脚本请求（R4，2026-11-14）
+
+脚本只发自己的 User-Agent（读 GitHub 索引时另加 Accept），不发 Referer、Cookie 或任何模仿浏览器的请求头，也不为了绕过厂商的防盗链换请求头重试。由此定下（设计默认值，2026-11-14，见[规格](spec.md)「默认值及其来源」）：
+
+- 任何一跳返回 401 或 403，表示官方服务器拒绝脚本的请求：出方案时不出方案，结果是 `source-refused`；下载时记为 `failed`，原因 `source-refused`。不重试，不换请求头。判断只有一处：`setup-download.ts` 的 `chainScriptable`，厂商表的记录状态和每一次实际请求都用它。
+- 记录状态里有 401／403 的厂商，出方案和下载都直接返回 `source-refused`，不向它发任何请求。脚本不能下载的厂商：`bluestacks-cn`（蓝叠 5）。用户在自己的浏览器里从官方页面 `https://www.bluestacks.cn/` 下载安装包，然后从方案里的 `run-emulator-installer` 这一步继续：由用户自己运行安装程序，不需要把文件交给脚本；之后照常是模拟器首次设置、游戏客户端（用户）和 adb 连接、复检（skill）。
+- 不带官网页面作 Referer：维护者 2026-11-14 确认，原话「yes as you recommended」（按协调者的建议不带，用户在自己的浏览器里下载）。以后若要带，需作为新规则登记：在规格两张来源表登记来源，重新只读核对后再改厂商表。
+
+未核实的事实：MAA zip 解压后 `MAA.exe` 在顶层（见上一条，按 ci.yml 推断）；platform-tools zip 解压后是 `platform-tools/adb.exe`（MAA 自身替换 adb 时也使用 `adb/platform-tools/adb.exe`，见上文 ConnectSettingsUserControlModel 的核对）。脚本按这些假设核对解压结果，不符时解压记为失败并清空目标文件夹，不会记为成功。上表的模拟器下载主机和状态已由 HEAD 核对，但只代表核对当日：没有下载任何安装包，安装包内容和完整性没有核对（大小只来自 HEAD 的 Content-Length）；蓝叠 5 的 403 以后是否解除未知，解除后也要重新核对并改表，脚本才会下载它。MAA zip 里的 `DependencySetup_依赖库安装.bat` 条目名是否带 UTF-8 标志（0x0800）也未核实：带标志按 UTF-8 解码；不带标志时同样按 UTF-8 严格解码，解不出就整包失败，不会写出乱码名。
+
+### 解压方式（2026-11-14）
+
+要解压的只有两种 zip：MAA 发布包和 platform-tools；Node 的 `.msi` 和模拟器安装程序只下载，由用户运行，从来不解压，所以不涉及别的格式。
+
+发现：原先用 Windows 自带的 `tar.exe`（bsdtar 3.8.9，libarchive 在 System32 的 `archiveint.dll`）。它把 zip 条目名从 UTF-8 转成本进程的 ANSI 代码页；代码页里没有的字符转不了，这个条目就被跳过（「Archive entry has empty or unreadable filename ... skipping」），最后以 1 退出。MAA 发布包里有 `DependencySetup_依赖库安装.bat`，其中「赖」「库」是简体字，英文（1252）、日文（932）代码页里没有（两者都已实测，见下），韩文（949）只收繁体汉字、按字符表推断也没有，所以这些系统上的真实用户解压 MAA 一定失败；只有代码页是 936 或启用了「使用 Unicode UTF-8 提供全球语言支持」（65001）的系统能成功。证据：
+
+- GitHub windows-latest（代码页 1252）上，PR #70 的「MAA extraction is the skill's only install step…」两次得到 `failed` 而不是 `extracted`。
+- 本机的 ANSI 代码页是 65001（不是 936），所以本机能通过。本机把 `tar.exe` 复制到临时目录，只换掉它内嵌的清单，加上 `activeCodePage` 强制本进程代码页，再解压同一个合成 zip：en-US（1252）、ja-JP（932）、Legacy（本机系统区域为 en-US，即 1252）下，中文名、韩文名和 emoji 名都被跳过并退出 1；zh-CN（936）下中文名成功、韩文名和 emoji 名失败；UTF-8 下全部成功。转换失败的提示文字也在 `archiveint.dll` 里（「Pathname cannot be converted from %s to current locale」等）。
+- 同一实验还显示 `tar.exe` 对危险条目名是「改名后照样解压」：去掉盘符或开头的 `/` 后解到目标文件夹里、`a:b` 解成 `b`、`MAA.exe.` 和 `NUL.txt` 原样写出，不分大小写重名时直接覆盖，都以 0 退出；只有含 `..` 的条目会报错。没有写到目标文件夹之外。
+
+做法（设计默认值，2026-11-14，见[规格](spec.md)「默认值及其来源」）：改用 Windows 10／11 自带的 Windows PowerShell 5.1（`System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -Command`）里的 .NET Framework `ZipArchive`。.NET 按 UTF-8 标志把条目名直接解码成 UTF-16，用宽字符接口写盘，不经过 ANSI 代码页；同样的强制代码页实验里，复制出来的 powershell.exe 在 1252、932、936 和 65001 下都原样解出了中文、韩文、带重音字母和 emoji 的名字。脚本文字固定，压缩包和目标路径只经环境变量传入；不调用 cmdlet，只用 .NET 方法，并且不把调用方的 `PSModulePath` 传给它（PowerShell 7 的模块路径会让 5.1 加载模块失败）。写入前先检查全部条目名，任何一条不合格就整包拒绝、什么都不写：空名、`/` 或 `\` 开头（含 `\\?\`）、空段、`.`／`..` 段、Windows 文件名非法字符（含 `:`，即盘符和备用数据流）、设备名（CON、PRN、AUX、NUL、COM0–9、LPT0–9、CONIN$、CONOUT$，带不带扩展名）、末尾点或空格、含替换字符（名字不是有效 UTF-8）、规范化后路径改变或不在目标文件夹下、不分大小写重名、文件与文件夹同名。写入时逐级建文件夹，已有的一级必须是普通文件夹，遇到重解析点（联接、符号链接）即停；文件用「只新建」打开，已有同名文件时失败，不覆盖。条目表用方法 `get_Entries()` 读取：本机实测，PowerShell 5.1 的 `foreach ($entry in $zip.Entries)` 在读属性出错时（名字含 `|`，或没有 UTF-8 标志的 GBK 名在严格 UTF-8 解码下）不报错、循环零次，原脚本因此以 0 退出、什么都没解出；改用方法调用后异常进入 `catch`，没有条目时也退出 1。目标路径经 `GetFullPath` 规范化后必须与传入的逐字相同（末尾的 `\` 除外）：Windows 会去掉最后一级名字末尾的点和空格、中间一级末尾的单个点，Node 用扩展长度形式时不去掉，两者不同就会检查一个文件夹、写进另一个。退出码 0 为成功，2 为条目名或路径被拒绝，3 为目标路径形式不对或规范化后改变，其他为出错；产品把任何非零、超时或启动失败都记为 `extract-failed` 并清空目标文件夹。
+
+长路径：`tar.exe` 的清单声明了 longPathAware，powershell.exe 没有；本机（LongPathsEnabled 为 0）先用普通路径写，完整路径 240 字符成功、300 字符以 1 退出。所以条目名在普通完整路径上检查，写盘改用同一路径的扩展长度形式（`\\?\` 前缀，UNC 为 `\\?\UNC\`），超过 260 字符也能写，和 `tar.exe` 一致。目标路径本身已是 `\\?\` 或 `\\.\` 形式时拒绝（退出码 3）。
+
+已知限制：受约束语言模式（WDAC／AppLocker 强制）会禁止这些 .NET 调用，那时解压失败（`extract-failed`），不会写到别处；这一点按 PowerShell 文档推断，本机未实测。

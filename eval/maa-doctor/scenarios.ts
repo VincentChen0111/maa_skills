@@ -48,7 +48,8 @@ type Mode = 'healthy' | 'corrupt' | 'unknown' | 'remote';
 // The rows doctor's full check (ticket 10) reports in the fixture, as fixed literals in its order with each row's group: MAA.exe is a
 // placeholder whose version reads as unknown, no adb is configured and the skill update is not looked up. They are what the shared
 // check library (libraryCheck, connectionCheck, groupOf) produced at commit 996599a, with the version row (ticket 25) and the Skland
-// credential's purpose (ticket 19) as at bd3b3e6; tests/doctor-scenarios.test.ts runs the installed doctor against them.
+// credential's purpose (ticket 19) as at bd3b3e6, and the Node repair text (ticket 08, which offers the official plan) as at 5b11222;
+// tests/doctor-scenarios.test.ts runs the installed doctor against them.
 const noAction = { executor: 'user', description: 'No action is needed.' };
 const inspectMaa = { id: 'inspect-maa-configuration', executor: 'user', description: 'Inspect or initialize the current configuration in the MAA GUI.' };
 const row = (group: string, id: string, status: string, reason: string, message: string, repair: Record<string, string>) => ({ id, status, reason, message, repair, group });
@@ -64,7 +65,8 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
     corrupt ? row('installation', 'server', 'error', 'client-unverified', 'The current client has not been verified.', cnRepair)
       : row('installation', 'server', 'normal', 'cn-client', 'The current MAA profile selects a CN client.', cnRepair),
     row('installation', 'node', 'normal', 'node-24', 'Node 24 is running.',
-      { id: 'official-node-24-installation', executor: 'user', description: 'Use the official Node download page and select version 24.x.' }),
+      { id: 'official-node-24-installation', executor: 'user',
+        description: 'Install Node 24.x from the official Node download page; setup plan can show the official installer, downloaded only after you confirm that plan.' }),
     row('installation', 'settings', 'normal', 'settings-readable', 'Existing settings were read.',
       { id: 'set-preferences', executor: 'skill', description: 'Save the first-run choices using the shared preferences script.', channel: 'preferences.ts set' }),
     row('installation', 'private-directory', 'normal', 'private-directory-present', 'The selected private directory exists.',

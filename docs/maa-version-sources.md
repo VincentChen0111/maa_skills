@@ -88,6 +88,22 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 
 经 25 的生成器（`node scripts/maa-version-check.ts record --write`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2）。注册表现为 19 条条目、87 个文件。
 
+## 合并到 08 时登记的条目（2026-11-14）
+
+08（下载与补齐）把带 25 的 main 合进自己的分支时登记。08 的 MAA 事实记在 [setup 来源](setup-sources.md)「08 下载来源核对」：2026-11-13 只读查看了 MAA 安装文档、Windows 模拟器文档的源文件和开发分支上的 `ci.yml`，链接指向网站或开发分支，不是固定提交，所以覆盖测试的匹配式扫不到（`.github/workflows` 也不在它认的路径前缀里）。08 依赖这三处：下载的资产名、压缩包顶层有 `MAA.exe`（解压核对按它判断成败）、交给用户的安装步骤，以及可下载的模拟器厂商表。按本票规则登记为条目 `setup-release-package`（skill 为 maa-core 和 maa-setup）：经 `raw.githubusercontent.com` 只读取三个文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob，再经 GitHub 公开接口 `contents/<路径>?ref=<v6.22.0 的提交>` 核对三个 blob 一致。
+
+| 文件 | 两个版本 | 条目依赖的部分 |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | blob 不同（v6.21.4 `4d0679d`，v6.22.0 `400675e`），唯一的变化是 macOS 任务多一行 `libwebgpu_dawn.dylib` 的 xcframework | Windows 任务第 224 行 `dotnet publish … -o install`；第 254 行把 `MaaAppHostStub.exe` 复制为 `install/MAA.exe`；第 256 行把 `tools/DependencySetup_依赖库安装.bat` 复制进 `install`；第 263–264 行进入 `install` 后 `Compress-Archive -Destination MAA-<tag>-win-<arch>.zip -Path ./*`，所以压缩包顶层就是 `install` 的内容；发布任务把各产物平铺后作为发布资产上传。这几行在两个版本上相同 |
+| `docs/zh-cn/manual/install.md` | blob 相同 | 第 59 行 Windows 选 `MAA-<版本号>-win-x64.zip`；第 69–81 行完全解压，不要解压到系统盘根目录、Program Files 这类需要 UAC 权限的路径，以管理员身份运行 `DependencySetup_依赖库安装.bat` 安装 VCRedist x64，再双击 `MAA.exe` |
+| `docs/zh-cn/manual/device/windows.md` | blob 相同 | 「完美支持」的 MuMu、雷电、蓝叠 5、蓝叠 5 国际版、夜神、逍遥和各自的官网地址，与 08 的厂商表一致；页面说明排序随机生成、不分先后 |
+
+所以 `sourceVerified` 是 v6.21.4 和 v6.22.0，指纹取 v6.22.0 的 blob。08 原来按开发分支 `ci.yml` 推断的「`MAA.exe` 在压缩包顶层」，现在在两个固定提交的源码上核过，但仍没有用真实发行包核实（没有下载任何发行包）；依赖安装脚本的条目名是否带 UTF-8 标志也仍未核实。依赖安装脚本本身（`tools/` 下）没有登记：注册表的路径只允许 ASCII 字符，08 也不读它的内容，它在包里由 `ci.yml` 第 256 行保证，用途由安装文档第 75 行说明。`ci.yml` 的改动比较频繁，以后每次改动都会开变化 issue，由人核对 Windows 打包的几行是否变了，这是本票「宁可多开 issue，也不错误认证」的代价。
+
+覆盖测试另有一处误报：[setup 验证记录](setup-verification.md)列出 08 的解压必须拒绝的合成条目名，其中 Windows 设备名一项写作「resource/NUL.txt」，形式上像 MAA 资源路径，实际是测试里的条目名，不是 MAA 文件；测试的例外表加了这一项并写明原因。
+
+重新生成的随包核实记录内容不变（仍是源码已核 v6.22.0，记录版本 2）。注册表现为 20 条条目、90 个文件。
+
 ## 27 交付时登记的条目（2026-11-14）
 
 27（批准后的碎石与临期药）在合并 28 最终版之后交付，它在待登记里的位置改为条目 `fight-stone-expiring-medicine`。事实记在 [daily 验证记录](daily-verification.md)「27 批准后的碎石与临期药」的「固定 MAA 源码核实」表和规格「默认值及其来源」的临期药一行，都在 v6.21.4（`52d0b2a`）上核对。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob（用 `scripts/maa-version-check.ts` 自己的读取器和 `gitBlobSha`）；v6.21.4 的 blob 与 27 验证记录表里的逐一一致。
@@ -101,7 +117,7 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 | `tasks.json` | 解析两个版本：任务从 1113 个变为 1114 个，有变化的是 `ClickedCorrectStage`、`StageResource`、`FightMissionFailedAndStop`、`GoTerminalStopflag`、`BattleDeployWhenPause`、`EndOfActionThenStop`、`ClickCornerAfterFailure` 七个 | 27 引用的 `StartButton1`（第 1310–1329 行）、`UseMedicine`（第 1496–1502 行）、`UseStone`、`StoneConfirm`、`StoneConfirmWait`（第 1579–1604 行）、`NoStone`、`CloseStonePage`、`CloseStonePageExceeded`（第 1605–1621 行）在两个版本里逐字段相同 |
 | `integration.md` | 第 1750 行一处（GPU OCR 的说明），见上文 | 27 引用的第 169–173 行（`medicine_expire_days`）不在变化范围里 |
 
-经 25 的生成器（`node scripts/maa-version-check.ts record`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2），记录文件没有改。注册表现为 20 条条目、91 个文件，待登记为空。
+经 25 的生成器（`node scripts/maa-version-check.ts record`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2），记录文件没有改。注册表现为 21 条条目（含 08 的 `setup-release-package`）、94 个文件，待登记为空。
 
 ## 发布与 Action 相关的外部事实
 

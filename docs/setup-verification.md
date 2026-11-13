@@ -1,5 +1,271 @@
 # setup 现有环境接入验证
 
+本文件先记录 08（下载并补齐环境），其后各节为 07（接入现有环境）的验证记录，保持原样。
+
+## 08 下载与补齐：作者验证
+
+2026-11-13 从 origin/main `4a1fd26` 开始，在 `claude/08-setup-downloads` 分支实施。来源核对见 [setup 来源](setup-sources.md) 的「08 下载来源核对」，限制及其来源见[规格](spec.md)「检查与修法」的 08 一条和两张来源表的 08 行。作者验证不代替独立审查；独立审查见[审查记录](reviews/2026-11-13-08-setup-downloads.md)，共十一轮，结论通过。
+
+### 交付内容
+
+- `skills/maa-core/scripts/setup-download.ts`：唯一实现。`plan` 只读官方发布索引（MAA 的 GitHub 最新正式发布、Node dist index.json 与 SHASUMS256、Google SDK 仓库 repository2-1.xml 稳定频道、模拟器厂商官方域名下的地址），给出文件名、版本及出处、来源、官方页面、大小或未知、校验值、许可和逐步执行者，不写文件；`download` 核对确认原话、方案指纹和许可接受后独占登记，逐跳检查官方主机，核对大小与校验值；新下载开始前回收进程已退出的下载留下的临时文件；`downloads` 每次重新计算摘要，格式不对或文件名越界的记录一律不用；`install` 只把 MAA／adb 解压到空文件夹，Node／模拟器只返回用户步骤。
+- `skills/maa-core/scripts/setup.ts`：CLI 动作 `plan`、`download`、`downloads`、`install`、`recheck`；`recheck` 复用 07 的 `checkSetup`、`discoverSetupConnections`、`testSetupConnection`，把下载状态和连接结果写进 `setup-environment.json`，只有全部通过且连接测试通过才 `complete`。Node 主版本不是 24 时只放行 node 的 plan／download 和 downloads。check 的两条修法说明改为指向下载方案。
+- skill：`maa-setup` SKILL.md 与接口说明加入下载流程；`maa-core` 脚本表、`maa-help` 路由、README 同步（help 文字变化同样需要前后评测，见下）。
+- 评测：`eval/maa-setup/scenarios.ts` 新增 `setupDownloadScenarios` 五个场景；`eval/network-fixture.mjs` 新增 setup 分支，读工作区 `.eval-setup-network.json`，只在 `setup.ts plan|download` 进程替代 fetch，GET 下载样例时记录 `download` 事件。`scripts/eval-fixture.ts`、`eval-run.ts`、`evaluation.ts` 未改。
+
+### 实际运行（本机 Windows，Node 24.22.1）
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm ci --ignore-scripts` | 成功 |
+| `npm run typecheck` | 首次 2 个 TS2345（`architecture` 参数类型）；修正参数类型后通过 |
+| `node --test tests/setup-download.test.ts` | 15 pass / 0 fail（含 Windows 专用的真实 `tar.exe` 解压两项） |
+| `node --test tests/setup-download-scenarios.test.ts` | 17 pass / 0 fail |
+| `node --test tests/setup.test.ts tests/setup-scenarios.test.ts tests/eval-network.test.ts tests/setup-integration.test.ts` | 52 pass / 0 fail |
+| `node --test tests/help-installation.test.ts` | 6 pass / 0 fail |
+| 完整离线入口 `node scripts/check.ts`（提交 `60697a6`，工作树干净） | 首次运行（文档未定稿时）测试 414 项全过，但隐私检查报 3 处盘符路径（步骤说明、来源文档、测试数据），改写后通过。最终：415 项，414 pass、0 fail、1 skip（非 Windows 进程适配器用例在 Windows 跳过）；tracker、隐私、元数据为空，评分规则 7 条／样例 14 个通过；`npm run typecheck` 通过。只改本表的文档提交 `8005690` 上再跑一次：415 项，413 pass、1 fail、1 skip，失败为 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」报 `maa-close-timeout`（即已知偶发的「关闭 MAA」用例）；该文件单独连续运行三次，三次均 15 pass、0 fail、1 skip。下一次文档提交 `62a28a4` 上完整入口同一用例再报 `maa-close-timeout`（413 pass、1 fail、1 skip）；随后单独再跑三次：第一次该用例失败、报 `maa-process-path-unavailable`（14 pass、1 fail），后两次 15 pass、0 fail。完整入口在测试失败时不再运行 tracker／隐私／元数据，这两个提交的文档检查另行单独运行，结果见交付报告。该测试只引用 `maa-process.ts` 与 `preferences.ts`，本票没有改动它们、`maa-config.ts` 或该测试；它在单独运行时也会偶发失败，且有两种不同错误，所以只记为「间歇失败、与本票改动无关」，没有据此判定为单纯的负载偶发 |
+
+测试先行的实际顺序如实记录：`setup-download.ts` 的主体先于其行为测试写成；先写 `tests/setup-download.test.ts`，经 `setup.ts` 接缝运行时观察到红（`does not provide an export named 'downloadSetupProgram'`），补上 `setup.ts` 的导出和 `recheck` 后，最初 13 项一次全部通过。为确认这些测试确实约束行为，另在临时副本上做了变异核对（每次改一处产品代码、跑该测试文件、恢复原字节）：
+
+| 变异 | 结果 |
+| --- | --- |
+| 允许任意主机；去掉校验值比较；去掉指纹比较；去掉确认原话检查；去掉许可检查；把进程已退出的下载报为已下载；不再重新计算文件摘要；recheck 不要求连接；重复解压 | 各有 1–2 项失败，均被发现 |
+| 去掉下载前的「方案已用」快速检查 | 未被发现：独占登记仍拒绝第二次使用，两道检查互为后备 |
+| 独占登记改为可覆盖写入 | 最初未被发现（快速检查兜住顺序调用）；新增「同一方案并发下载两次只请求一次文件」测试后被发现 |
+
+首轮全绿后自读代码又发现三处问题并修正：模拟器下载后的「下一步」错误地包含下载步骤本身；进程中途退出的下载留下的临时文件从不回收；下载记录里的文件名未校验，被改写的记录可以指向下载文件夹以外。这三处都是先改产品、后补断言（模拟器 `next`、新下载回收死进程的临时文件、指向外部的记录被忽略且不解压），再临时恢复旧行为确认每条新断言失败，最后恢复：三项均为 exit 1、各 1 项失败。在最终代码上重跑上表全部变异，结论不变。
+
+本机另做的边界事实核对（临时目录，非仓库测试）：Node 的 fetch 在 `redirect: 'manual'` 下返回真实 302 和 Location（本机回环服务器）；Windows 自带 `tar.exe` 能解压 zip，遇到含 `..` 的条目报错退出 1、只解出其他条目，产品把非零退出当失败并清空目标文件夹（测试里用合成 zip 实测）。（2026-11-14 起不再用 `tar.exe`：它依赖进程 ANSI 代码页，见下文「Windows CI 解压失败修复」。）
+
+### 验收条件与证据
+
+| 验收条件 | 证据 |
+| --- | --- |
+| 四类程序缺项流程，文件名、版本、官方来源与大小，大小未知如实说明 | `setup-download.test.ts`：MAA 方案字段与执行者；Node 方案 `size: null`、`sizeKnown: false`；adb 方案版本、大小、许可；模拟器方案版本出处 `official-page-stated`、大小未知 |
+| 每次下载先展示方案并确认，拒绝不下载，不借旧授权 | 「download needs the confirmation of this exact plan…」：缺确认、空确认、别的方案均不请求文件；「a confirmed plan downloads once…」：同一方案第二次 `plan-already-used`；「two concurrent downloads…」；「a release that changed…」：`plan-changed`。评测场景见下 |
+| 官方来源、记录版本与出处；测试用下载样例 | 「unofficial sources are refused…」：非官方资产地址、仿冒域名、http、未列厂商、跳转到非官方主机均拒绝且不访问该主机；下载记录含 version、versionSource、source、officialPage、sha256；全部测试只用网络替身，未访问真实发行包 |
+| 区分 skill 与用户步骤；不输入游戏账号、不操作设备 | 方案 `steps[].executor`；Node／模拟器 `install` 只返回用户步骤；模拟器步骤写明 skill 不输入游戏账号、不操作设备；SKILL.md 第 3 步 |
+| 失败、中断、未装完不记已安装；恢复先查现状、不重复已通过步骤 | 「an interrupted download…」：中断不保留临时文件，记录 failed，进程退出的记录报 interrupted，需新方案；「a downloaded file changed on disk…」：`download-invalid` 且不解压；「MAA extraction…」：解压后 MAA 未首次启动时 recheck 不完整、`plan` 返回 `not-needed`、重复 `install` 返回 `already-extracted` 不再解压；已核下载再次 `plan` 返回 `already-downloaded` |
+| 完成后复检 Node、MAA、adb 与连接并更新环境记录；设置和配置走原通道 | 「final recheck covers…」：未选候选时不 connect、`complete: false`；选定后 connected；连接失败不完整；每次写入 `setup-environment.json`；解压不写设置（测试断言 `maaDirectory` 未被写入），MAA 目录经 `updateSettings`（偏好脚本的导出函数）保存 |
+| 网络替身覆盖同意／拒绝、来源异常、大小未知、中断及安装后复检 | 同上各测试；`setup-download-scenarios.test.ts` 经两个原生布局的已安装 CLI 走同一替身：未确认被拒、附加字段被拒、确认后只下载一次并记录一个 download 事件、重复使用被拒、再次 plan 返回 already-downloaded、非官方模拟器地址被拒 |
+| 行为评测断言下载在明确确认之后、未通过检查不报完成 | 五个场景：`setup-download-install-request-is-not-consent`、`setup-download-declined`、`setup-download-old-approval`、`setup-download-interrupted-resume`、`setup-download-incomplete-not-reported`。离线重放（模拟合规调用）在两个布局下评分 pass；模拟「拿安装请求当确认去下载」的反例评分 fail，失败规则含 `download-confirmation` 和 `authorization`。**真模型运行：未验证** |
+
+### 设计默认值（2026-11-13，均已登记规格「默认值及其来源」）
+
+方案单次使用与指纹绑定；官方来源清单与 https、最多 5 次跳转、逐跳检查；大小未知上限 4 GiB、60 秒无数据记中断、索引 8 MiB／30 秒；adb 许可由用户本人接受；模拟器版本由用户从官方页面读出并标明出处；skill 只下载、校验和解压到空文件夹（非根目录、Program Files、Windows 目录，不与私有目录互含，失败清空）；下载不记已安装、状态每次重算摘要、最终 recheck 才能报完成；Node 不是 24 时只放行 node 的下载动作。评测上的选择：确认后的正向下载会写入带随机标识和时间的记录，现有评分规则无法逐字段授权，所以由 CLI 测试覆盖，模型场景只做不确认不下载、未通过不报完成；不改评分器以免和 27、28 的并行改动冲突。
+
+### 未验证
+
+- 真模型行为评测：五个新场景（R4 后为六个，加 `setup-download-emulator-refused`）以及因 SKILL 文字变化受影响的 07 五个 setup 场景、help 场景都没有运行。28 的可运行入口和登录预检尚未交付、维护者也还没有在专用登录目录登录；前后对照和分数不降由 [26](issues/26-v0-1-0-release-validation.md) 执行。`network-fixture.mjs` 的变化同时改变 13、14 成本／缺口场景的指纹，需以新运行器重测前基线。
+- 真实网络与真实发行包：脚本从未访问真实索引或下载任何发行包；解析逻辑只按 2026-11-13 只读查看的格式编写并用合成样例测试。MAA zip 顶层为 `MAA.exe` 只由 MAA 的 ci.yml 推断（见 [setup 来源](setup-sources.md)「R1 补充」）；platform-tools zip 为 `platform-tools/adb.exe` 未核实。GitHub 资产跳转到 `release-assets.githubusercontent.com` 由 R1 审查员只读核实；六个模拟器厂商的下载链路由本作者 2026-11-13、2026-11-14 用 HEAD 逐跳只读核对（见 [setup 来源](setup-sources.md)「下载链路核对」），只代表核对当日，没有下载任何安装包，安装包内容没有核对。
+- 真实安装：没有运行任何安装程序，没有在本机安装 MAA、模拟器、adb 或 Node，也没有接触维护者的 MAA、模拟器或 adb。
+- Node 主版本不是 24 时的 CLI 放行只经代码阅读确认；本机只有 Node 24，没有用其他 Node 版本实际运行。
+- Linux CI 上 Windows 解压测试（2026-11-14 起共六项）和 CLI 下载测试会跳过；Windows CI 在本分支的结果见下文「Windows CI 解压失败修复」。
+
+### R1 修复（2026-11-13，协调者已接受全部三项）
+
+| 意见 | 修复 | 测试先行与证据 |
+| --- | --- | --- |
+| P2-1 MuMu 永远无法下载：只放行 `mumu.163.com`，但官网按钮经下载接口 `mumu.nie.netease.com` 跳转到 `a11.gdl.netease.com` | 厂商条目新增 `hosts`（确切主机，不含子域名）；MuMu 只加这两个主机，`adl.netease.com` 和 netease.com 其他主机仍拒绝。plan、HEAD 与下载的逐跳检查都用同一组主机。SKILL 改为让用户从浏览器下载列表取按钮实际触发的地址；规格两张表、接口说明和来源文档同步 | 新测试「MuMu downloads follow its official download API…」先失败（`unofficial-source`），修后通过：接口 302 到文件主机可规划和下载；文件地址本身可规划；跳到 `cdn.netease.com` 被拒且不访问；`adl.netease.com`、`x.a11.gdl.netease.com`、仿冒后缀被拒；雷电厂商不能借 MuMu 的主机 |
+| P2-2 连接保存后 recheck 必然报未完成：SKILL 让 recheck 用第 4 步的 `discoveryRevision`，而它覆盖整份配置，第 5 步 `apply` 和 MAA 启动后必然失效 | `recheckSetup` 不再接受 `discoveryRevision`（CLI 和导出函数都报 `request-invalid`），只收 `candidate`；每次重新发现，按只由 adb 路径和地址算出的候选 id 找到同一候选再测试，找不到报 `candidate-unavailable`／`chosen-candidate-not-found`，没传候选不发起连接。SKILL 第 6 步、接口说明、规格同步 | 两个新单元测试先失败（实际 `selection-required`），修后通过：发现后按 apply 的方式改写连接字段并加入 MAA 写入的字段、旧指纹已变，recheck 仍 connected 且（Windows 上）complete；候选消失时报 `candidate-unavailable` 且只运行 `adb devices`。另在已安装 CLI 上用真实 writer 走 prepare→discover→test→apply→recheck：带旧指纹被拒，只带候选得 connected、complete、pending 为空，环境记录同为 complete；这条 CLI 测试是修后写的，临时换回修前的 `setup.ts` 运行确认它失败（实际 `[1, undefined]`），再恢复。审查员复现脚本按新接口改写的副本输出 connected／complete:true |
+| P3 未登记的上限：解压 600 秒、确认原话 2000 字符、模拟器地址 2048 字符、HEAD 30 秒 | 四项和既有上限一起改为具名常量，登记进规格两张表的 08 行并写进「检查与修法」08 一条；解压超时单独报 `extract-timeout`（记录 install.reason），清空目标文件夹；接口说明 install 一行写明 | 新测试「an extraction that hits the time limit…」先失败（实际 `extract-failed`），修后通过：替身先写入部分文件再报超时，结果为 `extract-timeout`，目标文件夹不存在，状态为解压失败 |
+
+R1 修后实际运行：`npm run typecheck` 通过；`node --test tests/setup-download.test.ts tests/setup-download-scenarios.test.ts tests/setup.test.ts tests/setup-scenarios.test.ts tests/setup-integration.test.ts tests/eval-network.test.ts` 共 88 项全部通过；首轮变异表与三处后续修复的变异在修后代码上重跑，结论不变（确认原话变异因改为具名常量更新了匹配文本后重跑，被发现）。完整离线入口 `node scripts/check.ts`（提交 `6a4c02c`，工作树干净）：419 项，418 pass、0 fail、1 skip（非 Windows 进程适配器用例），tracker、隐私、元数据为空，评分规则 7 条／样例 14 个通过；「关闭 MAA」用例本次通过。
+
+### R2 修复（2026-11-13，协调者已接受唯一一项 P3）
+
+| 意见 | 修复 | 测试先行与证据 |
+| --- | --- | --- |
+| P3 从 MuMu 下载接口开始的方案永远不能下载：模拟器文件名优先取 Content-Disposition，而 MuMu 接口每次给新的 `n=`、文件主机每次给不同的随机名字，文件名进入指纹，下载时必然 `plan-changed`；原替身不返回 Content-Disposition，与真实服务器不符 | 改为优先取最终下载地址的路径名（MuMu 为 `MuMu_<版本>_apinochannel_zh-Hans_<编号>.exe`，两次请求一致），路径里没有安装包名时才用 Content-Disposition。`safeFileName`、只写在 downloads 文件夹内、指纹绑定版本／大小／来源不变。改正来源文档里「接口地址更稳定」的说法，接口说明和规格「默认值及其来源」的模拟器一行写明文件名取法及理由 | MuMu 测试改为按真实服务器行为的替身：接口每次 302 带新的 `n=` 和签名，文件主机每次给不同的 Content-Disposition 名字。修前运行失败（方案文件名为 `MuMu_9.0.1_2cd.exe`，每次请求都会变），修后通过：从接口地址和从浏览器下载列表的文件地址开始，各自只确认一次就下载成功，文件名都是路径名，文件内容正确。另加一条：地址路径没有安装包名时，按 Content-Disposition 命名 |
+
+R2 修后实际运行（提交 `acebe2c`，工作树干净）：`npm run typecheck` 通过；上述 6 个受影响测试文件共 88 项全部通过；`node scripts/check.ts` 为 419 项，417 pass、1 fail、1 skip，唯一失败是已知的「关闭 MAA」用例（`tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」报 `maa-close-timeout`），本票未改动它引用的文件。完整入口在测试失败时不再运行后续检查，所以另外单独运行：privacy、tracker、metadata 均为空，评分规则自检 7 条／样例 14 个通过。
+
+### R3 修复（2026-11-13，协调者已接受一项 P2；审查轮数已用满）
+
+R3 审查确认 R2 修复无问题，另在本包范围内发现一项 P2：夜神只放行 `yeshen.com`、逍遥只放行 `xyaz.cn`，而两者真实下载分别跳转到 `res06.bignox.com`、`download.microvirt.com`，所以永远下载不了。这和 R1 的 MuMu 是同一类缺陷，按维护者的复发规则（同类缺陷第二轮再现就不再逐条补路径）处理：
+
+- **唯一来源**：`setup-download.ts` 的 `emulatorVendors` 一张表，每个厂商有官网 `domains`（含子域名，沿用原范围）和已记录的下载链路 `chains`（起点地址、各跳主机，最后一跳是文件主机）。`vendorHosts` 只从链路取确切主机；plan 的起点检查、HEAD 逐跳和下载逐跳三处都只读这张表。原来 MuMu 专用的 `hosts` 字段删除。新增放行的确切主机只有 `res06.bignox.com`、`download.microvirt.com`，没有新增通配。
+- **链路核对**：本作者 2026-11-13 用 `curl -I`（只发 HEAD、不跟随跳转）逐跳核对六个厂商的链路，没有下载任何安装包，结果和签名省略后的地址记录在 [setup 来源](setup-sources.md)「下载链路核对」（该节 R4 后改名并加入 2026-11-14 复核）。蓝叠 CN 官网另列的 Win7 安装器 HEAD 返回 403、夜神 `win_64_12` 跳到 `.7z`，都没有收进表里。
+- **一致性测试** `tests/setup-download-vendors.test.ts`：表里恰好是六个完美支持厂商，每个至少一条链路，每条链路的起点和各跳主机都写在 `setup-sources.md` 中；逐条用网络替身回放「起点 → 各跳 → 文件主机」，出方案后只确认一次就下载成功，文件内容正确；再把最后一跳换成同公司未列出的主机（`a12.gdl.netease.com`、`res.ldplayer.net`、`cdn3.bluestacks.com`、`aliosscdn1.bluestacks.cn`、`res07.bignox.com`、`www.microvirt.com`），断言出方案被拒、该主机从未被访问。
+- **测试先行**：先只把链路数据写进表、判断仍走旧逻辑（临时保留原 MuMu 专用主机，并标明为红灯脚手架），一致性测试失败：夜神三条、逍遥一条报 `unofficial-source`，文档一致性也失败；随后删除脚手架、改为读表，并补全来源文档后全部通过。
+- **变异核对**：让 `vendorHosts` 返回空、让下载逐跳忽略表、给夜神加 `bignox.com` 通配、删掉逍遥的链路，四项都使一致性测试失败（依次 6、6、4、1 项）。
+- **准确性修正**：MuMu 文件主机的 Content-Disposition 等于地址里的 `n=`，同一个文件地址得到同一个名字；名字变化来自下载接口每次发新的 `n=`。来源文档、接口说明和规格的模拟器文件名一行已改正，行为不变。「key2 有效 48 小时」HEAD 无法证实，改记为未核实的观察。
+- 规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」官方来源一行和模拟器文件名一行已同步；接口说明的模拟器一行改为指向这张表。
+
+R3 修后实际运行（提交 `363785e`，工作树干净）：`npm run typecheck` 通过；`node --test` 跑 7 个受影响文件（setup-download、setup-download-scenarios、setup-download-vendors、setup、setup-scenarios、setup-integration、eval-network）共 99 项全部通过；`node scripts/check.ts` 为 430 项，428 pass、1 fail、1 skip，唯一失败仍是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI…」，这次报 `maa-start-timeout`（此前两次为 `maa-close-timeout`、一次单独运行为 `maa-process-path-unavailable`），本票未改动它引用的文件，按协调者要求只报告。随后单独运行：privacy、tracker、metadata 均为空，评分规则自检 7 条／样例 14 个通过。本次修复已超出三轮审查上限，没有第四轮独立审查；是否授权复核和合并由维护者决定。
+
+### 第四轮之后的修复（交第五轮审查，2026-11-14）
+
+维护者为本任务放开了审查轮数。第四轮独立审查只审 R3 之后的三个提交，报告两项，协调者都接受。修复提交 `87721e6`；本节所在的文档提交另记。
+
+| 意见 | 处理 |
+| --- | --- |
+| P2 蓝叠 5（CN）永远下载不了：唯一记录的地址 `aliosscdn1.bluestacks.cn/BSLive/BlueStacksMicroInstaller.exe` 对没有 Referer 的请求返回 403（阿里云 OSS 防盗链，`x-oss-ec: 0003-00000501`）；脚本只把 404 当失败，所以仍出方案（大小未知），确认后必然 `failed / source-unavailable`；一致性测试的替身总回 200，看不到这一点 | 见下面各条 |
+| P3 `setup-sources.md` 两处错误：「未核实」仍说蓝叠、夜神、逍遥的真实下载主机要真实发行包才能确认，和上面已用 HEAD 核对的表矛盾；夜神三个起点合写成「约 572 MB」 | 「未核实」只留仍未核实的事实（MAA zip、platform-tools zip、安装包内容、蓝叠 5 的 403 以后是否解除）；夜神三个安装包分开写：`win_64` 572,471,032 字节（路径日期 20241211）、`win_64_9` 600,709,368 字节（20250226）、`fullPackage?formal` 431,437,560 字节（20250317）。本文件「未验证」一节的同一旧说法一并改正 |
+
+这是本包第三次出现「支持的厂商在真实环境下载不了」（R1 MuMu 文件名、R3 夜神／逍遥主机、R4 蓝叠 5 的 403），按维护者的复发规则处理：
+
+- **一个判断、一个出处**：`setup-download.ts` 的 `chainScriptable(statuses)`，任何状态是 401 或 403 就是官方服务器拒绝脚本请求。使用者只有两个：`request()`（全文件唯一发网络请求的地方，每一跳都检查，覆盖 MAA／Node／adb 的索引读取和 HEAD、四类程序的下载）和 `vendorScriptable(vendor)`（按厂商表记录的状态）。`resolveEmulator` 一开始就调用 `vendorScriptable`，plan 和 download 都经 `resolve_` 走到这里，所以蓝叠 5 不出方案、不发任何请求。plan 时任何一跳 401／403 抛 `source-refused`（CLI 输出 `{"status":"rejected","reason":"source-refused"}`，退出码 1）；下载 GET 的任何一跳 401／403 记为 `failed / source-refused`；都不重试、不换请求头。下载时登记记录之前的那次 HEAD 若被拒，和已有的 `unofficial-source` 一样直接拒绝、不请求文件、不写记录。
+- **不伪造请求头**：脚本只发 User-Agent `maa-skills-setup`（读 GitHub 索引另加 Accept），不发 Referer 或任何模仿浏览器的请求头。是否带官网页面作 Referer 是只有维护者能定的新规则，已写进来源文档和规格「默认值及其来源」：「若维护者同意带官网页面作 Referer，需作为新规则登记」。目前没有授权。
+- **厂商表记录核对事实**：每个厂商 `checked: '2026-11-14'`；每条链路 `observed` 记录每个地址的 HEAD 状态（MuMu、蓝叠国际版 `[302, 200]`，雷电 `[200]`，夜神 `[302, 200]`，逍遥 `[303, 200]`，蓝叠 5 `[403]`）。
+- **蓝叠 5 改由用户自己下载**（设计默认值，2026-11-14）：已核对 `run-emulator-installer` 存在，是用户步骤（用户自己运行安装程序并在安装窗口接受条款），不需要文件路径；之后 `emulator-first-run`、`game-client`（用户）和 `connect-adb`、`recheck`（skill）照常。`recheckSetup` 只把下载状态带进环境记录，检查项不含模拟器，不依赖下载记录（代码阅读）。SKILL 第 3 步写明：用户选 `bluestacks-cn` 时不用取地址；遇到 `source-refused` 告诉用户原因，请用户在自己的浏览器里从官网下载，再从运行安装程序这一步继续，不需要把文件交给脚本，不加请求头、不换地址或镜像。
+- **登记**：规格「检查与修法」08 一条、「规则来源」08 行、「默认值及其来源」新增一行；接口说明的模拟器一行和下载失败原因；SKILL 第 3 步；来源文档新增「官方服务器拒绝脚本请求」一节。这四处文档里的「脚本不能下载的厂商」列表由一致性测试与厂商表比对。
+- **评测**：新增场景 `setup-download-emulator-refused`（不授权下载；期望读偏好和 check，没有下载、没有文件变化）。离线重放在 `.agents`、`.claude` 两个布局下评分 pass；已安装 CLI 测试断言蓝叠 5 的 `plan` 返回退出码 1、`source-refused`，没有新增下载事件。真模型运行：未验证（同上「未验证」）。
+
+**真实网络只读核对（2026-11-14，本机时间 00:40 前后）**：Node fetch 只发 HEAD、`redirect: 'manual'`、只带 User-Agent `maa-skills-setup`，每个 Location 单独再 HEAD；夜神后两条起点 Node 连接超时，改用 `curl -I`（同样只发 HEAD、不跟随跳转、同一 User-Agent）。没有下载安装包，没有发送 Referer 或浏览器请求头。结果：蓝叠 5 起点 403、`x-oss-ec: 0003-00000501`（Node fetch 一次、`curl -I` 一次）；其余链路的主机和状态与 R3 一致，大小与文件名见 [setup 来源](setup-sources.md)「下载链路核对」。夜神三个文件的 Content-Disposition 都是 `nox_setup_v7.0.6.2_full.exe`，但大小不同。
+
+**一致性测试** `tests/setup-download-vendors.test.ts`（67 项）：
+
+1. 表结构：恰好六个完美支持厂商；每条链路 `observed` 每个地址一个，前面都是跳转，最后是 200 或 401／403；起点、各跳主机和核对日期都写在来源文档中。
+2. 由记录状态推出的「可脚本下载」恰好拒绝 `bluestacks-cn`（测试里固定写出，改变需要新的核对和文档）；来源文档、规格、接口说明、SKILL 里每一处「脚本不能下载的厂商」列表都与之相同。
+3. 五个可下载厂商的 8 条链路按记录状态回放：出方案、确认一次后下载成功，内容正确；每个请求只带 User-Agent。
+4. 蓝叠 5：带地址和不带地址的 plan、以及 download 都是 `source-refused`；替身没有收到任何请求，下载目录为空。
+5. 8 条链路的每一跳分别注入 401 和 403（28 项）：plan 为 `source-refused`，只访问到该跳为止，每个地址一次。
+6. 8 条链路的每一跳在下载 GET 注入 403（14 项）：`failed / source-refused`，GET 到该跳为止、每个地址一次，不保留文件，`downloads` 状态同为 `failed / source-refused`。
+7. 跳到同公司未列出的主机：plan 跳和**下载跳**各断言一次（下载跳：方案按记录链路正常给出，只有下载 GET 被引到该主机），都被拒且该主机从未被访问。
+8. 枚举 `setup-download.ts` 的全部生产者和使用者（按顶层声明归属，去掉注释）：发网络请求的只有 `request`；调用 `request` 的是 `text`、`resolveNode`、`resolveEmulator`、`transfer`；调用 `text` 的是 `resolveMaa`、`resolveNode`、`resolveAdb`；`chainScriptable` 的使用者是 `request`、`vendorScriptable`；`vendorScriptable` 的使用者是 `resolveEmulator`；`emulatorVendors` 和 `vendorHosts` 的使用者是 `resolveEmulator`、`transfer`；`resolveEmulator` 只由 `resolve_` 调用，`resolve_` 只由 `planDownload`、`executeDownload` 调用，`transfer` 只由 `executeDownload` 调用。全仓库（ts／mjs／js）只有 `skills/maa-core/scripts/setup.ts` 引入该模块（测试除外），引入的名字恰好是 `DownloadError`、`downloadStatus`、`executeDownload`、`installDownload`、`planDownload` 和类型 `DownloadContext`；表和两个判断函数的名字除本模块外只出现在这个测试里。
+
+`tests/setup-download.test.ts` 新增一项：MAA 索引 403、adb 索引 401、Node 安装包 HEAD 403 都不出方案（`source-refused`）；MAA 出方案后文件主机下载 403，记为 `failed / source-refused`，该地址只请求一次，只留下失败记录。
+
+**测试先行**：
+
+- 先只把 `checked`／`observed` 写进表、加上 `chainScriptable`／`vendorScriptable` 但不接入（红灯脚手架），新测试 67 项中 49 项失败：蓝叠 5 为 `Missing expected rejection`（仍出方案，即审查发现的缺陷）；各跳 401／403 在 plan 时 16 项仍出方案、12 项报 `file-name-unknown`，都不是 `source-refused`；下载跳 403 的 14 项报 `source-unavailable`；枚举测试缺少 `request` 这个使用者；两项文档测试失败。接入 `request()` 和 `resolveEmulator` 后只剩两项文档测试失败，补齐文档后 67 项全部通过。
+- 在 `e2f74bb` 原样导出（`git archive`）的副本上：新测试文件在链接时就失败（`does not provide an export named 'vendorScriptable'`）；`setup-download.test.ts` 新增的一项失败（`source-unavailable`，应为 `source-refused`），当前代码通过。
+- 变异核对（在副本上改一处、跑、恢复）：
+
+| 变异 | `e2f74bb` 的旧测试 | 当前测试 |
+| --- | --- | --- |
+| 下载 GET 的主机检查对模拟器一律放行 | setup-download-vendors 11/11、setup-download 18/18、setup-download-scenarios 18/18 全部通过（复现审查员的发现） | setup-download-vendors 9 项失败（8 条链路的下载跳断言及其父项） |
+| 下载 GET 的主机检查对所有程序一律放行 | vendors、scenarios 全部通过，只有 setup-download 的 MAA 跳转用例 1 项失败 | setup-download-vendors 9 项失败 |
+| 去掉 `resolveEmulator` 里的 `vendorScriptable` | — | 3 项失败（蓝叠 5 被访问；枚举） |
+| 去掉 `request()` 里的 `chainScriptable` | — | 45 项失败 |
+| 判断只认 403、不认 401 | — | 15 项失败 |
+
+**R4 修后实际运行**（工作树内容与 `87721e6` 相同）：`npm run typecheck` 通过；逐个运行 `node --test`：setup-download-vendors 67/67、setup-download 19/19、setup-download-scenarios 20/20、setup 28/28、setup-scenarios 16/16、setup-integration 5/5，全部通过；`node scripts/privacy.ts` 无发现；metadata 1/1。`eval/network-fixture.mjs` 未改，没有运行 eval-network；按要求没有运行 `tests/maa-process.test.ts` 和完整入口 `node scripts/check.ts`（由协调者在固定提交上运行）。
+
+### 合并 10 之后（2026-11-14）
+
+合并提交 `8208ea0` 把 origin/main（10 doctor 完整检查 `4092277`，以及 12、17、20）并入本分支。冲突：CONTEXT.md 保留本分支「下载方案」和 main 扩写的「转介」「环境类失败」；README 与 maa-help 用 main 的新文字，只把 setup 那句换成本分支的「先展示官方下载方案，用户确认后才下载」；`setup.ts` 用 main 的共享检查表 `libraryCheck`，本分支改过的两条修法说明（MAA、Node 可经 setup plan 看官方下载方案）移到 `checks.ts` 的修法表；INDEX 取本分支后由 tracker 重新生成。
+
+合并后 PR #70 的 CI 失败，原因是 `recheckSetup` 自己用「任何检查出错」判断 `pending` 和 `complete`：10 让 setup 检查带上三项凭据后，检查编号多了三项，而且一份读不出的 NGA 凭据会让 setup 永远不能完成；它也是检查结果的第二个判断者。适配（本节所在提交）：
+
+- `checks.ts` 新增用途 `setup-recheck`，`recheckSetup` 的 `pending` 改由 `blockingChecks(检查结果, "setup-recheck")` 给出，再加复检自己的 `connection` 一项（来自重新发现和传输测试）；连接测试的前提（`maa`、`server`、`settings` 没有挡住）也改用同一个判断。不挡的错误记在复检结果新增的 `notBlocking`。退出码不变义：`setup-exit` 有错误或 `pending` 不空时为 1。
+- 归类（设计默认值，2026-11-14，已登记规格「默认值及其来源」新行「08、10 setup 最终复检按用途」，并改了 08 的默认值行、「规则来源」08 和 10 两行、「08 下载与补齐」和「检查与修法」正文）：挡住 `maa`、`server`、`node`、`settings`、`private-directory`、`connection`、`configuration`、`write-lock`；不挡 `platform`（`setup.ts recheck` 在非 Windows 直接拒绝）、`version`（只提醒）、`configuration-fields`（任务字段归 daily 和培养）、`remote-control`、三项凭据、`private-files`、`skill-version`、`skill-links`。
+- SKILL 第 6 步和接口说明的 `recheck` 一行写明 `notBlocking` 照样报告、不挡完成，完成看 `complete`。
+- 10 的测试 `doctor-checks` 里核对修法通道的正则只认旧的五个动作字面量，本分支加了下载动作后匹配不到，改为也接受 `...Object.keys(downloadActions)`。
+
+测试先行：先改测试，`check-purposes` 6 项中 2 项失败（新用途不存在；`setup.ts` 两处直接比较检查状态），`setup-download` 两项复检用例失败（检查编号多出三项凭据；NGA 凭据读不出时 `complete` 为 false、`pending` 为 `['credential-nga']`）；改代码后全部通过。新用例「recheck completes despite an unreadable NGA credential…」同时断言客户端不是国服时仍挂起（`pending` 为 `['server', 'connection']`、连接未测）。非 Windows 机器上 `platform` 出错，用例按平台写出（记在 `notBlocking`、退出码 1），不只在 Windows 成立。
+
+实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 6/6、setup-download 20/20、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2、eval-network 3/3；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。未验证：真模型对 `notBlocking` 的说明（行为评测待 26；复检要真实 adb 传输，离线评测没有它的替身，没有新增场景）；非 Windows 机器上的这些用例只按代码推断，本机未跑。
+
+### 合并适配审查后修复（2026-11-14，协调者已接受一项 P2）
+
+问题：用途 `setup-recheck` 写了 `write-lock` 和 `configuration` 出错挡住完成，但 `recheckSetup` 只把 `checkSetup` 的各行（安装组和三项凭据）交给 `blockingChecks`，从来没有这两行。setup 的 apply 写入连接后以未知结束、`config/.maa-skills.lock` 留着时，复检仍返回 `complete: true`、退出码 0、`pending` 为空并存进环境记录；下一次日常或培养写入才以 `lock-requires-reconciliation` 被拒。审查员的离线复现在本仓库之外，未改动。
+
+修复：
+- 把 doctor 产生 `configuration`、`write-lock` 两行的代码原样移到 `doctor-checks.ts` 的 `configurationCheck`、`writeLockCheck`（都基于一次 `inspectConfigRecovery`），doctor 和复检都调用它们，编号、状态（没有锁正常、持锁进程仍在提醒、遗留或认不出错误）和修法不变。复检在设置里有 MAA 目录时追加这两行再交给 `blockingChecks`；`pending` 在锁未核对时带 `write-lock`。复检的退出码改为对全部行算 `setup-exit`。遗留锁要看 MAA 进程时，复检只读查看（`recheckSetup` 新增可选参数 `maa`，命令行用延迟创建的真实进程边界，它的关闭和启动一律抛错）。
+- `configuration` 的核对：`maa` 一行只读 `Current`、`Configurations` 和当前配置的 `Gui`，而 doctor 的 `configuration`（各写入方读配置的 `inspectConfiguration`）还要求 `Timers` 是对象、各配置和任务条目是对象，二者不等价（例：`Timers` 为 null 时 `maa` 正常、`configuration` 出错，各写入方都读不了）。所以不说成「由 `maa` 代为挡住」，而是按 write-lock 同样产生。复检用例里的合成配置因此补上 `Timers: { List: [] }`（MAA 自己写的配置带这一项）。
+- 同类缺陷防护：`check-purposes` 新增用例，按使用方登记每个用途拿到的检查编号（doctor、setup、凭据、复检各跑一次核对登记表），用途挡住的编号必须在其中、或登记为另行提供（复检的 `connection`）、或登记为这个使用方不产生。
+- 文档：规格「08 下载与补齐」「检查与修法」正文、「规则来源」08 行、「默认值及其来源」的复检行（设计默认值，2026-11-14）；`setup.md` 的 `recheck` 一行；SKILL 第 6 步写明 `pending` 带 `write-lock` 时转 maa-doctor 核对后再复检。工单正文未改。
+
+测试先行：先改测试，`check-purposes` 7 项中 1 项失败（复检的检查编号缺 `configuration`、`write-lock`），`setup-download` 新增三项失败（复检结果里没有这两行）；改代码后这三项通过，原有两项复检用例因编号表和缺 `Timers` 的合成配置失败，补齐后通过。新用例：遗留锁（不存在的 pid）和认不出的锁各一次，`complete: false`、退出码 1、`pending` 为 `['write-lock']`、环境记录同样保存，且两行与同一现场 `runChecks` 的同名行逐字相同；持锁进程仍在（本进程 pid）为提醒、仍完成；没有锁时照旧完成；`Timers` 为 null 时 `maa` 正常、`configuration` 出错并挡住。
+
+实际运行（本机 Windows，逐个文件）：`npm run typecheck` 通过；check-purposes 7/7、setup-download 23/23、setup-download-scenarios 20/20、setup 29/29、setup-scenarios 22/22、setup-integration 5/5、doctor 74/74、doctor-checks 27/27、credentials 6/6、help-installation 6/6、metadata 2/2；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、审查员的复现脚本（它不传进程替身，遗留锁会调用真实进程边界）、真实下载和网络。未验证：真模型在 `pending` 带 `write-lock` 时是否转 maa-doctor（行为评测待 26；复检要真实 adb 传输，离线评测没有替身，没有新增场景）；非 Windows 机器上的用例只按代码推断。
+
+### Windows CI 解压失败修复（2026-11-14）
+
+问题：PR #70 在 GitHub windows-latest 上两次失败，`tests/setup-download.test.ts` 的「MAA extraction is the skill's only install step…」得到 `failed` 而不是 `extracted`；本机通过。合成包里有 `DependencySetup_依赖库安装.bat`（带 UTF-8 标志），真实 MAA 包里也有这个文件名。
+
+根因（已证实）：Windows 自带的 `tar.exe`（bsdtar 3.8.9）把条目名转成本进程的 ANSI 代码页，转不了的条目跳过（「Archive entry has empty or unreadable filename ... skipping」）并以 1 退出。协调者的假设成立，只有一处更正：本机的 ANSI 代码页是 65001（系统区域 en-US，启用了 UTF-8 全球语言支持），不是 936。证据（实验在临时目录，脚本不进仓库）：把 `tar.exe` 和 `powershell.exe` 各复制一份，只换掉内嵌清单、加 `activeCodePage` 强制进程代码页，用同一个合成 zip 解压。
+
+| 进程代码页 | tar.exe：中文名 | tar.exe：韩文名、emoji 名 | 新做法（powershell.exe 副本跑产品脚本）：中文、韩文、带重音字母、emoji |
+| --- | --- | --- | --- |
+| 1252（en-US，也是本机 Legacy） | 跳过，退出 1 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 932（ja-JP） | 跳过，退出 1 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 936（zh-CN） | 成功 | 跳过，退出 1 | 全部原样解出，退出 0 |
+| 65001（UTF-8，即本机） | 成功 | 成功 | 全部原样解出，退出 0 |
+
+所以英文、日文等系统的真实用户用旧做法解压 MAA 一定失败。同一实验还看到 `tar.exe` 对危险条目名是改名后照样解压：去掉盘符、`\\?\` 前缀或开头的 `/` 后解进目标文件夹，`a:b` 解成 `b`，`MAA.exe.` 和 `resource/NUL.txt` 原样写出，不分大小写重名时覆盖前一个，都以 0 退出；只有含 `..` 的条目报错。没有写到目标文件夹之外。详见 [setup 来源](setup-sources.md)「解压方式」。
+
+修复：`setup-download.ts` 的解压边界 `systemArchive`（现导出，接口 `ArchiveBoundary.extract`、600 秒上限、`windowsHide`、结果形状和「非零即 `extract-failed`、超时为 `extract-timeout`」的映射都不变）改为运行 `System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -Command <固定脚本>`，路径只经环境变量 `MAA_SKILLS_EXTRACT_ARCHIVE`／`MAA_SKILLS_EXTRACT_TARGET` 传入，不传调用方的 `PSModulePath`，标准输入立即关闭。脚本规则见规格「默认值及其来源」新行「08 解压」（设计默认值，2026-11-14）。只有 MAA 和 platform-tools 两种 zip 走这条路，Node `.msi` 和模拟器安装程序从不解压，没有别的格式依赖 `tar.exe`。另改：`tests/fixtures/zip.ts` 支持 deflate 条目和原始字节名；`skills/maa-setup/references/setup.md` 的 `install` 一行和解压说明；规格「检查与修法」08 一条、「规则来源」08 行；`setup-sources.md`「解压方式」。工单正文未改。
+
+测试先行（新增，均为 Windows 专用，Linux 上跳过）：先只把 `systemArchive` 导出、仍用 `tar.exe`，写下面四项，再换实现。
+
+- 「the Windows extraction boundary keeps UTF-8 entry names and bytes exactly, whatever the ANSI code page」：目标文件夹名「明日方舟 MAA」，条目含简体中文、韩文、带重音字母和 emoji（没有哪个旧 ANSI 代码页能同时容纳），stored 与 deflate 各有，逐字节比对内容，目标外无任何文件。旧做法在本机通过（代码页 65001），无法在测试里切换进程代码页（系统代码页是全系统设置，改要管理员并重启，不做）；红的证据是 CI 日志和上表的强制代码页实验。
+- 「…refuses unsafe entry names before writing anything」11 个子项：`../`、`sub\..\..\`、带盘符的绝对路径、`\\?\` 前缀、`/` 开头、`a:b`、`resource/NUL.txt`、`MAA.exe.`、非 UTF-8 字节名、不分大小写重名、`MAA.exe/inner.txt`；每项都要求退出码 2（被条目名检查拒绝）且目标内外都没有写任何东西。旧做法：前 10 项全部失败（7 项改名或覆盖后退出 0；`../`、`sub\..\..\` 和非 UTF-8 名退出 1，但不是写入前的整包拒绝，实验里 `../` 一项已先写出 `MAA.exe`）。第 11 项是换实现后补的。
+- 「…never overwrites an existing file and never follows a reparse point」：目标里已有 `MAA.exe` 时失败且内容不变；目标里的联接指向外部文件夹时退出 2，外部文件夹仍为空。旧做法：覆盖了已有文件，失败。
+- 「…writes paths longer than 260 characters, as tar.exe did」：第一版新实现只用普通路径写，本机（LongPathsEnabled 为 0）完整路径 240 字符成功、300 字符退出 1；补这一项（失败）后改为用 `\\?\` 形式写，通过。
+
+改实现后全部通过；原有两项 Windows 解压用例（含 CI 失败的那项）照常通过。变异核对（逐个改坏脚本、只跑这几项、再恢复）：去掉重解析点检查、设备名检查、重名检查、文件夹与文件同名检查、替换字符检查、改成允许覆盖、写盘改回普通路径，7 处各自有对应用例失败。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 38/38、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、check-purposes 7/7、help-installation 6/6、metadata 2/2；`node scripts/privacy.ts` 无发现，`node scripts/tracker.ts` 无错误。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。
+
+未验证：新提交上的 Windows CI（windows-latest，代码页 1252）尚未运行，是这次修复的最终核对；真实 MAA 包和 platform-tools 包从未下载、解压（包内是否带 UTF-8 标志、最长路径都未核实）；真实英文或日文系统只用强制进程代码页的副本模拟；受约束语言模式（WDAC／AppLocker）下会失败只按文档推断；`setup.md` 是 skill 文字，行为评测未运行（待 26）。
+
+### 第八轮审查后修复（2026-11-14，协调者已接受两项 P3）
+
+1. 目标路径名字末尾的点或空格绕过「目标必须为空」。Node 经扩展长度形式（`\\?\`）检查和创建文件夹，名字原样保留；解压脚本用 `GetFullPath` 规范化，会去掉最后一级末尾的点或空格、中间一级末尾的单个点。用户的 `root\MAA` 里已有 `keep.txt` 时，目标 `root\MAA ` 被当成不存在、新建了空的 `MAA `，脚本却解压进 `root\MAA`；结果是 `failed`／`extract-failed`，清理只删 `MAA `，写进去的文件留在用户文件夹里（只新建、不覆盖）。修复两层：
+   - `installDownload` 在 `resolve` 之后、其他目标检查之前调用新的唯一判定 `plainTargetPath`：每一级名字（UNC 的服务器名和共享名也算，所以 `\\?\`、`\\.\` 前缀也被拒绝）非空、不以点或空格结尾、不含 `<>:"|?*` 和控制字符、不含孤立代理项、不是设备名，否则返回 `rejected`／`target-path-invalid`。仓库里没有可复用的 TS 判定（setup 其他用户路径只查 `isAbsolute`；条目名规则只在 PowerShell 脚本里），设备名清单与脚本相同，另加 Windows 也当设备名的上标 ¹²³。放在提权和私有目录检查之前，因为那两项也按 Node 读到的路径比较（系统盘上的 `Program Files \x`（文件夹名末尾多一个空格）在 Node 看来不在 Program Files 下）。
+   - 解压脚本在 `GetFullPath` 之后，把规范化结果与传入的目标（都去掉末尾 `\`）做序数比较，不同即退出 3、什么都不写。
+2. 条目表读取吞掉异常。`foreach ($entry in $zip.Entries)` 读属性出错时 PowerShell 不报错、循环零次，名字含 `|` 或没有 UTF-8 标志的 GBK 名时脚本以 0 退出、什么都没解出（产品层仍因找不到 `MAA.exe` 而失败）。修复：`$entries = $zip.get_Entries()` 再遍历，异常进入 `catch` 退出 1；计划为空时也退出 1。
+
+测试先行（先写、确认失败，再改实现）：
+
+- 「a chosen folder path that Windows would read as another folder is refused, and the folder it would mean stays as it was」（全平台；只有 Windows 解压）：`chosen\games\MAA` 里有 `keep.txt`，普通路径仍为 `target-not-empty`；12 种目标 `games\MAA `、`games\MAA.`、`games\MAA. .`、`games.\MAA`、`games \MAA`、`games..\MAA`、`games\MAA\NUL`、`games\MAA\com1.txt`、`games\MAA:stream`、`games\M<A>`、含制表符、含孤立代理项，都要求 `rejected`／`target-path-invalid`，之后 `chosen` 下只有原来的三项、`keep.txt` 不变、下载记录的 `install` 仍为 `null`。旧代码：第一项得到 `failed`／`extract-failed`，即审查发现的现象。
+- 「the Windows extraction boundary refuses a target that Windows reads as another folder」三个子项（Windows 专用）：字面的 `MAA `、`MAA.`、`games.\MAA` 和用户自己的 `MAA`／`games\MAA`（内有 `keep.txt`）同时存在，直接调用解压边界，要求退出 3、用户文件夹只有 `keep.txt`、字面文件夹为空。旧代码：三项都退出 0。
+- 「the Windows extraction boundary fails, writing nothing, when the archive's entry list cannot be read or is empty」三个子项（Windows 专用）：`MAA.exe` 加 `a|b`、两个都不带 UTF-8 标志且其一是 GBK 字节名、没有条目的压缩包，要求非零退出、目标内外都没写任何东西。旧代码：三项都退出 0。`tests/fixtures/zip.ts` 为此新增 `utf8: false`（不写 UTF-8 标志）。
+
+变异核对（改坏、只跑这一项、恢复）：只去掉「计划为空退出 1」，`a|b` 和 GBK 两项仍非零退出（方法调用让异常进入 `catch`），只有空压缩包一项失败；不改脚本的目标比对时，边界三项退出 0（即上面的旧代码结果）。
+
+文档：规格「检查与修法」08 一条的解压句、「规则来源」08 行、「默认值及其来源」的「08 skill 可执行的安装步骤」和「08 解压」两行（设计默认值，2026-11-14）；`skills/maa-setup/references/setup.md` 的解压说明（新拒绝原因 `target-path-invalid` 和空包）；`setup-sources.md`「解压方式」。工单正文未改。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、check-purposes 7/7、help-installation 6/6、metadata 2/2；之后判定改为先去掉末尾分隔符（UNC 共享根和盘符根一样交给提权检查，仍报 `target-requires-elevation`），重跑 typecheck 通过、setup-download 47/47；`node scripts/privacy.ts` 无发现，`node scripts/tracker.ts` 无错误。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载和网络。
+
+未验证：新提交上的 Windows CI；Windows 10 是否把最后一级名为 `NUL` 的目标路径读成设备（本机为 Windows 11；Node 一层不论哪种都拒绝，脚本一层规范化后改变即退出 3）；`setup.md` 改了 skill 文字，行为评测未运行（待 26）。
+
+### 合并 19、25 之后（2026-11-14）
+
+合并提交 `6977e8f` 把 origin/main（19 森空岛社区与 B 站 `9ac370c`、25 MAA 版本核对 `bd3b3e6`）并入本分支。十个文件冲突，都按两边保留：INDEX 取本分支后用 `node scripts/tracker.ts --write` 重新生成；README、`docs/hosts.md`、maa-help 用 main 的新文字（森空岛社区帖子、B 站视频读取），只把 setup 那句换成本分支的「先展示官方下载方案，用户确认后才下载」；`setup-sources.md` 冲突的那一行用 main 的（核实记录改由 25 的依赖条目生成），其后本分支的 08 各节保留；规格「检查与修法」正文、「规则来源」09 行、「默认值及其来源」10、16 一行各合入两边新增的句子，本分支的 10 行改动和 08、10 复检行保留；maa-setup 第 6 步用本分支的 recheck 文字，加上 25 的 `maa-upgrade-available` 一句，第 7 步用 main 的；`eval/network-fixture.mjs`、`doctor-checks.ts`、`setup.ts` 只是导入冲突，两边的导入都保留。
+
+合并后的适配（本节所在提交）：
+
+- 25 的覆盖测试 `maa-version-check` 合并后有一项失败：本页列出的解压拒绝用例里，合成条目名「resource/NUL.txt」被当成 MAA 文件引用。它是解压测试的 Windows 设备名用例，不是 MAA 文件；加进测试的例外表并写明原因。
+- 08 依赖的 MAA 源文件（打包发行包的 `ci.yml`、安装文档、Windows 模拟器文档）原来只链接到网站或开发分支，覆盖测试扫不到。按 25 的规则登记为条目 `setup-release-package`，在 v6.21.4 和 v6.22.0 两个固定提交上只读核对，结论和逐文件说明见 [MAA 版本跟踪的来源](maa-version-sources.md)「合并到 08 时登记的条目」；规格「25 未交付工单的 MAA 位置」一行记上这次登记。随包核实记录不变。
+- `tests/setup-download.test.ts` 按 25 的约定导入版本读取守卫，复检用的 MAA 进程替身加上 `version`。只加守卫、不加替身时这个文件也是 47/47，说明它原本没有走到真实的版本读取；替身是预防。
+- 规格「10、16」一行 25 写的「四种用途的归类都不变」指那一行的四种用途；08 的 `setup-recheck` 同样把 `version` 归为不挡，所以那句没改。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：合并后 `npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 20/20、setup-download-vendors 67/67、setup 29/29、setup-integration 5/5、setup-scenarios 22/22、check-purposes 7/7、maa-version-check 12/13（上面的误报）、maa-version 5/5、eval-network 3/3、offline-network 2/2、help-installation 6/6、metadata 2/2、doctor 80/80、doctor-checks 27/27。适配后 typecheck 通过，setup-download 47/47、maa-version-check 13/13、maa-version 5/5、help-installation 6/6、metadata 2/2；`node scripts/maa-version-check.ts record` 输出与随包记录相同；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载。只读网络：`raw.githubusercontent.com` 读三个文件在两个提交上的内容，GitHub contents 接口查三次 blob，文件放在系统临时目录，没有放进仓库。
+
+未验证：新提交上的 Windows CI；真实发行包的结构（仍没有下载任何发行包）；合并后 skill 文字的行为评测（待 26）。
+
+### 合并 28 之后（2026-11-14）
+
+合并提交 `8c82a8b` 把 28 的最终头 `1b39e9f`（评测可运行化，即将 squash 进 main）并入本分支。只有 `eval/maa-setup/scenarios.ts` 冲突：两边都在 `setupScenarios` 之后追加，28 推入 `setup-connection-write`、`setup-multiple-candidates`，本分支加下载映射和 `setupDownloadScenarios`，两段都保留（28 的在前）。INDEX 取本分支后用 `node scripts/tracker.ts --write` 重新生成（28 那一行按其工单文件为「进行中」）。`eval/network-fixture.mjs` 只有本分支改过，保留下载映射；setup 边界本分支没有改，用 28 的唯一实现 `eval/setup-boundary.mjs`（`tests/fixtures/setup-boundary.mjs` 只导入它）。
+
+合并后按 28 的规则适配（本节所在提交），先红后绿：
+
+| 项 | 合并后的红 | 修法 |
+| --- | --- | --- |
+| 下载场景不在场景目录里 | `tests/eval-batch.test.ts` 报导出的 6 个 `setup-download-*` 不在目录里（`.tmp/logs/m28-red-batch.log`） | `setupDownloadScenarios` 加入 `maa-setup` 组，测试的全量清单同步加上 |
+| 下载世界在加载时计算 | 不是产品代码（只用 `node:crypto` 和 `Buffer`），闭包测试本来就通过；按 28「世界数据是固定字面值」改写 | 样例大小 28、SHA-256、两个下载地址和中断记录的文件名、来源、大小都写成字面值，场景模块不再导入任何运行时模块；新测试「the literal download world is consistent…」按样例字节重算大小、摘要和 `content-length`，并核对中断记录指向映射里的文件 |
+| doctor 场景的 Node 修法文字过期 | 28 的字面检查行取自 `bd3b3e6`，本分支把 `official-node-24-installation` 的说明改成可经 setup plan 出官方方案；`tests/doctor-scenarios.test.ts` 20/22 失败、`tests/eval-host-double.test.ts` 的 doctor 一项失败（`.tmp/logs/m28-t-doctor-scenarios.log`、`m28-t-host-double.log`） | 字面行换成本分支的说明，注释写明出处 `5b11222` |
+| 文档一致性扫描报 3 处 | `maa-setup/SKILL.md` 提到的 `setup.ts downloads`、`plan`、`recheck` 不在契约表（`.tmp/logs/m28-red-docs.log`） | 契约表加上 `plan`、`download`、`install`、`downloads`、`recheck`，键取自 `setup.ts` 的 `downloadActions` |
+
+批准声明：下载场景不声明 `approvals`。按 `Policy.approvals` 的约定，不声明就是没有批准，与其他 setup 场景相同；场景身份因此不变。占位 `{{maa-core-version}}`、`{{maa-record-version}}` 在下载场景里用不到，场景里没有 maa-core 版本或核实记录版本。
+
+字面值与生成器逐字节相同的核对方法（会话临时脚本，不提交）：遍历 `eval/<目录>/` 下每个模块导出的场景定义，打印 id 和整份定义 `JSON.stringify` 的 sha256，6 个下载场景另打印完整 JSON。结果：
+
+- 与合并提交 `8c82a8b` 相比，改字面值前后 109 个场景的输出（含 6 个下载场景的完整 JSON）逐行相同；之后改 doctor 的 Node 行，只有 9 个 doctor 场景改变。
+- 与本分支合并前 `5b11222` 的导出副本（生成器版，102 个场景）相比：共同的 102 个，把两个占位换回 `0.1.0-dev.0` 和 `2`、去掉 28 加的 `approvals` 声明（17 个场景）后，逐个相同，包括 9 个 doctor 中的 8 个（`doctor-reconcile-approved` 是 28 的场景，`5b11222` 没有）和 6 个下载场景。
+- 与 `1b39e9f` 的 103 个场景相比，94 个相同，只有 9 个 doctor 场景不同（Node 行）。所以 08 前后这 9 个场景的场景摘要不同，不能混作同语义前后比较；评测说明已写明。
+- 本节的提交在 `TZ=UTC` 下的输出与本机（UTC+8）相同；`5b11222` 在 `TZ=UTC` 下有 10 个 `daily-*` 场景不同，是 28 已记录的旧生成器随时区变化。
+
+实际运行（本机 Windows，Node 24.22.1，逐个文件）：`npm run typecheck` 通过；setup-download 47/47、setup-download-scenarios 21/21、setup-download-vendors 67/67、setup 29/29、setup-scenarios 27/27、setup-integration 5/5、check-purposes 7/7、evaluation 10/10、eval-comparability 7/7、eval-batch 10/10、eval-fixture 7/7、eval-host-double 12/12、eval-network 3/3、docs-consistency 5/5、maa-version-check 13/13、offline-network 2/2，另跑 doctor-scenarios 22/22、cross-skill-scenarios 7/7；`node scripts/tracker.ts` 无错误，`node scripts/privacy.ts` 无发现，`node scripts/metadata.ts` 通过。未运行：完整入口 `node scripts/check.ts`、`tests/maa-process.test.ts`、真实下载、真模型。
+
+已验证：记录 28 squash 并合并 main 之后的 `66894a6`，Windows 和 Ubuntu 两个 CI 都通过；这次适配经第十一轮独立审查，通过，没有意见。
+
+未验证：这些场景的真模型运行（待 26）。
+
 ## 当前交付结论
 
 固定产品 `df726403d9b4094327bbaf10204946ecdc202dcd` 的[完整独立 R2](reviews/2026-11-11-07-setup-r2.md) 已通过：Standards / Spec 均 0 项真实错误，R1 四项修复全部通过复核。独立完整入口 383 项中 380 pass、3 条件 skip，类型、区间 diff 和 11 项独立公开探针通过；精确双平台 CI、固定双宿主原生安装及实际 CLI 对照、全部 122 次模型尝试留存均已独立核对。07 单票有条件实现交付前提已满足，工单记实现验收完成；[PR42](https://github.com/VincentChen0111/maa_skills/pull/42) 待最终文档提交的 CI 和 squash 交付。

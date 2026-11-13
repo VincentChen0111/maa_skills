@@ -160,6 +160,8 @@ node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/
 
 需要 adb 的 setup 场景声明 `setupBoundary: true`：运行器把 `eval/setup-boundary.mjs` 复制进工作区并预加载，只替代 adb 和 MAA 进程，setup 与统一写入器照常运行（测试也用这一份实现）。带 `maaProcess` 的场景除 daily 的写入外，doctor 和关卡准备脚本的 MAA 进程边界同样换成合成边界。
 
+08 的下载场景声明 `networkFixtures: {}` 启用同一个预加载器，并用 `jsonInputs` 写入 `.eval-setup-network.json`：官方发布索引与合成下载样例的可信映射（`json`／`text`／`headers`，下载样例标 `download: true`）。预加载器只在两个临时原生目录内 `maa-core/scripts/setup.ts plan` 或 `download` 进程替代 `fetch`，只接受映射里的 GET／HEAD；GET 标为下载的地址时向 `events.jsonl` 追加 `download` 事件，由 `download-confirmation` 规则按场景的 `downloadGrants` 评分。映射位于工作区，被改写照常产生未授权差异；预加载器内容进入场景指纹。确认后的下载会写入带随机标识和时间的下载记录，现有评分无法逐字段授权，因此正向下载由 `tests/setup-download-scenarios.test.ts` 经已安装 CLI 覆盖，模型场景只断言没有确认时不下载、未通过检查时不报完成。下载场景在 `maa-setup` 组，世界数据是固定字面值：样例的大小和 SHA-256 写死在场景里，`tests/setup-download-scenarios.test.ts` 按样例字节重算核对。预加载器内容变化也改变其他声明 `networkFixtures` 的 16 个场景的场景摘要（13、14 的成本／缺口，19 的 `account-skland-community-read`，20、22 的报告与基建），需以新运行器对冻结旧产品重测前基线，旧记录不能混作同语义前后比较。08 改了 Node 修法的文字，doctor 场景字面写出的检查行随之更新，9 个 doctor 场景的场景摘要也与 08 之前不同，同样不能混作前后比较。
+
 `jsonFiles` 中的顶层 JSON 对象按字段比较；创建和删除另产生 `$exists` 布尔变化，空对象也不会丢失。数组、损坏 JSON 及含保留键 `$exists` / `$file` 的对象退回 `$file` 完整字节比较。创建文件须同时授权 `$exists: true` 和每个预期字段；额外字段、删除或未授权路径照常失败。
 
 确实由产品产生的读取时间可由可信场景声明 `generatedUtcFields: [{ file: 'private/account-snapshot.json', key: 'readAt' }]`。它同时是该字段的写入授权和必需变化：只接受确切相对 JSON 文件、非保留顶层标识符，拒绝通配符、重复项及与静态 `grants` / `expectedChanges` 同位置的声明。2026-11-14 起可加 `offsetMs`（0 到 31 天的整数毫秒）：字段值减去它须落在执行窗口内，用于工具写下的到期时间，例如森空岛社区帖子缓存的 `expiresAt`（`offsetMs: 86400000`）。

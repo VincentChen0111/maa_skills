@@ -66,7 +66,7 @@ test('doctor covers the eight check groups with status, reason, repair and execu
 
 test('every skill-executed repair names an existing channel script and action, never a second writer', async () => {
   const channels = { ...skillRepairChannels(), 'reconcile-lock': 'doctor.ts repair', 'restore-config': 'doctor.ts repair' };
-  const actions: Record<string, RegExp> = { 'preferences.ts': /process\.argv\[2\] === '(\w+)'/g, 'setup.ts': /\['check', 'prepare', 'discover', 'test', 'apply'\]/g, 'doctor.ts': /\['check', 'analyze', 'repair'\]/g };
+  const actions: Record<string, RegExp> = { 'preferences.ts': /process\.argv\[2\] === '(\w+)'/g, 'setup.ts': /\['check', 'prepare', 'discover', 'test', 'apply'(?:, \.\.\.Object\.keys\(downloadActions\))?\]/g, 'doctor.ts': /\['check', 'analyze', 'repair'\]/g };
   for (const [repair, channel] of Object.entries(channels)) {
     const [script, action, flag] = channel.split(' ');
     const source = await readFile(join(coreDirectory, 'scripts', script!), 'utf8');

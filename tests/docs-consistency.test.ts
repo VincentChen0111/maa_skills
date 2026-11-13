@@ -24,7 +24,10 @@ const contract: Record<string, Record<string, string[]>> = {
   'doctor.ts': { check: [], analyze: ['run', 'interfaceUnobscured', 'conclusion', 'processExitCode'],
     repair: ['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'] },
   'setup.ts': { check: ['maaDirectory'], prepare: [], discover: ['adbPaths', 'addresses'], test: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'],
-    apply: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'] },
+    apply: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'],
+    // Ticket 08's download and recheck actions, transcribed from the same validation (`downloadActions` in setup.ts).
+    plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
+    install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'candidate'] },
   'stage-jobs.ts': { stages: ['codes', 'tablesFile'], query: ['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'],
     prepare: ['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed'] },
   'account-snapshot.ts': { inspect: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'], import: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'] },

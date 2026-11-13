@@ -18,7 +18,7 @@ import { baseApplyScenarios } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { trainingScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
-import { setupScenarios } from '../eval/maa-setup/scenarios.ts';
+import { setupDownloadScenarios, setupScenarios } from '../eval/maa-setup/scenarios.ts';
 import { crossSkillScenarios } from '../eval/cross-skill/scenarios.ts';
 
 /** One runnable scenario with the skill directories the runner installs for it. */
@@ -29,7 +29,7 @@ export const skillDirectory = (name: string) => fileURLToPath(new URL(`../skills
 const groups: { group: string; subject?: string; companions: string[]; scenarios: ScenarioDefinition[] }[] = [
   { group: 'maa-core', subject: 'maa-core', companions: [], scenarios: coreScenarios },
   { group: 'maa-help', subject: 'maa-help', companions: [], scenarios: helpScenarios },
-  { group: 'maa-setup', subject: 'maa-setup', companions: ['maa-core'], scenarios: setupScenarios },
+  { group: 'maa-setup', subject: 'maa-setup', companions: ['maa-core'], scenarios: [...setupScenarios, ...setupDownloadScenarios] },
   { group: 'maa-doctor', subject: 'maa-doctor', companions: ['maa-core'], scenarios: doctorScenarios },
   { group: 'maa-account', subject: 'maa-account', companions: ['maa-core'], scenarios: [...accountScenarios, ...baseScenarios, ...costScenarios, ...gapScenarios, ...researchScenarios,
     ...sklandScenarios, ...communityScenarios, ...reportScenarios, ...baseReportScenarios] },

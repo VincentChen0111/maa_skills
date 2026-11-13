@@ -1,4 +1,4 @@
-# 现有环境接入接口
+# 环境接入与下载接口
 
 脚本只有相邻 `maa-core/scripts/setup.ts` 一份实现。Node 24，Windows GUI MAA；游戏客户端接受国服 `Official`／`Bilibili`，客户端字段来自当前配置 `Gui.RuntimeSettings.ClientType`，不能只凭设置中的 CN 推断。没有该字段时请用户在 MAA 界面检查，不默认通过。设置由偏好脚本读取；所有输入是标准输入 JSON，不把用户路径或原话拼进 shell 命令。
 
@@ -11,6 +11,11 @@
 | `discover` | `{}`；可传 `adbPaths` 绝对路径数组、`addresses` 数组 | 返回 adb 数量、读取失败数、脱敏候选及 `discoveryRevision`；每次重新发现 |
 | `test` | `discoveryRevision`、所选 `candidate`；以及与 discover 相同的可选候选输入 | 重新发现与指纹一致，`connect` 后指定设备 `get-state` 返回 device；单一候选可省略 candidate |
 | `apply` | test 的输入，另加 `host: "codex"` 或 `"claude"`、本次授权原话 `reference`；已获得关闭确认才加 `closedConfirmed: true` | 重新发现与复测，统一 writer 完成持锁关停、备份、必要键更新、受限重开、读回、记录和释放锁；已一致且无遗留锁才返回 unchanged |
+| `plan` | `program`：`maa`、`node`、`adb` 或 `emulator`；模拟器另传 `vendor`、官方页面上的安装包 `url` 和页面写的 `version` | 只读官方发布索引，返回 `planned` 方案（`planId`、`fingerprint`、文件名、版本及出处、来源、官方页面、大小或未知、校验值、许可协议、步骤及执行者）；已装好返回 `not-needed`，已有核对过的下载返回 `already-downloaded`；不写文件 |
+| `download` | 方案的 `program`、`planId`、`fingerprint`，用户对这份方案的确认原话 `reference`；adb 另需用户本人接受许可协议后的 `termsAccepted: true`；模拟器另传与 plan 相同的 `vendor`、`url`、`version` | 重新读取官方索引并与方案指纹一致，独占登记这份方案后才请求文件；逐跳检查官方主机，核对大小与官方校验值后才保存为 `downloaded`；一份方案只用一次 |
+| `downloads` | `{}` | 每次重新核对文件摘要：`downloaded`、`download-invalid`、`failed`、`interrupted`、`in-progress`，以及解压状态 |
+| `install` | 下载记录的 `planId`；MAA／adb 另传用户所选空文件夹 `target` 绝对路径 | 先重新核对文件；MAA／adb 用系统自带的 Windows PowerShell 5.1（.NET ZipArchive）解压（最多 600 秒，超时为 `extract-timeout`）并核对 `MAA.exe`／`platform-tools/adb.exe`，失败或超时都清空该文件夹；已解压返回 `already-extracted`；Node／模拟器只返回用户步骤 |
+| `recheck` | `{}`，或用户选定的候选 `candidate`（候选 id），以及 discover 的可选候选输入；不接受 `discoveryRevision` | 重新检查 Node、MAA、设置、私有目录、下载状态；每次重新发现连接，按候选 id（只由 adb 路径和地址算出，连接写入和 MAA 改写配置后不变）找到同一候选后测试，找不到为 `candidate-unavailable`，没传候选不发起连接；原子替换 `setup-environment.json`；只有用途 `setup-recheck` 挡住的检查（MAA 与国服客户端、Node、设置、私有目录、连接、配置可读、写入锁）都没有错误且连接测试通过才 `complete: true`，未完成的项记在 `pending`；配置可读（`configuration`）和写入锁（`write-lock`）两行与 doctor 的同名检查出自同一个产生者：遗留或认不出的写入锁（上一次配置写入，包括连接写入，结果未知）为错误、挡住完成，持锁进程仍在只提醒；遗留锁要看 MAA 进程时只读查看，不关闭、不启动 MAA；凭据、私有记录、skill 版本与目录联接、远程控制、任务字段、平台和 MAA 版本的错误记在 `notBlocking`，照样报告、不挡完成；退出码仍是「1 表示有错误」，没有任何错误且完成时才为 0 |
 
 设置损坏／不可读时，`check` 返回退出码 1、`settings-unreadable` 及保留原文件后修复 JSON、字段或访问权限的用户修法。Windows、Node 和明确提供的 MAA 目录仍检查；未知私有目录返回 `private-directory-unverified`，不猜默认目录、不显示首次偏好提示，也不覆盖或自动创建。修复后重新检查。
 
@@ -26,4 +31,21 @@
 
 `version` 从 MAA.exe 的 Windows ProductVersion 读取；缺少或格式未知时为 null。随包 [验证版本记录](../../maa-core/references/verified-versions.json) 由仓库的依赖条目生成（来源见仓库的 `docs/maa-version-sources.md`），带自己的版本号 `recordVersion`：「源码已核」只列全部依赖条目都核过的正式版，「实机已核」只列在真实 MAA、模拟器和游戏上核对过的版本，目前为空。修改列表必须有本仓库实际验证证据，并经 `scripts/maa-version-check.ts` 生成。原因依次为记录不可读、`verification-record-empty`（返回的 `version` 另有 `recordEmpty: true`）、版本未知、`maa-upgrade-available`（有比安装版本新的源码已核正式版，`newerSourceVerified` 给出版本；升级由用户在 MAA 里自己完成）、未完全核实、已核实；只有最后一种正常。读法和判断与 doctor 共用 `maa-core/scripts/maa-version.ts`。版本提醒不阻止接入。
 
-缺失程序只给官方入口：[MAA 下载与安装](https://docs.maa.plus/zh-cn/manual/install.html)、[MAA 官方发布](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases)、[Node 官方下载](https://nodejs.org/en/download)（选择 24.x）、[Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)、[MAA Windows 模拟器支持说明](https://docs.maa.plus/zh-cn/manual/device/windows.html)（从说明进入对应模拟器官方站点）。文件下载、解压和安装由后续下载流程处理；不把这些入口当成已获下载同意。
+官方入口：[MAA 下载与安装](https://docs.maa.plus/zh-cn/manual/install.html)、[MAA 官方发布](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases)、[Node 官方下载](https://nodejs.org/en/download)（选择 24.x）、[Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)、[MAA Windows 模拟器支持说明](https://docs.maa.plus/zh-cn/manual/device/windows.html)（从说明进入对应模拟器官方站点）。给出入口不等于已获下载同意。
+
+## 下载流程
+
+`setup-download.ts` 是唯一实现，`setup.ts` 的 `plan`、`download`、`downloads`、`install`、`recheck` 调用它。只替代网络（fetch）和解压工具两个系统边界。
+
+| 程序 | 版本出处（只读索引） | 下载与校验 |
+| --- | --- | --- |
+| MAA | GitHub API 的 MaaAssistantArknights 最新正式发布（非草稿、非预发布）；文件 `MAA-v<版本>-win-<x64/arm64>.zip` | `github.com` 该仓库 releases/download 地址，可跳转到 `objects.githubusercontent.com`／`release-assets.githubusercontent.com`；大小与发布资产的 sha256 摘要（有则核对） |
+| Node | `nodejs.org/dist/index.json` 中最高的 v24.x.y；文件 `node-v<版本>-<x64/arm64>.msi` | `nodejs.org/dist`；大小来自 HEAD 的 Content-Length，没有则如实写未知；sha256 来自同版本 `SHASUMS256.txt`，列表里没有该文件就不出方案 |
+| adb | Google SDK 仓库索引 `repository2-1.xml` 中唯一稳定频道（channel-0）的 platform-tools 及其 Windows 归档 | `dl.google.com/android/repository`；大小与索引里的 SHA-1；下载前需用户本人接受 [Android SDK 许可协议](https://developer.android.com/studio/terms) |
+| 模拟器 | MAA 模拟器页「完美支持」中的厂商：`mumu`、`ldplayer`、`bluestacks-cn`、`bluestacks`、`nox`、`memu`；版本是用户在厂商官方页面读到的值，记为 `official-page-stated` | 只认 `setup-download.ts` 里的一张厂商表 `emulatorVendors`：厂商官网域名及其子域名（MuMu 只放行 `mumu.163.com`），加上该厂商已记录下载链路中的确切主机（不含子域名）：MuMu 的 `mumu.nie.netease.com`、`a11.gdl.netease.com`，夜神的 `res06.bignox.com`，逍遥的 `download.microvirt.com`，以及雷电、蓝叠链路里本来就在官网域名内的主机。每条链路的起点、跳转和文件主机记录在仓库的 `docs/setup-sources.md`。只接受 https，plan、HEAD 和下载的每一跳都按这张表检查。表里还记录每条链路每一跳的 HEAD 状态和核对日期；记录里有 401／403 的厂商，脚本不能下载，plan 和 download 直接返回 `source-refused`、不发任何请求。脚本不能下载的厂商：`bluestacks-cn`（蓝叠 5；2026-11-14 核对，文件主机的防盗链对没有 Referer 的请求返回 403，脚本不伪造 Referer 或其他浏览器请求头）。地址取自用户在官方页面点下载后浏览器下载列表里的地址；文件名取最终地址的路径名，路径里没有安装包名时才用 Content-Disposition（MuMu 的 Content-Disposition 名字等于地址里的 `n=`，而它的下载接口每次发新的 `n=`）；大小来自 HEAD，没有则未知；厂商不公布校验值，`checksumVerified: false` |
+
+方案不写文件，`planId` 每次随机。`download` 先拒绝缺少确认原话（`confirmation-required`）、已用过的方案（`plan-already-used`）、发布已变化或指纹不符（`plan-changed`）、adb 未接受协议（`terms-acceptance-required`），这些情况都不请求文件；再在私有目录 `downloads/records/<planId>.json` 独占登记后才请求文件。跳转最多 5 次，地址不是 https 官方主机即 `unofficial-source`；任何一跳返回 401 或 403 即 `source-refused`（官方服务器拒绝脚本的请求）：plan 时不出方案，下载时记为 `failed`，都不重试、不换请求头，用户改为在自己的浏览器里从官方页面下载（模拟器随后从 `run-emulator-installer` 这一步继续：用户自己运行下载好的安装程序，不需要把文件交给脚本）；60 秒没有新数据或连接中断为 `download-interrupted`；大小不符 `size-mismatch`，校验不符 `checksum-mismatch`；大小未知时最多 4 GiB；每次读索引和 HEAD 请求最多 30 秒；确认原话最多 2000 字符，模拟器地址最多 2048 字符。失败删除临时文件，记录为 `failed`。进程中途退出留下的 `downloading` 记录由 `downloads` 报为 `interrupted`，记录保留，临时文件在下一次下载开始前回收；格式不对或文件名越界的记录一律不用。
+
+下载文件放在私有目录 `downloads/`，记录保存版本、来源、大小、sha256 和确认原话；输出不含本机路径和确认原话。`install` 的目标必须是空文件夹或不存在，不能是盘符根目录、Program Files 或 Windows 目录下，也不能与私有目录互相包含；路径里任何一级名字以点或空格结尾、含 Windows 文件名非法字符（`<>:"|?*`）或是设备名（如 `NUL`、`COM1`）时返回 `target-path-invalid`（Windows 会把它读成另一个文件夹），请用户换一个普通名字的文件夹。解压按 UTF-8 读条目名，与系统代码页无关（不用 `tar.exe`：它在非中文系统上解不出 `DependencySetup_依赖库安装.bat`）；先检查全部条目名，有绝对路径、盘符、`..`、`:`、设备名、末尾点或空格、非 UTF-8 名、不分大小写重名或文件与文件夹同名时整包拒绝，路径上遇到重解析点即停，文件只新建不覆盖。解压失败、被拒绝或缺少预期程序时清空该文件夹，记录 `failed`（`extract-failed`）；压缩包读不出条目表或没有条目也算失败。下载与解压都不写设置或 MAA 配置：MAA 目录经偏好脚本保存，adb 路径经 `apply` 写入。
+
+`plan`、`download`、`install`、`recheck` 需要 Windows；Node 主版本不是 24 时，只有 `program: "node"` 的 `plan`／`download` 和 `downloads` 可用。没有能运行脚本的 node 时，由用户从官方页面下载安装 Node 24。

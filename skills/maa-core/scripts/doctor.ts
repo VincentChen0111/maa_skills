@@ -9,7 +9,7 @@ import { blockingChecks, groupOf, libraryCheck, type CheckResult as LibraryCheck
 import { inspectInstallation } from './setup.ts';
 import { connectionCheck, inspectConnection, type AdbBoundary } from './setup-connection.ts';
 import { readMaaVersion, type MaaVersionReader } from './maa-version.ts';
-import { githubReleaseLookup, privateFilesCheck, remoteControlCheck, skillInstallationChecks, type ReleaseLookup } from './doctor-checks.ts';
+import { configurationCheck, githubReleaseLookup, privateFilesCheck, remoteControlCheck, skillInstallationChecks, writeLockCheck, type ReleaseLookup } from './doctor-checks.ts';
 import { classifyRun, evidenceOf, parseCallbacks, runsNewestFirst, safeToken, savedScreenshots, type Callback, type EvidenceItem } from './maa-log.ts';
 export { githubReleaseLookup, type ReleaseLookup } from './doctor-checks.ts';
 
@@ -49,9 +49,7 @@ export async function runChecks(context: CheckContext, maa: MaaProcess, boundari
   const connection = await inspectConnection(context.maaDirectory, boundaries.adb);
   checks.push(connectionCheck(connection));
   const recovery = await inspectConfigRecovery(context, maa);
-  if (recovery.configuration === 'valid') {
-    checks.push({ id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' } });
-  } else { checks.push({ id: 'configuration', status: 'error', reason: 'Configuration cannot be parsed.', repair: { id: 'manual-configuration', executor: 'user', description: 'Inspect the configuration and retained backups manually.' } }); }
+  checks.push(configurationCheck(recovery));
   let config: unknown; let fields: LibraryCheck;
   try { config = await readConfiguration(context.maaDirectory); } catch { config = undefined; }
   try {
@@ -62,13 +60,7 @@ export async function runChecks(context: CheckContext, maa: MaaProcess, boundari
       : libraryCheck('configuration-fields', 'normal', 'managed-fields-valid', 'no-field-repair-needed');
   } catch { fields = libraryCheck('configuration-fields', 'warning', 'managed-fields-unknown', 'inspect-maa-configuration'); }
   checks.push(fields, remoteControlCheck(config));
-  const lock = recovery.lock;
-  checks.push({ id: 'write-lock', status: lock === 'none' ? 'normal' : lock === 'active' ? 'warning' : 'error',
-    reason: lock === 'none' ? 'No write lock is present.' : lock === 'active' ? 'The lock holder is still alive.' : 'The previous write result requires reconciliation.',
-    repair: { id: recovery.canReconcile ? 'reconcile-lock' : recovery.canRestore ? 'restore-config' : 'manual-lock',
-      executor: recovery.canReconcile || recovery.canRestore ? 'skill' : 'user',
-      description: recovery.canReconcile ? 'Approve reconciliation of this evidence and release the retained lock.' : recovery.canRestore ? 'Approve restoring only the recorded changed fields through the configuration writer.' : 'Preserve the evidence; wait for the writer or inspect MAA manually.',
-      ...(recovery.canReconcile || recovery.canRestore ? { channel: 'doctor.ts repair' } : {}) } });
+  checks.push(writeLockCheck(recovery));
   checks.push(...(await inspectCredentials(installation.settings ? context.privateDirectory : null)).checks);
   checks.push(await privateFilesCheck(installation.settings ? context.privateDirectory : null));
   const skill = await skillInstallationChecks(context.skillsRoot ?? defaultSkillsRoot(), boundaries.releases);
