@@ -8,6 +8,8 @@ import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from '.
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 import { prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
 import { consumptionFields, consumptionRefusals, decideConsumption, type ConsumptionDecision, type ConsumptionGrant, type ConsumptionTarget, type ExpiringMedicineGrant } from './consumption-grant.ts';
+import { compareVersionStamp, isVersionStamp, readVersionStamp, type MaaVersionStamp, type VersionDrift } from './maa-version.ts';
+import { baseReferencePattern, buildBaseChanges, checkGrant, inspectBaseAsset, installBaseAsset, loadBaseAsset, type BaseAsset, type BasePlanGrant } from './base-config.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
 export type WriteRequest = {
@@ -15,15 +17,28 @@ export type WriteRequest = {
   expectedRevision: string;
   closedConfirmed?: boolean;
   authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; stoneCount?: number;
-    expiringMedicine?: ExpiringMedicineGrant; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant };
+    expiringMedicine?: ExpiringMedicineGrant; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant; basePlan?: BasePlanGrant };
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
-/** The only replaceable boundary: the MAA process and its runtime observations. */
+/**
+ * The only replaceable boundary: the MAA process and its runtime observations. `version` reads the installed
+ * MAA.exe product version (maa-version.ts). A boundary without it falls back to the real MAA.exe reader
+ * (`readMaaVersion`, which starts PowerShell on Windows): stage-run's `switch` boundary relies on that, and a test
+ * double must supply its own `version` (tests/fixtures/maa-version-guard.ts fails a test file that reaches the real reader).
+ */
 export interface MaaProcess {
   inspect(): Promise<MaaState>;
   close(): Promise<void>;
   start(): Promise<void>;
+  version?(): Promise<string | null>;
+}
+/**
+ * The version stamp written into a pending record or plan, read through the process boundary (or, without `version`,
+ * the real MAA.exe reader); no MAA directory or no MAA.exe reads as unknown.
+ */
+export function versionStampOf(maaDirectory: string | null | undefined, maa: MaaProcess): Promise<MaaVersionStamp> {
+  return readVersionStamp(maaDirectory, maa.version ? () => maa.version!() : undefined);
 }
 type RecordValue = Record<string, unknown>;
 function revision(config: RecordValue): string { return createHash('sha256').update(JSON.stringify(config)).digest('hex'); }
@@ -64,8 +79,9 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
  * that backup. The changed-field decision then goes to the predicate as `doctor-restore` with each task's backup task, so a
  * class that ends closed may take back its pre-transaction values without its grant. Ordinary writes never pass it.
  */
-function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', restoreTo?: RecordValue | 'recorded-values') {
-  const plans = ['jobPlan', 'trainingPlan'].filter(key => Object.hasOwn(request.authorization, key));
+function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', baseAsset?: BaseAsset | null,
+  restoreTo?: RecordValue | 'recorded-values') {
+  const plans = ['jobPlan', 'trainingPlan', 'basePlan'].filter(key => Object.hasOwn(request.authorization, key));
   if (plans.length > 1) throw new Error('conflicting-authorizations');
   // The consumption predicate owns which grants may accompany a plan: only the expiring-medicine grant may.
   const plan = plans[0] === 'jobPlan' ? 'job' as const : plans[0] === 'trainingPlan' ? 'training' as const : undefined;
@@ -73,12 +89,19 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
     || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');
+  // Ticket 23: an approved base plan derives its own exact change set; the copy was loaded from the approved report.
+  if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
+  const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
+  // The derived set may be empty (fields already at target): then the transaction only installs the copy (see writeConfiguration).
+  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan'].includes(key)) || request.authorization.source !== 'approved-report'
+    || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
   const consumptionTasks = new Set<string>();
   const enabledTasks: (string | number)[][] = [];
   const dependencies: (string | number)[][] = [];
   if (training) dependencies.push(['Configurations', training.profile, 'TaskQueue'], ['Timers']);
+  if (base) dependencies.push(base.taskPath);
   for (const change of request.changes) {
     if (!Array.isArray(change.path) || !change.path.length) throw new Error('change-not-allowed');
     const path = change.path;
@@ -147,7 +170,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
         consumptionTasks.add(JSON.stringify(path.slice(0, 4)));
       }
     }
-    if (training) allowed = true;
+    if (training || base) allowed = true;
     if (!allowed || (!nullableBoolean && old !== null && typeof old !== typeof value)) throw new Error('change-not-allowed');
     const parent = at(next, path.slice(0, -1)) as Record<string | number, unknown>;
     parent[path.at(-1)!] = value;
@@ -225,8 +248,54 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   decide(decideConsumption(request.authorization, budget, { consumer: 'quantity-budget', plan }));
   return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
-async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
+export async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
   return object(JSON.parse((await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')).replace(/^\uFEFF/, '')));
+}
+/**
+ * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with.
+ * Returns field kinds only (never a profile name or value); `timerProfileMissing` marks an enabled timer whose
+ * configuration no longer exists. Unknown task types and fields the writer never manages are not judged.
+ */
+export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {
+  const config = object(value); const invalid = new Set<string>(); let timerProfileMissing = false;
+  const profiles = object(config.Configurations);
+  const integer = (item: unknown, min: number, max: number) => Number.isSafeInteger(item) && Number(item) >= min && Number(item) <= max;
+  for (const name of Object.keys(profiles)) {
+    const profile = profiles[name];
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) { invalid.add('profile'); continue; }
+    const queue = (profile as RecordValue).TaskQueue;
+    if (queue === undefined) continue;
+    if (!Array.isArray(queue)) { invalid.add('task-queue'); continue; }
+    for (const item of queue) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) { invalid.add('task'); continue; }
+      const task = item as RecordValue;
+      if (Object.hasOwn(task, 'IsEnable') && typeof task.IsEnable !== 'boolean') invalid.add('task.IsEnable');
+      if (knownTaskType(task) !== 'Fight') continue;
+      if (Object.hasOwn(task, 'UseMedicine') && typeof task.UseMedicine !== 'boolean') invalid.add('fight.UseMedicine');
+      if (Object.hasOwn(task, 'MedicineCount') && !integer(task.MedicineCount, 0, 2147483647)) invalid.add('fight.MedicineCount');
+    }
+  }
+  if (config.Timers !== undefined) {
+    if (!config.Timers || typeof config.Timers !== 'object' || Array.isArray(config.Timers)) invalid.add('timers');
+    else {
+      const timers = config.Timers as RecordValue;
+      for (const flag of ['CustomConfig', 'ForceScheduledStart', 'ShowWindowBeforeForceScheduledStart', 'NotifyBeforeScheduledStart']) {
+        if (Object.hasOwn(timers, flag) && typeof timers[flag] !== 'boolean') invalid.add(`timers.${flag}`);
+      }
+      if (Object.hasOwn(timers, 'ScheduledStartNotificationMinutes') && !integer(timers.ScheduledStartNotificationMinutes, 0, 1439)) invalid.add('timers.ScheduledStartNotificationMinutes');
+      if (timers.List !== undefined && !Array.isArray(timers.List)) invalid.add('timers.List');
+      for (const item of Array.isArray(timers.List) ? timers.List : []) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) { invalid.add('timer'); continue; }
+        const timer = item as RecordValue; const enabled = timerEnabled(timer);
+        if (enabled !== null && typeof enabled !== 'boolean') invalid.add('timer.IsEnabled');
+        if (!integer(timer.Hour, 0, 23)) invalid.add('timer.Hour');
+        if (!integer(timer.Minute, 0, 59)) invalid.add('timer.Minute');
+        if (Object.hasOwn(timer, 'Config') && typeof timer.Config !== 'string') invalid.add('timer.Config');
+        else if (enabled !== false && typeof timer.Config === 'string' && !Object.hasOwn(profiles, timer.Config)) timerProfileMissing = true;
+      }
+    }
+  }
+  return { invalid: [...invalid], timerProfileMissing };
 }
 async function existingLock(file: string) {
   let text: string;
@@ -253,6 +322,8 @@ export type RecoveryInspection = {
   evidenceRevision: string; configuration: 'valid' | 'invalid'; backup: 'matched-latest' | 'unavailable';
   process: 'ready' | 'closed' | 'unverified'; canReconcile: boolean; canRestore: boolean;
   changes: { key: string; state: 'applied' | 'unchanged' | 'unknown' }[];
+  /** MAA and record versions in the pending record against the current ones; reported only, outside `evidenceRevision`. */
+  versions: VersionDrift | null;
 };
 const operationId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 
@@ -263,7 +334,7 @@ function transactionFields(value: unknown, required: string[], optional: string[
 }
 
 function transactionMetadata(value: unknown, pending = false): RecordValue {
-  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
+  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])], pending ? ['versions'] : []);
   if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor' && record.skill !== 'maa-setup')
     || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
     || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
@@ -277,6 +348,7 @@ function transactionPending(value: unknown): RecordValue {
   if ((authorization.source !== 'current-request' && authorization.source !== 'approved-report')
     || typeof authorization.reference !== 'string' || !authorization.reference.trim()
     || !decideConsumption(authorization as ConsumptionGrant, [], { consumer: 'pending-record' }).allowed) throw new Error('transaction-authorization-invalid');
+  if (Object.hasOwn(record, 'versions') && !isVersionStamp(record.versions)) throw new Error('transaction-versions-invalid');
   if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
   for (const item of record.changes) {
     const change = transactionFields(item, ['path', 'value']);
@@ -290,8 +362,8 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
   const read = async (file: string) => { try { return await readFile(file, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } };
   const rawLock = await read(lockFile); const rawCurrent = await read(join(context.maaDirectory, 'config', 'gui.new.json'));
   const summary: RecoveryInspection = { lock: rawLock === null ? 'none' : 'unknown', comparison: 'unknown', evidenceRevision: '',
-    configuration: 'invalid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [] };
-  let current: RecordValue | undefined; let metadata: RecordValue | undefined;
+    configuration: 'invalid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [], versions: null };
+  let current: RecordValue | undefined; let metadata: RecordValue | undefined; let pendingStamp: { versions: unknown } | undefined;
   let backup: RecordValue | undefined; let pending: WriteRequest | undefined; let rawBackup: string | null = null; let rawPending: string | null = null;
   try { current = object(JSON.parse((rawCurrent ?? '').replace(/^\uFEFF/, ''))); await inspectConfiguration(context.maaDirectory); summary.configuration = 'valid'; } catch { /* A damaged configuration cannot be restored automatically. */ }
   if (rawLock !== null) {
@@ -323,9 +395,10 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       if (matches.length !== 1 || records.at(-1)?.id !== metadata.id) throw new Error('pending-record-mismatch');
       const record = transactionPending(matches[0]);
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
+      pendingStamp = { versions: record.versions };
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
       // A doctor record is a restore this writer built from an earlier backup: replay it with the same restore allowance.
-      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined,
+      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined, null,
         record.skill === 'maa-doctor' ? 'recorded-values' : undefined).config;
       summary.backup = 'matched-latest';
       if (!current || summary.configuration !== 'valid') throw new Error('current-invalid');
@@ -340,6 +413,8 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
   const stable = rawLock === await read(lockFile) && rawCurrent === await read(join(context.maaDirectory, 'config', 'gui.new.json'));
   if (!stable) { summary.comparison = 'unknown'; summary.canReconcile = false; summary.canRestore = false; }
   summary.evidenceRevision = createHash('sha256').update(JSON.stringify([rawLock, rawCurrent, rawBackup, rawPending, summary])).digest('hex');
+  // Version differences are reported after the revision is fixed, so an unreadable version cannot invalidate an approval.
+  if (pendingStamp) summary.versions = compareVersionStamp(pendingStamp.versions, await versionStampOf(context.maaDirectory, maa));
   return { summary, rawLock, rawCurrent, rawBackup, rawPending, metadata, backup, pending, current };
 }
 
@@ -385,14 +460,14 @@ export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaPr
       });
       const lock = await open(join(request.maaDirectory, 'config', '.maa-skills.lock'), 'r+');
       try {
-        return await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
+        return { ...await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
           expectedRevision: revision(evidence.current!), closedConfirmed: request.closedConfirmed,
           authorization: { source: 'current-request', reference: request.reference, ...grant }, changes }, maa,
-        { lock, rawLock: evidence.rawLock!, restoreTo: evidence.backup! });
+        { lock, rawLock: evidence.rawLock!, restoreTo: evidence.backup! }), versions: evidence.summary.versions };
       } finally { await lock.close(); }
     }
     await unlink(join(request.maaDirectory, 'config', '.maa-skills.lock'));
-    return { status: 'complete', reason: null };
+    return { status: 'complete', reason: null, versions: evidence.summary.versions };
   } catch { return { status: 'unknown', reason: 'reconciliation-required' }; }
   finally {
     await guard.close();
@@ -465,11 +540,16 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
       const body = object(JSON.parse(input));
       if (Object.keys(body).some(key => !['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
+      /** A job-plan continuation (ticket 17) is written only by `stage-run.ts switch`, after the re-run gate allowed it. */
+      const jobPlan = body.authorization && typeof body.authorization === 'object' ? (body.authorization as RecordValue).jobPlan : undefined;
+      if (jobPlan && typeof jobPlan === 'object' && Object.hasOwn(jobPlan, 'continuation')) throw new Error('request-invalid');
+      // Ticket 23: an approved base plan is applied only through base-apply.ts, which re-runs every check first.
+      if (body.authorization && typeof body.authorization === 'object' && Object.hasOwn(body.authorization, 'basePlan')) throw new Error('base-apply-route-required');
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
       const result = await executeConfigWrite({ ...body, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as WriteRequest,
-        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start() });
+        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       console.log(JSON.stringify({ ok: result.status === 'complete', ...result }));
       if (result.status !== 'complete') process.exitCode = 1;
     } else throw new Error('action-invalid');
@@ -500,7 +580,12 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   let original: RecordValue;
   let trainingAsset: TrainingAsset | null = null;
   let assetBefore: 'absent' | 'matching' | null = null;
-  const checkAsset = async () => { if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== assetBefore) throw new Error('training-asset-target-changed'); };
+  let baseAsset: BaseAsset | null = null;
+  let baseBefore: 'absent' | 'matching' | null = null;
+  const checkAsset = async () => {
+    if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== assetBefore) throw new Error('training-asset-target-changed');
+    if (baseAsset && await inspectBaseAsset(baseAsset, request.privateDirectory) !== baseBefore) throw new Error('base-plan-copy-changed');
+  };
   let targets: { path: (string | number)[]; value: string | undefined }[];
   const checkTargets = (config: RecordValue) => {
     if (targets.some(target => comparableAt(config, target.path) !== target.value)) throw new Error('authorized-target-changed');
@@ -510,10 +595,10 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (request.closedConfirmed !== undefined && typeof request.closedConfirmed !== 'boolean') return rejected('request-invalid');
     // Grant values are validated by the consumption predicate in prepare; unknown grant keys never reach a pending record.
     if (!request.authorization || typeof request.authorization !== 'object' || Object.keys(request.authorization)
-      .some(key => !['source', 'reference', 'medicineCount', 'stoneCount', 'expiringMedicine', 'jobPlan', 'trainingPlan'].includes(key))) return rejected('authorization-invalid');
+      .some(key => !['source', 'reference', 'medicineCount', 'stoneCount', 'expiringMedicine', 'jobPlan', 'trainingPlan', 'basePlan'].includes(key))) return rejected('authorization-invalid');
     if (!['codex', 'claude'].includes(request.host) || !['current-request', 'approved-report'].includes(request.authorization.source)
       || typeof request.authorization.reference !== 'string' || !request.authorization.reference.trim()
-      || !Array.isArray(request.changes) || !request.changes.length) return rejected('authorization-invalid');
+      || !Array.isArray(request.changes) || !request.changes.length && !request.authorization.basePlan) return rejected('authorization-invalid');
     original = await readConfiguration(request.maaDirectory);
     if (typeof request.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(request.expectedRevision)) return rejected('revision-required');
     if (request.expectedRevision !== revision(original)) return rejected('configuration-changed');
@@ -529,9 +614,16 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
       }
     }
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
-    const prepared = prepare(original, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
+    if (request.authorization.basePlan) {
+      if (!baseReferencePattern.test(request.authorization.reference)) return rejected('authorization-invalid');
+      baseAsset = await loadBaseAsset(request.privateDirectory, request.authorization.reference, checkGrant(request.authorization.basePlan));
+    }
+    const prepared = prepare(original, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
+    if (baseAsset) baseBefore = await inspectBaseAsset(baseAsset, request.privateDirectory);
+    // Ticket 23: a base transaction without field changes exists only to install a missing copy; anything else is a no-op.
+    if (!request.changes.length && baseBefore !== 'absent') return rejected('plan-already-applied');
     targets = request.changes.map(change => {
       const path = change.path[0] === 'Configurations' && change.path[2] === 'TaskQueue' ? change.path.slice(0, Math.min(change.path.length, 4))
         : change.path[0] === 'Timers' && change.path[1] === 'List' ? change.path.slice(0, 3) : change.path;
@@ -562,7 +654,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try { lock = recovery?.lock ?? await open(lockFile, 'wx', 0o600); }
   catch { return (await locked()) ?? rejected('lock-unavailable'); }
   if (recovery) { const changed = await locked(); if (changed) return changed; }
-  const connectionOnly = request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
+  const connectionOnly = request.changes.length > 0 && request.changes.every(change => change.path[0] === 'Configurations' && change.path[2] === 'Gui' && change.path[3] === 'ConnectSettings');
   const metadata = { id, skill: recovery ? 'maa-doctor' : connectionOnly ? 'maa-setup' : 'maa-daily', host: request.host, pid: process.pid, startedAt: new Date().toISOString(), phase: 'check' };
   const phase = async (value: string) => {
     metadata.phase = value;
@@ -570,6 +662,8 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   };
   let lockClosed = false;
   let closeStarted: Date;
+  // Ticket 23: the run record keeps which approved plan bytes were applied and the user's decision on unverified items.
+  const runRecord = request.authorization.basePlan ? { basePlan: { sha256: request.authorization.basePlan.sha256, decision: request.authorization.basePlan.decision } } : {};
   try {
     await phase('check');
     const state = await maa.inspect();
@@ -579,10 +673,13 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const { authorization, changes } = request;
     await checkAsset();
     const trainingManifest = trainingAsset ? { file: trainingAsset.file, before: assetBefore, sha256: trainingAsset.sha256, immutable: true } : undefined;
-    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest }) + '\n', { mode: 0o600 });
+    const baseManifest = baseAsset ? { file: baseAsset.relative, before: baseBefore, sha256: baseAsset.sha256, immutable: true } : undefined;
+    // The MAA and record versions read now; recovery reports a difference from them and refuses nothing for it.
+    const versions = await versionStampOf(request.maaDirectory, maa);
+    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest, baseManifest, versions }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
-    const preview = prepare(original, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
+    const preview = prepare(original, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
     if (!checkMaintenanceWindow(original, closeStarted, deadline) || !checkMaintenanceWindow(preview.config, closeStarted, deadline)) throw new Error('timer-window');
@@ -594,7 +691,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
     await checkAsset();
-    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, recovery?.restoreTo);
+    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');
@@ -609,12 +706,16 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     if (!(await maa.inspect()).treeExited) throw new Error('process-tree-running');
     await checkAsset();
     if (trainingAsset) await installTrainingAsset(trainingAsset);
-    const temporary = `${file}.${id}.tmp`;
-    const handle = await open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
+    if (baseAsset) await installBaseAsset(baseAsset, request.privateDirectory);
+    // A copy-only base transaction (no field changes) leaves gui.new.json byte for byte as it was.
+    const temporary = request.changes.length ? `${file}.${id}.tmp` : null;
+    if (temporary) {
+      const handle = await open(temporary, 'wx', 0o600);
+      try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
+    }
     if (!(await maa.inspect()).treeExited || object(JSON.parse(await readFile(lockFile, 'utf8'))).id !== id) throw new Error('write-ownership-lost');
     checkBeforeRestart();
-    await rename(temporary, file);
+    if (temporary) await rename(temporary, file);
     await phase('restart'); checkBeforeRestart(); await maa.start();
     if (!(await maa.inspect()).ready) throw new Error('restart-unverified');
     const reopened = new Date();
@@ -623,6 +724,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const readback = await readConfiguration(request.maaDirectory);
     if (request.authorization.jobPlan) await verifyApprovedJobFiles(request.authorization.jobPlan, request.privateDirectory);
     if (trainingAsset && await inspectTrainingAsset(trainingAsset) !== 'matching') throw new Error('training-asset-readback-mismatch');
+    if (baseAsset && await inspectBaseAsset(baseAsset, request.privateDirectory) !== 'matching') throw new Error('base-plan-readback-mismatch');
     for (const change of request.changes) {
       if (comparableAt(readback, change.path) !== comparableAt(config, change.path)) throw new Error('readback-mismatch');
     }
@@ -631,7 +733,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     }
     await phase('record');
     const result = { status: 'complete', phase: 'complete', operation: id, changedKeys, reason: null };
-    await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result }) + '\n', { mode: 0o600 });
+    await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result, ...runRecord }) + '\n', { mode: 0o600 });
     await phase('release');
     if (object(JSON.parse(await readFile(lockFile, 'utf8'))).id !== id) throw new Error('lock-owner-changed');
     await lock.close(); lockClosed = true;
@@ -639,7 +741,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     return result;
   } catch {
     const result = { status: 'unknown', phase: metadata.phase, operation: id, changedKeys: [] as string[], reason: 'reconciliation-required' };
-    try { await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result }) + '\n', { mode: 0o600 }); }
+    try { await appendFile(join(request.privateDirectory, 'daily-runs.jsonl'), JSON.stringify({ ...metadata, ...result, ...runRecord }) + '\n', { mode: 0o600 }); }
     catch { /* The retained lock remains evidence when the private record cannot be saved. */ }
     return result;
   } finally {

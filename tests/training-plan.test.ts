@@ -9,6 +9,8 @@ import { configFixture } from './fixtures/training-runtime.ts';
 import { plan, log } from './fixtures/training-runtime.ts';
 import { nativeTask, log as nativeLog } from './fixtures/training-evidence.ts';
 import { reconcileTraining } from '../skills/maa-core/scripts/training-state.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import './fixtures/maa-version-guard.ts';
 
 test('a prepared authorized target persists pending state and a repeated apply cannot arm it twice', async t => {
   const f = await configFixture(t), data = trainingFixture();
@@ -30,6 +32,25 @@ test('a prepared authorized target persists pending state and a repeated apply c
   const before = await readFile(f.file, 'utf8');
   const duplicate = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true }, f.maa, { home: f.root });
   assert.equal(duplicate.status, 'check-required'); assert.equal(await readFile(f.file, 'utf8'), before);
+});
+
+test('a plan records the MAA and record versions it was prepared under; apply and reconcile report a difference without refusing', async t => {
+  const f = await configFixture(t), data = trainingFixture(), recordVersion = (await readVerificationRecord()).recordVersion;
+  await writeFile(join(f.maaDirectory, 'MAA.exe'), 'synthetic executable placeholder');
+  await writeFile(join(f.root, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }));
+  await writeFile(join(f.root, 'snapshot.json'), JSON.stringify(data.snapshot)); await writeFile(join(f.root, 'tables.json'), JSON.stringify(data.tables));
+  const prepared = await prepareTrainingPlan({ query: { ...data.request, snapshotFile: join(f.root, 'snapshot.json'), tablesFile: join(f.root, 'tables.json') },
+    binding: { profile: 0, infrastTask: 0, progressTask: 1, timer: 0 }, currentTrainee: null,
+    authorization: { source: 'current-request', reference: 'synthetic request' } }, { home: f.root, versionReader: async () => '6.21.4' });
+  assert.deepEqual(prepared.versions, { maaVersion: '6.21.4', recordVersion });
+  assert.deepEqual((await readTrainingPlan(prepared.id, { home: f.root })).versions, prepared.versions);
+  f.maa.version = async () => '6.22.0';
+  const applied = await applyTrainingPlan({ id: prepared.id, host: 'codex', closedConfirmed: true }, f.maa, { home: f.root });
+  const drift = { state: 'changed', recorded: { maaVersion: '6.21.4', recordVersion }, current: { maaVersion: '6.22.0', recordVersion }, changed: ['maaVersion'] };
+  assert.equal(applied.status, 'complete'); assert.deepEqual(applied.versions, drift);
+  await writeFile(join(f.maaDirectory, 'core.log'), '');
+  const reconciled = await reconcileTrainingPlan({ id: prepared.id, logFile: join(f.maaDirectory, 'core.log'), host: 'codex', closedConfirmed: true }, f.maa, { home: f.root });
+  assert.deepEqual(reconciled.versions, drift);
 });
 
 test('each next stage requires fresh shared costs and cannot change the approved target', async t => {

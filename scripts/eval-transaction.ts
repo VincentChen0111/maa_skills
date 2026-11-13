@@ -71,7 +71,12 @@ export function assessWriterTransaction(policy: WriterTransactionPolicy, evidenc
     };
     const pending = appended('private/daily-pending.jsonl');
     const record = pending.record;
-    if (Object.keys(record).some((key) => !['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'trainingManifest'].includes(key))) throw new Error('pending-fields');
+    if (Object.keys(record).some((key) => !['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'trainingManifest', 'versions'].includes(key))) throw new Error('pending-fields');
+    // Ticket 25: the writer stamps the MAA and verification-record versions it read, as the reminder grader checks them
+    // (scripts/eval-daily.ts). The synthetic MAA has no readable product version, so it must be null (never guessed); the
+    // installed record's version is product data, so only its form is checked: a positive integer.
+    const versions = object(record.versions);
+    if (Object.keys(versions).length !== 2 || versions.maaVersion !== null || !Number.isSafeInteger(versions.recordVersion) || versions.recordVersion < 1) throw new Error('pending-versions');
     exact(record.id, id); exact(record.skill, policy.skill); exact(record.phase, 'check');
     if (!['codex', 'claude'].includes(record.host) || !Number.isSafeInteger(record.pid) || record.pid <= 0) throw new Error('pending-owner');
     const startedAt = utc(record.startedAt);

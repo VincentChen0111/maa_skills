@@ -14,6 +14,8 @@
 
 设置损坏／不可读时，`check` 返回退出码 1、`settings-unreadable` 及保留原文件后修复 JSON、字段或访问权限的用户修法。Windows、Node 和明确提供的 MAA 目录仍检查；未知私有目录返回 `private-directory-unverified`，不猜默认目录、不显示首次偏好提示，也不覆盖或自动创建。修复后重新检查。
 
+`check` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 doctor 及 `credentials.ts check` 是同一个函数。它只读、不解密、不联网：已知过期或无法读取是错误，尚未验证是提醒，未设置是正常（凭据是可选项）。设置损坏时私有目录未知，三项都是 `credential-unknown`，不猜位置。修法只能由用户在自己的终端运行输入脚本，见 [凭据接口](../../maa-core/references/credentials.md)。`prepare` 保存的环境记录里也只有这些状态。
+
 发现范围：当前配置的 adb 路径、MAA 目录的 `adb.exe`／`adb/adb.exe`／`adb/platform-tools/adb.exe`、当前配置中模拟器程序目录相邻的 adb、PATH 的 adb，以及用户给定路径。相对 MAA 配置路径按 MAA 安装目录解析。只调用已存在且文件名以 adb 段结尾的 `.exe`，参数数组调用，不经过 shell；没有候选时不扫描全盘、不猜测安装位置。候选地址来自现有 Address／AddressHistory、`adb devices` 和用户输入，本票自动测试仅接收 `127.0.0.1:端口`、`localhost:端口`、`emulator-编号`，其它连接交用户手动核对。发现数量最多 32 个 adb、128 对连接，用户补充列表各最多 32 项；每个 adb 命令最多 5 秒、64 KiB 输出，失败不回显底层输出。
 
 多个候选必须由用户选；返回的 id 只绑定本次候选，不是账号标识。地址、路径与私人配置名称不会出现在摘要。候选来源或状态无法帮助用户定位时，让其在本机 MAA／模拟器界面查看并提供所选路径与地址。显式 `adbPaths` 将 adb 发现限定到这些路径；显式 `addresses` 将地址限定到这些值，空列表表示不选择任何项。重新 discover 后再使用新指纹。`discovery-changed` 表示配置或候选集合变化，应重新检查与选择，不能重用旧选择。
@@ -22,6 +24,6 @@
 
 `setup.ts apply` 调用统一 writer 的 `executeSetupConfigWrite`；该入口自身通过 `setup-connection.ts` 重新发现、选定并复测，按现场当前配置生成精确四字段差异，不接受任意 changes 或其他授权 grant。普通 `maa-config.ts write`／`executeConfigWrite` 不允许连接字段，不能用 approved-report 绕过。原空地址、空／相对 adb 路径及开关仅能经 doctor 已核遗留事务恢复。无变更仍检查 active／stale／unknown 锁；失败重开后不得把已写入当成接入完成。
 
-`version` 从 MAA.exe 的 Windows ProductVersion 读取；缺少或格式未知时为 null。随包 [验证版本记录](../../maa-core/references/verified-versions.json) 目前两个列表都为空：仅核对若干固定源码字段不等于完整版本源码已核，更不等于实机已核。修改验证列表必须有本仓库实际验证证据。版本提醒不阻止接入。
+`version` 从 MAA.exe 的 Windows ProductVersion 读取；缺少或格式未知时为 null。随包 [验证版本记录](../../maa-core/references/verified-versions.json) 由仓库的依赖条目生成（来源见仓库的 `docs/maa-version-sources.md`），带自己的版本号 `recordVersion`：「源码已核」只列全部依赖条目都核过的正式版，「实机已核」只列在真实 MAA、模拟器和游戏上核对过的版本，目前为空。修改列表必须有本仓库实际验证证据，并经 `scripts/maa-version-check.ts` 生成。原因依次为记录不可读、`verification-record-empty`（返回的 `version` 另有 `recordEmpty: true`）、版本未知、`maa-upgrade-available`（有比安装版本新的源码已核正式版，`newerSourceVerified` 给出版本；升级由用户在 MAA 里自己完成）、未完全核实、已核实；只有最后一种正常。读法和判断与 doctor 共用 `maa-core/scripts/maa-version.ts`。版本提醒不阻止接入。
 
 缺失程序只给官方入口：[MAA 下载与安装](https://docs.maa.plus/zh-cn/manual/install.html)、[MAA 官方发布](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases)、[Node 官方下载](https://nodejs.org/en/download)（选择 24.x）、[Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)、[MAA Windows 模拟器支持说明](https://docs.maa.plus/zh-cn/manual/device/windows.html)（从说明进入对应模拟器官方站点）。文件下载、解压和安装由后续下载流程处理；不把这些入口当成已获下载同意。

@@ -6,6 +6,8 @@
 
 关卡作业由 [作业准备接口](stage-jobs.md) 生成独立 jobPlan 授权，唯一写入器核对当前配置的 Copilot.TaskList 和 EnableUserAdditional=false。摘要仅新增每配置 jobCount，不输出文件路径、关卡名称或完整作业。事务还绑定 Current、整份 Copilot 设置及私有作业资产内容指纹；不与普通配置修改合成一次请求。
 
+已批准的基建排班只经 [基建排班应用](base-apply.md) 的 `base-apply.ts apply` 写入：它先重新核对批准、排班字节、数据新鲜度和全部验收门，再由唯一写入器按 basePlan 授权推导出所选基建任务的四个字段、在关停 MAA 后安装排班副本并读回。本页的 `write` 拒绝带 basePlan 的请求，也不接受这几个字段的普通修改。
+
 `read` 输出配置序号、任务类型/启用状态、定时槽、提醒字段与 revision 指纹。任务的 `$type` 和 `TaskType` 必须符合已核对应关系；缺失、未知或不一致均显示 `OtherTask`，不能凭任务名称或标签授权启用。类型已核的 Fight 任务另有 `consumption`：`medicine`（`on`、`count`）、`stone`（`on`、`count`、`allowSave`）、`expiring`（`on`、`days`、`activity`）；`on` 为 null 表示开关不是布尔值，MAA 和写入器都按开启处理，`count`/`days` 为 null 表示不是合法整数。类型不明的任务不输出这些。不输出配置名称、任务名称、关卡、连接地址、账号或完整配置。`write.expectedRevision` 必须使用此次摘要的 `configuration.revision`，不能临时读取新值来绕过变更提示。开始时版本不符返回 configuration-changed；关停后任务/定时槽对象或决定实际执行目标的当前配置、定时模式、目标队列变化则保留 unknown，不按旧下标写入。重新核对目标与当次授权后才可重新准备请求。
 
 `write` 输入示例：
@@ -84,5 +86,5 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 必须确认目标路径的 MAA 及已见子进程树退出后才备份、改盘；写入前再查。只正常关闭窗口，拒绝退出不强杀。托盘状态没有可关闭主窗口时，请用户恢复主窗口或自行关闭并确认。重开带 MAA 原生 `--skip-startup-auto-run`，保持原自动启动设置；当前会话 GUI started/Init 日志和目标进程共同证明就绪，历史日志不算。实际游戏任务仍由用户或已批准定时启动。
 
-私有目录的 `maa-config-backups/<操作编号>.json` 保存关停后的原始字节；`daily-pending.jsonl` 追加授权与请求；`daily-runs.jsonl` 追加结果。按操作编号取最后记录：释放锁失败可在一次已读回记录之后追加 unknown。完整配置备份仅留本机，不粘贴到对话。CLI 成功退出 0，其余退出 1；只报告 status、phase、操作编号、允许的变更键和静态原因。部分修改不自动恢复或重开重试。
+私有目录的 `maa-config-backups/<操作编号>.json` 保存关停后的原始字节；`daily-pending.jsonl` 追加授权与请求，以及当时读到的 MAA 版本和核实记录版本（`versions`，读不出为 null；doctor 恢复时报告与当前的差异，不因此拒绝）；`daily-runs.jsonl` 追加结果。按操作编号取最后记录：释放锁失败可在一次已读回记录之后追加 unknown。完整配置备份仅留本机，不粘贴到对话。CLI 成功退出 0，其余退出 1；只报告 status、phase、操作编号、允许的变更键和静态原因。部分修改不自动恢复或重开重试。
 

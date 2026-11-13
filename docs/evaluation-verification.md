@@ -38,20 +38,20 @@
 
 1. 维护者在两个专用登录目录各登录一次（命令见[套餐登录](evaluation.md)）。这是唯一需要维护者本人做的一步。
 2. 认证预检的真实探测：`node scripts/eval-batch.ts run <host> <模型 id> <组> --executable <CLI 可执行文件>` 会依次做认证预检、读保护检查，再跑场景；任何一道不通过就停下，清单里写明类别。
-3. 两个宿主各自的读保护检查。首次结果记在下表。预计 Claude 在原生 Windows 上不通过（命令沙箱不支持原生 Windows，`node *` 的命令读得了任意文件）；不通过时 Claude 一侧不用套餐登录运行，交回维护者决定。Codex 依赖本机的 MXC 沙箱；不可用时同样交回维护者。
+3. 两个宿主各自的读保护检查。首次结果记在下表。预计 Claude 在原生 Windows 上不通过（命令沙箱不支持原生 Windows，`node *` 的命令读得了任意文件）；不通过时 Claude 一侧不用套餐登录运行，交回维护者决定。Codex 依赖本机的 MXC 沙箱；不可用时同样交回维护者。维护者 2026-11-14 在协调者列出的四个选择里选了 (a)，原话「do a) first.」：先只跑 Codex，Claude 暂缓到有隔离环境。
 4. 首批试运行：读保护检查通过的宿主，各跑一个 skill 的场景一次（建议 `maa-core` 组，三个场景）。把每次运行的 token 用量和耗时记在下表，据此估出完整批次的用量。
 5. 完整批次（`all`），之后才由 26 建立基线。
-6. 第一次真实完成的运行之后：按它的耗时确定默认超时，写进[失败类别与超时](evaluation.md)并登记到规格两张来源表；按名字核对宿主写进登录目录的条目；核对 Claude 实际加载项和工具、`-p` 读取登录、`--restricted` 对登录的影响、状态命令的登录后输出、用量上限的报告方式、模型与用量字段，以及 skill 规定的「标准输入传 JSON」写法在真实 CLI 允许列表下是否放行、在 Codex 沙箱里能否执行。Codex 的读保护检查记录里，看有没有命令执行、模型文字、推理以外的条目碰到哨兵（有就检查不通过，类别 `other-tool-touched-sentinel`），结果写进下表的类别栏。每次升级宿主 CLI 后重做这些核对，包括重新查 `codex features list` 里默认打开、可能读文件的功能。
+6. 第一次真实完成的运行之后：按它的耗时确定默认超时，写进[失败类别与超时](evaluation.md)并登记到规格两张来源表（2026-11-14 已按试运行 2、3 定为 180 秒）；按名字核对宿主写进登录目录的条目；核对 Claude 实际加载项和工具、`-p` 读取登录、`--restricted` 对登录的影响、状态命令的登录后输出、用量上限的报告方式、模型与用量字段，以及 skill 规定的「标准输入传 JSON」写法在真实 CLI 允许列表下是否放行、在 Codex 沙箱里能否执行。Codex 的读保护检查记录里，看有没有命令执行、模型文字、推理以外的条目碰到哨兵（有就检查不通过，类别 `other-tool-touched-sentinel`），结果写进下表的类别栏。每次升级宿主 CLI 后重做这些核对，包括重新查 `codex features list` 里默认打开、可能读文件的功能。
 
 | 宿主 | 读保护检查首次结果 | 日期 | 类别 |
 | --- | --- | --- | --- |
 | Claude Code 2.1.321 | 未运行（尚未登录） | — | — |
-| Codex CLI 0.167.0-alpha.3.2 | 未运行（尚未登录） | — | — |
+| Codex CLI 0.167.0-alpha.3.2 | 不通过：模型没有执行任何命令，检查看不到拒绝是否生效；没有命令执行以外的条目碰到哨兵。之后改为先做强制探测；改过的检查在试运行 2、3 里都通过（`declined`，探测哨兵 `denied`、对照 `ok`），见「首次真实运行（Codex，2026-11-14）」 | 2026-11-14 | `read-protection-failed`（`attempt-missing-or-succeeded`） |
 
 | 宿主 | 试运行场景 | token 用量 | 耗时 |
 | --- | --- | --- | --- |
 | Claude Code | 未运行 | — | — |
-| Codex CLI | 未运行 | — | — |
+| Codex CLI | 试运行 2：`maa-core` 组三个场景；试运行 3：`core-append` 重跑三次（见「首次真实运行（Codex，2026-11-14）」） | 每个场景输入约 16 万到 25 万 token（大部分是缓存），输出约 600 到 1,500；读保护检查约 1.6 万输入、不到 100 输出 | 完成的场景 33.6 到 55.4 秒；`core-append` 一次在 45 秒超时；两道检查约 6 秒 |
 
 ## 设计默认值
 
@@ -181,3 +181,305 @@
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 Windows 的 setup 新场景测试在 Ubuntu 上跳过，与原有的 setup 连接写入测试一致。
+
+## 合并 main 后的调整（2026-11-14）
+
+分支合并 `origin/main`（09 #59 凭据、29 #60 关卡作业匹配、18 #64 NGA 调研、16 #61 关卡运行跟踪）到 `04af397` 后，两项测试确定性失败。修复在提交 `a5b3ed7`（文档扫描）和 `16a12c9`（世界数据与场景目录），**未经独立审查**。更早的合并提交 `cf9f722` 已把 doctor 的凭据场景改成字面值、改了两处说明文字，保持不变。工单 28 的规则不变：场景世界数据不运行产品代码，只发布产品不改变场景身份；允许名单仍是原来三条，没有放宽。
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码 | 场景模块的运行时导入闭包多出 5 条进入 `skills/` 的导入：`research-scenarios.ts` 用 `cacheKey` 算缓存文件名和 `key`；`tests/fixtures/stage-run-data.ts` 的 `syntheticRunRecord` 用 `stage-run-state` 的分类器把合成日志行变成六条运行记录。改缓存键方案或分类器的产品发布会改变这些场景的身份。另外，合成日志的时间按本机时区书写，同一份代码在 UTC 与 UTC+8 下生成的六条记录不同（`at` 和由它算出的发现 `id`），场景身份随机器时区变化 | 缓存键写成字符串字面值；六条运行记录写成 `tests/fixtures/stage-run-records.ts` 里的固定字面值（只 `import type` 产品类型）；原生成器没有别的使用方，删除，`stage-run-data.ts` 只服务产品自己的测试（`stage-run`、`stage-run-flow`、`stage-run-rerun-gate`、演示脚本）。一致性测试的闭包清单加上三个新模块；产品发布副本另把缓存键改成 `'v2:'` 前缀、把运行发现 `id` 从 24 位改成 32 位 | `.tmp/logs/merge-red-comparability.log`（`04af397`：7 项中 1 项失败，闭包多出上述 5 条）；新测试配原生成器（`.tmp/logs/merge-red-comparability-old-producers.log`）：7 项中 2 项失败，第一项报 `account-nga-cached-citation: a product-only release keeps the scenario`，闭包一项报允许名单之外的导入；修复后 7 项通过 |
+| 16、18 的场景不在场景目录里 | 两组场景写在 `eval/` 下，但 `scripts/eval-scenarios.ts` 没有收录，批次入口跑不到；可达性测试手写模块清单，没有发现 | `research`（3 个）加入 `maa-account` 组，`stage-run`（6 个）加入 `maa-daily` 组；可达性测试另外逐个导入 `eval/<skill>/` 下的模块，导出的场景数组（带 `id` 和 `prompt` 的对象）不在目录里就失败 | `.tmp/logs/merge-red-catalog.log`（只跑这一项：缺 9 个场景）；接入后通过；变异核对：把 `researchScenarios` 同时从目录和手写清单去掉，新断言报出缺少的 3 个场景，改回后通过 |
+| 文档一致性测试堆溢出 | 代码块结束围栏用 `lines.indexOf('```', index + 1)` 按不缩进的整行查找。`skills/maa-daily/references/stage-run.md` 第 10–12 行把 ```json 块放在列表项里，两道围栏都缩进三格，找不到结束围栏得到 -1，扫描位置被设回 -1，从第一行重扫，每一遍都追加提及和示例，直到堆溢出 | 向前找 trim 后为 ``` 的行，没有结束围栏时块到文件末尾，扫描只向前；块上方两行改为往回找最多两行非空行，不再每块过滤整段前文。新增回归测试（缩进围栏、未闭合围栏） | `.tmp/logs/merge-red-docs.log`（`04af397`，256 MB 堆：第一项通过后堆溢出）；回归测试单独在修复前运行也堆溢出（`.tmp/logs/merge-red-docs-regression.log`）；修复后 4 项通过，256 MB 堆下约 27 毫秒 |
+| 循环修好后扫出的 10 处不一致 | 扫描第一次读完合并进来的说明（`.tmp/logs/merge-docs-after-loopfix.log`）：7 处示例 JSON 所属的 `nga.ts`、`stage-run.ts` 不在契约表里；`research.md:123` 的 `tests/research.test.ts` 被读成脚本 `test.ts`；`stage-run.md:31` 的 `"completedRuns":<次数>` 不能解析 | 契约表补上三个合并进来的命令行脚本：`credentials.ts`（`check`、`input`，都不从标准输入读 JSON）、`stage-run.ts`（六个动作，键取自脚本的 `allowed` 表）、`nga.ts`（`search`、`read` 的请求键加 `format`，`status` 无输入）；脚本名必须从词首开始（前面不是字母、数字、下划线、点或连字符）；冒号后不加引号的 `<…>` 占位按数字 0 解析，周围的键照样核对，其他不合法的 JSON 仍报不能解析。回归测试覆盖这两种形状 | 变异核对：临时把 `stage-run.md:10` 的 `operation`、`stage-run.md:31` 的 `stages`、`research.md:23` 的 `keyword` 和 `credentials.md:16` 的动作 `input` 改错，测试按文件和行报出四处，改回后通过 |
+
+字面值与修复前逐字节相同的核对方法（会话临时脚本，不提交）：脚本加载检出目录的场景目录和 16、18 两个场景模块，对全部 72 个场景打印 id、`scenarioIdentity`（提示词、运行器、替身都传空，与一致性测试相同）和整份定义 `JSON.stringify` 的 sha256，并打印 9 个新场景的完整 `jsonInputs`。修复前（`04af397`，本机时区 UTC+8）与修复后的输出除最后一行的目录计数（63→72）外逐行相同；修复后在 `TZ=UTC` 下的输出与本机相同；修复前在 `TZ=UTC` 下 6 个 `daily-run-*` 不同。六条记录由另一个会话临时脚本从 `04af397` 的场景模块的 `jsonInputs` 取出（时区 UTC+8），经 JSON 往返后写成字面值。
+
+这一轮的选择（不是产品限制，记在这里）：
+- 运行记录冻结为 UTC+8 下的输出：维护者在本机（UTC+8）运行真模型评测，记录的 `createdAt`（02:00Z）与日志时间（10:00）在这个时区下一致。`stage-run-scenarios` 在本机和 `TZ=UTC` 下都通过。
+- 不加「字面值等于生成器输出」的测试：那样分类器一改，场景就得跟着改，正是要避免的情况。产品读不懂这些记录或缓存时，场景自己的离线测试（已安装 CLI 读取记录和缓存）会失败。
+- 删除生成器而不是留作无人调用的导出，与 `stage-data.ts` 的先例（`2a60443`）一致；来源写在字面值模块的注释里（`04af397` 的 `syntheticRunRecord`）。
+- 新场景加入目录：[行为评测](evaluation.md)「添加产品场景」要求场景加入 `scripts/eval-scenarios.ts` 的组。
+- 数字占位与词首规则只放宽了文档写法，不放宽核对：键仍逐个核对，其他不能解析的 JSON 仍报错。
+
+按负载规则一次一个运行（Windows，Node 24，在提交 `16a12c9` 的内容上；文档提交不改代码）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/docs-consistency.test.ts` | 4 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/evaluation.test.ts` | 8 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/stage-run-scenarios.test.ts` | 1 项通过；`TZ=UTC` 下也 1 项通过 |
+| `node --test tests/stage-run.test.ts` | 14 项通过 |
+| `node --test tests/stage-run-flow.test.ts` | 4 项通过 |
+| `node --test tests/stage-run-demo.test.ts` | 1 项通过 |
+| `node --test tests/stage-run-rerun-gate.test.ts` | 11 项通过 |
+| `node --test tests/research-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/nga.test.ts` | 13 项通过 |
+| `node --test tests/nga-cli.test.ts` | 3 项通过 |
+| `node --test tests/research.test.ts` | 7 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 10 项通过 |
+| `node --test tests/credentials.test.ts` | 6 项通过 |
+| `node scripts/privacy.ts`；元数据（含相对链接）和 tracker 检查（只调用检查函数） | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：9 个新收录场景的真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
+
+## 首次真实运行（Codex，2026-11-14）
+
+维护者 2026-11-14 在 Codex 的专用登录目录登录后，协调者在冻结的检出副本上运行了一次（宿主是固定版本 Codex CLI 0.167.0-alpha.3.2）：
+
+`node scripts/eval-batch.ts run codex gpt-6.1-sol maa-core --executable <codex.exe>`
+
+| 项 | 结果 |
+| --- | --- |
+| 认证预检 | 通过：`statusCommand: plan-login`，`minimalRequest: not-supported`，子进程环境里没有凭据变量 |
+| 读保护检查 | 不通过：`status: fail`，`category: read-protection-failed`，`detail: attempt-missing-or-succeeded`；`fileToolAttempt: not-applicable`，`commandAttempt: missing`，`leaked: false`，`sentinelRemoved: true` |
+| 耗时与用量 | 7405 毫秒；输入 15,449 token，输出 94 token |
+| 记录内容 | 只有两条模型文字。模型说哨兵在当前策略禁止读取的目录里，所以不执行读取命令，也不申请提权（读取次数 0）。没有命令执行，也没有别的条目碰到哨兵 |
+| 批次 | 在第一个场景之前中止，符合设计 |
+
+模型没有发出任何命令，检查就观察不到拒绝是否真的生效。协调者随后不调用模型，手工做了一次探测（会话临时脚本，不提交）：`codex sandbox` 带与评测相同的权限参数（`-c windows.sandbox="mxc"`、`-c default_permissions="maa_eval"`、`-c permissions.maa_eval.extends=":workspace"`、`-c permissions.maa_eval.filesystem={'<login-dir>'='deny'}`），`CODEX_HOME=<login-dir>`，命令是 `node -e`。读放在 `<login-dir>` 里的合成哨兵得到 `EPERM`（被拒）；读工作区里的对照文件成功（15 字节）。脚本只打印结果码和字节数，不打印内容；结束后哨兵已删除。
+
+据此修改（代码和测试在提交 `0e30e19`，**未经独立审查**）。规则登记在规格「默认值及其来源」读保护那一行（2026-11-14 修订）和「规则来源」，说明写在[行为评测](evaluation.md)「读保护检查」：
+- Codex 一侧在调用模型之前，运行器自己做上面这项强制探测：`codex sandbox` 的权限参数与这次检查的 `exec` 出自同一个函数 `codexPermissionArguments`；读取的是刚放下的合成哨兵和临时工作区里的对照文件；结果记为 `enforcementProbe: { sentinel: denied|read|error, control: ok|failed }`。
+- 探测不是 `denied` + `ok` 时，检查不通过（`enforcement-probe-failed`），也不启动模型，`commandAttempt` 记为 `not-run`。
+- 探测通过后照常调用模型。模型一条命令都不执行、记录里只有它自己的文字和推理时，记为 `declined`，与流中断等情况的 `missing`、命令读到的 `succeeded`、命令被拒的 `denied` 分开。Codex 通过要求同时满足三条：探测为 `denied` + `ok`；`leaked` 为假；`commandAttempt` 为 `denied` 或 `declined`。Claude 一侧不变。
+- 宿主替身 `eval/host-double.mjs` 模拟 `codex sandbox`：按 `-c` 里的拒绝读取项让读取得到 `EPERM`；Windows 上有拒绝读取项而没有 `windows.sandbox="mxc"` 时拒绝运行，与真实 CLI 相同；另有不按拒绝项执行、对拒绝路径什么都不跑就以 0 退出、全部读取都失败、拒绝启动四种形态，以及回复里带出哨兵值的选项。
+
+| 项 | 先红后绿的证据 |
+| --- | --- |
+| 新增 `tests/eval-auth.test.ts`「Codex read protection first proves enforcement without a model…」：探测拒绝且模型拒绝执行 → 通过；探测拒绝且模型命令被拒 → 通过；探测读到、探测出错、对照读取失败、沙箱拒绝启动 → 不通过且模型没有启动；模型命令读到、模型不执行命令却泄露了值、流中断、执行别的命令却没去读 → 不通过。每一项都核对哨兵已删除、登录目录里只剩合成登录文件、探测和模型运行用同一段权限参数、探测只读哨兵和工作区里的对照文件 | 修复前（`.tmp/red-28-readprot.log`，只加了共用的权限参数函数）这一项失败：`the probe denies and the model declines: read-protection-failed/attempt-missing-or-succeeded`；修复后 6 项全部通过 |
+| 原有读保护检查一项另核对 Claude 的结果里没有 `enforcementProbe` | 修复后通过 |
+| 变异核对：探测改为不带共用权限参数（`codexSandboxArguments({}, …)`） | `.tmp/mutation-28-readprot-profile.log`：两项失败；改回后通过 |
+| `tests/eval-redact.test.ts`：允许在写出器之外直接写的文件加上对照文件（在临时工作区里，不是产物） | 3 项通过 |
+
+这一轮的实现选择（不改变产品限制，记在这里）：
+- 每次探测读取的超时是 60 秒，与协调者的手工探测相同。
+- 探测的输出不另存产物，清单里只记 `enforcementProbe` 的两个结果值：读取脚本只打印结果码和字节数，没有别的可存。
+- `declined` 按字面理解为一条命令都不执行：执行了与哨兵无关的命令却没去读，记为 `missing`，检查不通过。
+- 哨兵读取「非零退出且没有结果行」按协调者的要求记为 `denied`；它不会单独造成通过，因为同一份参数下对照文件必须读到（沙箱拒绝启动时对照读取失败，检查不通过）。
+- `codex sandbox` 只带权限参数，不加 `--ignore-user-config` 等别的参数，与协调者实测过的形式相同。
+
+按负载规则一次一个运行（Windows，Node 24，在提交 `0e30e19` 的代码上；文档提交不改代码）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts` | 6 项通过 |
+| `node --test tests/eval-redact.test.ts` | 3 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/evaluation.test.ts` | 8 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 4 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`（只检查）、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：改过的读保护检查还没有在真实 Codex 上运行（要由协调者在冻结副本上重跑同一条命令）；探测在运行器里的形式与协调者的手工探测相同，但运行器自己发出的 `codex sandbox` 调用没有在真实 CLI 上运行过；模型在 `exec` 里发出的读取命令是否同样被拒，这次没有直接观察到（模型没有执行命令）；首批试运行仍未运行。
+
+### 试运行 2：`maa-core` 组
+
+协调者在冻结副本（提交 `1612cca`，含上面的强制探测）上重跑同一条命令：Codex CLI 0.167.0-alpha.3.2，模型 `gpt-6.1-sol`，套餐登录，原生 Windows，登录目录记为 `<login-dir>`，场景工作区记为 `<workspace>`。
+
+`node scripts/eval-batch.ts run codex gpt-6.1-sol maa-core --executable <codex.exe>`
+
+| 项 | 结果 |
+| --- | --- |
+| 认证预检 | 通过 |
+| 读保护检查 | 通过：`enforcementProbe` 为哨兵 `denied`、对照 `ok`；`commandAttempt: declined`；`leaked: false`；6144 毫秒；输入 15,460 token，输出 65 token |
+| `core-language` | 完成，8/8 通过，43.8 秒；输入 233,666 token（其中缓存 185,728），输出 982 |
+| `core-boundary` | 完成，8/8 通过，33.6 秒；输入 159,061 token（缓存 128,640），输出 603 |
+| `core-append` | 在当时的默认超时 45 秒处超时，记为 `timeout`，评分为未验证。模型当时在反复重试 PowerShell 命令，看起来是文本编码的问题 |
+
+### 试运行 3：`core-append` 重跑三次
+
+`node scripts/eval-batch.ts run codex gpt-6.1-sol core-append --executable <codex.exe> --timeout-ms 180000 --rerun-of <试运行 2 的批次>`（重跑批次把这个场景跑三次）
+
+| 项 | 结果 |
+| --- | --- |
+| 读保护检查 | 通过：`commandAttempt: declined`，探测哨兵 `denied`、对照 `ok`；5828 毫秒；输入 16,803 token，输出 85 token |
+| 第 1 次 | 完成，8/8 通过，53.5 秒；输入 219,889 token（缓存 181,632），输出 1,344 |
+| 第 2 次 | 完成，8/8 通过，55.4 秒；输入 245,211 token（缓存 194,176），输出 1,478 |
+| 第 3 次 | 完成，8/8 通过，49.3 秒；输入 216,953 token（缓存 192,128），输出 1,135 |
+
+据此把场景运行的默认超时定为 180 秒，约为完成过的最长一次（55.4 秒）的三倍；认证预检和读保护检查的模型调用留在 45 秒，两次都约 6 秒完成。写进[失败类别与超时](evaluation.md)，登记在规格两张来源表（设计默认值，2026-11-14）。两个默认值写在运行器源码里（`scripts/eval-run.ts`、`scripts/eval-auth.ts`，两者都在运行器指纹和场景摘要里），改动之后的记录与这两次试运行的记录不能比较；这两次的记录本来也只用来定超时和估用量，不作为基线。
+
+这两次试运行之后已经验证的：改过的读保护检查在真实 Codex 上通过两次，运行器自己发出的 `codex sandbox` 探测在真实 CLI 上得到哨兵拒绝、对照读到。仍未验证：模型在 `exec` 里发出的读取命令是否同样被拒（两次模型都拒绝执行命令，记为 `declined`）；Claude 一侧没有运行（维护者决定暂缓）；完整批次没有运行。
+
+新超时的离线证据（一次一个运行）：
+
+| 项 | 先红后绿的证据 |
+| --- | --- |
+| 新增 `tests/eval-run.test.ts`「a scenario run waits 180 s by default…」：场景运行的默认值是 180 秒，两道检查的默认值是 45 秒（`hostCheckTimeoutMs`，原来两处写死的 45 秒改为这一个常量） | `.tmp/logs/sync-red-timeout.log`（实际 45000，预期 180000）；修复后 5 项通过 |
+| 原有测试里没有写死 45 秒的场景运行；超时归类的测试显式传 1500 毫秒，不受默认值影响 | `tests/eval-host-double.test.ts` 10 项通过 |
+
+## 第二次合并 main 后的调整（2026-11-14）
+
+分支两次合并 `origin/main`：`ac3fa46`（12 #63 森空岛快照、17 #69 备选作业、20 #68 培养报告、10 #62 doctor 完整检查、22 #72 基建报告与排班）和 `996599a`（23 #73 执行已批准的基建排班，合并时刚进 main）。合并时的取舍：doctor 场景保留本分支的凭据字面值和 `doctor-reconcile-approved`，接上 main 的完整检查、远程控制和日志分析场景；16 的运行记录生成器保持删除，main 给它加的 `blocking`、`notBlocking` 两个字段写进字面值（与 main 的生成器在 UTC+8 下逐字节相同），17 的夹具改为取这份字面值。合并后五个工单带来的 24 个场景和 doctor 的新场景不符合工单 28 的规则，修复在本节的提交里，**未经独立审查**。工单 28 的规则不变：场景世界数据不运行产品代码，只发布产品不改变场景身份；允许名单仍是同一类值（网络夹具地址用的公开数据来源描述），没有放宽。
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码 | 闭包多出 13 条进入 `skills/` 的导入（`.tmp/logs/sync-red-closure.log`，在 `996599a` 的导出副本上运行），其中 10 条运行产品代码：10 的 doctor 场景用共享检查库的 `libraryCheck`、`groupOf`、`blockingChecks` 和 `connectionCheck` 生成预期检查行和退出码；17 的夹具用运行分类器和 `switchKey` 生成四条运行记录和换备选台账（经 `stage-run-data.ts` 的合成日志工具，又带进它的 3 条）；22 的 `planSnapshot` 用快照解析函数；23 的四个世界在加载时用 22 的报告工具起草、保存并批准报告。另外 3 条是 20、22 的网络夹具地址用的公开数据来源描述，属于允许的那一类 | doctor 的 18 行检查写成字面值（各行文字是 `996599a` 上共享检查库的输出），退出码按「有错误行就是 1」直接写出；17 的记录和台账写成 `tests/fixtures/stage-alternate-records.ts`（只 `import type`），原生成器没有别的使用方，删除；`planSnapshot` 改为直接写出快照（解析函数对同一导入的输出）；23 的三份报告（`approved`、`unverified`、`outside`，`unapproved` 是 `approved` 去掉批准记录）写成 `tests/fixtures/base-apply-worlds.ts`，`infrastConfig` 移到这里，原世界生成器删除，`base-apply-data.ts` 只服务产品测试。允许名单加上 `report-data.ts` 的两条和 `base-plan-data.ts` 的 `planTableSources`，来源列表多了 `char_meta_table.json` | 修复后 7 项通过 |
+| 世界数据读产品文件 | 10 的 doctor 场景在加载时读 `skills/maa-core/package.json` 的版本，写进预期的 `skills.version.installed`。只改版本号的发布会让全部 doctor 场景无法比较；原一致性测试只查导入，看不到读文件 | 场景里写成占位 `{{maa-core-version}}`；`renderPolicy` 在宿主启动前按本次工作区装入的 maa-core 副本渲染，读不到就保持原样（授权对不上，判不通过）。一致性测试另列出闭包模块里指向 `skills/` 的相对路径字面值，只允许场景目录的 skill 目录；只改产品的发布副本另把 maa-core 的版本号改掉 | 变异核对：把读版本的那一行改回去，两项失败（`.tmp/logs/sync-red-doctor-version.log`：`doctor-inspect: a product-only release keeps the scenario`、`world data reads no product file`）；改回后通过。新增 `tests/eval-host-double.test.ts`「the runner grades a doctor scenario against the installed maa-core version…」：修复前 `authorization`、`expected-behavior` 不通过（`.tmp/logs/sync-red-runner.log`），修复后通过 |
+| 报告和基建场景在运行器里永远不通过 | 20、22 的场景要求报告审查标记，观察器（`eval/report-observer.ts`、`eval/base-plan-observer.ts`）只在离线测试里用，两张工单都写明接入运行器留给 28。运行器不接时，报告记录和排班文件是未授权的文件改动，也看不到审查标记 | 运行器对每次运行接上两个观察器，两个文件进入场景摘要（`scenarioHashSources`）和运行器指纹（`runnerSources`）。只评本次运行新建或改动过的报告版本：23 的场景在世界里放了已批准（跳过审查）的报告，接上观察器后若把它当成本次的报告，`report-review` 会误判失败 | 新增两项：「the runner grades report records with the report and base plan observers…」（跳过审查并批准的基建报告通过，只起草不处理的报告 `report-review` 不通过且没有未授权改动）修复前 `authorization`、`allowed-keys`、`report-review` 不通过（`.tmp/logs/sync-red-runner.log`）；「report records that were already in the world…」接上观察器后、加只评本次报告之前 `report-review` 不通过（`.tmp/logs/sync-red-preexisting-report.log`）；修复后都通过 |
+| 新场景不在场景目录里 | 五组场景写在 `eval/` 下，`scripts/eval-scenarios.ts` 没有收录 | `skland`（3）、`report`（4）、`base-report`（3）加入 `maa-account` 组，`stage-alternate`（4）、`base-apply`（10）加入 `maa-daily` 组 | `.tmp/logs/sync-red-catalog.log`（`996599a`：缺 24 个场景）；修复后通过 |
+| 文档一致性扫描报 14 处 | 合并进来的说明用到契约表里没有的脚本和动作（`doctor.ts analyze`、`stage-run.ts switch`、`skland-account.ts`、`cultivation-report.ts`、`base-plan.ts`、`base-report.ts`、`base-apply.ts`），另有四种扫描认错的形状 | 契约表补上这些脚本的动作和键（两份报告工具的审查、跳过、批准键取自共享的 `advice-report.ts`，基建报告草稿的方案键取自 `base-plan.ts`；绑定检查因此也查脚本直接导入的共享模块）。扫描规则：代码里的动作名先归当前脚本，没有就归文档的主脚本（`configuration.md` 在一行 `base-apply.ts` 之后回到 `maa-config.ts write`）；块上方那行在最后一个显式命令之后又写了动作（「先运行 `maa-config.ts read` … 再运行 `switch`」）时取后者；值写成 `…` 的形状（`{"ok":false,"error":…}`）是字段示意；一个脚本都不提的文档（审查说明，JSON 是审查员的回复）不算输入示例；`base-plan.md` 的 `{"skip": true}` 是导出排班文件里的房间值，列入「不是标准输入」清单，清单项不再出现就失败 | `.tmp/logs/sync-red-docs.log`（`996599a` 的测试对合并后的说明：第一项 14 处；第二项是收录新场景后、契约表补上之前的 14 处「没有文档写法」）；修复后 5 项通过；新增回归测试覆盖四种形状。改规则前后对全部说明的抽取结果做了对比：除上面四处，没有别的示例换了归属 |
+
+字面值与修复前逐字节相同的核对方法（会话临时脚本，不提交）：脚本加载场景目录和五个新场景模块，对全部 98 个场景打印 id 和整份定义 `JSON.stringify` 的 sha256。修复前（`996599a`，本机时区 UTC+8）与修复后逐个相同，只有 9 个 doctor 场景的 `skills.version.installed` 由版本号变成占位；把占位换回版本号后，这 9 个也相同。修复后在 `TZ=UTC` 下的输出与本机相同；修复前在 `TZ=UTC` 下 3 个 `daily-alternate-*` 不同（第四个的底稿已经是 16 的字面值）。17 的记录和 23 的报告由会话临时脚本从 `996599a` 的生成器取出（时区 UTC+8），经 JSON 往返后写成字面值；`planSnapshot` 对测试用到的 8 种排除名单与解析函数的输出逐字节相同。doctor 的检查行在 Windows 上逐行核对；非 Windows 的平台行（`windows-required`）取自同一检查库的输出，没有在非 Windows 上运行。
+
+这一轮的选择（不是产品限制，记在这里；运行器的两条登记在规格）：
+- doctor 的退出码不再调 `blockingChecks`，因为场景不能运行产品代码；写成「Windows 上健康或只有远程控制提醒且凭据未设置时为 0，否则为 1」，与 `doctor-exit`「有错误就挡」的规则对这些固定世界的结果相同。`tests/check-purposes.test.ts` 的使用方清单相应去掉 `eval/maa-doctor/scenarios.ts`。
+- 只评本次运行的报告版本，按版本目录里是否有文件变化判断，放在 `withReportEvidence` 里，离线测试和运行器共用这一个判断；20、22 的离线测试里报告都是本次新建的，结果不变。
+- 23 的 `unapproved` 世界不单独存一份：它的报告与 `approved` 相同（同一哈希），只少一份批准记录。
+- 23 的合并提交里 main 还给网络夹具加了 `base-plan.ts`、`base-report.ts` 的动作；22 的基建报告场景在真模型运行里需要它，所以本次一并合并 23，没有只合并到 22。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 4 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 5 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 20 项通过 |
+| `node --test tests/check-purposes.test.ts` | 5 项通过 |
+| `node --test tests/skland-scenarios.test.ts`、`report-scenarios`、`base-report-scenarios`、`stage-alternate-scenarios`、`base-apply-scenarios` | 1、1、2、1、1 项通过 |
+| `node --test tests/base-apply.test.ts`、`base-plan`、`base-report` | 16、15、7 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：新收录的 24 个场景和 doctor 的 2 个新场景都没有真模型运行（留给工单 26）；报告场景的提示词要求模型用 `codex exec` 发起独立审查，这条路在真实 Codex 评测里是否可行没有验证；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
+
+## 第六轮审查修复（2026-11-14）
+
+第六轮审查接受了三条，修复在本节的提交里，**未经独立审查**。
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| P2 批准范围没有评分 | 报告观察器把 `private/reports` 下的所有文件（包括 `approvals/*.json`）都移出文件授权，报告只按审查标记评分，`observed.approvals` 收集了却没有人评。真实运行里 `account-report-skip-review`（「这次不批准任何条目」）批准 S1、S2，`account-report-approve-one`（「我只批准第 1 步」）批准 S1、S2，都是 8/8；`base-report-default-review` 同理；手写的批准文件也被放过 | 场景策略新增 `approvals`：本次该有的批准记录，每条一组条目编号（`account-report-approve-one` 是 `[["S1"]]`，`base-report-skip-approve` 是 `[["P1"]]`，其余报告、基建报告场景和 10 个应用基建排班场景都是 `[]`）。评分器（`scripts/evaluation.ts` 的 `grade`，与其他策略检查同一处）逐条对照本次运行新建或改动的批准记录：声明以外的记录算 `authorization` 不通过，声明了却没有的算 `expected-behavior` 不通过，声明格式不对也算 `authorization` 不通过；场景不声明就是一条都不许批准。观察器（`eval/report-observer.ts`）只把已保存报告版本目录里的文件移出文件授权（`approvals/` 里只认直接放在里面的记录），把本次新建或改动的批准记录交给评分器；种类或报告哈希与所在目录对不上、读不出来的批准记录不带条目，永远对不上声明；报告目录下的其他文件（例如没有报告的批准文件）仍是要授权的文件改动 | 新增 `tests/eval-host-double.test.ts`「the runner grades this run's approvals against the scenario's declaration…」：修复前第一处断言就失败，跳过审查的场景批准 S1 得到 `{"status":"pass","score":8,"total":8}`（`.tmp/logs/r6-red-host-double.log`）。修复后：跳过审查不批准通过；批准 S1、批准 S1+S2 都是 `authorization` 不通过；只批准一步的场景批准 S1 通过、批准 S1+S2 是 `authorization` 不通过、没有批准是 `expected-behavior` 不通过；没有报告的手写批准文件是 `authorization` 不通过；daily 场景替用户批准世界里的报告是 `authorization` 不通过；世界里原有的批准不算本次的，只读核对仍通过。新增 `tests/evaluation.test.ts`「approvals this run made must equal the scenario declaration…」：修复前失败（`.tmp/logs/r6-red-evaluation.log`），修复后通过。审查员的两个复现脚本对修复后的代码：跳过审查批准 S1+S2 是 7/8（`authorization`），只批准一步却批准 S1+S2 是 6/8（`authorization`、`expected-behavior`） |
+| P3 26 号工单的维护者署名乱码 | `docs/issues/26-v0-1-0-release-validation.md` 那句开头少了「维护者」，日期后面多出一段「 -14」 | 改为「维护者 2026-11-14 在协调者列出的四个选择里选了 (a)，原话「do a) first.」：…」，句子其余部分不变。全部 `docs/`、`skills/`、`eval/`、`scripts/`、`tests/`、`README.md`、`CONTEXT.md` 按「日期后跟 ` -数字`」和「` -1x 在/选/说/决定`」搜过，只有这一处 | 搜索结果只有这一处，改后为零 |
+| P3 强制探测每次读取 60 秒没有登记 | `scripts/eval-auth.ts` 的探测两次读取写死 60 秒，不随 `--timeout-ms` 改变，规格的规则来源、默认值来源和正文都没写 | 写成具名常量 `enforcementProbeTimeoutMs`，放在 `hostCheckTimeoutMs` 旁边；规格「规则来源」测试决定那一行、「默认值及其来源」超时那一行和读保护正文登记「强制探测每次读取 60 秒，不随 --timeout-ms 改变：设计默认值，2026-11-14」及理由；评测说明同步 | `tests/eval-run.test.ts` 的超时测试加上这个常量：修复前读到 `undefined`（`.tmp/logs/r6-red-eval-run.log`），修复后通过。新增 `tests/eval-auth.test.ts`「the enforcement probe keeps its own per-read timeout…」：`timeoutMs` 设成 1 毫秒时模型调用超时，两次探测读取照样完成、探测成立；这一项在修复前也通过，固定的是已有行为，不是先红 |
+
+变异核对（会话临时脚本，每次改一处、只跑新增的那一项、跑完恢复原文件，`.tmp/logs/r6-mutations.log`）：
+
+| 变异 | 结果 |
+| --- | --- |
+| 报告目录下的所有文件都移出文件授权（修复前的放行范围） | 失败：没有报告的手写批准文件得到 8/8 |
+| 批准记录不交给评分器 | 失败：跳过审查批准 S1 得到 8/8 |
+| 世界里原有的批准也算本次的 | 失败：只读核对的 daily 场景 `authorization` 不通过 |
+| 不检查少批 | 宿主替身这一项仍通过（少批时预期的 `approve` 调用也没有，`expected-behavior` 照样不通过）；`tests/evaluation.test.ts` 的那一项失败：「a required approval that was never made」（`.tmp/logs/r6-mut-M4-evaluation.log`） |
+
+这一轮的选择（不是产品限制，记在这里；批准对照场景声明和探测超时两条登记在规格）：
+- 声明按批准记录逐条对照，一条记录里的条目顺序不计；同一条目分两次批准算两条记录。形状与 20 的离线测试比较 `observed.approvals` 的方式相同（`[["S1"]]`）。
+- 不新增评分规则，总分仍是 8：多批归 `authorization`（批准是用户逐项给的授权），少批归 `expected-behavior`（与预期动作同类）。总分不变，比较时 `grade.total` 的要求不受影响。
+- 只评本次运行新建或改动的批准文件；被删掉的批准文件不在观察器的放行范围里，仍是未授权改动。
+- 观察器把「不是目录」与「不存在」同样看待：报告目录下放了一个普通文件时，它留在文件改动里判 `authorization` 不通过，不再让整次运行变成 `invalid-evidence`。
+- 场景身份：报告 4 个、基建报告 3 个、应用基建排班 10 个场景的定义变了；`scripts/evaluation.ts`、`eval/report-observer.ts`、`scripts/eval-auth.ts` 都在场景摘要的运行器源码里，所以全部场景的摘要和运行器指纹都变了，之前的记录（包括首批 Codex 真实运行）不能与之后的比较。`tests/eval-comparability.test.ts` 加了一项：只改 `account-report-approve-one` 的声明只改变这一个场景的身份。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/evaluation.test.ts` | 9 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 11 项通过 |
+| `node --test tests/eval-auth.test.ts` | 7 项通过 |
+| `node --test tests/eval-run.test.ts` | 5 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-redact.test.ts`、`eval-fixture`、`eval-network` | 3、7、3 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 5 项通过 |
+| `node --test tests/report-scenarios.test.ts`、`base-report-scenarios`、`base-apply-scenarios` | 1、2、1 项通过 |
+| `node --test tests/cultivation-report.test.ts`、`base-report` | 9、7 项通过 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：这些场景都没有真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）。
+
+## 第三次合并 main 后的调整（2026-11-14）
+
+分支在 `8438136` 合并 `origin/main`（`bd3b3e6`：19 #78 森空岛社区与 B 站调研、25 #79 MAA 版本核对与升级提醒）。合并时的取舍：
+
+- 评测说明保留本分支精简后的段落，加上 main 新增的两句（森空岛合成世界、`offsetMs`）。
+- doctor 场景保留本分支的字面值检查行和 `doctor-reconcile-approved`，接上 25 的版本行、`recovery.versions` 和 `doctor-maa-upgrade-request`；森空岛凭据的用途按 19 改写。版本行在合并提交里暂按 main 的写法由产品代码算出，本节的提交改成字面值。
+- setup 边界只有 `eval/setup-boundary.mjs` 一份实现，main 给测试边界加的版本读取（`maa-version.ts` 的 `child_process` 走同一边界、MAA 进程的 `version()` 返回 null）写进这一份。
+- 配置写入事务的评分（`scripts/eval-transaction.ts`）原来只认待执行记录的固定字段，25 起写入器多写一个版本戳 `versions`，`setup-connection-write` 因此判不通过（`.tmp/logs/sync2-red-setup-write.log`）。现在按 main 的提醒事务评分（`scripts/eval-daily.ts`）的同一规则接受它：MAA 版本须为 null（合成 MAA 读不出版本），核实记录版本须为正整数（产品数据，只查形式）。`tests/setup-scenarios.test.ts` 加了四种篡改（猜测版本、缺版本戳、记录版本为 0、多一个字段），都判不通过；把缺版本戳当作默认值的变异让「缺版本戳」一项失败（会话内核对，已还原）。
+- `scripts/evaluation.ts` 自动合并。19 的 `offsetMs` 语义不变：作者在场景里声明，0 到 31 天的整数毫秒，不能与静态授权同位置。它写在场景定义的 `policy.generatedUtcFields` 里，`scenarioIdentity` 对整份定义求摘要，所以进入场景身份；`tests/eval-comparability.test.ts` 加了一处：只把 `account-skland-community-read` 的 `offsetMs` 改成两天，只有这个场景的身份改变。按场景声明的批准评分（`461deb3`）照常运行：`tests/evaluation.test.ts` 10 项通过，报告和基建场景的声明没有变。
+
+合并后 19、25 带来的场景不符合工单 28 的规则，修复在本节的提交里，**未经独立审查**：
+
+| 项 | 原因 | 修法 | 先红后绿的证据 |
+| --- | --- | --- | --- |
+| 世界数据运行产品代码、读产品文件 | 闭包多出三条进入 `skills/` 的导入（`.tmp/logs/sync2-red-closure.log`）：19 的 `community-scenarios.ts` 用 `research.ts` 的 `cacheKey` 算三个缓存文件名；25 的 doctor 场景用 `checks.ts` 的 `libraryCheck` 和 `maa-version.ts` 的 `assessMaaVersion`、`readVerificationRecord`、`versionRepair`，并在加载时读随包的 `verified-versions.json` | 三个缓存键写成字面值（与 NGA 调研场景的写法相同，是 `bd3b3e6` 上 `cacheKey` 的输出）；doctor 的版本行和版本证据写成字面值（`bd3b3e6` 上 `assessMaaVersion` 对占位 MAA.exe 的输出：`maa-version-unknown` 警告） | 修复后 7 项通过 |
+| 核实记录一更新，doctor 场景就判不通过 | 25 的核实记录每核实一个新版本，自己的 `recordVersion` 加一；预期里写死记录版本时，只更新记录的发布会让全部 doctor 场景 `authorization`、`expected-behavior` 不通过，前后比较报成回归 | 核实记录版本写成占位 `{{maa-record-version}}`，`renderPolicy` 在宿主启动前按本次装入的 maa-core 的记录渲染成整数，读不到就保持原样（授权对不上）；一致性测试的发布副本另把记录版本加一并多列一个已核版本 | `tests/eval-host-double.test.ts` 改过的一项（同一个 `doctor-inspect` 分别对仓库的 maa-core 和改了版本号与记录版本的发布副本运行）：修复前发布副本 `authorization`、`expected-behavior` 不通过（`.tmp/logs/sync2-red-doctor-record.log`），修复后通过 |
+| 新场景不在场景目录里 | 19 的四个场景写在 `eval/maa-account/` 下，`scripts/eval-scenarios.ts` 没有收录 | 加入 `maa-account` 组 | `.tmp/logs/sync2-red-catalog.log`（缺 4 个）；修复后 10 项通过 |
+| 23 的已保存报告缺 25 的版本戳 | 25 起基建报告起草时写入 `versions`（在报告哈希里），main 的世界生成器生成的三份报告带 `{ maaVersion: null, recordVersion: 2 }`，本分支的字面值还是 `996599a` 的旧报告 | 用 `bd3b3e6` 的生成器重新生成 `tests/fixtures/base-apply-worlds.ts` 的三份报告，报告哈希随之改变 | 旧世界在合并后也能通过，所以没有红；重新生成后 `base-apply-scenarios` 和运行器的基建场景测试通过 |
+| 文档一致性扫描报 3 处 | `setup.md` 提到仓库维护工具 `scripts/maa-version-check.ts`（不在 `maa-core/scripts`）；`research.md` 的两个示例属于 19 的 `skland-community.ts read` 和 `bilibili.ts read`，契约表没有这两个脚本 | 契约表加上两个读取脚本（`read` 的键取自脚本自己的校验，加 `format`；`status` 没有输入）；仓库维护工具单列名单：须在仓库的 `scripts/` 里、文档里仍提到、不带动作，名单项不再出现就失败 | `.tmp/logs/sync2-red-docs.log`；修复后 5 项通过 |
+
+字面值与生成器逐字节相同的核对方法（会话临时脚本，不提交）：脚本遍历 `eval/<目录>/` 下每个模块导出的场景定义，打印 id 和整份定义 `JSON.stringify` 的 sha256。`bd3b3e6` 的导出副本（生成器版）有 96 个场景，本节的提交有 103 个（多出的 7 个是本分支自己的场景）。共同的 96 个，把两个占位换回 `0.1.0-dev.0` 和 `2`、去掉本分支 `461deb3` 加的 `approvals` 声明后，逐个与 `bd3b3e6` 相同；本节的提交在 `TZ=UTC` 下的输出与本机（UTC+8）相同。基建报告的生成脚本先对 `996599a` 的生成器重现了改造前的 `base-apply-worlds.ts`（逐字节相同），再对 `bd3b3e6` 生成提交的文件。doctor 的版本行由 `tests/doctor-scenarios.test.ts` 用装入的 doctor 逐行核对。
+
+新增覆盖：`tests/eval-host-double.test.ts`「the runner reads a linked Skland post through the synthetic Skland world…」：运行器经网络夹具的合成森空岛世界读帖，判通过；不读帖的运行 `expected-behavior` 不通过。它第一次运行就通过（运行器的网络夹具接线本来可用），没有红。另用会话探针把 19 的四个场景都经运行器和宿主替身各跑一次，都是 8/8（`.tmp/logs/sync2-probe-community.log`）。
+
+这一轮的选择（不是产品限制，记在这里；占位一条登记在规格）：
+- 核实记录版本用占位，不写字面值 2：理由见上表第二行，与 maa-core 版本的占位同一做法。
+- 19、25 的新场景都不能写批准记录（允许的命令里没有报告工具），按默认不声明 `approvals`；报告、基建报告、应用基建排班的声明不变。
+- 应用基建排班世界里报告带的 `recordVersion: 2` 留在字面值里：它是报告起草时读到的值，属于世界本身；之后记录升级，应用时只报告版本差异，不拦也不进评分。
+- 写入事务的版本戳与提醒事务的评分用同一规则，两个评分器对同一份待执行记录的判断一致。
+- 仓库维护工具用单列名单而不是放宽扫描：只认名单里的工具，扫描对其他不存在的脚本照常报错。
+
+场景身份：doctor 9 个、应用基建排班 10 个场景的定义变了，19 的 4 个场景第一次进入目录；`scripts/eval-fixture.ts`、`scripts/eval-transaction.ts` 在场景摘要的运行器源码里，所以全部场景的摘要和运行器指纹都变了，之前的记录不能与之后的比较。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-batch`、`eval-run`、`eval-host-double`、`eval-redact` | 7、10、5、12、3 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`docs-consistency`、`eval-network` | 10、7、7、5、3 项通过 |
+| `node --test tests/community-scenarios.test.ts`、`research-scenarios`、`skland-scenarios`、`report-scenarios`、`base-report-scenarios`、`base-apply-scenarios` | 4、1、1、1、2、1 项通过 |
+| `node --test tests/doctor-scenarios.test.ts`、`stage-alternate-scenarios`、`stage-run-scenarios`、`setup-scenarios`、`stage-scenarios` | 22、1、1、27、4 项通过 |
+| `node --test tests/offline-network.test.ts`、`maa-version-check`、`check-purposes` | 2、13、5 项通过 |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts`、`node scripts/metadata.ts` | 无发现、无错误 |
+| 完整离线入口 | 没有跑，由协调者跑 |
+
+未验证：19 的四个场景和 25 的 `doctor-maa-upgrade-request` 都没有真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）；CI 由 PR 触发，本地没有运行。
+
+## Windows CI（2026-11-14）
+
+PR #77 的 windows-latest 有两项失败，本机和 ubuntu-latest 都通过。原因相同：GitHub 的 Windows 运行器把临时目录给成 8.3 短名（用户名一段是 `RUNNER~1`），`realpath` 得到的是长名。本机复现：建一个长名临时目录，取它的短名，把 `TEMP`、`TMP` 指向短名后单独跑两个测试文件，两项失败与 CI 逐字相同（`.tmp/logs/28win-repro-shorttemp-auth-red.log`、`28win-repro-shorttemp-redact-red.log`）。这台机器的系统盘有 8.3 短名，没有用 `subst` 或联接模拟。
+
+| 失败 | 原因 | 正式环境是否受影响 | 修法 |
+| --- | --- | --- | --- |
+| `eval-auth`「a parent of the private directory mixes them too」得到 `overlaps-settings-directory` | 重叠比较的 `canonical` 只对已存在的路径取 `realpath`，不存在的按原样比较。测试的私有目录不存在，留在短名写法；它的父目录存在，被解析成长名，两边写法不同，私有目录那一项没比中，落到下一项设置目录 | 是，**失效放行**：私有目录用长名、登录目录用短名或经联接给出且还没创建时，`loginDirectoryRefusal` 返回 `undefined`（新测试修复前的结果），登录目录可以落进私有目录 | 比较两边都用 `longPath`（`scripts/eval-redact.ts`，唯一一份）：最深的已存在部分取 `realpathSync.native`（短名展开、联接跟随、去掉 `\\?\`），不存在的部分按原样接上；Windows 上再统一小写。拒绝的种类和检查顺序不变 |
+| `eval-redact`「claude manifest.json names loginmarker…」 | 宿主替身用 Node 的 `pathToFileURL` 说出登录目录，Node 24 把 `~` 编成 `%7E`；脱敏只认 `encodeURIComponent` 会编码的字符的百分号写法，它不编码 `~`，短名写法那一个模式因此对不上，长名模式的片段本来就不同。漏出的字段是清单的 `fingerprint.hostVersion`，以及 `attempts[].authPreflight.hostVersion`、`attempts[].readProtection.hostVersion`，形式是 `file:///…/RUNNER%7E1/…/LoginMarker…/claude-config`（会话探针，`.tmp/logs/28win-repro-manifest-fields.log`） | 是：Claude Code 跑在 Node 上，登录目录、主目录或仓库路径里有短名或 `~` 时，宿主给出的 `file:` URL 会原样落盘 | 脱敏的单一出口里，字母和数字以外的每个字符都认它的 UTF-8 百分号编码（十六进制大小写都认）；每个路径按给出的写法、`resolve` 后的写法和 `longPath` 各匹配一次，所以尚不存在的路径也有长名写法 |
+
+先红后绿（Windows，Node 24，默认 `TEMP`，不依赖运行器）：
+
+- `tests/eval-auth.test.ts`「the overlap check compares long forms: through a junction…」：经联接给出的、尚不存在的登录目录在私有目录内，修复前得到 `undefined`；私有目录经联接给出且不存在，修复前也放行；同时与私有目录和设置目录重叠时报私有目录。「on Windows the overlap check matches 8.3 short names both ways round…」：用 `cmd` 的 `%~sI` 取临时目录的短名，长名登录目录对短名的不存在私有目录（CI 的情形，修复前 `overlaps-settings-directory`），以及短名、不存在的登录目录对长名私有目录。没有短名的系统上跳过并写明原因。红：`.tmp/logs/28win-red-auth.log`。
+- `tests/eval-redact.test.ts`「any character but a letter or digit may come percent-encoded…」（`%7E`／`%7e`、每个标点都编码的严格写法）、「on Windows a login directory named in the 8.3 short form is redacted in its long form, and before it exists」；整批的一致性测试在有短名的系统上把登录目录写成短名，所以本机就能复现运行器。红：`.tmp/logs/28win-red-redact.log`（3 项失败，其中整批那项与 CI 相同）。
+- 修复后两份文件在默认 `TEMP` 和短名 `TEMP` 下都通过（9、5 项）。
+
+这一轮的选择（设计默认值，2026-11-14，不是产品限制）：
+- 不为给出的长名另算短名：Node 没有取短名的接口；Windows 只在被要求时才把长名变短，宿主拿到的是给它的写法，自己解析时得到长名（已覆盖），宿主环境里的 home、临时目录都指向临时 home。
+- 字母和数字不认百分号写法：没有编码器会编码它们。
+- 重叠检查同时命中几项时报第一项，顺序是仓库、私有目录、设置目录、临时 home 或工作区、日常配置位置、另一宿主登录目录；写在 `loginDirectoryRefusal` 的注释和[行为评测](evaluation.md)里。
+
+`scripts/eval-redact.ts`、`scripts/eval-auth.ts` 在运行器指纹里，之前的记录不能与之后的比较。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-redact`、`eval-batch`、`eval-run`、`eval-host-double` | 9、5、10、5、12 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`docs-consistency` | 10、7、7、5 项通过 |
+| `node scripts/privacy.ts` | 无发现 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
+未验证：windows-latest 和 ubuntu-latest 的 CI 要等协调者推送后才跑；ubuntu 上两个 Windows 短名测试跳过，联接测试改用目录符号链接，本地没有在 Linux 上运行。

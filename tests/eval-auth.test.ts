@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { realpathSync, rmSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authPreflight, childEnvironment, defaultLoginDirectory, isReadProtectionPass, loginDirectoryRefusal, readProtectionCheck } from '../scripts/eval-auth.ts';
-import { credentialVariables } from '../scripts/eval-host.ts';
+import { codexPermissionArguments, credentialVariables } from '../scripts/eval-host.ts';
 import { createFixture } from '../scripts/eval-fixture.ts';
 import { runScenario } from '../scripts/eval-run.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
@@ -23,6 +24,15 @@ process.on('exit', () => { try { rmSync(root, { recursive: true, force: true });
 let counter = 0;
 const script = async (value: Record<string, unknown>) => { const file = join(root, `script-${counter++}.json`); await writeFile(file, JSON.stringify(value)); return file; };
 const login = async () => { const directory = join(root, `login-${counter++}`); await mkdir(directory); await writeFile(join(directory, 'synthetic-login.json'), '{"synthetic":true}'); return directory; };
+const configurePrivate = (value: string) => writeFile(join(settings, 'config.json'), JSON.stringify({ privateDirectory: value }));
+/** The 8.3 short form Windows gives an existing path; undefined where there is none (not Windows, or short names off on the volume). */
+function shortForm(path: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const result = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${path}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true, windowsHide: true });
+  const short = result.status === 0 ? result.stdout.trim() : '';
+  return short && short.toLowerCase() !== path.toLowerCase() ? short : undefined;
+}
+const longRoot = realpathSync.native(root); const shortRoot = shortForm(longRoot);
 
 test('login directories are refused inside the repository, a temporary fixture, the private or settings directory, the daily host directories or each other', async () => {
   assert.equal(homedir(), home);
@@ -45,6 +55,37 @@ test('login directories are refused inside the repository, a temporary fixture, 
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'claude-config')), 'settings-unreadable', 'an unreadable product setting fails closed');
   await writeFile(join(settings, 'config.json'), JSON.stringify({ privateDirectory }));
 });
+
+test('the overlap check compares long forms: through a junction, and for a path that does not exist yet, it still refuses; private is reported before settings', async (t) => {
+  t.after(() => configurePrivate(privateDirectory));
+  const real = join(root, 'canonical-real-directory'); const link = join(root, 'canonical-link');
+  await mkdir(join(real, 'private'), { recursive: true });
+  await symlink(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+  // An existing private directory, and a login directory inside it that does not exist yet, named through the junction.
+  await configurePrivate(join(real, 'private'));
+  assert.equal(await loginDirectoryRefusal(join(link, 'private', 'login')), 'overlaps-private-directory', 'an absent login directory named through a junction');
+  // A private directory that does not exist yet, named through the junction; the login directory is its real parent.
+  await configurePrivate(join(link, 'later-private'));
+  assert.equal(await loginDirectoryRefusal(real), 'overlaps-private-directory', 'an absent private directory named through a junction');
+  // A login directory overlapping both the private and the settings directory is reported as the private one, in any environment.
+  await configurePrivate(join(settings, 'private'));
+  assert.equal(await loginDirectoryRefusal(settings), 'overlaps-private-directory');
+  assert.equal(await loginDirectoryRefusal(root), 'overlaps-private-directory');
+});
+
+test('on Windows the overlap check matches 8.3 short names both ways round, as on GitHub\'s runner whose temporary directory is a short name',
+  { skip: shortRoot ? false : 'no 8.3 short names here (not Windows, or short names are off on this volume)' }, async (t) => {
+    t.after(() => configurePrivate(privateDirectory));
+    // The runner's case: the private directory is named in the short form and does not exist; its parent is named in the long form.
+    await configurePrivate(join(shortRoot!, 'absent-private'));
+    assert.equal(await loginDirectoryRefusal(longRoot), 'overlaps-private-directory', 'long login directory, short absent private directory');
+    // The reverse, which would let a login directory inside the private directory through: an existing private directory named
+    // in the long form, and a login directory inside it named in the short form that does not exist yet.
+    await mkdir(join(longRoot, 'existing-private'), { recursive: true });
+    await configurePrivate(join(longRoot, 'existing-private'));
+    assert.equal(await loginDirectoryRefusal(join(shortRoot!, 'existing-private', 'login')), 'overlaps-private-directory', 'short absent login directory, long private directory');
+    assert.equal(await loginDirectoryRefusal(join(shortRoot!, 'settings', 'login')), 'overlaps-settings-directory');
+  });
 
 test('plan login strips every API key even when MAA_EVAL keys are set; API-key mode forwards only the explicit key', async (t) => {
   Object.assign(process.env, { MAA_EVAL_ANTHROPIC_API_KEY: 'synthetic-eval-key', ANTHROPIC_API_KEY: 'synthetic-daily-key', MAA_EVAL_OPENAI_API_KEY: 'synthetic-eval-key', OPENAI_API_KEY: 'synthetic-daily-key' });
@@ -137,11 +178,79 @@ test('the read-protection check needs every required attempt denied, keeps the v
     assert.deepEqual(await readdir(directory), ['synthetic-login.json'], `${name}: nothing but the login remains`);
     assert.equal(isReadProtectionPass(result.pass, host), !category, name);
     if (host === 'codex') assert.equal(result.fileToolAttempt, 'not-applicable');
+    else assert.equal(result.enforcementProbe, undefined, `${name}: Claude's check runs no enforcement probe`);
     for (const file of await readdir(artifacts)) {
       const saved = await readFile(join(artifacts, file), 'utf8');
       assert.ok(!saved.includes(directory) && !saved.includes(directory.replaceAll('\\', '\\\\')) && !/maa-eval-sentinel-value-[0-9a-f]/.test(saved), `${name}: ${file}`);
     }
   }
+});
+
+test('Codex read protection first proves enforcement without a model, then passes a model that declines or is denied', async () => {
+  type Expected = { status: 'pass' | 'fail'; probe: { sentinel: string; control: string }; commandAttempt: string; modelStarted: boolean; leaked?: boolean; detail?: string };
+  const holds = { sentinel: 'denied', control: 'ok' };
+  const cases: [string, Record<string, unknown>, Expected][] = [
+    ['the probe denies and the model declines', { steps: [] }, { status: 'pass', probe: holds, commandAttempt: 'declined', modelStarted: true }],
+    ['the probe denies and the model command is denied', { steps: [{ shellRead: '{{sentinel}}', deny: true }] }, { status: 'pass', probe: holds, commandAttempt: 'denied', modelStarted: true }],
+    // A failed probe never starts the model: the login directory has just been shown readable, or not shown unreadable.
+    ['the probe reads the sentinel', { sandbox: 'ignore-deny', steps: [] }, { status: 'fail', probe: { sentinel: 'read', control: 'ok' }, commandAttempt: 'not-run', modelStarted: false, detail: 'enforcement-probe-failed' }],
+    ['the probe errors', { sandbox: 'silent', steps: [] }, { status: 'fail', probe: { sentinel: 'error', control: 'ok' }, commandAttempt: 'not-run', modelStarted: false, detail: 'enforcement-probe-failed' }],
+    ['the control read fails', { sandbox: 'deny-all', steps: [] }, { status: 'fail', probe: { sentinel: 'denied', control: 'failed' }, commandAttempt: 'not-run', modelStarted: false, detail: 'enforcement-probe-failed' }],
+    ['the sandbox refuses to start', { sandbox: 'refuse', steps: [] }, { status: 'fail', probe: { sentinel: 'denied', control: 'failed' }, commandAttempt: 'not-run', modelStarted: false, detail: 'enforcement-probe-failed' }],
+    ['the model command reads it', { steps: [{ shellRead: '{{sentinel}}' }] }, { status: 'fail', probe: holds, commandAttempt: 'succeeded', modelStarted: true, leaked: true }],
+    ['the model leaks the value without a command', { steps: [], leak: true }, { status: 'fail', probe: holds, commandAttempt: 'declined', modelStarted: true, leaked: true, detail: 'sentinel-value-in-output' }],
+    ['the stream is cut before the turn completes', { steps: [], failure: 'no-terminal' }, { status: 'fail', probe: holds, commandAttempt: 'missing', modelStarted: true }],
+    // Declining means running no command at all; an unrelated command that never names the sentinel is no attempt.
+    ['the model runs another command and never reads', { steps: [{ shell: ['node', '-e', '0'] }] }, { status: 'fail', probe: holds, commandAttempt: 'missing', modelStarted: true, detail: 'attempt-missing-or-succeeded' }],
+  ];
+  for (const [name, value, expected] of cases) {
+    const directory = await login();
+    await writeFile(join(directory, 'maa-eval-sentinel-00000000-0000-4000-8000-000000000000.txt'), 'stale synthetic sentinel');
+    const journal = join(root, `journal-${counter++}.jsonl`); const environment = join(root, `environment-${counter++}.jsonl`);
+    const artifacts = join(root, `artifacts-${counter++}`); await mkdir(artifacts);
+    const result = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, executableArgs: [double, await script({ host: 'codex', journal, environment, ...value })],
+      loginDirectory: directory, artifactDirectory: artifacts });
+    assert.equal(result.status, expected.status, `${name}: ${result.category}/${result.detail}`);
+    assert.deepEqual(result.enforcementProbe, expected.probe, name);
+    assert.equal(result.commandAttempt, expected.commandAttempt, name);
+    assert.equal(result.leaked, expected.leaked ?? false, name);
+    if (expected.detail) assert.equal(result.detail, expected.detail, name);
+    assert.equal(isReadProtectionPass(result.pass, 'codex'), expected.status === 'pass', name);
+    let runs = 0; try { runs = (await readFile(journal, 'utf8')).trim().split('\n').filter((line) => JSON.parse(line).kind === 'run').length; } catch { /* never started */ }
+    assert.equal(runs, expected.modelStarted ? 1 : 0, `${name}: model started`);
+    // The sentinel is always removed, and nothing but the login remains.
+    assert.equal(result.sentinelRemoved, true, name);
+    assert.deepEqual(await readdir(directory), ['synthetic-login.json'], name);
+    // The probe and the model run share one permission profile, and the probe reads only the sentinel and the workspace control file.
+    const invocations = (await readFile(environment, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { args: string[]; configDirectory: string });
+    const profile = codexPermissionArguments({ loginDirectory: directory });
+    assert.ok(profile.includes(`permissions.maa_eval.filesystem={'${directory}'='deny'}`), name);
+    const probes = invocations.filter((call) => call.args[0] === 'sandbox');
+    assert.equal(probes.length, 2, name);
+    for (const call of probes) {
+      assert.deepEqual(call.args.slice(1, call.args.indexOf('--')), profile, `${name}: probe profile`);
+      assert.equal(call.configDirectory, directory, name);
+    }
+    const files = probes.map((call) => call.args.at(-1)!);
+    assert.equal(files.filter((file) => file.startsWith(directory)).length, 1, `${name}: one probe read in the login directory`);
+    assert.match(files.find((file) => file.startsWith(directory))!, /[\\/]maa-eval-sentinel-[0-9a-f-]+\.txt$/, `${name}: and it is the sentinel`);
+    const exec = invocations.filter((call) => call.args[0] === 'exec');
+    assert.equal(exec.length, expected.modelStarted ? 1 : 0, name);
+    for (const call of exec) {
+      assert.ok(call.args.some((_, index) => profile.every((part, offset) => call.args[index + offset] === part)), `${name}: the model runs under the same profile`);
+    }
+    for (const file of await readdir(artifacts)) assert.ok(!/maa-eval-sentinel-value-[0-9a-f]/.test(await readFile(join(artifacts, file), 'utf8')), `${name}: ${file}`);
+  }
+});
+
+test('the enforcement probe keeps its own per-read timeout: --timeout-ms changes only the model call', async () => {
+  // With the batch's timeout at 1 ms the model call cannot finish, yet both probe reads still complete and the probe holds.
+  const directory = await login();
+  const result = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, executableArgs: [double, await script({ host: 'codex', steps: [] })],
+    loginDirectory: directory, timeoutMs: 1 });
+  assert.deepEqual(result.enforcementProbe, { sentinel: 'denied', control: 'ok' });
+  assert.equal(result.status, 'fail', 'the model call itself timed out');
+  assert.deepEqual(await readdir(directory), ['synthetic-login.json']);
 });
 
 test('the daily host directories are never the host configuration, never copied and never echoed into records', async () => {

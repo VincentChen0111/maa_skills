@@ -75,6 +75,14 @@ const productRelease = () => release ??= (async () => {
   const moved = text.replace(/const mainCommit = '[0-9a-f]{40}'/, `const mainCommit = '${'1'.repeat(40)}'`).replace(/const crossCommit = '[0-9a-f]{40}'/, `const crossCommit = '${'2'.repeat(40)}'`);
   assert.ok(moved.includes('1'.repeat(40)) && moved.includes('2'.repeat(40)), 'both pinned commits moved');
   await writeFile(cost, moved);
+  // The version doctor reports moves too (the doctor scenarios name it only by placeholder).
+  const packageFile = join(directory, 'skills/maa-core/package.json');
+  const manifest = JSON.parse(await readFile(packageFile, 'utf8')) as { version: string };
+  await writeFile(packageFile, JSON.stringify({ ...manifest, version: `${manifest.version}-release` }, null, 2));
+  // So does the packaged MAA verification record (ticket 25): a newly verified MAA version raises its own version.
+  const recordFile = join(directory, 'skills/maa-core/references/verified-versions.json');
+  const record = JSON.parse(await readFile(recordFile, 'utf8')) as { recordVersion: number; sourceVerified: string[] };
+  await writeFile(recordFile, JSON.stringify({ ...record, recordVersion: record.recordVersion + 1, sourceVerified: [...record.sourceVerified, '6.99.0'] }, null, 2));
   const preferences = join(directory, 'skills/maa-core/scripts/preferences.ts');
   await writeFile(preferences, `${await readFile(preferences, 'utf8')}\n// A product-only change.\n`);
   // A parsing change: the snapshot reader reports another issue code (world data must not follow it).
@@ -82,6 +90,16 @@ const productRelease = () => release ??= (async () => {
   const parser = await readFile(snapshot, 'utf8');
   assert.ok(parser.includes(`'missing-' + field`), 'the issue code the release changes');
   await writeFile(snapshot, parser.replace(`'missing-' + field`, `'absent-' + field`));
+  // A research cache key scheme change and a run classifier change (longer finding ids): the cached NGA thread page and the
+  // saved run records in world data must not follow them either.
+  const research = join(directory, 'skills/maa-core/scripts/research.ts');
+  const keys = await readFile(research, 'utf8');
+  assert.ok(keys.includes('.update(JSON.stringify(canonical(parts)))'), 'the cache key scheme the release changes');
+  await writeFile(research, keys.replace('.update(JSON.stringify(canonical(parts)))', `.update('v2:' + JSON.stringify(canonical(parts)))`));
+  const runState = join(directory, 'skills/maa-core/scripts/stage-run-state.ts');
+  const classifier = await readFile(runState, 'utf8');
+  assert.ok(classifier.includes('${key}`).slice(0, 24)'), 'the finding id the release changes');
+  await writeFile(runState, classifier.replace('${key}`).slice(0, 24)', '${key}`).slice(0, 32)'));
   return directory;
 })();
 
@@ -111,6 +129,12 @@ test('scenario identity counts every scenario definition, eval fixture and netwo
   changed('setup-connection-write', (definition) => { definition.policy.writerTransaction.reference = 'another request'; });
   changed('account-cost-raw', (definition) => { const [url] = Object.keys(definition.networkFixtures); definition.networkFixtures[url!] = { changed: true }; });
   changed('account-cost-unknown', (definition) => { definition.jsonInputs['private/account-snapshot.json'].operators = []; });
+  changed('account-report-approve-one', (definition) => { definition.policy.approvals = [['S2']]; });
+  // The fixed distance of a tool-written expiry from the execution window (ticket 19's `offsetMs`) is grading too.
+  changed('account-skland-community-read', (definition) => {
+    const expiry = definition.policy.generatedUtcFields.find((field: { key: string }) => field.key === 'expiresAt');
+    assert.equal(expiry.offsetMs, 86_400_000); expiry.offsetMs = 2 * 86_400_000;
+  });
 });
 
 test('scenario world data runs no product code: the runtime import closure of every scenario module reaches the product only through the allow-list', async () => {
@@ -136,23 +160,44 @@ test('scenario world data runs no product code: the runtime import closure of ev
     'eval/maa-account/cost-scenarios.ts -> skills/maa-core/scripts/operator-cost.ts { operatorCostSources }': 'network fixture URLs; pinned data commit normalised out',
     'eval/maa-account/gap-scenarios.ts -> skills/maa-core/scripts/operator-cost.ts { operatorCostSources }': 'network fixture URLs; pinned data commit normalised out',
     'eval/maa-account/gap-scenarios.ts -> skills/maa-core/scripts/cultivation-gaps.ts { craftingSources }': 'network fixture URLs; pinned data commit normalised out',
+    'tests/fixtures/report-data.ts -> skills/maa-core/scripts/operator-cost.ts { operatorCostSources }': 'network fixture URLs; pinned data commit normalised out',
+    'tests/fixtures/report-data.ts -> skills/maa-core/scripts/cultivation-gaps.ts { craftingSources }': 'network fixture URLs; pinned data commit normalised out',
+    'tests/fixtures/base-plan-data.ts -> skills/maa-core/scripts/base-plan.ts { planTableSources }': 'network fixture URLs; pinned data commit normalised out',
   };
   assert.deepEqual([...new Set(product)].sort(), Object.keys(allowedProductImports).sort(), 'only allow-listed product values reach scenario world data');
+  // A module of the closure can also read a product file without importing it (the doctor scenarios once read maa-core's
+  // package.json version): every relative path literal into skills/ outside an import line is listed, and only the catalog's
+  // skill directories (what a run installs; product files then count toward the skill version) may appear.
+  const productPaths: string[] = [];
+  for (const file of closure) {
+    for (const line of (await readFile(join(repository, file), 'utf8')).split(/\r?\n/)) {
+      // Module declarations (`import … from`, `export … from`, a side-effect import) are the import edges above.
+      if (/^\s*(?:(?:import|export)\b[^'"`]*?\bfrom|import|\}\s*from)\s*['"]/.test(line)) continue;
+      for (const match of line.matchAll(/(['"`])((?:\.\.\/)+skills\/[^'"`]*)\1/g)) productPaths.push(`${file} -> ${match[2]}`);
+    }
+  }
+  assert.deepEqual(productPaths, ['scripts/eval-scenarios.ts -> ../skills/${name}'], 'world data reads no product file');
   // Every producer of a scenario definition (prompt, policy, eval fixtures, network fixtures): a new module in the closure
   // must be looked at and added here.
-  assert.deepEqual([...closure].sort(), ['eval/cross-skill/scenarios.ts', 'eval/daily-observer.mjs', 'eval/host-double.mjs', 'eval/maa-account/base-scenarios.ts',
-    'eval/maa-account/cost-scenarios.ts', 'eval/maa-account/gap-scenarios.ts', 'eval/maa-account/scenarios.ts', 'eval/maa-core/scenarios.ts', 'eval/maa-daily/scenarios.ts',
-    'eval/maa-daily/stage-scenarios.ts', 'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts', 'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs',
-    'eval/maa-setup/scenarios.ts', 'eval/network-fixture.mjs', 'eval/observe-node.mjs', 'eval/probe.ts', 'eval/rule-samples.ts', 'eval/setup-boundary.mjs',
-    'scripts/eval-scenarios.ts', 'tests/fixtures/cost-data.ts', 'tests/fixtures/gap-data.ts', 'tests/fixtures/stage-data.ts', 'tests/fixtures/training-data.ts',
-    'tests/fixtures/training-runtime.ts']);
+  // tests/fixtures/stage-run-records.ts, stage-alternate-records.ts and base-apply-worlds.ts hold the run records, switch ledger
+  // and saved base reports of tickets 16, 17 and 23 as literals; the fixtures that run product code to make such data
+  // (stage-run-data.ts, base-apply-data.ts) serve only the product's own tests and stay out of this closure.
+  assert.deepEqual([...closure].sort(), ['eval/base-plan-observer.ts', 'eval/cross-skill/scenarios.ts', 'eval/daily-observer.mjs', 'eval/host-double.mjs',
+    'eval/maa-account/base-report-scenarios.ts', 'eval/maa-account/base-scenarios.ts', 'eval/maa-account/community-scenarios.ts', 'eval/maa-account/cost-scenarios.ts',
+    'eval/maa-account/gap-scenarios.ts', 'eval/maa-account/report-scenarios.ts', 'eval/maa-account/research-scenarios.ts', 'eval/maa-account/scenarios.ts', 'eval/maa-account/skland-scenarios.ts',
+    'eval/maa-core/scenarios.ts', 'eval/maa-daily/base-apply-scenarios.ts', 'eval/maa-daily/scenarios.ts', 'eval/maa-daily/stage-alternate-scenarios.ts',
+    'eval/maa-daily/stage-run-scenarios.ts', 'eval/maa-daily/stage-scenarios.ts', 'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts',
+    'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs', 'eval/maa-setup/scenarios.ts', 'eval/network-fixture.mjs', 'eval/observe-node.mjs', 'eval/probe.ts',
+    'eval/report-observer.ts', 'eval/rule-samples.ts', 'eval/setup-boundary.mjs', 'scripts/eval-scenarios.ts', 'tests/fixtures/base-apply-worlds.ts',
+    'tests/fixtures/base-plan-data.ts', 'tests/fixtures/cost-data.ts', 'tests/fixtures/gap-data.ts', 'tests/fixtures/report-data.ts', 'tests/fixtures/stage-alternate-records.ts',
+    'tests/fixtures/stage-data.ts', 'tests/fixtures/stage-run-records.ts', 'tests/fixtures/training-data.ts', 'tests/fixtures/training-runtime.ts']);
   // The allow-listed values reach identity only as network fixture URLs, and only their pinned commit may vary: repository
   // and file stay part of the scenario (which URL serves which table), so a product change there fails here first.
   const sources = new Set(scenarioCatalog().flatMap((entry) => Object.keys((entry.definition as ScenarioDefinition).networkFixtures ?? {}))
     .map((url) => url.replace(/^(https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/)[0-9a-f]{40}\//, '$1<commit>/')));
   const main = 'https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/<commit>/zh_CN/gamedata/excel/';
   const cross = 'https://raw.githubusercontent.com/arkntools/arknights-toolbox-data/<commit>/assets/data/';
-  assert.deepEqual([...sources].sort(), [...['building_data', 'char_patch_table', 'character_table', 'gamedata_const', 'item_table', 'stage_table', 'uniequip_table']
+  assert.deepEqual([...sources].sort(), [...['building_data', 'char_meta_table', 'char_patch_table', 'character_table', 'gamedata_const', 'item_table', 'stage_table', 'uniequip_table']
     .map((name) => `${main}${name}.json`), `${cross}cultivate.json`, `${cross}level.json`]);
 });
 
