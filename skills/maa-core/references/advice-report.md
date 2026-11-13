@@ -1,6 +1,6 @@
 # 建议报告与独立审查接口
 
-建议报告是 maa-account 写给用户批准、之后可以交给 maa-daily 执行的报告。报告的保存、独立审查、跳过审查、改正和逐项批准只有一套做法，由 `scripts/advice-report.ts` 实现；每种报告有自己的命令入口，目前是培养报告 `scripts/cultivation-report.ts`（输入见 [培养报告接口](../../maa-account/references/cultivation-report.md)）。需要 Node 24。
+建议报告是 maa-account 写给用户批准、之后可以交给 maa-daily 执行的报告。报告的保存、独立审查、跳过审查、改正和逐项批准只有一套做法，由 `scripts/advice-report.ts` 实现；每种报告有自己的命令入口，目前是培养报告 `scripts/cultivation-report.ts`（输入见 [培养报告接口](../../maa-account/references/cultivation-report.md)）和基建报告 `scripts/base-report.ts`（输入见 [基建报告接口](../../maa-account/references/base-report.md)，引用写作 `base/<reportHash>#P1`）。需要 Node 24。
 
 随口问答（某个干员要多少材料、缺口多少、值不值得练）不生成报告，也不走审查，直接用成本、缺口或调研工具回答。
 
@@ -63,5 +63,5 @@ import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, rec
   approveReportItems, resolveApprovedItem, formatAdviceReportMarkdown } from '../../maa-core/scripts/advice-report.ts';
 ```
 
-- 新的报告种类（例如工单 22 的基建报告）提供自己的内容和正文渲染，并且只用一个函数判断改正版本与原版本之间哪些结果变化，附一份一致性测试，逐个列出每个重新读取或重新计算的来源，各有「晚些重读到相同内容不列出」和「内容真的变化要列出」两种情况（参照 `tests/cultivation-report.test.ts` 的 conformance 测试）；保存、审查、跳过、改正、批准都用这些函数，审查说明用同一个模板；正文里所有不是模板文字的值都经调研层的 `inert`/`inline` 处理。
+- 新的报告种类提供自己的内容和正文渲染，并且只用一个函数判断改正版本与原版本之间哪些结果变化，附一份一致性测试，逐个列出每个重新读取或重新计算的来源，各有「晚些重读到相同内容不列出」和「内容真的变化要列出」两种情况（参照 `tests/cultivation-report.test.ts` 和 `tests/base-report.test.ts` 的 conformance 测试；基建报告的函数是 `base-report.ts` 的 `changedReportResults`）；正文顶部的边界句由 `formatAdviceReportMarkdown` 的 `carriesOut` 说明这种报告不执行什么（培养报告是「培养」，基建报告是「排班」）；保存、审查、跳过、改正、批准都用这些函数，审查说明用同一个模板；正文里所有不是模板文字的值都经调研层的 `inert`/`inline` 处理。
 - `resolveApprovedItem(privateDirectory, "cultivation/<hash>#S1")` 返回已批准的条目及其范围；没有批准、报告状态不能批准或文件被改过时报错。
