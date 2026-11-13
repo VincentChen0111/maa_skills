@@ -4,11 +4,13 @@
 
 `check` 返回 `checkedAt`、`exitCode`、`checks` 和 `recovery`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`status`（normal/warning/error）、`reason` 和 `repair`（id、executor 为 skill/user、description）。setup 可以复用导出的 `runChecks(context, maa)`；本接口不替 setup 推定下载或人工操作授权。
 
+`checks` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 setup 及 `credentials.ts check` 是同一个函数（`inspectCredentials`）。这三项另有 `message` 一句说明，`reason` 是 `credential-<状态>` 代码；人类可读输出显示 `message`。检查只读、不解密、不联网，最近记录里也只有状态。它们的修法执行者都是用户：`repair` 的批准列表含 `enter-credential`、`verify-by-use`、`replace-credential` 或 `reenter-credential` 时整体拒绝，返回 `user-manual-repair`，不执行同一请求里的其他修法。状态和修法见 [凭据接口](../../maa-core/references/credentials.md)。
+
 核对证据中的 `lock` 区分 none、active、stale、unknown。只有已确认不存在的进程号才算 stale；不可辨认或无法确认进程状态的锁留给用户处理。`comparison` 表示全部当前配置与备份相同（unchanged）、与原请求预期结果相同（applied），或者 unknown。字段证据只显示脱敏键名和状态，不显示私人配置名或值。
 
 已关联的最新备份、唯一匹配且为最新的待执行记录、持有者信息、当前配置和 MAA 进程状态共同构成 `evidenceRevision`。证据变化时批准失效，重新诊断。`canReconcile` 和 `canRestore` 是可选动作的前提，不代表已经批准。
 
-通过标准输入向 `repair --json` 传 JSON：
+通过标准输入向 `doctor.ts repair --json` 传 JSON：
 
 ```json
 {

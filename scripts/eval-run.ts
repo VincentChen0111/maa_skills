@@ -29,9 +29,10 @@ export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-obs
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.
+ * `chatSecrets`: synthetic values the prompt itself pastes into the chat; they are graded like the fixture secret.
  */
 export type ScenarioDefinition = { id: string; prompt: string; policy: Omit<Policy, 'secrets'>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; commands?: string[];
-  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[] };
+  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[]; chatSecrets?: string[] };
 /**
  * plan: the maintainer's plan login in the dedicated directory; tool-enabled runs need a pass object from readProtectionCheck.
  * The API-key mode is an explicit opt-in that forwards only MAA_EVAL_* keys. host-double: only `eval/host-double.mjs`, never a model.
@@ -57,7 +58,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     ...(custom?.jsonInputs ? { jsonInputs: custom.jsonInputs } : {}), ...(custom?.jsonFiles ? { jsonFiles: custom.jsonFiles } : {}),
     maaProcess: custom?.maaProcess, ...(custom?.networkFixtures ? { networkFixtures: custom.networkFixtures } : {}), ...(custom?.setupBoundary ? { setupBoundary: true } : {}) });
   try {
-    if (custom) fixture.policy = { ...renderPolicy(structuredClone(custom.policy), fixture.workspace), secrets: fixture.policy.secrets };
+    if (custom) fixture.policy = { ...renderPolicy(structuredClone(custom.policy), fixture.workspace), secrets: [...fixture.policy.secrets, ...(custom.chatSecrets ?? [])] };
     else if (options.scenario !== 'approved-write' || options.reviewBrief) {
       fixture.policy.grants = []; fixture.policy.expectedChanges = []; fixture.policy.allowedKeys = [];
     }

@@ -36,6 +36,8 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 
 15 的有条件延期由根代理于 2026-11-11 依据维护者授权自行决定推进问题及继续依赖实施单独登记，不从 06 继承、不称维护者明确免测。只有完整独立复核、离线/类型、双平台 CI、固定双宿主原生准备/读回全部通过，完整实际前后及新增场景尝试保存，且缺口仅为隔离认证不可用时，才可交付实现。实际完成的行为失败/回归不得改为 unverified 或自动延期。最终产品 d2877b5 的 R4 和上述产品验证已通过；固定框架 1f2a3e89 下改前、9c、8e、d287 四批共 128 次实际尝试均 unverified（64 Codex 401 / 64 Claude 未登录），没有完成事件。成功 stage/daily/core 模型基线、语义与分数不降仍由本票硬阻塞发布，见 [作业准备验证](../stage-jobs-verification.md)。
 
+29 的模型验收延期（2026-11-13 登记）：29 构建时真实模型评测不能运行（28 正在并行实施，评测专用登录目录还没有登录），协调者的构建规则要求把模型评测记为未验证、延到本票，不是维护者明确免测，也不从 15 继承。29 只有在独立审查、离线检查和类型检查通过，且缺口仅为评测不能运行时才可交付实现；实际完成的行为失败或回归不得改记 unverified。六个原有 stage 场景的改前改后比较，以及 29 新增场景的成功基线，由本票硬阻塞发布，见[作业准备验证](../stage-jobs-verification.md)「29 匹配改进作者验证」。
+
 ## 要交付的行为
 
 24 于 2026-11-11 获根代理依据维护者授权自行判断推进事项的单票有条件决定，不继承 06/15：只有隔离认证不可用可延期模型发布验收，须完整独立复核、离线/类型、双平台 CI、固定双宿主原生正向排程及资产/配置读回，以及完整实际模型前后/新增尝试均留存才交付实现。最终产品 991c7e0 的 R3 和上述产品证据均已通过；143 个唯一实际模型记录仍全 unverified，其中 142 份完整批次为 71 Codex 401 / 71 Claude 未登录，另保留 1 份中断 Codex 401。成功训练基线、受影响 daily/core/doctor/stage 真实语义及分数不降继续由本票硬阻塞发布，见[训练验证](../training-verification.md)。实际完成的模型失败/回归不得改为 unverified 或自动延期，合成预入驻成功不等于真实游戏训练或正向模型语义通过。
@@ -49,6 +51,7 @@ Blocked by: [08: setup 下载并补齐环境](08-setup-program-downloads.md), [1
 ## 验收条件
 
 - [ ] 在最终发布载荷上完成 15 的 Codex/Claude 各六个 stage 场景 `daily-stage-exact-scope`、`daily-stage-unknown-elite`、`daily-stage-alternative-requirements`、`daily-stage-prerequisite`、`daily-stage-data-not-authority`、`daily-stage-loop-handoff`，以及受影响 daily/core 的成功真实模型基线和固定模型前后分数不降验证；固定 CLI、模型、场景/评分器/夹具与载荷指纹，保留完整历史尝试。人工核实精确地图/难度/环境与前置、未知练度、逐替代要求及全局唯一分配、实际派生执行内容只含已验证分配并与原文独立保存、规范化要求与批准绑定、原循环次数和由用户开始的交接。只读候选场景与原生准备/读回 smoke 不替代正向批准准备的真实模型语义验收（场景 `daily-stage-prepare-approved`）。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布；pass→fail 独立重跑三次，实际完成的失败/回归不因实现延期决定改记 unverified，更换模型或评测语义需重建基线，旧证据不改写。
+- [ ] 在最终发布载荷上完成 29 的模型验收：上面六个 stage 场景以 29 合并前后的载荷同模型比较、分数不降，并建立 29 新增的 Codex/Claude 各五个场景 `daily-stage-requirements-unstated`、`daily-stage-support-named`、`daily-stage-rating-order`、`daily-stage-undeclared-action`、`daily-stage-six-star-unsupported` 的成功真实基线。固定 CLI、模型、场景/评分器/夹具与载荷指纹，保留完整历史尝试。人工核实：没写要求的条目待核且不推定练度；需借助战的作业单列、须用户点名，并说明 MAA 不核对助战练度、开始前要勾选「借助战」并选「补漏」；评分只影响建议顺序；动作里未声明的名字待核；`#s` 六星关卡不能准备，写着它的作业不用于普通版；检索结果覆盖不足、同图无法证明或疑似退回时不说成没有作业。检索结果分类目前没有离线评测场景（评测的网络替身只服务固定提交的 GitHub 数据），须在可用的场景或人工核对里补上。认证缺失、unverified、失败、不稳定或未核实分数不降均不得发布。
 - [ ] 在最终载荷建立 24 的 Codex/Claude 四个训练场景 `training-active`、`training-unknown`、`training-material-shortage`、`training-contradiction` 成功基线，完成受影响 daily/core 及后续整合新增回归的真实前后验证。固定 CLI、模型、框架、场景和载荷指纹，保留实际尝试；人工核实明确目标/形态、材料、当前助手条件、真实开训与完成、单次槽所有权、手动阶段和未知不重放语义。CLI/合成 GUI/机器评分不替代语义验收；认证缺失、unverified、失败、不稳定或分数不降未核实时硬阻塞发布。实际 pass→fail 单独重跑三次；设备及六分钟防护/计时公式/助手身份另列实证状态，不从模型或离线结果推定。
 
 - [ ] 补齐 Codex/Claude 各六个场景的真实基线：maa-help 的 `help-routing`、`help-preference`、`help-boundary`，以及 maa-core 偏好接口的 `core-language`、`core-append`、`core-boundary`（2026-11-11 共享脚本移到 maa-core 后，原 04 的三个场景按此拆分）；固定 CLI、模型、场景和评分器，保存版本与证据摘要。另人工核实模型的语言切换、help 路由和未交付入口说明，不能把仅有脚本调用的机器评分当作这些语义行为的证据。认证缺失、`unverified`、失败或不稳定时不得发布。模型不可用而需更换固定版本时重新建立基线，不伪称与旧模型可比。2026-11-13 修订：`help-boundary`、`core-boundary` 的拒绝诱饵由 27 从「打开源石」改为仍被禁止的设置，场景名不变，按改写后的场景指纹建立基线。

@@ -144,7 +144,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 
 ## 添加产品场景
 
-每个新 skill 起步 3–6 个场景，数量不是上限。场景结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`），写进 `eval/<skill>/` 并加入 `scripts/eval-scenarios.ts` 的组。自定义 `.json` 场景仍可交给 `eval-run.ts`，第四个参数指定 CLI 可执行文件，第五个参数指定待测 skill 源目录：
+每个新 skill 起步 3–6 个场景，数量不是上限。场景结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`），写进 `eval/<skill>/` 并加入 `scripts/eval-scenarios.ts` 的组。提示词里替用户贴进对话的合成值写在可选的 `chatSecrets`，评分时与样例的随机秘密一起检查秘密输出，并计入场景摘要。自定义 `.json` 场景仍可交给 `eval-run.ts`，第四个参数指定 CLI 可执行文件，第五个参数指定待测 skill 源目录：
 
 ```text
 node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/maa-example
