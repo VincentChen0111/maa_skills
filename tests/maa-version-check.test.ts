@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { addSourceVerified, checkSources, directorySource, generateRecord, readRegistry, releaseNotes, runDailyCheck, validateRegistry, type Registry, type RecordFile } from '../scripts/maa-version-check.ts';
@@ -271,6 +271,55 @@ test('the daily CLI uses the network only with --online and publishes only with 
   assert.doesNotMatch(offline.stdout + offline.stderr + noToken.stdout + noToken.stderr, new RegExp(token));
 });
 
+// ---- registry coverage: every MAA source a page cites --------------------------------------------------------------
+// A citation is a link to a file at a fixed MAA commit, or a backticked MAA source path.
+const citation = /MaaAssistantArknights\/MaaAssistantArknights\/blob\/[0-9a-f]{40}\/([^)#\s`]+)|`((?:src\/Maa[A-Za-z]+|docs\/zh-cn|resource|\.agents\/skills|\.github\/ISSUE_TEMPLATE)\/[A-Za-z0-9_./-]+\.[a-z]+)`/g;
+/** Known historical citations that are deliberately not registered, keyed `<page> <cited path>`; each one says why. */
+const historicalCitations = new Map([
+  // 05's record links Bootstrapper.cs without its Main/ directory, a 404 on every version. The behaviour is registered at
+  // the real path src/MaaWpfGui/Main/Bootstrapper.cs (entry startup-auto-run-skip); 05's historical record is not rewritten.
+  ['docs/daily-verification.md src/MaaWpfGui/Bootstrapper.cs', 'old path in 05\'s record; registered at src/MaaWpfGui/Main/Bootstrapper.cs'],
+]);
+/**
+ * The pages scanned: every Markdown page under docs/ (sources and verification records, tickets, reviews, the spec) and
+ * every Markdown file a skill ships (SKILL.md and references). Scanning only docs/*-sources.md missed 22's and 23's
+ * citations, which live in their *-verification.md pages.
+ */
+async function citingPages(repositoryRoot: string): Promise<string[]> {
+  const markdown = async (directory: string) => (await readdir(join(repositoryRoot, directory), { recursive: true }))
+    .filter(name => name.endsWith('.md')).map(name => join(repositoryRoot, directory, name));
+  return [...await markdown('docs'), ...await markdown('skills')];
+}
+/** Citations neither registered nor pending (`<page> cites <path>`), and the historical exceptions that matched. */
+async function citationCoverage(repositoryRoot: string, registry: Registry): Promise<{ unregistered: string[]; excepted: string[] }> {
+  const registered = new Set([...registry.entries.flatMap(entry => entry.sources.map(source => source.path)), ...registry.pending.flatMap(item => item.locations)]);
+  const unregistered = new Set<string>(), excepted = new Set<string>();
+  for (const file of await citingPages(repositoryRoot)) {
+    const page = relative(repositoryRoot, file).replaceAll('\\', '/');
+    for (const match of (await readFile(file, 'utf8')).matchAll(citation)) {
+      const path = match[1] ?? match[2]!;
+      if (registered.has(path)) continue;
+      if (historicalCitations.has(`${page} ${path}`)) excepted.add(`${page} ${path}`); else unregistered.add(`${page} cites ${path}`);
+    }
+  }
+  return { unregistered: [...unregistered].sort(), excepted: [...excepted].sort() };
+}
+
+test('the citation scan reads every docs page: without 23\'s registry entry, the citations in 23\'s verification record are unregistered', async (t) => {
+  // 22's and 23's MAA facts are cited in their *-verification.md pages, not in a *-sources.md page.
+  const directory = await mkdtemp(join(tmpdir(), 'maa-registry-copy-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const copy = JSON.parse(await readFile(join(root, 'docs/maa-dependencies.json'), 'utf8')) as Registry;
+  assert.ok(copy.entries.some(entry => entry.id === 'base-plan-apply' && entry.tickets.includes('23')));
+  copy.entries = copy.entries.filter(entry => entry.id !== 'base-plan-apply');
+  await writeFile(join(directory, 'maa-dependencies.json'), JSON.stringify(copy, null, 2) + '\n');
+  const { unregistered } = await citationCoverage(root, await readRegistry(join(directory, 'maa-dependencies.json')));
+  // The files only this entry registers (the others are also in 05's or 22's entries) and that 23's record cites.
+  assert.deepEqual(unregistered.filter(entry => entry.startsWith('docs/base-apply-verification.md ')), ['src/MaaCore/Common/AsstInfrastDef.h',
+    'src/MaaWpfGui/Configuration/Converter/JsonPredictSerializationModifier.cs', 'src/MaaWpfGui/Constants/Enums/InfrastRoomType.cs', 'src/MaaWpfGui/Utilities/JsonPredictAttribute.cs']
+    .map(path => `docs/base-apply-verification.md cites ${path}`));
+});
+
 test('the repository registry covers the delivered MAA dependencies and the packaged record is generated from it', async () => {
   const actual = await readRegistry();
   assert.equal(validateRegistry(actual), actual);
@@ -283,16 +332,10 @@ test('the repository registry covers the delivered MAA dependencies and the pack
     for (const evidence of entry.evidence) assert.ok(existsSync(join(root, evidence)), `${entry.id}: ${evidence}`);
     for (const ticket of entry.tickets) assert.ok((await readdir(join(root, 'docs/issues'))).some(file => file.startsWith(`${ticket}-`)), ticket);
   }
-  // Every MAA file a sources document or skill reference cites at a fixed commit is registered, or pending for an undelivered ticket.
-  const registered = new Set([...actual.entries.flatMap(entry => entry.sources.map(source => source.path)), ...actual.pending.flatMap(item => item.locations)]);
-  const documents = [...(await readdir(join(root, 'docs'))).filter(name => name.endsWith('-sources.md')).map(name => join(root, 'docs', name)),
-    ...(await Promise.all((await readdir(join(root, 'skills'))).filter(name => existsSync(join(root, 'skills', name, 'references'))).map(async name =>
-      (await readdir(join(root, 'skills', name, 'references'))).filter(file => file.endsWith('.md')).map(file => join(root, 'skills', name, 'references', file))))).flat()];
-  const cited = /MaaAssistantArknights\/MaaAssistantArknights\/blob\/[0-9a-f]{40}\/([^)#\s`]+)|`((?:src\/Maa[A-Za-z]+|docs\/zh-cn|resource|\.agents\/skills|\.github\/ISSUE_TEMPLATE)\/[A-Za-z0-9_./-]+\.[a-z]+)`/g;
-  for (const document of documents) for (const match of (await readFile(document, 'utf8')).matchAll(cited)) {
-    const path = match[1] ?? match[2]!;
-    assert.ok(registered.has(path), `${document.slice(root.length)} cites ${path}, which is neither registered nor pending`);
-  }
+  // Every MAA file a docs page or skill text cites is registered, or pending for an undelivered ticket.
+  const coverage = await citationCoverage(root, actual);
+  assert.deepEqual(coverage.unregistered, [], 'each of these is neither registered nor pending');
+  assert.deepEqual(coverage.excepted, [...historicalCitations.keys()].sort(), 'every historical exception still names a citation that exists');
   // Pending registrations belong to tickets that are not delivered yet; delivering one requires registering its entries.
   for (const item of actual.pending) {
     const file = (await readdir(join(root, 'docs/issues'))).find(name => name.startsWith(`${item.ticket}-`))!;
