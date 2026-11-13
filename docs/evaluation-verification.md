@@ -449,3 +449,37 @@ CI（Windows 与 Ubuntu）的运行由 PR 触发，本地没有运行；需要 W
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 未验证：19 的四个场景和 25 的 `doctor-maa-upgrade-request` 都没有真模型运行（留给工单 26）；`tests/maa-process.test.ts` 没有运行（本轮没有改它覆盖的文件）；CI 由 PR 触发，本地没有运行。
+
+## Windows CI（2026-11-14）
+
+PR #77 的 windows-latest 有两项失败，本机和 ubuntu-latest 都通过。原因相同：GitHub 的 Windows 运行器把临时目录给成 8.3 短名（用户名一段是 `RUNNER~1`），`realpath` 得到的是长名。本机复现：建一个长名临时目录，取它的短名，把 `TEMP`、`TMP` 指向短名后单独跑两个测试文件，两项失败与 CI 逐字相同（`.tmp/logs/28win-repro-shorttemp-auth-red.log`、`28win-repro-shorttemp-redact-red.log`）。这台机器的系统盘有 8.3 短名，没有用 `subst` 或联接模拟。
+
+| 失败 | 原因 | 正式环境是否受影响 | 修法 |
+| --- | --- | --- | --- |
+| `eval-auth`「a parent of the private directory mixes them too」得到 `overlaps-settings-directory` | 重叠比较的 `canonical` 只对已存在的路径取 `realpath`，不存在的按原样比较。测试的私有目录不存在，留在短名写法；它的父目录存在，被解析成长名，两边写法不同，私有目录那一项没比中，落到下一项设置目录 | 是，**失效放行**：私有目录用长名、登录目录用短名或经联接给出且还没创建时，`loginDirectoryRefusal` 返回 `undefined`（新测试修复前的结果），登录目录可以落进私有目录 | 比较两边都用 `longPath`（`scripts/eval-redact.ts`，唯一一份）：最深的已存在部分取 `realpathSync.native`（短名展开、联接跟随、去掉 `\\?\`），不存在的部分按原样接上；Windows 上再统一小写。拒绝的种类和检查顺序不变 |
+| `eval-redact`「claude manifest.json names loginmarker…」 | 宿主替身用 Node 的 `pathToFileURL` 说出登录目录，Node 24 把 `~` 编成 `%7E`；脱敏只认 `encodeURIComponent` 会编码的字符的百分号写法，它不编码 `~`，短名写法那一个模式因此对不上，长名模式的片段本来就不同。漏出的字段是清单的 `fingerprint.hostVersion`，以及 `attempts[].authPreflight.hostVersion`、`attempts[].readProtection.hostVersion`，形式是 `file:///…/RUNNER%7E1/…/LoginMarker…/claude-config`（会话探针，`.tmp/logs/28win-repro-manifest-fields.log`） | 是：Claude Code 跑在 Node 上，登录目录、主目录或仓库路径里有短名或 `~` 时，宿主给出的 `file:` URL 会原样落盘 | 脱敏的单一出口里，字母和数字以外的每个字符都认它的 UTF-8 百分号编码（十六进制大小写都认）；每个路径按给出的写法、`resolve` 后的写法和 `longPath` 各匹配一次，所以尚不存在的路径也有长名写法 |
+
+先红后绿（Windows，Node 24，默认 `TEMP`，不依赖运行器）：
+
+- `tests/eval-auth.test.ts`「the overlap check compares long forms: through a junction…」：经联接给出的、尚不存在的登录目录在私有目录内，修复前得到 `undefined`；私有目录经联接给出且不存在，修复前也放行；同时与私有目录和设置目录重叠时报私有目录。「on Windows the overlap check matches 8.3 short names both ways round…」：用 `cmd` 的 `%~sI` 取临时目录的短名，长名登录目录对短名的不存在私有目录（CI 的情形，修复前 `overlaps-settings-directory`），以及短名、不存在的登录目录对长名私有目录。没有短名的系统上跳过并写明原因。红：`.tmp/logs/28win-red-auth.log`。
+- `tests/eval-redact.test.ts`「any character but a letter or digit may come percent-encoded…」（`%7E`／`%7e`、每个标点都编码的严格写法）、「on Windows a login directory named in the 8.3 short form is redacted in its long form, and before it exists」；整批的一致性测试在有短名的系统上把登录目录写成短名，所以本机就能复现运行器。红：`.tmp/logs/28win-red-redact.log`（3 项失败，其中整批那项与 CI 相同）。
+- 修复后两份文件在默认 `TEMP` 和短名 `TEMP` 下都通过（9、5 项）。
+
+这一轮的选择（设计默认值，2026-11-14，不是产品限制）：
+- 不为给出的长名另算短名：Node 没有取短名的接口；Windows 只在被要求时才把长名变短，宿主拿到的是给它的写法，自己解析时得到长名（已覆盖），宿主环境里的 home、临时目录都指向临时 home。
+- 字母和数字不认百分号写法：没有编码器会编码它们。
+- 重叠检查同时命中几项时报第一项，顺序是仓库、私有目录、设置目录、临时 home 或工作区、日常配置位置、另一宿主登录目录；写在 `loginDirectoryRefusal` 的注释和[行为评测](evaluation.md)里。
+
+`scripts/eval-redact.ts`、`scripts/eval-auth.ts` 在运行器指纹里，之前的记录不能与之后的比较。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-redact`、`eval-batch`、`eval-run`、`eval-host-double` | 9、5、10、5、12 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`docs-consistency` | 10、7、7、5 项通过 |
+| `node scripts/privacy.ts` | 无发现 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
+未验证：windows-latest 和 ubuntu-latest 的 CI 要等协调者推送后才跑；ubuntu 上两个 Windows 短名测试跳过，联接测试改用目录符号链接，本地没有在 Linux 上运行。

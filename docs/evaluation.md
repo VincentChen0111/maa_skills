@@ -21,7 +21,7 @@ node scripts/eval-batch.ts preflight
 
 宿主 CLI 的位置用 `--executable`，或环境变量 `MAA_EVAL_CLAUDE_EXECUTABLE`、`MAA_EVAL_CODEX_EXECUTABLE` 指定；都没有时用 PATH 里的 `claude`、`codex`。文档和记录里只写占位符，不写维护者机器上的实际路径。
 
-评测写到磁盘的每一份产物——每次运行的 `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`、`invocation.json`、`scenario.json`，读保护检查的两个文件，批次清单——都只经 `scripts/eval-redact.ts` 的 `artifactWriter` 写出。哪些路径不能落盘也只由这个模块决定：登录目录和哨兵、本次的工作区和临时目录、任何评测临时目录（按生成名）、仓库、宿主可执行文件、用户主目录，各换成固定占位符（`<login-dir>`、`<workspace>`、`<fixture>`、`<repo>`、`<host-executable>`、`<home>`）。路径按片段匹配，不分大小写；片段之间可以是任意多的斜杠、反斜杠（多层 JSON 转义）、JSON 的 `\u` 转义或百分号编码；盘符也认 `/c/…`、`//c/…` 写法，`\\?\` 前缀和 `file:` URL 照样替换，非 ASCII 字符也认百分号编码和 `\u` 转义，目录经联接或短文件名解析后的写法一并替换。路径后面紧跟什么都替换（中文、句号、连字符、数字、引号）；名字更长的同级目录只剩后缀，不暴露任何路径。一致性测试 `tests/eval-redact.test.ts` 让宿主替身在版本、回复和标准错误里用这些写法说出各个路径，逐一列出一批写出的全部产物并搜索唯一标记；新增产物必须加进这份清单并经同一个出口写出。
+评测写到磁盘的每一份产物——每次运行的 `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`、`invocation.json`、`scenario.json`，读保护检查的两个文件，批次清单——都只经 `scripts/eval-redact.ts` 的 `artifactWriter` 写出。哪些路径不能落盘也只由这个模块决定：登录目录和哨兵、本次的工作区和临时目录、任何评测临时目录（按生成名）、仓库、宿主可执行文件、用户主目录，各换成固定占位符（`<login-dir>`、`<workspace>`、`<fixture>`、`<repo>`、`<host-executable>`、`<home>`）。路径按片段匹配，不分大小写；片段之间可以是任意多的斜杠、反斜杠（多层 JSON 转义）、JSON 的 `\u` 转义或百分号编码；盘符也认 `/c/…`、`//c/…` 写法，`\\?\` 前缀和 `file:` URL 照样替换；字母和数字以外的每个字符都认它的百分号编码（各编码器编码的字符不同，Node 的 `pathToFileURL` 把 `~` 编成 `%7E`），非 ASCII 字符还认 `\u` 转义；每个路径按给出的写法、解析后的写法和长形式（短文件名展开、联接跟随，尚不存在的部分接在最深的已存在目录之后）各匹配一次。路径后面紧跟什么都替换（中文、句号、连字符、数字、引号）；名字更长的同级目录只剩后缀，不暴露任何路径。一致性测试 `tests/eval-redact.test.ts` 让宿主替身在版本、回复和标准错误里用这些写法说出各个路径，逐一列出一批写出的全部产物并搜索唯一标记；新增产物必须加进这份清单并经同一个出口写出。
 
 原来的单次入口用法不变：`node scripts/eval-run.ts <host> <model> <approved-write|unapproved-write|forbidden-setting|自定义.json> [<CLI 可执行文件>] [<待测 skill 目录>]`。内置三个演示场景只验证驱动，不是产品 skill 的发布基线。现在每次单次运行都是只含一个场景的批次，同样先过认证预检和读保护检查；要用 API key 时加 `--auth api-key`。
 
@@ -48,7 +48,7 @@ Codex 一侧按「读取都经命令」处理，文件工具这一路记为不�
 | Claude Code | `~/.maa-skills-eval/claude-config`（作为 `CLAUDE_CONFIG_DIR`） | `--login-dir` 或 `MAA_EVAL_CLAUDE_LOGIN_DIR` |
 | Codex CLI | `~/.maa-skills-eval/codex-home`（作为 `CODEX_HOME`） | `--login-dir` 或 `MAA_EVAL_CODEX_LOGIN_DIR` |
 
-登录目录是临时 home 之外唯一持久的评测状态。运行器在启动宿主之前拒绝落在仓库、临时 home 或工作区、设置文件所在目录或私有目录之内（或包含它们）、两个宿主日常的配置位置（`~/.claude`、`~/.codex`、`~/.claude.json`）之内、或者两个宿主的登录目录互相重叠的位置。私有目录按产品自己的规则只读定位（`settingsHome`、`readSettings`），这两个路径只用来比较，不写进记录。另有两条拒绝：路径里有单引号、换行或 NUL 字符时拒绝（`unsupported-character`），因为 Codex 的拒绝读取配置把路径写成 TOML 字面字符串，字面字符串装不下单引号，换行和 NUL 也会改变配置本身；产品设置文件存在但读不了或格式不对时拒绝（`settings-unreadable`），因为那样找不到私有目录，也就无法确认登录目录和它不重叠，只能停下。遇到这两种情况，用 `--login-dir` 或上表的环境变量换一个不含这些字符的位置，或者先修好设置目录里的 `config.json`。运行器不复制、不读取维护者日常使用的登录文件，也不读取登录目录里的任何文件内容；清理只删临时 home 和工作区。运行器不创建登录目录：目录不存在时认证预检报告「没有登录」。
+登录目录是临时 home 之外唯一持久的评测状态。运行器在启动宿主之前拒绝落在仓库、临时 home 或工作区、设置文件所在目录或私有目录之内（或包含它们）、两个宿主日常的配置位置（`~/.claude`、`~/.codex`、`~/.claude.json`）之内、或者两个宿主的登录目录互相重叠的位置。比较前两边都化成同一个长形式（`scripts/eval-redact.ts` 的 `longPath`：短文件名展开、联接跟随，尚不存在的部分接在最深的已存在目录之后；Windows 上不分大小写），所以用短文件名、联接或尚未创建的路径都绕不过去；同时与几项重叠时，按仓库、私有目录、设置目录、临时 home 或工作区、日常配置位置、另一宿主登录目录的顺序报第一项。私有目录按产品自己的规则只读定位（`settingsHome`、`readSettings`），这两个路径只用来比较，不写进记录。另有两条拒绝：路径里有单引号、换行或 NUL 字符时拒绝（`unsupported-character`），因为 Codex 的拒绝读取配置把路径写成 TOML 字面字符串，字面字符串装不下单引号，换行和 NUL 也会改变配置本身；产品设置文件存在但读不了或格式不对时拒绝（`settings-unreadable`），因为那样找不到私有目录，也就无法确认登录目录和它不重叠，只能停下。遇到这两种情况，用 `--login-dir` 或上表的环境变量换一个不含这些字符的位置，或者先修好设置目录里的 `config.json`。运行器不复制、不读取维护者日常使用的登录文件，也不读取登录目录里的任何文件内容；清理只删临时 home 和工作区。运行器不创建登录目录：目录不存在时认证预检报告「没有登录」。
 
 维护者自己登录，每个目录一次，过期后再登录一次；agent 不输入凭据。在 PowerShell 里（占位符换成实际位置）：
 
