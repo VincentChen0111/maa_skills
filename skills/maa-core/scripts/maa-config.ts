@@ -438,6 +438,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
       const body = object(JSON.parse(input));
       if (Object.keys(body).some(key => !['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'].includes(key))) throw new Error('request-invalid');
+      /** A job-plan continuation (ticket 17) is written only by `stage-run.ts switch`, after the re-run gate allowed it. */
+      const jobPlan = body.authorization && typeof body.authorization === 'object' ? (body.authorization as RecordValue).jobPlan : undefined;
+      if (jobPlan && typeof jobPlan === 'object' && Object.hasOwn(jobPlan, 'continuation')) throw new Error('request-invalid');
       const { createMaaProcess } = await import('./maa-process.ts');
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
