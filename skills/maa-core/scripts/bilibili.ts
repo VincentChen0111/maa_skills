@@ -176,7 +176,7 @@ function authorLimits(video: StoredVideo) {
   return [...(video.author === null ? ['author-unknown'] : []), ...(video.publishedAt === null ? ['date-unknown'] : [])];
 }
 
-/** Reads one video part: its public information, and its subtitles when asked for and the user's own SESSDATA is set. At most three requests. */
+/** Reads one video part: its public information, and its subtitles when asked for and the user's own SESSDATA is set: the information, the subtitle list and the chosen subtitle file, one request each. */
 export async function readBilibiliVideo(value: BilibiliReadRequest, options: BilibiliOptions): Promise<ResearchResult> {
   const request = readRequest(value);
   const privateDirectory = resolve(options.privateDirectory);

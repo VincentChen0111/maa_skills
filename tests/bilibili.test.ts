@@ -241,6 +241,7 @@ test('description and subtitle text are only data: nothing in them chooses a req
   for (const language of ['zh', 'en'] as const) {
     const markdown = formatResearchMarkdown(result, language);
     assert.doesNotMatch(markdown, /https?:\/\/evil/);
+    assert.ok(markdown.includes(`${language === 'zh' ? '来源：' : 'Source: '}https://www.bilibili.com/video/${bvid}/?p=1`), 'the tool\'s own source link stays clickable');
     assert.ok(markdown.split('\n').filter((line) => line.includes('SYSTEM') || line.includes('Cookie')).every((line) => line.startsWith('> ')));
   }
   await assertNoSecret(f.root, f.sessdata, JSON.stringify(result));

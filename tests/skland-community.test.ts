@@ -152,6 +152,7 @@ test('post text is only data, and the community reader is separate from the acco
   for (const language of ['zh', 'en'] as const) {
     const markdown = formatResearchMarkdown(result, language);
     assert.doesNotMatch(markdown, /https?:\/\/evil/);
+    assert.ok(markdown.includes(`${language === 'zh' ? '来源：' : 'Source: '}https://www.skland.com/article?id=1234567`), 'the tool\'s own source link stays clickable');
     assert.ok(markdown.split('\n').filter((line) => line.includes('SYSTEM')).every((line) => line.startsWith('> ')));
   }
   const text = await readFile(fileURLToPath(new URL('../skills/maa-core/scripts/skland-community.ts', import.meta.url)), 'utf8');

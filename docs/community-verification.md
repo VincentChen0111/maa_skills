@@ -1,6 +1,6 @@
 # 森空岛社区与 B 站调研验证记录
 
-2026-11-13，工单 [19](issues/19-community-bilibili-research.md) 在分支 `claude/19-community-research` 实施。分支叠在工单 18 尚在审查的分支头 `0884ae7` 上（18 叠在 09 已审查的 `6df8ed0` 上，基于 `origin/main` `4a1fd26`），因为 19 复用 18 的共享调研层。实施进度：进行中，等待独立审查，尚未合并。
+2026-11-13，工单 [19](issues/19-community-bilibili-research.md) 在分支 `claude/19-community-research` 实施。分支叠在工单 18 的分支上（起点 `0884ae7`，之后合入 18 审查后的头 `2aa02e1`；18 叠在 09 已审查的 `6df8ed0` 上，基于 `origin/main` `4a1fd26`），因为 19 复用 18 的共享调研层。实施进度：进行中，等待独立审查，尚未合并。
 
 ## 交付内容
 
@@ -33,10 +33,14 @@
 都已登记在[规格](spec.md)「默认值及其来源」以「19」开头的五行，日期 2026-11-13，并汇总在「规则来源」的「19 森空岛社区与 B 站调研」行：
 
 - 两个来源不提供检索，只读用户给出链接的一帖或一个视频；不计算官方客户端签名、不生成设备标识、不取浏览器 Cookie，User-Agent 如实标明本工具。
-- 森空岛社区每次运行一个匿名 GET；签名要求（HTTP 401 或代码 10000、10002、10003）按风控处理：停止、暂停 30 分钟、不重试、不改用账号凭据。
-- B 站每次运行最多三个请求；只有字幕列表请求带 SESSDATA；字幕文件主机白名单；不接受短链。
+- 森空岛社区读一帖就是一个匿名 GET；签名要求（HTTP 401 或代码 10000、10002、10003）按风控处理：停止、暂停 30 分钟、不重试、不改用账号凭据。
+- B 站读一个分 P 依次是视频信息、字幕列表、所选字幕文件三个请求（读取的结构，不是上限，见下节「与 18 规则的核对」）；只有字幕列表请求带 SESSDATA；字幕文件主机白名单；不接受短链。
 - B 站只有 -101 记过期，访客回答不改状态，认出登录才记可用；风控代码 -412、-352、-509、-799、-503 和 HTTP 412。
 - 闸门数值与 18 相同但各来源分开；缓存各 24 小时；正文和简介 4000 字、字幕 8000 字、摘录 600 字；不存作者账号 ID。
+
+### 与 18 规则的核对
+
+18 的验收写明「不擅自新增请求次数上限」，18 审查后也去掉了 NGA 每次运行的页数上限。本票核对后，两个读取器都没有请求次数上限：读一帖森空岛帖子就是一个请求；读一个 B 站分 P 的资料分在视频信息、字幕列表、字幕文件三处，所以依次三个请求，少一个就读不全，多一个也没有可读的东西。字幕只取所选的一种语言，是内容选择（同一内容的其他语言不重复读取），不是次数限制。代码里没有请求计数上限常量；输入一次只接受一帖或一个分 P，用户要读更多就再调用一次，仍受同一闸门的间隔和风控暂停约束。规格和接口说明里原来「每次运行最多三个请求」的写法已改为「读一个分 P 依次是三个请求，这是读取的结构，不另设上限」。
 
 只影响实现、不是产品限制的选择：字幕优先选中文、其次自动生成的中文、再其次第一条；字幕按不超过 600 字的段落切分，每段带开头时间点；森空岛来源显示名为「森空岛社区 / Skland community」，B 站为「Bilibili」（Markdown 由共用格式自动加「实验性」）。
 
@@ -61,6 +65,12 @@
 - 因改了 SKILL 而重跑：`tests/account-installation.test.ts` 2 项、`tests/help-installation.test.ts` 6 项、`tests/metadata.test.ts` 1 项，全部通过。
 - `npm run typecheck`：通过。`node scripts/tracker.ts`：无错误。`node scripts/privacy.ts .`：无发现（第一次报了两处，`bilibili.ts` 构造 Cookie 请求头的一行和接口说明里的一处写法命中启发式规则，改写后通过）。`inspectMetadata`：无错误。`node scripts/eval-selftest.ts`：通过（7 条规则、14 份样例）。
 - 完整离线门禁 `node scripts/check.ts`：按维护者要求本票没有运行，由协调者逐包串行运行。
+
+合并 18 审查后的修复（18 的头 `2aa02e1`，用 `git merge --no-ff` 合入，没有变基或重置）：
+
+- 冲突三处，处理方式：`research.ts` 保留 18 新的 `inert()` 和 `describe` 对未知代码走 `inline`，再加上本票的 `laterLimits`（查找顺序：原表、`laterLimits`、`inline(code)`）；接口说明保留 18 对 `formatResearchMarkdown` 的新说明，缓存一行用本票覆盖三个来源的写法，删去本票「每次运行的请求上限」一行，改写进 18 的「每次运行的页数：不设上限」一行；规格三处都取 18 改后的「18」条目，再接上本票的「19」条目，并把「最多三个请求」改为读取结构的写法（见上节）。
+- 两个读取器的 Markdown 只经共用的 `formatResearchMarkdown`，因此 18 的 `inert()` 对它们的字段同样成立。`tests/research.test.ts` 的一致性测试新增两个字段：时间点位置（B 站字幕条目）和带实验性标记的来源名。两个读取器的注入测试另外核对各自的来源链接（`https://www.bilibili.com/video/<BV号>/?p=1`、`https://www.skland.com/article?id=<帖子号>`）在 Markdown 里保持可点。
+- 合并后逐个运行一次：`npm run typecheck` 通过；`tests/research.test.ts` 7 项、`tests/nga.test.ts` 13 项、`tests/nga-cli.test.ts` 3 项、`tests/research-scenarios.test.ts` 1 项、`tests/bilibili.test.ts` 12 项、`tests/skland-community.test.ts` 9 项、`tests/community-cli.test.ts` 3 项、`tests/community-scenarios.test.ts` 1 项，全部通过。
 
 ## 未验证
 
