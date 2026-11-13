@@ -56,7 +56,7 @@
 | 验收条件 | 证据 |
 | --- | --- |
 | 1 识别批准的排班和条目，核对一致；未批准和后来修改的内容不执行 | A「nothing unapproved runs」（未批准、未批准的新版本、批准后被改的报告、非基建引用）；A「an invalid plan, a failing gate」末段（排班文件批准后被改） |
-| 2 应用前运行共享校验，报告错误和未持有警告，不写无效排班 | A「an invalid plan, a failing gate」（`check.errors` 有名表错误，什么都没写）；检查结果里有 `errors`、`warnings`（`operator-unowned` 沿用 22） |
+| 2 应用前运行共享校验，报告错误和未持有警告，不写无效排班 | A「an invalid plan, a failing gate」（`check.errors` 有名表错误，什么都没写）；同一测试里快照少了排班用到的干员时，检查结果的 `warnings` 有 `operator-unowned`（沿用 22） |
 | 3 只走 05 的通道；锁、关停、备份、定时窗口、最小改动、读回；不改生产线 | A「report → approval → check → safe write → read-back」（只变四个字段，其余配置逐项相同，备份等于原字节，锁释放，没有 `product`）；A「the base grant is only reachable through base-apply」 |
 | 4 daily 只维护配置、待执行和运行记录；不改写报告和快照；未审查标记不变 | A「report → approval」（报告目录和快照字节不变，报告状态仍是 `unreviewed`，检查结果 `review: unreviewed`） |
 | 5 失败或结果未知保留证据转核对、不重放；成功说明改了什么和备份 | A「an interrupted write or unknown outcome」（重开失败和关停失败；锁、备份、记录保留，再次应用被拒绝且不碰 MAA）；A「report → approval」（`changedKeys`、`backup`） |

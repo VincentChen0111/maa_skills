@@ -124,6 +124,7 @@ async function inspect(value: unknown, options: Options, keys: string[]): Promis
     } catch (error) { result.reasons.push(code(error)); }
   }
   // 5. The user's decision on everything still unverified, given explicitly; nothing unverified counts as passed.
+  result.unverified = result.unverified.filter((entry, index) => result.unverified.findIndex(other => other.id === entry.id) === index);
   const ids = result.unverified.map(entry => entry.id);
   if (input.decision && ids.every(id => input.decision!.accept.includes(id))) result.decision = { unverified: ids, userWords: ids.length ? input.decision.userWords : null };
   else if (!ids.length) result.decision = { unverified: [], userWords: null };

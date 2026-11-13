@@ -135,11 +135,18 @@ test('an invalid plan, a failing gate and a snapshot changed after approval are 
   assert.deepEqual(failing.reasons, ['base-plan-not-applicable']); assert.equal(failing.freshness!.tables, 'stale');
   assert.equal(failing.check!.gates.find(entry => entry.gate === 4)!.verdict, 'fail'); assert.deepEqual(failing.check!.errors, []);
   // The snapshot changed after approval: the old approval does not cover it, so the user must approve again.
-  const shot = await home(t), snapshot = planSnapshot() as { operators: { level: number }[] };
+  const shot = await home(t), snapshot = planSnapshot() as { operators: { name: string; level: number }[] };
   snapshot.operators[0]!.level = 50;
   await writeFile(join(shot.home, 'account-snapshot.json'), JSON.stringify(snapshot));
   const changed = await checkBaseApply({ reference: shot.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: shot.home });
   assert.deepEqual(changed.reasons, ['base-snapshot-changed']); assert.equal(changed.freshness!.snapshot, 'stale');
+  // An operator the plan uses is no longer in the snapshot: the recheck reports the unowned warning next to the refusal.
+  const gone = await home(t), smaller = planSnapshot() as { operators: { name: string }[] };
+  smaller.operators = smaller.operators.filter(operator => operator.name !== '合成金一');
+  await writeFile(join(gone.home, 'account-snapshot.json'), JSON.stringify(smaller));
+  const unowned = await checkBaseApply({ reference: gone.reference, profile: 0, task: 1, decision: accept(['maa-timers']) }, { home: gone.home });
+  assert.ok(unowned.reasons.includes('base-snapshot-changed'));
+  assert.ok(unowned.check!.warnings.some(warning => warning.startsWith('operator-unowned') && warning.includes('合成金一')), JSON.stringify(unowned.check!.warnings));
   // The account's plan file edited after approval is a changed plan, not the approved one.
   const plan = await home(t), checked = await checkBaseApply({ reference: plan.reference, profile: 0, task: 1 }, { home: plan.home });
   const planFile = join(plan.home, checked.plan!.file);
