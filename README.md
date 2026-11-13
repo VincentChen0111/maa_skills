@@ -2,7 +2,7 @@
 
 MAA skills for Arknights CN on Windows, designed for Codex and Claude Code. Work in progress; no playable automation is shipped yet.
 
-面向 Windows MAA 图形界面版、国服玩家的 skill 集合，产品边界见[规格](docs/spec.md)。maa-help 只提供文字帮助；maa-account 提供本地识别快照、培养成本、加工与材料券缺口及已持有干员基建技能查询；maa-daily 维护已有队列、提醒与定时；maa-doctor 核对配置和遗留锁，经点名批准恢复已记录字段。07 候选 maa-setup 接入已有环境、设置语言和私有目录、发现并测试本机 adb、经统一写入器保存连接；当前不下载程序。共享脚本集中在 maa-core，其余功能按[工单索引](docs/issues/INDEX.md)实施。原生安装与模型状态分别见 [setup](docs/setup-verification.md)、[help](docs/help-verification.md)、[account](docs/account-verification.md)、[成本](docs/operator-cost-verification.md)、[加工缺口](docs/crafting-verification.md)、[基建](docs/base-verification.md)、[daily](docs/daily-verification.md)和 [doctor](docs/doctor-verification.md)验证记录。真实模型基线仍是发布门禁，离线测试或源码检查不代表实机已核。
+面向 Windows MAA 图形界面版、国服玩家的 skill 集合，产品边界见[规格](docs/spec.md)。maa-help 只提供文字帮助；maa-account 提供本地识别快照、培养成本、加工与材料券缺口及已持有干员基建技能查询；maa-daily 维护已有队列、提醒与定时；maa-doctor 核对配置和遗留锁，经点名批准恢复已记录字段。maa-setup 接入已有环境、设置语言和私有目录、发现并测试本机 adb、经统一写入器保存连接；缺少 MAA、模拟器、adb 或 Node 时先展示官方下载方案，用户确认这份方案后才下载。共享脚本集中在 maa-core，其余功能按[工单索引](docs/issues/INDEX.md)实施。原生安装与模型状态分别见 [setup](docs/setup-verification.md)、[help](docs/help-verification.md)、[account](docs/account-verification.md)、[成本](docs/operator-cost-verification.md)、[加工缺口](docs/crafting-verification.md)、[基建](docs/base-verification.md)、[daily](docs/daily-verification.md)和 [doctor](docs/doctor-verification.md)验证记录。真实模型基线仍是发布门禁，离线测试或源码检查不代表实机已核。
 
 需要 Node 24。在干净检出运行 `node scripts/check.ts` 即可离线检查，不必安装依赖。开发、类型检查和 PR 流程见[贡献指南](CONTRIBUTING.md)，原生安装结构见[宿主说明](docs/hosts.md)。问题通过 [Issues](https://github.com/VincentChen0111/maa_skills/issues)报告，修改通过 PR 和 squash 交付。
 
