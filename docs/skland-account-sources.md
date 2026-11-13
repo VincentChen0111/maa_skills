@@ -42,7 +42,7 @@
 | 模组 | `chars[].equip[]` 的 `id`、`level`、`locked` | nonebot `Equip`；MAA-PRTS 跳过 `locked` 的模组 | 采用。`locked` 为真记 0（未解锁），否则记 `level`；缺 `locked` 记未知 |
 | 仓库物品 | `GET /api/v1/game/cultivate/player?uid=…` 的 `items[]`：`id`、`count`；`count` 可能是字符串 | 只有 arknights-toolbox（`Number(count)`）；`player/info` 的模型里没有物品 | 单一来源；采用。接口返回的物品范围未核对，未列出的物品仍是未知 |
 | 龙门币 | 没有找到单独字段。游戏物品 ID `4001` 是龙门币（11 已核对，见[account 来源核对](account-sources.md)） | — | 只在养成接口的 `items` 里出现 `4001` 时采用，否则未知。是否会出现未验证 |
-| 基建房间、驻员、心情 | `player/info` 的 `building`：`control`、`powers`、`manufactures`、`tradings`、`dormitories`、`meeting`、`hire`、`training`，各房间 `slotId`、`level`、`chars[]`（`charId`、`ap`、`lastApAddTime`）；训练室为 `trainee`、`trainer` | nonebot `buildings/*.py` | 采用。心情 `ap` 的满值 8,640,000（nonebot 以此判断已休满） |
+| 基建房间、驻员、心情 | `player/info` 的 `building`：`control`、`powers`、`manufactures`、`tradings`、`dormitories`、`meeting`、`hire`、`training`，各房间 `slotId`、`level`、`chars[]`（`charId`、`ap`、`lastApAddTime`）；训练室为 `trainee`、`trainer` | nonebot `buildings/*.py` | 采用。心情 `ap` 的满值 8,640,000（nonebot 以此判断已休满）。nonebot 的 `Building` 把 `meeting`、`hire`、`training` 声明为可选（默认 None），其余房间字段为必需：这三项缺失视为未建造，其余缺失视为结构不符 |
 | 当前理智、公招槽位计时 | `status.ap`、`recruit[]` | nonebot `Status`、`Recruit` | 字段存在，但不写进快照：验收第 3 条只要求干员、仓库、龙门币和基建，理智是随时变化的状态 |
 | 理智药等药剂；凭证和各类券；逐关通关状态 | 三个项目里都没有找到 | — | 快照里写成无来源（`coverage` 的 `medicine`、`vouchers`、`stageClears` 为 `unavailable`、`no-source`）。`status.mainStageProgress` 只是主线进度，不推断逐关通关 |
 

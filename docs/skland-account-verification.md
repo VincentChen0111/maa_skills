@@ -20,7 +20,7 @@
 | 1 用 09 的凭据入口和 11 的快照格式；无需模拟器；不代替登录 | 读取器只调用 `readCredential`／`recordCredentialOutcome`；「a read exchanges the pasted token …」核对请求只有换取和三类读取；「the same synthetic account through MAA and Skland …」核对两种来源被同一成本工具和基建查询接受 | 通过（离线替身） |
 | 2 只读，不签到、发帖、点赞、付费或其他写操作 | 同上第一项：只有授权码和 cred 两步用 POST，绑定、玩家信息、养成只用 GET，都带 `redirect: "error"`；替身对任何其他接口记录并拒绝，轨迹必须恰好是五步 | 通过（离线替身） |
 | 3 覆盖干员、仓库、龙门币和基建，带读取时间和森空岛来源，缺失为未知 | 「a read exchanges …」（来源、读取时间、空的原扫描时间、物品和龙门币）；「the base keeps rooms …」；「an incomplete cultivation read …」；「skill level, mastery and modules …」的缺字段部分 | 通过（离线替身）；龙门币来源见未验证 |
-| 4 凭据缺失、过期、网络失败或响应不完整时给可行动状态，不伪造成功、不沿用旧数据 | 「a missing credential stops before any request …」；「a token the service refuses …」；「network failures, refusals …」（玩家信息结构不符为 `response-invalid`，不产出快照）；「inspect reads without saving; failures exit non-zero …」（错误码、`repair`、已有快照字节不变，含签名被拒和字段改名两种）；「a read with a failed domain never replaces an existing Skland snapshot …」（五种部分读取都不替换已有快照，只有第一份快照可以是部分快照）；`tests/skland-scenarios.test.ts` 的未设置场景 | 通过（离线替身） |
+| 4 凭据缺失、过期、网络失败或响应不完整时给可行动状态，不伪造成功、不沿用旧数据 | 「a missing credential stops before any request …」；「a token the service refuses …」；「network failures, refusals …」（玩家信息结构不符为 `response-invalid`，不产出快照）；「inspect reads without saving; failures exit non-zero …」（错误码、`repair`、已有快照字节不变，含签名被拒和字段改名两种）；「the import CLI wires the read verdict …」和「conformance: every producer of operators, inventory and base …」（22 种生产路径对全部消费方：有域没读到时已有快照字节不变，只有第一份快照可以是部分快照）；`tests/skland-scenarios.test.ts` 的未设置场景 | 通过（离线替身） |
 | 5 MAA 与森空岛来源可区分；冲突时展示差异和时间，不静默合并 | 「the same synthetic account through MAA and Skland …」：`compare` 列出两边读取时间与原扫描时间、等级冲突和物品冲突、只在一边的条目，不写文件、不联网；缺一边时报 `snapshot-missing` | 通过 |
 | 6 秘密及账号标识不进入对话、Markdown 或错误日志；快照留在私有目录；MAA 配置不变 | `assertNoSecrets` 在读取结果、CLI 的 JSON 和 Markdown 输出、失败输出以及临时根目录下所有文件里搜索合成 token、授权码、cred、签名 token、角色号、昵称、用户 ID 和头像地址；「the import CLI …」核对私有目录只多出 `account-snapshot-skland.json`、MAA 快照和 MAA 目录逐字节不变 | 通过（离线替身） |
 | 7 接口和字段核对之后才写进读取器和来源记录 | [接口来源核对](skland-account-sources.md)：三个 MIT 项目的固定提交、逐项结论和与工单表的差别 | 通过（公开资料）；真实服务未验证 |
@@ -68,6 +68,32 @@
 
 本轮按维护者 2026-11-13 关于本机负载的要求，只运行 `npm run typecheck`（通过）和受影响的单个测试文件各一次：`tests/skland-account.test.ts` 17 项通过、`tests/skland-scenarios.test.ts` 1 项通过；另运行隐私检查、tracker 和相对链接检查，均无问题。没有运行完整离线门禁，由协调者统一运行。
 
+## 审查第 2 轮修复
+
+第 2 轮结论不通过，协调者接受两条：
+
+- P2：一个域条目为零时只记为部分（`empty-response`），被当成读到了。所以外层 code 为 0、内容为空或改名的回复，会用空数据替换已有快照，同时报 `saved: true`。这和第 1 轮的 P2 属于同类缺陷，按复现规则不再逐条修路径，改为一个规则函数加一个一致性测试。
+- P3：code 为 0 却缺少基建的回复，被建议「稍后再试」，用户会一直重试，旧快照也一直保留。
+
+修复：
+
+- `skland-account.ts` 的 `domainVerdict` 是唯一判断各域是否读到的函数：只有 `complete` 且没有原因码才算读到（`read`）；有已核对结构的条目才算可用（`usable`）；没读到时给出修法，请求失败按原因给，code 为 0 的回复有问题一律 `report-issue`。
+- `sklandRepair` 按「重新粘贴、报告问题、检查时间、稍后再试」的先后取一个修法。
+- 条目为零记为无效（`invalid` + `empty-response`），缺少基建记为无效（`not-returned`）。会客室、人力办公室和训练室在参考项目里是可选字段，缺失视为未建造。
+- 用到这个判断的地方，现在全部经过它：玩家信息门槛（没有可用干员即 `response-invalid`）、写入锁内的保留或替换、`saved`、`failedDomains`、`repair`、摘要文字，以及 `sklandSnapshot` 写出的覆盖状态（不可用的域清空，不会写成完整或部分）。
+- inspect 和 import 的流程抽成导出函数 `runSklandRead`，CLI 只负责输出，一致性测试在进程内调用它。
+- 规格正文和两张来源表已登记。
+
+一致性测试：「conformance: every producer of operators, inventory and base against every consumer of the read verdict」。
+
+- 生产路径：干员、仓库、基建各 8 条（请求失败、非 0 code、429、结构不符、下一层字段改名、缺少该域、列表为空、正常），另加两个域同时失败一例，共 22 例。审查员复现的 emptyChars、emptyItems、buildingRoomsRenamed、buildingRenamed 都在其中。基建和干员来自同一个玩家信息请求，请求层的三条与干员相同。
+- 每例都在两种情况下核对全部消费方：已有快照时，核对字节是否不变（有域没读到时必须不变）、`saved`、`failedDomains`、`repair`、摘要文字；还没有快照时，核对是否写入、写入的覆盖状态等于输出的覆盖状态、对写入的快照再判断一次结果一致、不可用的域没有残留数据。
+- CLI 接线测试同时更新，缺少基建的那一行改为期望 `report-issue`。
+
+先红后绿：先把 CLI 的读取流程原样抽成 `runSklandRead`，判断规则保持原样，再运行新测试。18 项中 3 项失败（缺少基建的覆盖状态、CLI 接线的 `repair`、一致性测试在「干员：下一层字段改名」一例替换了已有快照），日志在已忽略的 `.tmp/skland-round2-red.log`。改为单一规则后 18 项全部通过。审查员的 `empty.ts`（只读，未修改）运行一次，四例的已有快照都没有被替换：emptyChars 退出码 1，另外三例 `saved: false` 且修法为 `report-issue`。
+
+本轮命令：`npm run typecheck` 通过；`tests/skland-account.test.ts` 18 项通过；`tests/skland-scenarios.test.ts` 1 项通过；另运行隐私检查、tracker 和相对链接检查，均无问题。完整离线门禁由协调者统一运行。
+
 ## 设计默认值
 
 都登记在[规格](spec.md)「默认值及其来源」以「12」开头的行，日期 2026-11-13：
@@ -77,7 +103,7 @@
 - 两级刷新各最多一次；刷新后仍未授权时再走第二级（比参考项目多一步）；只有换取授权码被明确拒绝才记过期，两级之后仍被拒报 `signature-rejected`、凭据状态不变（第 1 轮修订）；其他失败不记过期，也不自动重试；访问凭证和签名 token 不落盘。
 - 多个角色时取森空岛默认角色，没有默认又不止一个时停止。
 - 森空岛快照另存为 `account-snapshot-skland.json`，与 MAA 快照共用写入锁；读取失败不写新快照；玩家信息没有已核对的干员结构时按 `response-invalid` 处理、不写入；查询工具要显式传 `snapshotFile` 才用森空岛快照；两份不合并。
-- 干员、仓库、基建任一域没读到（请求失败、回复不合格或没有返回）的读取不替换已有森空岛快照，输出 `saved: false`、`failedDomains` 和建议；只有还没有森空岛快照时才保存部分快照并在 `coverage` 写明原因；判断在写入锁内（第 1 轮由协调者选定）。
+- 干员、仓库、基建是否读到只由 `domainVerdict` 判断：只有完整且没有原因码才算读到；条目为零或缺少基建记为无效；有域没读到的读取不替换已有森空岛快照，输出 `saved: false`、`failedDomains` 和一个修法（code 为 0 的回复有问题为报告问题）；只有还没有森空岛快照时才保存部分快照并在 `coverage` 写明原因；判断在写入锁内（第 1 轮由协调者选定，第 2 轮改为单一规则函数）。会客室、人力办公室和训练室缺失视为未建造。
 - 转换：单项越界记未知并写原因，结构错误使该域无效；模组锁定记 0；技能专精按列表顺序；基建只记房间、驻员和心情原始值及其时间；不写账号标识、理智和公招；原扫描时间为空。
 - 对比只比较两边都已知的字段，Markdown 每类最多列 50 条。
 

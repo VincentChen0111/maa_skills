@@ -21,7 +21,7 @@
 
 读取成功时退出码 0，JSON 只含 `saved`、`source`、`readAt`、`coverage`、`failedDomains`、计数、`lmd`、`baseRoomCount`、`credential`、`disclosures` 和摘要（有没读到的域时另有 `repair`），不含 token、cred、角色号、昵称或本机路径。不要打开快照文件把内容贴到对话里。
 
-`failedDomains` 列出干员、仓库、基建中这次没读到的域（请求失败为 `unavailable`，回复不合格为 `invalid`，没有返回为 `missing`，原因在 `coverage` 里）。这时 `import` 不替换已有的森空岛快照，`saved` 为 false，摘要说明旧快照保持不变；只有还没有森空岛快照时才保存这份部分快照。`repair` 为 `retry-later`（请求失败）或 `report-issue`（回复不合格）。以 `saved` 为准，不要把没保存的结果说成已更新。
+`failedDomains` 列出干员、仓库、基建中这次没读到的域。只有 `coverage` 为 `complete` 且没有原因码才算读到；请求失败（`unavailable`）、回复结构不符、列表为空、缺少该域（`invalid`）和条目缺字段或数值越界（`partial`）都算没读到，原因在 `coverage` 的 `issues` 里。这时 `import` 不替换已有的森空岛快照，`saved` 为 false，摘要说明旧快照保持不变；只有还没有森空岛快照时才保存这份部分快照。`repair` 只有一个，按先后取：`reenter-credential`（换取被拒）、`report-issue`（code 为 0 的回复有问题，包括为空或缺少基建；重试不会好，请用户报告问题）、`check-system-time`（签名被拒）、`retry-later`（其他请求失败）。以 `saved` 为准，不要把没保存的结果说成已更新。
 
 失败时退出码 1，标准错误输出 `{"ok":false,"saved":false,"error":…,"credential":…,"repair":…,"summary":…}`。失败时不会写新快照，已有的森空岛快照原样保留；不能把它说成本次读取的数据。
 
@@ -33,7 +33,7 @@
 | `credential-unreadable` | 保存的记录损坏或不是当前 Windows 用户保存的 | `reenter-credential` |
 | `network-failed` | 连不上或超时；凭据状态不变 | `retry-later` |
 | `service-error` | 对方拒绝，但没有表明是凭据问题（可能限流或风控）；凭据状态不变，不自动重试 | `retry-later` |
-| `response-invalid` | 回复格式和已核对的不一致，包括玩家信息里没有已核对的干员结构；不写快照 | `report-issue`：接口可能变化，请用户报告问题 |
+| `response-invalid` | 回复格式和已核对的不一致，包括玩家信息里没有可用的干员条目（结构不符、缺少或列表为空）；不写快照 | `report-issue`：接口可能变化，请用户报告问题 |
 | `binding-missing` | 账号下没有可用的明日方舟角色 | `bind-role-in-skland`：用户在森空岛 App 里绑定 |
 | `binding-ambiguous` | 有多个角色且没有默认角色 | `set-default-role-in-skland`：用户在森空岛 App 里设默认角色；不要请用户把角色号发到对话里 |
 | `windows-required`、`protection-failed` | 当前环境解不开凭据 | 按摘要说明处理 |
