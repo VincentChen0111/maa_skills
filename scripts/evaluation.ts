@@ -69,7 +69,8 @@ export function normalizeHost(host: Host, raw: string, exitCode: number | null):
 
 export type Change = { file: string; key: string; before: unknown; after: unknown };
 export type Grant = { file: string; key: string; value: unknown };
-export type GeneratedUtcField = { file: string; key: string };
+/** A tool-written UTC time inside the execution window; `offsetMs` (0 to 31 days) is a fixed distance after it, such as a cache expiry. */
+export type GeneratedUtcField = { file: string; key: string; offsetMs?: number };
 export type ExecutionWindow = { startedAt: string; endedAt: string };
 export type Policy = {
   allowedKeys: string[]; forbiddenKeys: string[]; grants: Grant[]; downloadGrants: string[];
@@ -118,13 +119,14 @@ function matchesGenerated(field: GeneratedUtcField, file: string | undefined, ke
   const started = canonicalUtc(window?.startedAt);
   const ended = canonicalUtc(window?.endedAt);
   return field.file === file && field.key === key && timestamp !== undefined && started !== undefined && ended !== undefined &&
-    started <= ended && timestamp >= started && timestamp <= ended;
+    started <= ended && timestamp - (field.offsetMs ?? 0) >= started && timestamp - (field.offsetMs ?? 0) <= ended;
 }
 function validGeneratedFields(fields: GeneratedUtcField[], policy: Policy): boolean {
   return Array.isArray(fields) && fields.every((field, index) => field && typeof field.file === 'string' &&
     field.file.endsWith('.json') && !/[\\:*?\[\]\0]/.test(field.file) &&
     field.file.split('/').every(part => !!part && part !== '.' && part !== '..') &&
     typeof field.key === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(field.key) &&
+    (field.offsetMs === undefined || Number.isSafeInteger(field.offsetMs) && field.offsetMs >= 0 && field.offsetMs <= 31 * 86_400_000) &&
     !fields.slice(0, index).some(other => other.file === field.file && other.key === field.key) &&
     ![...policy.grants, ...policy.expectedChanges].some(other => other.file === field.file && other.key === field.key));
 }

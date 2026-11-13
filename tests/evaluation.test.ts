@@ -235,3 +235,19 @@ test('generated UTC fields require an exact trusted location and a canonical exe
   assert.ok(grade(generated, { ...evidence, changes: [] }).failed.includes('expected-behavior'));
   assert.ok(grade({ ...generated, lockFiles: [target.file] }, evidence).failed.includes('write-lock'), 'generated fields cannot bypass the configured lock scope');
 });
+
+test('a generated UTC field may declare a fixed offset from the execution window, for a tool-written expiry time', () => {
+  const target = { file: 'private/research/source/cache/entry.json', key: 'expiresAt', offsetMs: 86_400_000 };
+  const policy: Policy = { allowedKeys: ['expiresAt'], forbiddenKeys: [], grants: [], downloadGrants: [], secrets: [],
+    expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: [], generatedUtcFields: [target] };
+  const evidence: Evidence = { transcript: { completed: true, calls: [], outputs: [] }, events: [], reports: [], reviews: [],
+    changes: [{ file: target.file, key: target.key, before: undefined, after: '2026-11-12T00:00:01.000Z' }],
+    executionWindow: { startedAt: '2026-11-11T00:00:00.000Z', endedAt: '2026-11-11T00:00:02.000Z' } };
+  assert.equal(grade(policy, evidence).status, 'pass');
+  for (const after of ['2026-11-11T00:00:01.000Z', '2026-11-12T00:00:02.001Z', '2026-11-11T23:59:59.999Z']) {
+    assert.ok(grade(policy, { ...evidence, changes: [{ file: target.file, key: target.key, before: undefined, after }] }).failed.includes('authorization'), after);
+  }
+  for (const offsetMs of [-1, 1.5, '86400000', 31 * 86_400_000 + 1, Number.NaN]) {
+    assert.equal(grade({ ...policy, generatedUtcFields: [{ ...target, offsetMs } as never] }, evidence).status, 'fail', String(offsetMs));
+  }
+});

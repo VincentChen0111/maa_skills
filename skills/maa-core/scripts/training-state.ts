@@ -13,6 +13,8 @@ export type TrainingPlan = {
     native?: { process: string; taskId: number; chain: string; appendedAt: string; paramsHash: string; startedAt?: string } };
   preplacedAt?: string; confirmationAt?: string; startedAt?: string; latestObservationAt?: string; expectedCompleteAt?: string; assistantAttempted?: boolean;
   assistantState: 'unverified'; history: { at: string; kind: string; rank: number }[]; consumed: string[]; issues: string[];
+  /** MAA and verification record versions read at preparation; absent in plans prepared before ticket 25. */
+  versions?: import('./maa-version.ts').MaaVersionStamp;
 };
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};

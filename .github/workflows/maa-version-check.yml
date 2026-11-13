@@ -1,0 +1,30 @@
+name: MAA version check
+# Ticket 25: once a day, compare the dependency fingerprints (docs/maa-dependencies.json) with the newest MAA stable
+# release and the newest beta above it. Unchanged stable: one PR adding it to the source-verified lists. Changed or
+# missing entries: one issue (stable) or one early-warning issue (beta). Repeated checks do not repeat a notification.
+# Only the version and fingerprint check runs here: no model, no MAA, no device, no account, no user configuration.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+concurrency:
+  group: maa-version-check
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node scripts/maa-version-check.ts daily --online --publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { executeConfigWrite, type MaaProcess } from './maa-config.ts';
+import { executeConfigWrite, versionStampOf, type MaaProcess } from './maa-config.ts';
+import { compareVersionStamp, readVersionStamp } from './maa-version.ts';
 import { approvedJobList, approvedJobFile, approvedJobSourceFile, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { readPublicJson } from './public-data.ts';
 import { readSettings } from './preferences.ts';
@@ -408,7 +409,8 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
 export async function prepareStageJobs(input: { report: StageReport; approval: StageApproval; snapshot: unknown; maaDirectory: string; privateDirectory: string;
   profile: number; host: 'codex' | 'claude'; expectedRevision: string; closedConfirmed?: boolean }, maa: MaaProcess) {
   const { approval, report } = structuredClone(input);
-  const { hash: reportHash, ...displayed } = report;
+  // `versions` is the stamp saved with the report (outside its hash); a difference is reported, never refused.
+  const { hash: reportHash, versions: generatedVersions, ...displayed } = report as StageReport & { versions?: unknown };
   // A report that no longer re-verifies (tampered, or produced by an older matcher structure) cannot bind an approval.
   let verified: StageReport;
   try { verified = matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search); } catch { throw new Error('approval-mismatch'); }
@@ -444,9 +446,10 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
       if (handle) try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     }
   }
-  return executeConfigWrite({ maaDirectory: input.maaDirectory, privateDirectory: input.privateDirectory, host: input.host, expectedRevision: input.expectedRevision,
+  const versions = compareVersionStamp(generatedVersions, await versionStampOf(input.maaDirectory, maa));
+  return { ...await executeConfigWrite({ maaDirectory: input.maaDirectory, privateDirectory: input.privateDirectory, host: input.host, expectedRevision: input.expectedRevision,
     closedConfirmed: input.closedConfirmed, authorization: { source: 'current-request', reference: approval.reference, jobPlan: plan },
-    changes: [{ path: ['Configurations', input.profile, 'Copilot', 'TaskList'], value: list }, { path: ['Configurations', input.profile, 'Copilot', 'EnableUserAdditional'], value: false }] }, maa);
+    changes: [{ path: ['Configurations', input.profile, 'Copilot', 'TaskList'], value: list }, { path: ['Configurations', input.profile, 'Copilot', 'EnableUserAdditional'], value: false }] }, maa), versions };
 }
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
@@ -484,7 +487,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (Object.keys(input).some(key => !['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'].includes(key))
         || input.format !== undefined && !['json', 'markdown'].includes(input.format) || input.saveReport !== undefined && typeof input.saveReport !== 'boolean') throw new Error('request-invalid');
       const tables = await loadStageTables(input.tablesFile, true);
-      const report = input.jobsFile ? matchStageJobs(snapshot, tables, input.request, JSON.parse(await readFile(text(input.jobsFile), 'utf8'))) : await collectStageJobs(snapshot, tables, input.request);
+      const matched = input.jobsFile ? matchStageJobs(snapshot, tables, input.request, JSON.parse(await readFile(text(input.jobsFile), 'utf8'))) : await collectStageJobs(snapshot, tables, input.request);
+      // The MAA and record versions read now travel with the report; prepare reports any difference.
+      const report = { ...matched, versions: await readVersionStamp(settings.maaDirectory) };
       if (input.saveReport) {
         const file = join(settings.privateDirectory, 'stage-jobs', 'reports', `${report.hash}.json`);
         await mkdir(dirname(file), { recursive: true });
@@ -500,7 +505,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       const { createMaaProcess } = await import('./maa-process.ts');
       let processBoundary: MaaProcess | undefined; const get = () => processBoundary ??= createMaaProcess(settings.maaDirectory!);
       const result = await prepareStageJobs({ ...input, report, snapshot, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as Parameters<typeof prepareStageJobs>[0],
-        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start() });
+        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       console.log(JSON.stringify({ ok: result.status === 'complete', ...result })); if (result.status !== 'complete') process.exitCode = 1;
     }
   } catch { console.log(JSON.stringify({ ok: false, status: 'check-required' })); process.exitCode = 1; }

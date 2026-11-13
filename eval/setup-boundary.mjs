@@ -19,6 +19,8 @@ if (JSON.parse(readFileSync(join(workspace, '.eval-fixture.json'), 'utf8')).kind
 if (core) {
 const setupUrl = pathToFileURL(join(core, 'scripts/setup.ts')).href;
 const connectionUrl = pathToFileURL(join(core, 'scripts/setup-connection.ts')).href;
+// The MAA.exe version reader (setup's check) lives in maa-version.ts since ticket 10; it goes through the same boundary.
+const versionUrl = pathToFileURL(join(core, 'scripts/maa-version.ts')).href;
 const writerUrl = pathToFileURL(join(core, 'scripts/maa-config.ts')).href;
 const processUrl = pathToFileURL(join(core, 'scripts/maa-process.ts')).href;
 const canonicalUrl = url => {
@@ -54,13 +56,15 @@ export function createMaaProcess(directory) {
     inspect: async () => { const running = existsSync(state); return { running, treeExited: !running, idle: true, ready: running }; },
     close: async () => { record({ kind: 'maa-close' }); if (existsSync(state)) unlinkSync(state); },
     start: async () => { record({ kind: 'maa-start' }); writeFileSync(state, 'synthetic'); },
+    // The writer's version stamp (ticket 25): the placeholder MAA.exe has no readable version.
+    version: async () => null,
   };
 }
 `;
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const parent = canonicalUrl(context.parentURL);
-    if ([setupUrl, connectionUrl].includes(parent) && specifier === 'node:child_process') return { url: 'maa-setup-test:boundary', shortCircuit: true };
+    if ([setupUrl, connectionUrl, versionUrl].includes(parent) && specifier === 'node:child_process') return { url: 'maa-setup-test:boundary', shortCircuit: true };
     const result = nextResolve(specifier, context);
     if (parent === writerUrl && canonicalUrl(result.url) === processUrl) return { url: 'maa-setup-test:boundary', shortCircuit: true };
     return result;

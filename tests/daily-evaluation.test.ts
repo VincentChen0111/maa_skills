@@ -72,6 +72,21 @@ test('an authorized reminder transaction is graded from real locks, backups and 
     reordered.daily!.observations = reordered.daily!.observations.map(value => JSON.parse(JSON.stringify(value)).action === 'write' ? entry : value);
     assert.equal(grade(policy, reordered).status, 'fail', mutation);
   }
+  // The pending record carries the version stamp (ticket 25): the synthetic MAA has no readable version, so a guessed
+  // version, a missing or malformed stamp, or any extra field fails like any other change to the pending record.
+  const pendingOf = (value: unknown) => (value as { actions: { kind: string; file?: string; after?: string }[] }).actions
+    .find(action => action.kind === 'append' && action.file === 'private/daily-pending.jsonl')!;
+  const written = JSON.parse(Buffer.from(pendingOf(evidence.daily!.observations.find(value => (value as { action?: string }).action === 'write')).after!, 'base64').toString('utf8'));
+  assert.deepEqual(Object.keys(written), ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'versions']);
+  assert.equal(written.versions.maaVersion, null);
+  for (const [name, versions] of [['guessed version', { ...written.versions, maaVersion: '6.22.0' }], ['missing stamp', undefined],
+    ['zero record version', { ...written.versions, recordVersion: 0 }], ['extra field', { ...written.versions, note: 'x' }]] as const) {
+    const tampered = structuredClone(evidence);
+    const entry = tampered.daily!.observations.find(value => (value as { action?: string }).action === 'write');
+    const { versions: _versions, ...rest } = written;
+    pendingOf(entry).after = Buffer.from(JSON.stringify(versions === undefined ? rest : { ...rest, versions }) + '\n').toString('base64');
+    assert.equal(grade(policy, tampered).status, 'fail', name);
+  }
   assert.equal(grade(policy, { ...evidence, daily: { ...evidence.daily!, observations: [] } }).status, 'fail');
   assert.ok(grade({ ...policy, allowedKeys: [] }, evidence).failed.includes('allowed-keys'));
   assert.ok(grade({ ...policy, forbiddenKeys: ['Timers'] }, evidence).failed.includes('forbidden-settings'));

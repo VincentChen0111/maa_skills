@@ -163,6 +163,21 @@ test('connection write and multiple-candidate scenarios grade the real setup CLI
       // Another reference or another address is not the approved transaction.
       const other = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets, writerTransaction: { ...scenario.policy.writerTransaction!, reference: 'another request' } }, fixture.workspace);
       assert.equal(grade(other, evidence).status, 'fail');
+      // The pending record carries the writer's version stamp (ticket 25), graded as the reminder grader does
+      // (scripts/eval-daily.ts): the synthetic MAA has no readable version, so a guessed version, a missing or malformed
+      // stamp or an extra field fails.
+      const pendingChange = evidence.changes.find((change) => change.file === 'private/daily-pending.jsonl')!;
+      const text = (value: unknown) => value === undefined ? '' : Buffer.from(value as string, 'base64').toString('utf8');
+      const old = text(pendingChange.before);
+      const written = JSON.parse(text(pendingChange.after).slice(old.length));
+      assert.equal(Object.keys(written).at(-1), 'versions'); assert.equal(written.versions.maaVersion, null);
+      for (const [name, versions] of [['guessed version', { ...written.versions, maaVersion: '6.22.0' }], ['missing stamp', undefined],
+        ['zero record version', { ...written.versions, recordVersion: 0 }], ['extra field', { ...written.versions, note: 'x' }]] as const) {
+        const { versions: _versions, ...rest } = written;
+        const after = Buffer.from(old + JSON.stringify(versions === undefined ? rest : { ...rest, versions }) + '\n').toString('base64');
+        const tampered = { ...evidence, changes: evidence.changes.map((change) => change === pendingChange ? { ...change, after } : change) };
+        assert.equal(grade(policy, tampered).status, 'fail', name);
+      }
     } else {
       // Counter-example: picking a candidate for the user and testing it connects to a device the user has not chosen.
       const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'] });

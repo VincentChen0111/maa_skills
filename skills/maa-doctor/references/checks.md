@@ -8,7 +8,7 @@
 
 | group | 检查 | 内容 |
 | --- | --- | --- |
-| installation | `platform`、`maa`、`server`、`node`、`settings`、`private-directory`、`version` | 与 setup 相同。`version` 读 MAA.exe 的产品版本并对照随包核实记录：记录缺失、为空（`verification-record-empty`）、版本未知或未完全核实都只是提醒，不阻止使用 |
+| installation | `platform`、`maa`、`server`、`node`、`settings`、`private-directory`、`version` | 与 setup 相同。`version` 读 MAA.exe 的产品版本并对照随包核实记录：记录缺失、为空（`verification-record-empty`）、版本未知或未完全核实都只是提醒，不阻止使用。记录里有比安装版本新的源码已核正式版时为 `maa-upgrade-available`（提醒，修法 `upgrade-maa-yourself`，执行者是用户）：用户自己在 MAA 的更新设置或官方发布页升级，skill 不下载、不升级 MAA；比全部已核版本都新的安装（含 beta）不提醒降级。返回的 `version` 有 `installed`、`recordAvailable`、`recordEmpty`、`recordVersion`（核实记录自己的版本）、`sourceVerified`、`deviceVerified`、`newerSourceVerified`（可升级到的最高源码已核版本或 null）和 `newerDeviceVerified` |
 | connection | `connection` | 读当前配置的 adb 路径和地址，只运行 `adb devices`（adb 服务没在运行时 adb 会自行启动它，与 setup 的发现相同）：在线正常；离线、未授权、adb 不存在为错误；其余为提醒：`device-not-connected`（配置的地址不在 adb 列表里：网络地址要 `connect` 之后才列出，本机模拟器端口只在 adb 服务启动时扫描一次，所以不说明模拟器是否开着，等待也不会让它出现）、`adb-unavailable`、`adb-path-unrecognized`（配置的路径不是 adb 程序，没有运行）、`connection-not-configured`。状态、说明和修法只由 `setup-connection.ts` 的 `classifyAdbListing` 与 `connectionStates` 决定；只运行文件名是 adb 程序的路径（与 setup 发现共用 `isAdbExecutablePath`），不连接、不选择、不写入，不输出地址或路径 |
 | configuration | `configuration`、`configuration-fields`、`remote-control` | 能否解析；本项目写入的任务开关、理智药和定时字段的类型与范围（只给字段种类）；MAA 远程控制是否已配置 |
 | write-lock | `write-lock` | 遗留写入核对，规则见下文 |
@@ -26,6 +26,8 @@
 核对证据中的 `lock` 区分 none、active、stale、unknown。只有已确认不存在的进程号才算 stale；不可辨认或无法确认进程状态的锁留给用户处理。`comparison` 表示全部当前配置与备份相同（unchanged）、与原请求预期结果相同（applied），或者 unknown。字段证据只显示脱敏键名和状态，不显示私人配置名或值。
 
 已关联的最新备份、唯一匹配且为最新的待执行记录、持有者信息、当前配置和 MAA 进程状态共同构成 `evidenceRevision`。证据变化时批准失效，重新诊断。`canReconcile` 和 `canRestore` 是可选动作的前提，不代表已经批准。
+
+`recovery.versions` 比较待执行记录写下的 MAA 版本和核实记录版本与当前的值：`state` 为 same、changed（`changed` 列出变了的一项或两项）、unknown（某一边读不出）或 unrecorded（25 之前写的记录没有版本），没有可核对的待执行记录时为 null。`repair` 的结果带同一个 `versions`。差异只向用户报告，不阻止修法，也不计入 `evidenceRevision`；待执行记录里版本字段格式不对时，该事务不能自动恢复。
 
 通过标准输入向 `doctor.ts repair --json` 传 JSON：
 

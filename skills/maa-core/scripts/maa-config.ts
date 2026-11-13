@@ -7,6 +7,7 @@ import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 import { prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
+import { compareVersionStamp, isVersionStamp, readVersionStamp, type MaaVersionStamp, type VersionDrift } from './maa-version.ts';
 import { baseReferencePattern, buildBaseChanges, checkGrant, inspectBaseAsset, installBaseAsset, loadBaseAsset, type BaseAsset, type BasePlanGrant } from './base-config.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
@@ -18,11 +19,24 @@ export type WriteRequest = {
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
-/** The only replaceable boundary: the MAA process and its runtime observations. */
+/**
+ * The only replaceable boundary: the MAA process and its runtime observations. `version` reads the installed
+ * MAA.exe product version (maa-version.ts). A boundary without it falls back to the real MAA.exe reader
+ * (`readMaaVersion`, which starts PowerShell on Windows): stage-run's `switch` boundary relies on that, and a test
+ * double must supply its own `version` (tests/fixtures/maa-version-guard.ts fails a test file that reaches the real reader).
+ */
 export interface MaaProcess {
   inspect(): Promise<MaaState>;
   close(): Promise<void>;
   start(): Promise<void>;
+  version?(): Promise<string | null>;
+}
+/**
+ * The version stamp written into a pending record or plan, read through the process boundary (or, without `version`,
+ * the real MAA.exe reader); no MAA directory or no MAA.exe reads as unknown.
+ */
+export function versionStampOf(maaDirectory: string | null | undefined, maa: MaaProcess): Promise<MaaVersionStamp> {
+  return readVersionStamp(maaDirectory, maa.version ? () => maa.version!() : undefined);
 }
 type RecordValue = Record<string, unknown>;
 function revision(config: RecordValue): string { return createHash('sha256').update(JSON.stringify(config)).digest('hex'); }
@@ -290,6 +304,8 @@ export type RecoveryInspection = {
   evidenceRevision: string; configuration: 'valid' | 'invalid'; backup: 'matched-latest' | 'unavailable';
   process: 'ready' | 'closed' | 'unverified'; canReconcile: boolean; canRestore: boolean;
   changes: { key: string; state: 'applied' | 'unchanged' | 'unknown' }[];
+  /** MAA and record versions in the pending record against the current ones; reported only, outside `evidenceRevision`. */
+  versions: VersionDrift | null;
 };
 const operationId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 
@@ -300,7 +316,7 @@ function transactionFields(value: unknown, required: string[], optional: string[
 }
 
 function transactionMetadata(value: unknown, pending = false): RecordValue {
-  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])]);
+  const record = transactionFields(value, ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', ...(pending ? ['authorization', 'changes'] : [])], pending ? ['versions'] : []);
   if (!operationId(record.id) || (record.skill !== 'maa-daily' && record.skill !== 'maa-doctor' && record.skill !== 'maa-setup')
     || (record.host !== 'codex' && record.host !== 'claude') || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 0
     || typeof record.startedAt !== 'string' || !Number.isFinite(Date.parse(record.startedAt)) || new Date(record.startedAt).toISOString() !== record.startedAt
@@ -314,6 +330,7 @@ function transactionPending(value: unknown): RecordValue {
   if ((authorization.source !== 'current-request' && authorization.source !== 'approved-report')
     || typeof authorization.reference !== 'string' || !authorization.reference.trim()
     || Object.hasOwn(authorization, 'medicineCount') && (!Number.isInteger(authorization.medicineCount) || Number(authorization.medicineCount) < 0 || Number(authorization.medicineCount) > 2147483647)) throw new Error('transaction-authorization-invalid');
+  if (Object.hasOwn(record, 'versions') && !isVersionStamp(record.versions)) throw new Error('transaction-versions-invalid');
   if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
   for (const item of record.changes) {
     const change = transactionFields(item, ['path', 'value']);
@@ -327,8 +344,8 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
   const read = async (file: string) => { try { return await readFile(file, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } };
   const rawLock = await read(lockFile); const rawCurrent = await read(join(context.maaDirectory, 'config', 'gui.new.json'));
   const summary: RecoveryInspection = { lock: rawLock === null ? 'none' : 'unknown', comparison: 'unknown', evidenceRevision: '',
-    configuration: 'invalid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [] };
-  let current: RecordValue | undefined; let metadata: RecordValue | undefined;
+    configuration: 'invalid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [], versions: null };
+  let current: RecordValue | undefined; let metadata: RecordValue | undefined; let pendingStamp: { versions: unknown } | undefined;
   let backup: RecordValue | undefined; let pending: WriteRequest | undefined; let rawBackup: string | null = null; let rawPending: string | null = null;
   try { current = object(JSON.parse((rawCurrent ?? '').replace(/^\uFEFF/, ''))); await inspectConfiguration(context.maaDirectory); summary.configuration = 'valid'; } catch { /* A damaged configuration cannot be restored automatically. */ }
   if (rawLock !== null) {
@@ -360,6 +377,7 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       if (matches.length !== 1 || records.at(-1)?.id !== metadata.id) throw new Error('pending-record-mismatch');
       const record = transactionPending(matches[0]);
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
+      pendingStamp = { versions: record.versions };
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
       const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined).config;
       summary.backup = 'matched-latest';
@@ -375,6 +393,8 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
   const stable = rawLock === await read(lockFile) && rawCurrent === await read(join(context.maaDirectory, 'config', 'gui.new.json'));
   if (!stable) { summary.comparison = 'unknown'; summary.canReconcile = false; summary.canRestore = false; }
   summary.evidenceRevision = createHash('sha256').update(JSON.stringify([rawLock, rawCurrent, rawBackup, rawPending, summary])).digest('hex');
+  // Version differences are reported after the revision is fixed, so an unreadable version cannot invalidate an approval.
+  if (pendingStamp) summary.versions = compareVersionStamp(pendingStamp.versions, await versionStampOf(context.maaDirectory, maa));
   return { summary, rawLock, rawCurrent, rawBackup, rawPending, metadata, backup, pending, current };
 }
 
@@ -415,14 +435,14 @@ export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaPr
       });
       const lock = await open(join(request.maaDirectory, 'config', '.maa-skills.lock'), 'r+');
       try {
-        return await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
+        return { ...await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
           expectedRevision: revision(evidence.current!), closedConfirmed: request.closedConfirmed,
           authorization: { source: 'current-request', reference: request.reference, ...(request.medicineCount === undefined ? {} : { medicineCount: request.medicineCount }) }, changes }, maa,
-        { lock, rawLock: evidence.rawLock! });
+        { lock, rawLock: evidence.rawLock! }), versions: evidence.summary.versions };
       } finally { await lock.close(); }
     }
     await unlink(join(request.maaDirectory, 'config', '.maa-skills.lock'));
-    return { status: 'complete', reason: null };
+    return { status: 'complete', reason: null, versions: evidence.summary.versions };
   } catch { return { status: 'unknown', reason: 'reconciliation-required' }; }
   finally {
     await guard.close();
@@ -501,7 +521,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       let boundary: MaaProcess | undefined;
       const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
       const result = await executeConfigWrite({ ...body, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as WriteRequest,
-        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start() });
+        { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       console.log(JSON.stringify({ ok: result.status === 'complete', ...result }));
       if (result.status !== 'complete') process.exitCode = 1;
     } else throw new Error('action-invalid');
@@ -621,7 +641,9 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await checkAsset();
     const trainingManifest = trainingAsset ? { file: trainingAsset.file, before: assetBefore, sha256: trainingAsset.sha256, immutable: true } : undefined;
     const baseManifest = baseAsset ? { file: baseAsset.relative, before: baseBefore, sha256: baseAsset.sha256, immutable: true } : undefined;
-    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest, baseManifest }) + '\n', { mode: 0o600 });
+    // The MAA and record versions read now; recovery reports a difference from them and refuses nothing for it.
+    const versions = await versionStampOf(request.maaDirectory, maa);
+    await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest, baseManifest, versions }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
     const preview = prepare(original, request, recovery ? 'recovery' : connection, baseAsset);

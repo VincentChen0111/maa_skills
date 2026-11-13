@@ -38,7 +38,7 @@ Android 官方 [adb 文档](https://developer.android.com/tools/adb)（2026-11-1
 
 ## 供 25 登记的依赖条目
 
-以下 MAA 位置是本票新增的依赖，按 [25](issues/25-maa-version-verification.md) 的要求登记指纹和受影响的 skill（maa-core 的 `maa-log.ts`、`doctor-checks.ts`，入口 maa-doctor）：
+以下 MAA 位置是本票新增的依赖，按 [25](issues/25-maa-version-verification.md) 的要求登记指纹和受影响的 skill（maa-core 的 `maa-log.ts`、`doctor-checks.ts`，入口 maa-doctor）。2026-11-13 已由 25 登记进 [依赖条目](maa-dependencies.json)：`callback-log`、`debug-images`、`remote-control`、`log-analysis-guide`、`issue-referral-entries`，连接检查用到的位置在 `connection-settings`。
 
 | 依赖 | 固定位置 | blob |
 | --- | --- | --- |

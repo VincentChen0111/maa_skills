@@ -19,7 +19,7 @@ test('trusted network fixtures replace only the named product CLI boundary and r
   await writeFile(join(root, 'scripts/cultivation-gaps.ts'), await readFile(join(root, 'scripts/operator-cost.ts')));
   await writeFile(join(root, 'scripts/cultivation-gaps-copy.ts'), await readFile(join(root, 'scripts/operator-cost.ts')));
   await writeFile(join(root, 'scripts/cultivation-report.ts'), await readFile(join(root, 'scripts/operator-cost.ts')));
-  for (const name of ['base-plan', 'base-report', 'base-apply']) await writeFile(join(root, `scripts/${name}.ts`), await readFile(join(root, 'scripts/operator-cost.ts')));
+  for (const name of ['base-plan', 'base-report', 'base-apply', 'skland-community']) await writeFile(join(root, `scripts/${name}.ts`), await readFile(join(root, 'scripts/operator-cost.ts')));
   const fixture = await createFixture({ companionSkills: { 'maa-core': root }, networkFixtures: { [url]: { synthetic: 17 } } }); t.after(() => fixture.dispose());
   for (const host of ['.agents', '.claude']) for (const name of ['operator-cost', 'cultivation-gaps']) {
     const script = `${host}/skills/maa-core/scripts/${name}.ts`;
@@ -39,6 +39,7 @@ test('trusted network fixtures replace only the named product CLI boundary and r
     ['base-plan.ts', 'generate', 'true'], ['base-plan.ts', 'check', 'true'], ['base-plan.ts', 'candidates', 'true'], ['base-plan.ts', 'query', 'false'],
     ['base-report.ts', 'draft', 'true'], ['base-report.ts', 'freshness', 'true'], ['base-report.ts', 'read', 'false'], ['base-report.ts', 'approve', 'false'],
     ['base-apply.ts', 'check', 'false'],
+    ['skland-community.ts', 'read', 'true'], ['skland-community.ts', 'status', 'false'],
   ]) {
     const probe = spawnSync(process.execPath, [`${host}/skills/maa-core/scripts/${file}`, action!, '--probe'], { cwd: fixture.workspace, env: fixture.env, encoding: 'utf8' });
     assert.equal(probe.status, 0, probe.stderr); assert.equal(probe.stdout.trim(), active);

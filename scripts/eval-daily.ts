@@ -82,7 +82,12 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
       held(action, lockPhase); exact(decode(action.after), JSON.stringify(record) + '\n');
       grants.push({ file, key: '$file', value: action.after });
     };
-    append(pending, 'private/daily-pending.jsonl', { ...metadata, authorization, changes: [change] }, 'check');
+    // Ticket 25: the writer records the MAA and verification-record versions it read. The synthetic MAA has no readable
+    // product version, so it must be null (never guessed); the installed record's version must be a positive integer.
+    // The whole line is still compared byte for byte, so no other field can appear.
+    const recordVersion = object(pendingRecord.versions).recordVersion;
+    if (!Number.isSafeInteger(recordVersion) || recordVersion < 1) throw new Error('pending-versions');
+    append(pending, 'private/daily-pending.jsonl', { ...metadata, authorization, changes: [change], versions: { maaVersion: null, recordVersion } }, 'check');
     const recordedResult = { ...metadata, status: result.status, phase, operation: id, changedKeys: result.changedKeys, reason: result.reason };
     append(last, 'private/daily-runs.jsonl', recordedResult, complete ? 'record' : phase);
     const replaced = mutations.filter(action => action.kind === 'replace');

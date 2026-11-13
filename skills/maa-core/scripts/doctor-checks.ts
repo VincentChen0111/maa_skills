@@ -1,6 +1,7 @@
 import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { libraryCheck, type LibraryCheck } from './checks.ts';
+import { compareMaaVersions } from './maa-version.ts';
 
 /**
  * Read-only doctor checks that have no other owner: MAA remote control, the private records, and the
@@ -74,28 +75,8 @@ export function githubReleaseLookup(fetcher: typeof fetch = fetch): ReleaseLooku
   };
 }
 
-/** SemVer 2.0 precedence; build metadata is ignored. Returns a negative, zero or positive number. */
-export function compareVersions(left: string, right: string): number {
-  const a = semver.exec(left), b = semver.exec(right);
-  if (!a || !b) throw new Error('version-invalid');
-  for (let index = 1; index <= 3; index++) {
-    const difference = Number(a[index]) - Number(b[index]);
-    if (difference) return difference;
-  }
-  if (!a[4] !== !b[4]) return a[4] ? -1 : 1;
-  const ap = a[4]?.split('.') ?? [], bp = b[4]?.split('.') ?? [];
-  for (let index = 0; index < Math.max(ap.length, bp.length); index++) {
-    const x = ap[index], y = bp[index];
-    if (x === y) continue;
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
-    if (xn && yn) return Number(x) - Number(y);
-    if (xn !== yn) return xn ? -1 : 1;
-    return x < y ? -1 : 1;
-  }
-  return 0;
-}
+/** SemVer 2.0 precedence, one implementation shared with the MAA version seam. */
+export const compareVersions = compareMaaVersions;
 
 const packageSkills = ['maa-account', 'maa-core', 'maa-daily', 'maa-doctor', 'maa-help', 'maa-setup'];
 export type SkillLink = { name: string; kind: 'directory' | 'link' | 'other'; state: 'ok' | 'broken' | 'no-skill-file' };

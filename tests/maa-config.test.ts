@@ -7,6 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
+import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import './fixtures/maa-version-guard.ts';
 
 async function executeConfigWrite(request: Omit<WriteRequest, 'expectedRevision'> & { expectedRevision?: string }, maa: MaaProcess) {
   const expectedRevision = request.expectedRevision ?? (await inspectConfiguration(request.maaDirectory)).revision;
@@ -98,6 +100,19 @@ test('a confirmed closed MAA receives only the requested reminder change with ba
   assert.match(runs, /"status":"complete"/);
   const publicOutput = JSON.stringify({ result, summary: await inspectConfiguration(f.maa) });
   assert.doesNotMatch(publicOutput, /synthetic-secret|Synthetic profile/);
+});
+
+test('the pending record carries the MAA version and verification record version read when it was written', async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.maa, 'MAA.exe'), 'synthetic executable placeholder');
+  let running = true;
+  const processBoundary: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+    close: async () => { running = false; }, start: async () => { running = true; }, version: async () => '6.22.0' };
+  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex',
+    authorization: { source: 'current-request', reference: 'synthetic request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }, processBoundary);
+  assert.equal(result.status, 'complete');
+  const pending = JSON.parse((await readFile(join(f.privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim());
+  assert.deepEqual(pending.versions, { maaVersion: '6.22.0', recordVersion: (await readVerificationRecord()).recordVersion });
 });
 
 test('invalid grants and forbidden fields are rejected before closing MAA or creating a lock', async (t) => {
