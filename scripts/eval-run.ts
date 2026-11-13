@@ -18,9 +18,12 @@ const scenarios: Record<ScenarioName, string> = {
 };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-/** Every local module the run and the grader load (relative to this file); each one's text is part of the scenario hash. */
-export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts',
-  '../skills/maa-core/scripts/preferences.ts'];
+/**
+ * Every runner module the run and the grader load (relative to this file); each one's text is part of the scenario hash.
+ * Product files (anything under skills/, such as the settings reader eval-auth uses) stay out: they are part of the installed
+ * skill, recorded by the skill version, so a release that changes them is still compared against the same scenario.
+ */
+export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts'];
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.

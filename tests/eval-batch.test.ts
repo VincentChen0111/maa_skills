@@ -2,15 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compareBatches, readManifest, runBatch, runnerSources } from '../scripts/eval-batch.ts';
-import { scenarioHashSources } from '../scripts/eval-run.ts';
+import { scenarioHashSources, type ScenarioDefinition } from '../scripts/eval-run.ts';
+import { createFixture } from '../scripts/eval-fixture.ts';
 import { entryId, scenarioCatalog, scenarioGroups, selectScenarios } from '../scripts/eval-scenarios.ts';
-import type { RunRecord } from '../scripts/evaluation.ts';
+import { compareRuns, type RunRecord } from '../scripts/evaluation.ts';
 import { accountScenarios } from '../eval/maa-account/scenarios.ts';
 import { baseScenarios } from '../eval/maa-account/base-scenarios.ts';
 import { costScenarios } from '../eval/maa-account/cost-scenarios.ts';
@@ -218,7 +219,7 @@ test('the batch CLI lists scenarios and refuses incomplete arguments; eval-run k
   assert.equal(manifest.abort?.stage, 'auth-preflight');
 });
 
-test('every local module the grader and the run load is in both the scenario hash and the runner fingerprint', async () => {
+test('every local module the run and the grader load is fingerprinted: runner modules in the scenario hash, product modules in the skill version', async () => {
   // Static imports, followed transitively; the dynamic import of the batch module is only the command-line entry of eval-run.
   const closure = new Set<string>();
   const visit = async (file: string) => {
@@ -232,8 +233,40 @@ test('every local module the grader and the run load is in both the scenario has
   await visit('scripts/evaluation.ts'); await visit('scripts/eval-run.ts');
   const hashed = scenarioHashSources.map((file) => relative(repository, join(repository, 'scripts', file)).replaceAll('\\', '/'));
   for (const file of closure) {
-    assert.ok(hashed.includes(file), `${file} is in the scenario hash`);
     assert.ok(runnerSources.includes(file), `${file} is in the runner fingerprint`);
+    const product = file.match(/^skills\/([^/]+)\/(.+)$/);
+    if (!product) { assert.ok(hashed.includes(file), `${file} is in the scenario hash`); continue; }
+    // A product file never enters the scenario hash: a release changing it must stay comparable. It is part of the installed
+    // skill instead, which the skill version (and the payload fingerprint) records.
+    assert.ok(!hashed.includes(file), `${file} stays out of the scenario hash`);
+    const fixture = await createFixture({ companionSkills: { [product[1]!]: join(repository, 'skills', product[1]!) } });
+    try { assert.ok(fixture.original.has(`.agents/skills/${product[1]}/${product[2]}`), `${file} counts toward the skill version`); }
+    finally { await fixture.dispose(); }
   }
   assert.ok(closure.has('scripts/eval-transaction.ts'));
+  assert.ok(closure.has('skills/maa-core/scripts/preferences.ts'));
+});
+
+test('a release that changes only a product script stays comparable: same scenario hash, new skill version', async () => {
+  // A copy of the runner and the skills, with one product script changed, against this checkout.
+  const copy = await mkdtemp(join(root, 'release-'));
+  for (const directory of ['scripts', 'eval', 'skills', 'tests/fixtures']) await cp(join(repository, directory), join(copy, directory), { recursive: true });
+  await cp(join(repository, 'package.json'), join(copy, 'package.json'));
+  const changed = join(copy, 'skills/maa-core/scripts/preferences.ts');
+  await writeFile(changed, `${await readFile(changed, 'utf8')}\n// A product-only change.\n`);
+  const records: RunRecord[] = [];
+  for (const checkout of [repository, copy]) {
+    const { runScenario } = await import(pathToFileURL(join(checkout, 'scripts/eval-run.ts')).href) as typeof import('../scripts/eval-run.ts');
+    const { selectScenarios: select } = await import(pathToFileURL(join(checkout, 'scripts/eval-scenarios.ts')).href) as typeof import('../scripts/eval-scenarios.ts');
+    const [entry] = select(['core-language']);
+    const outcome = await runScenario({ host: 'claude', model: 'fixed-model', scenario: entry!.definition as ScenarioDefinition, executable: process.execPath,
+      executableArgs: [join(checkout, 'eval/host-double.mjs'), await script({ host: 'claude', steps: [] })], auth: { mode: 'host-double' }, artifactParent: join(copy, 'runs'),
+      ...(entry!.skillDirectory ? { skillDirectory: entry!.skillDirectory } : {}), companionSkills: entry!.companionSkills });
+    // Compared as real records are: only the double mark and the grade differ from a model run.
+    const { double: _double, ...record } = outcome.record;
+    records.push({ ...record, grade: { ...record.grade, status: 'pass' } });
+  }
+  assert.equal(records[0]!.scenarioHash, records[1]!.scenarioHash, 'a product script is not part of the scenario');
+  assert.notEqual(records[0]!.skillVersion, records[1]!.skillVersion, 'the skill version records the product change');
+  assert.equal(compareRuns([records[0]!], [records[1]!]).status, 'pass');
 });
