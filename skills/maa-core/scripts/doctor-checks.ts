@@ -1,12 +1,35 @@
 import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { libraryCheck, type LibraryCheck } from './checks.ts';
+import { libraryCheck, type CheckResult, type LibraryCheck } from './checks.ts';
+import type { RecoveryInspection } from './maa-config.ts';
 import { compareMaaVersions } from './maa-version.ts';
 
 /**
  * Read-only doctor checks that have no other owner: MAA remote control, the private records, and the
  * skill installation (version and directory links). None of them writes, decrypts or prints a value.
+ * The configuration and write-lock rows are the one producer doctor and the setup recheck share.
  */
+
+/**
+ * The `configuration` and `write-lock` rows from one `inspectConfigRecovery` result (owned by the configuration writer).
+ * `configuration` is the writers' own read (`inspectConfiguration`), stricter than the installation group's `maa` row.
+ * `write-lock`: no lock is normal, a live holder a warning, a stale or unknown lock an error (the next write is refused until
+ * it is reconciled), with the reconcile or restore repair only when the evidence proves it.
+ */
+export function configurationCheck(recovery: Pick<RecoveryInspection, 'configuration'>): CheckResult {
+  return recovery.configuration === 'valid'
+    ? { id: 'configuration', status: 'normal', reason: 'Configuration is readable.', repair: { id: 'inspect-configuration', executor: 'user', description: 'Inspect the configuration in MAA if the symptom persists.' } }
+    : { id: 'configuration', status: 'error', reason: 'Configuration cannot be parsed.', repair: { id: 'manual-configuration', executor: 'user', description: 'Inspect the configuration and retained backups manually.' } };
+}
+export function writeLockCheck(recovery: Pick<RecoveryInspection, 'lock' | 'canReconcile' | 'canRestore'>): CheckResult {
+  const lock = recovery.lock;
+  return { id: 'write-lock', status: lock === 'none' ? 'normal' : lock === 'active' ? 'warning' : 'error',
+    reason: lock === 'none' ? 'No write lock is present.' : lock === 'active' ? 'The lock holder is still alive.' : 'The previous write result requires reconciliation.',
+    repair: { id: recovery.canReconcile ? 'reconcile-lock' : recovery.canRestore ? 'restore-config' : 'manual-lock',
+      executor: recovery.canReconcile || recovery.canRestore ? 'skill' : 'user',
+      description: recovery.canReconcile ? 'Approve reconciliation of this evidence and release the retained lock.' : recovery.canRestore ? 'Approve restoring only the recorded changed fields through the configuration writer.' : 'Preserve the evidence; wait for the writer or inspect MAA manually.',
+      ...(recovery.canReconcile || recovery.canRestore ? { channel: 'doctor.ts repair' } : {}) } };
+}
 
 /**
  * Fixed MAA v6.21.4 (docs/doctor-sources.md): each configuration's `Gui.RemoteControl` holds

@@ -274,11 +274,17 @@ test('the daily CLI uses the network only with --online and publishes only with 
 // ---- registry coverage: every MAA source a page cites --------------------------------------------------------------
 // A citation is a link to a file at a fixed MAA commit, or a backticked MAA source path.
 const citation = /MaaAssistantArknights\/MaaAssistantArknights\/blob\/[0-9a-f]{40}\/([^)#\s`]+)|`((?:src\/Maa[A-Za-z]+|docs\/zh-cn|resource|\.agents\/skills|\.github\/ISSUE_TEMPLATE)\/[A-Za-z0-9_./-]+\.[a-z]+)`/g;
-/** Known historical citations that are deliberately not registered, keyed `<page> <cited path>`; each one says why. */
+/**
+ * Known matches that are deliberately not registered, keyed `<page> <cited path>`; each one says why. They are historical
+ * citations, or text that only looks like a citation.
+ */
 const historicalCitations = new Map([
   // 05's record links Bootstrapper.cs without its Main/ directory, a 404 on every version. The behaviour is registered at
   // the real path src/MaaWpfGui/Main/Bootstrapper.cs (entry startup-auto-run-skip); 05's historical record is not rewritten.
   ['docs/daily-verification.md src/MaaWpfGui/Bootstrapper.cs', 'old path in 05\'s record; registered at src/MaaWpfGui/Main/Bootstrapper.cs'],
+  // 08's record lists the synthetic zip entry names its extraction must refuse; `resource/NUL.txt` is the Windows device-name
+  // case (tests/setup-download.test.ts), not an MAA file.
+  ['docs/setup-verification.md resource/NUL.txt', 'synthetic zip entry name in 08\'s extraction tests, not an MAA source file'],
 ]);
 /**
  * The pages scanned: every Markdown page under docs/ (sources and verification records, tickets, reviews, the spec) and
