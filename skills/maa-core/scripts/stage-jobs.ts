@@ -20,7 +20,8 @@ export type Job = { id: number; content: ObjectValue; source: SourceRecord; rati
 export type CandidateRating = { flag: 'ok' | 'low' | 'not-enough' | 'unknown'; like?: number; dislike?: number; votes?: number; notEnoughRating?: boolean;
   likeRatio?: number; requiredRatio?: number; ratingLevel?: number | null; ratingRatio?: number | null; source?: SourceRecord | null };
 type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean; ids: number[] };
-type SearchOutcome = 'offline' | 'empty' | 'found' | 'fallback-suspected' | 'insufficient' | 'other-stages';
+type SearchOutcome = 'offline' | 'empty' | 'found' | 'same-map-unproven' | 'fallback-suspected' | 'insufficient' | 'unresolved' | 'other-stages';
+const blockingReasons = ['map-mismatch', 'stage-same-map-unproven', 'stage-name-unresolved', 'difficulty-mismatch', 'difficulty-unstated-normal-only', 'full-job-required', 'unsupported-job-type'];
 export type StageReport = ReturnType<typeof matchStageJobs>;
 export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number; supportJobs?: number[] }[] };
 const object = (value: unknown): ObjectValue => {
@@ -193,6 +194,37 @@ function scanActionNames(content: ObjectValue, professions: Map<string, Set<stri
   return { undeclared, unrecognized };
 }
 
+export type StageMatch = 'this-stage' | 'same-map-unprovable' | 'other-stage' | 'unknown';
+type StageIndex = Map<string, [string, ObjectValue][]>;
+// MAA v6.21.4 resolves a job's stage_name by exact equality with a level's stageId, code, levelId or name (Tile LevelKey),
+// takes the first match in its own data order, and list mode navigates to that level's code. levelId tails never match.
+function indexStages(stages: ObjectValue): StageIndex {
+  const index: StageIndex = new Map();
+  for (const [key, value] of Object.entries(stages)) {
+    if (!value || typeof value !== 'object') continue;
+    for (const field of new Set([value.stageId, value.code, value.levelId, value.name])) if (typeof field === 'string' && field) index.set(field, [...(index.get(field) ?? []), [key, value]]);
+  }
+  return index;
+}
+const twinDifficulties = ['NORMAL', 'FOUR_STAR'];
+/**
+ * The single owner of "does this job's stage_name mean the selected stage?". this-stage: every level it names is the
+ * selected stage or its normal/raid twin (same levelId, code and difficulty group; the job's difficulty bit decides).
+ * same-map-unprovable: it names the same map in another difficulty group or mode (e.g. #s). other-stage: every level it
+ * names is a different map. unknown: no level, or a mix MAA's own lookup order would decide. Only other-stage can mean
+ * "no job for this stage"; nothing but this-stage can become ready.
+ */
+export function resolveJobStage(stages: unknown, stageName: unknown, selectedValue: unknown, index: StageIndex = indexStages(object(stages))): { kind: StageMatch; matches: string[] } {
+  const selected = object(selectedValue), group = (value: ObjectValue) => value.diffGroup ?? 'NONE';
+  const entries = typeof stageName === 'string' && stageName ? index.get(stageName) ?? [] : [];
+  const kinds = new Set<StageMatch>(entries.map(([, entry]) => entry.stageId === selected.stageId || entry.levelId === selected.levelId && entry.code === selected.code
+    && group(entry) === group(selected) && twinDifficulties.includes(entry.difficulty) && twinDifficulties.includes(selected.difficulty) ? 'this-stage'
+    : entry.levelId === selected.levelId ? 'same-map-unprovable' : 'other-stage'));
+  const kind: StageMatch = !kinds.size ? 'unknown' : kinds.size === 1 ? [...kinds][0]! : kinds.has('other-stage') ? 'unknown' : 'same-map-unprovable';
+  return { kind, matches: entries.map(([key]) => key) };
+}
+const stageReasons: Record<StageMatch, string | null> = { 'this-stage': null, 'same-map-unprovable': 'stage-same-map-unproven', 'other-stage': 'map-mismatch', unknown: 'stage-name-unresolved' };
+
 /** The request is the user's explicit scope. Remote content contributes facts, never authorization. */
 export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, request: StageRequest, jobs: Job[], search?: SearchCoverage[]) {
   const snapshot = object(snapshotValue), tables = object(object(tablesValue).stages);
@@ -200,6 +232,7 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
   const coverage = search ?? request.stages.map(stage => ({ stageId: stage.stageId, mode: 'offline' as const, pages: 0, truncated: false, ids: [] }));
   if (!Array.isArray(jobs)) throw new Error('jobs-invalid');
   const jobsById = new Map(jobs.map(job => [job?.id, job]));
+  const stageIndex = indexStages(tables), usedStages = new Set<string>();
   // Optional character catalog (pinned game data): id -> { name, profession }. Absent means names cannot be classified.
   const rawCatalog = object(tablesValue).characters, catalog: ObjectValue = rawCatalog && typeof rawCatalog === 'object' && !Array.isArray(rawCatalog) ? rawCatalog : {};
   const professions = new Map<string, Set<string>>(), usedNames = new Set<string>();
@@ -217,9 +250,8 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       || stage.difficulty !== (selected.difficulty === 'normal' ? 'NORMAL' : 'FOUR_STAR')) throw new Error('stage-identity-mismatch');
     if (!Number.isSafeInteger(selected.loops) || selected.loops < 1 || selected.loops > 1000) throw new Error('loops-invalid');
     const map = text(stage.zoneId), levelId = text(stage.levelId);
-    // Main-story difficulty groups can share levelId. Only an explicit stageId proves the chosen group.
     const difficultyGroup = text(stage.diffGroup ?? 'NONE');
-    const aliases = difficultyGroup === 'NONE' ? [selected.stageId, levelId, levelId.split('level_').at(-1)] : [selected.stageId];
+    const identify = (stageName: unknown) => { const found = resolveJobStage(tables, stageName, stage, stageIndex); for (const key of found.matches) usedStages.add(key); return found.kind; };
     const prerequisiteChecks = Array.isArray(stage.unlockCondition) ? stage.unlockCondition.map((value: unknown) => {
       const requirement = object(value), actual = request.completions?.[requirement.stageId];
       const state: Status = !request.completionEvidence?.trim() || !actual ? 'unknown' : actual === requirement.completeState || actual === 'COMPLETE' && requirement.completeState === 'PASS' ? 'ready' : 'blocked';
@@ -228,9 +260,12 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
     const candidates = jobs.map(job => {
       if (!Number.isSafeInteger(job.id) || job.id <= 0) throw new Error('job-id-invalid');
       const content = object(job.content), reasons: string[] = [];
-      if (!aliases.includes(content.stage_name)) reasons.push('map-mismatch');
-      const flag = selected.difficulty === 'normal' ? 1 : 2;
-      if (!Number.isInteger(content.difficulty) || content.difficulty < 1 || content.difficulty > 3 || !(content.difficulty & flag)) reasons.push('difficulty-mismatch');
+      const stageMatch = identify(content.stage_name);
+      if (stageReasons[stageMatch]) reasons.push(stageReasons[stageMatch]!);
+      // MAA v6.21.4 GUI adds a job whose difficulty is 0 or missing (DifficultyFlags.None) to the list as normal only.
+      const flag = selected.difficulty === 'normal' ? 1 : 2, declared = content.difficulty === undefined ? 0 : content.difficulty;
+      if (!Number.isInteger(declared) || declared < 0 || declared > 3 || declared > 0 && !(declared & flag)) reasons.push('difficulty-mismatch');
+      else if (declared === 0 && flag === 2) reasons.push('difficulty-unstated-normal-only');
       if (!Array.isArray(content.actions) || !content.actions.length) reasons.push('full-job-required');
       if (content.type !== undefined && content.type !== 'Copilot') reasons.push('unsupported-job-type');
       const operators = matchOperators(snapshot, content), actionNames = scanActionNames(content, professions, usedNames);
@@ -243,7 +278,7 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
         checks.push(proof?.satisfied === true ? 'ready' : proof?.satisfied === false ? 'blocked' : 'unknown');
         if (!proof) reasons.push('document-conditions-unverified');
       }
-      return { id: job.id, status: reasons.some(reason => ['map-mismatch', 'difficulty-mismatch', 'full-job-required', 'unsupported-job-type'].includes(reason)) ? 'blocked' as Status : status(checks), reasons, source: job.source,
+      return { id: job.id, status: reasons.some(reason => blockingReasons.includes(reason)) ? 'blocked' as Status : status(checks), reasons, source: job.source, stageMatch,
         requirements: operators.requirements, assignment: operators.assignment, content: structuredClone(content), hash: digest(content),
         execution: operators.execution ? { content: operators.execution, hash: digest(operators.execution) } : null, rating: rateJob(job), actionNames, support: operators.support };
     });
@@ -254,16 +289,20 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
     // The live backend matches level_keyword against level name / levelId / stageId; with no match it drops the stage
     // filter (no document parameter is sent) and returns unrelated site-wide jobs. Classify what this query returned.
     const searched = coverage.find(item => item.stageId === selected.stageId)!, keyword = levelId.split('level_').at(-1)!;
-    const returned = searched.ids.map(id => object(jobsById.get(id)!.content).stage_name);
-    const belonging = returned.filter(name => aliases.includes(name)).length;
+    const returned = searched.ids.map(id => object(jobsById.get(id)!.content).stage_name), kinds = returned.map(identify);
+    const count = (kind: StageMatch) => kinds.filter(item => item === kind).length, belonging = count('this-stage'), sameMap = count('same-map-unprovable'), unresolved = count('unknown');
+    // Only results that provably name other maps may be reported as "no jobs for this stage".
     const outcome: SearchOutcome = searched.mode === 'offline' ? 'offline' : belonging ? 'found' : !returned.length ? searched.truncated ? 'insufficient' : 'empty'
-      : !returned.some(name => typeof name === 'string' && name.includes(keyword)) ? 'fallback-suspected' : searched.truncated ? 'insufficient' : 'other-stages';
+      : sameMap ? 'same-map-unproven' : !returned.some(name => typeof name === 'string' && name.includes(keyword)) ? 'fallback-suspected'
+      : searched.truncated ? 'insufficient' : unresolved ? 'unresolved' : 'other-stages';
     return { ...selected, map, levelId, difficultyGroup, prerequisites: prerequisiteChecks, candidates, primary: ready[0]?.id ?? null, alternates: ready.slice(1, 4).map(candidate => candidate.id),
       // 需借助战 candidates are never default suggestions; the user names them explicitly at approval.
-      supportCandidates: ranked('support').map(candidate => candidate.id), searchResult: { outcome, returned: returned.length, belonging } };
+      supportCandidates: ranked('support').map(candidate => candidate.id), searchResult: { outcome, returned: returned.length, belonging, sameMap, unresolved } };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
-    tables: { stages: Object.fromEntries(request.stages.map(stage => [stage.stageId, structuredClone(tables[stage.stageId])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }),
+    // Requested stages plus every table entry a job's stage_name resolved to, so preparation re-resolves identically.
+    tables: { stages: Object.fromEntries([...request.stages.map(stage => stage.stageId), ...[...usedStages].filter(key => !request.stages.some(stage => stage.stageId === key)).sort()]
+      .map(key => [key, structuredClone(tables[key])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }),
       characters: Object.fromEntries(Object.entries(catalog).filter(([, entry]) => usedNames.has(entry?.name) && typeof entry.profession === 'string').map(([id, entry]) => [id, { name: entry.name, profession: entry.profession }])),
       charactersSource: structuredClone(object(tablesValue).charactersSource ?? null) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
     batches: [...new Set(stages.map(stage => JSON.stringify([stage.map, stage.difficulty, stage.difficultyGroup])))].map(key => {
@@ -334,12 +373,16 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
       const found = stage.searchResult, insufficient = '覆盖不足，不能据此判断这一关没有作业。';
       if (found.outcome !== 'offline') lines.push(`检索结果：${found.outcome === 'found' ? `返回 ${found.returned} 份，其中 ${found.belonging} 份属于这一关。`
         : found.outcome === 'empty' ? '接口没有返回作业，本次检索条件下这一关没有作业。'
+        : found.outcome === 'same-map-unproven' ? `返回的 ${found.returned} 份作业中，${found.sameMap} 份与这一关同一张地图，但属于其他难度组或模式，无法证明适用；不能据此判断这一关没有作业。`
+        : found.outcome === 'unresolved' ? `返回的 ${found.returned} 份作业中，${found.unresolved} 份的关卡名对应不到唯一的关卡；不能据此判断这一关没有作业。`
         : found.outcome === 'fallback-suspected' ? `返回的 ${found.returned} 份作业都不属于这一关，查询疑似退回到了关键字搜索，结果与这一关无关；${insufficient}`
         : found.outcome === 'insufficient' ? `读完 ${coverage.pages} 页共 ${found.returned} 份，没有一份属于这一关；${insufficient}`
         : `返回的 ${found.returned} 份作业都属于名称相近的其他关卡；本次检索条件下这一关没有作业。`}`);
       for (const condition of stage.prerequisites) lines.push(`- 前置 ${escape(condition.stageId)} ${condition.required}：${condition.status}`);
       for (const candidate of stage.candidates) {
         lines.push(`- 作业 ${candidate.id}：${candidate.status}${candidate.status === 'support' ? '（需借助战）' : ''}；${candidate.reasons.join(', ')}；来源 ${escape(candidate.source.url)}`, `  > 外部描述：${escape(candidate.content.doc?.title ?? '')} ${escape(candidate.content.doc?.details ?? '')}`);
+        if (candidate.stageMatch === 'same-map-unprovable') lines.push(`  - 作业写的关卡 ${escape(candidate.content.stage_name)} 与这一关同一张地图，但属于其他难度组或模式，无法证明适用。`);
+        if (candidate.stageMatch === 'unknown') lines.push(`  - 作业写的关卡 ${escape(candidate.content.stage_name)} 对应不到唯一的关卡，无法证明是这一关。`);
         if (candidate.support) lines.push(`  - 需借助战：缺 ${escape(candidate.support.slot)}，可借 ${candidate.support.members.map(member => `${escape(member.name)}（S${escape(member.skill)}，要求 ${escape(JSON.stringify(member.effectiveRequired))}）`).join('、')}；MAA 只按干员名和技能从助战列表挑选，不核对作业写的精英化和等级，助战练度需要自己确认；开始前在自动战斗页勾选「借助战」并选「补漏」。`);
         if (candidate.actionNames.undeclared.length) lines.push(`  - 动作引用了未声明的干员：${candidate.actionNames.undeclared.map(escape).join('、')}（待核）`);
         if (candidate.actionNames.unrecognized.length) lines.push(`  - 动作引用了无法识别的名字：${candidate.actionNames.unrecognized.map(escape).join('、')}（待核）`);

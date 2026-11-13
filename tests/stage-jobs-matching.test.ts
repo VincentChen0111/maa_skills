@@ -103,15 +103,18 @@ const pagedFetcher = (pages: { stageName: string; ids: number[] }[], hasNext: (p
 
 test('search results distinguish no jobs, unrelated fallback results and insufficient coverage', async () => {
   const { collectStageJobs } = await import('../skills/maa-core/scripts/stage-jobs.ts');
-  const run = (pages: { stageName: string; ids: number[] }[], hasNext: (page: number) => boolean) => collectStageJobs(snapshot, stageTables, stageRequest, pagedFetcher(pages, hasNext));
+  // A different stage whose id contains the keyword: provably another map, so it may justify "no jobs".
+  const near010 = { stageId: 'synthetic_010', code: 'SYN-10', levelId: 'Obt/Synthetic/level_synthetic_010', zoneId: 'synthetic_map', difficulty: 'NORMAL', unlockCondition: [] };
+  const searchTables = { stages: { ...stageTables.stages, synthetic_010: near010 } };
+  const run = (pages: { stageName: string; ids: number[] }[], hasNext: (page: number) => boolean) => collectStageJobs(snapshot, searchTables, stageRequest, pagedFetcher(pages, hasNext));
   const unrelated = await run([1, 2, 3].map(page => ({ stageName: 'unrelated_stage_9', ids: [page * 10, page * 10 + 1] })), () => true);
-  assert.deepEqual(unrelated.stages[0]!.searchResult, { outcome: 'fallback-suspected', returned: 6, belonging: 0 });
+  assert.deepEqual(unrelated.stages[0]!.searchResult, { outcome: 'fallback-suspected', returned: 6, belonging: 0, sameMap: 0, unresolved: 6 });
   assert.deepEqual(unrelated.search[0]!.ids, [10, 11, 20, 21, 30, 31]);
   const fallbackText = formatStageJobs(unrelated);
   assert.match(fallbackText, /检索结果：返回的 6 份作业都不属于这一关，查询疑似退回到了关键字搜索，结果与这一关无关；覆盖不足，不能据此判断这一关没有作业。/);
   assert.equal(unrelated.stages[0]!.primary, null);
   const empty = await run([], () => false);
-  assert.deepEqual(empty.stages[0]!.searchResult, { outcome: 'empty', returned: 0, belonging: 0 });
+  assert.deepEqual(empty.stages[0]!.searchResult, { outcome: 'empty', returned: 0, belonging: 0, sameMap: 0, unresolved: 0 });
   assert.match(formatStageJobs(empty), /检索结果：接口没有返回作业，本次检索条件下这一关没有作业。/);
   const near = await run([{ stageName: 'synthetic_010', ids: [61] }], () => false);
   assert.equal(near.stages[0]!.searchResult.outcome, 'other-stages');
@@ -120,7 +123,7 @@ test('search results distinguish no jobs, unrelated fallback results and insuffi
   assert.equal(nearTruncated.stages[0]!.searchResult.outcome, 'insufficient');
   assert.match(formatStageJobs(nearTruncated), /检索结果：读完 3 页共 3 份，没有一份属于这一关；覆盖不足，不能据此判断这一关没有作业。/);
   const found = await run([{ stageName: 'synthetic_01', ids: [81] }, { stageName: 'unrelated_stage_9', ids: [82] }], page => page < 2);
-  assert.deepEqual(found.stages[0]!.searchResult, { outcome: 'found', returned: 2, belonging: 1 });
+  assert.deepEqual(found.stages[0]!.searchResult, { outcome: 'found', returned: 2, belonging: 1, sameMap: 0, unresolved: 1 });
   assert.match(formatStageJobs(found), /检索结果：返回 2 份，其中 1 份属于这一关。/);
   // Offline inputs make no search claim; coverage ids must name supplied jobs and fit the page bound.
   assert.equal(first([stageJob(1)]).searchResult.outcome, 'offline');
@@ -280,5 +283,5 @@ test('the six-star #s stage spelling is listed but not matched: the pinned copil
   const normalJob = { ...stageJob(92), content: { ...stageJob(92).content, stage_name: 'synthetic_02' } };
   const stage = matchStageJobs(snapshot, tables, request('synthetic_02', 'normal'), [sixStarJob, normalJob]).stages[0]!;
   assert.deepEqual(stage.candidates.map(candidate => [candidate.id, candidate.status]), [[91, 'blocked'], [92, 'ready']]);
-  assert.ok(stage.candidates[0]!.reasons.includes('map-mismatch'));
+  assert.ok(stage.candidates[0]!.reasons.includes('stage-same-map-unproven')); assert.equal(stage.candidates[0]!.stageMatch, 'same-map-unprovable');
 });
