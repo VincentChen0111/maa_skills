@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { executeConfigRecovery, inspectConfigRecovery, inspectManagedFields, readConfiguration, type MaaProcess, type RecoveryRequest } from './maa-config.ts';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials, userCredentialRepairs } from './credentials.ts';
-import { groupOf, libraryCheck, type CheckResult as LibraryCheckResult, type LibraryCheck } from './checks.ts';
+import { blockingChecks, groupOf, libraryCheck, type CheckResult as LibraryCheckResult, type LibraryCheck } from './checks.ts';
 import { inspectInstallation } from './setup.ts';
 import { connectionCheck, inspectConnection, type AdbBoundary } from './setup-connection.ts';
 import { readMaaVersion, type MaaVersionReader } from './maa-version.ts';
@@ -70,7 +70,7 @@ export async function runChecks(context: CheckContext, maa: MaaProcess, boundari
   const skill = await skillInstallationChecks(context.skillsRoot ?? defaultSkillsRoot(), boundaries.releases);
   checks.push(...skill.checks);
   const grouped = checks.map(item => ({ ...item, group: groupOf(item.id) }));
-  const result = { checkedAt: new Date().toISOString(), exitCode: checks.some(item => item.status === 'error') ? 1 : 0, checks: grouped, recovery,
+  const result = { checkedAt: new Date().toISOString(), exitCode: blockingChecks(checks, 'doctor-exit').blocking.length ? 1 : 0, checks: grouped, recovery,
     version: installation.version, skills: skill.skills };
   await writeRecord(context.privateDirectory, 'doctor-latest', result);
   return result;

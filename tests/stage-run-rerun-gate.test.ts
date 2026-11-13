@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { decideStageRun, loadBatchView, observeStageRun, recordStageProgress, startStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
 import { rerunGate, type BatchView } from '../skills/maa-core/scripts/stage-run-state.ts';
@@ -8,7 +8,7 @@ import { inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
 import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { matchStageJobs, prepareStageJobs } from '../skills/maa-core/scripts/stage-jobs.ts';
 import { stageJob, stageSnapshot, stageTables } from './fixtures/stage-data.ts';
-import { attempt, chainEnd, connection, copilotStart, core, gui, preparedBatch, runJobs, runRequest, runTables, type PreparedBatch } from './fixtures/stage-run-data.ts';
+import { adbListing, attempt, chainEnd, connection, copilotStart, core, gui, preparedBatch, runJobs, runRequest, runTables, type PreparedBatch } from './fixtures/stage-run-data.ts';
 
 /**
  * Conformance for the one re-run gate (`rerunGate`). Every producer of "a chain may have run / the outcome is unproven"
@@ -30,7 +30,8 @@ async function context(t: test.TestContext, beforeStart: (batch: PreparedBatch) 
   return { batch, paths, runId };
 }
 const observe = (c: Context, runId = c.runId) => observeStageRun({ ...c.paths, runId }, c.batch.maa);
-const verify = (c: Context, runId = c.runId) => verifyStageRun({ ...c.paths, runId }, c.batch.maa);
+/** The shared checks see the fixture's settings home and its MAA.exe metadata and adb boundaries; `adb` replaces the listing. */
+const verify = (c: Context, adb = c.batch.boundaries.adb) => verifyStageRun({ ...c.paths, home: c.batch.home, runId: c.runId }, c.batch.maa, { ...c.batch.boundaries, adb });
 const beforeBattle = async (c: Context) => c.batch.core([...copilotStart(0, { files: c.batch.files }), loaded(10, c.batch.files[0]!), connection(12, 'Disconnect'), ...chainEnd(13, 'TaskChainError')]);
 const settledThenDisconnect = async (c: Context) => c.batch.core([...copilotStart(0, { files: c.batch.files }),
   ...attempt(10, 0, c.batch.files[0]!, 'open', [endOfAction(80), connection(81, 'Reconnecting'), connection(85, 'Disconnect')]), ...chainEnd(86, 'TaskChainError')]);
@@ -125,6 +126,33 @@ test('the only unlock without a user statement: an environment failure before ba
   await c.batch.core([...retag(copilotStart(200, { files: c.batch.files }), 2), ...retag(chainEnd(205, 'TaskChainStopped'), 2)]);
   await observeStageRun({ ...c.paths, runId: retry.runId }, c.batch.maa);
   await assert.rejects(startStageRun({ ...c.paths, operation: c.batch.operation, reference: '第三次', retryOf: c.runId }), /chain-already-started/);
+});
+
+test('errors unrelated to a stage retry are reported but do not block it; a connection or write-lock error does', async t => {
+  const c = await context(t);
+  await beforeBattle(c);
+  await observe(c);
+  // Errors of other features: an unreadable NGA credential and a damaged doctor record in the private directory.
+  await mkdir(join(c.batch.privateDirectory, 'credentials'), { recursive: true });
+  await writeFile(join(c.batch.privateDirectory, 'credentials', 'nga.json'), '{"damaged":true}');
+  await writeFile(join(c.batch.privateDirectory, 'doctor-analysis-latest.json'), '{ damaged');
+  const unrelated = await verify(c);
+  assert.deepEqual(unrelated.verification.checks.filter(check => check.status === 'error').map(check => check.id), ['credential-nga', 'private-files']);
+  assert.equal(unrelated.verification.clear, true);
+  assert.deepEqual([unrelated.verification.blocking, unrelated.verification.notBlocking], [[], ['credential-nga', 'private-files']]);
+  assert.deepEqual(unrelated.verifications.at(-1)!.notBlocking, ['credential-nga', 'private-files'], 'the summary reports them too');
+  assert.deepEqual(unrelated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
+
+  const offline = await verify(c, adbListing('offline'));
+  assert.equal(offline.verification.clear, false);
+  assert.deepEqual([offline.verification.blocking, offline.verification.notBlocking], [['connection'], ['credential-nga', 'private-files']]);
+  assert.deepEqual(offline.allowedDecisions, ['stop-and-tell-user']);
+  await assert.rejects(decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
+
+  await writeFile(join(c.batch.maaDirectory, 'config', '.maa-skills.lock'), 'an interrupted write');
+  const locked = await verify(c);
+  assert.deepEqual(locked.verification.blocking, ['write-lock']); assert.equal(locked.verification.clear, false);
+  assert.deepEqual(locked.allowedDecisions, ['stop-and-tell-user']);
 });
 
 test('a chain the user started before start retryOf consumes the retry decision: first and second use refused', async t => {

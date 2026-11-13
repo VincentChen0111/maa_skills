@@ -96,8 +96,8 @@ test('disconnect mid-battle is an environment failure: not a stage failure; veri
   assert.deepEqual(Object.keys(failed.environment[1]!.diagnosis).sort(), ['id', 'reason', 'repair', 'status']);
   assert.equal(failed.next, 'verify'); assert.deepEqual(failed.allowedDecisions, ['stop-and-tell-user']);
   await assert.rejects(decideStageRun({ privateDirectory: batch.privateDirectory, maaDirectory: batch.maaDirectory, runId, decision: 'retry-within-approval', reason: '断连后重试' }), /decision-not-allowed/);
-  const verified = await verifyStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, runId }, batch.maa);
-  assert.equal(verified.verification.clear, true); assert.equal(verified.verification.preparedList, 'matches');
+  const verified = await verifyStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, home: batch.home, runId }, batch.maa, batch.boundaries);
+  assert.equal(verified.verification.clear, true); assert.equal(verified.verification.preparedList, 'matches'); assert.deepEqual(verified.verification.blocking, []);
   assert.deepEqual(verified.verification.unknown, ['sanity', 'medicine-inventory', 'originium', 'stage-progress']);
   assert.deepEqual(verified.allowedDecisions, ['stop-and-tell-user'], 'the interrupted attempt was in battle; its outcome is unknown');
   assert.equal(verified.next, 'ask-progress');
