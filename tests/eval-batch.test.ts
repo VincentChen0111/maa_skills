@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -94,6 +94,48 @@ test('plan-login batches stop before any scenario when the auth preflight or the
     assert.deepEqual(manifest.runs, [], `${name}: no scenario started`);
     assert.deepEqual(await readdir(directory), [], `${name}: the sentinel is gone and nothing else was added`);
   }
+});
+
+test('one host login directory serves one batch at a time, across processes, through a lock file beside it', async () => {
+  const directory = await login();
+  const lock = `${directory}.lock`;
+  const options = { host: 'claude' as const, model: 'fixed-model', entries: selectScenarios(['core-language']), executable: process.execPath,
+    executableArgs: [double, await script({ host: 'claude', ...planHost })], loginDirectory: directory, batchParent: join(root, 'batches') };
+  await writeFile(lock, 'held by another batch');
+  const busy = await runBatch(options);
+  assert.equal(busy.manifest.status, 'aborted'); assert.deepEqual(busy.manifest.abort, { reason: 'login-directory-busy', stage: 'login-lock' });
+  assert.deepEqual(busy.manifest.attempts.map((attempt) => Object.keys(attempt)), [['at']], 'no auth preflight or check started');
+  assert.equal(await readFile(lock, 'utf8'), 'held by another batch', 'another batch\'s lock is never removed');
+  await rm(lock);
+  const [first, second] = await Promise.all([runBatch(options), runBatch(options)]);
+  assert.deepEqual([first.manifest.status, second.manifest.status].sort(), ['aborted', 'complete'], 'two batches on one login directory: one runs, one is refused');
+  assert.equal([first, second].find((item) => item.manifest.status === 'aborted')!.manifest.abort?.reason, 'login-directory-busy');
+  await assert.rejects(readFile(lock), /ENOENT/, 'the lock is released when the batch ends');
+  assert.deepEqual(await readdir(directory), [], 'the lock never sits inside the login directory');
+});
+
+test('an interrupted batch stops after the current host run, releases the lock, and resume runs the interrupted scenario again', async () => {
+  const directory = await login();
+  const lock = `${directory}.lock`;
+  const journal = join(root, `interrupt-${counter++}.jsonl`);
+  const options = { host: 'claude' as const, model: 'fixed-model', entries: selectScenarios(['maa-core']), executable: process.execPath,
+    executableArgs: [double, await script({ host: 'claude', journal, ...planHost })], loginDirectory: directory, batchParent: join(root, 'batches') };
+  const listeners = process.listenerCount('SIGINT');
+  const early = await runBatch({ ...options, signal: AbortSignal.abort() });
+  assert.deepEqual(early.manifest.abort, { reason: 'interrupted', stage: 'auth-preflight' }); assert.deepEqual(early.manifest.runs, []);
+  await assert.rejects(readFile(lock), /ENOENT/);
+  // Interrupt while the first scenario's host run is being recorded: the journal holds the preflight, the check and that run.
+  const stop = new AbortController();
+  const poll = setInterval(async () => { if ((await lines(journal)).length >= 3) stop.abort(); }, 1);
+  const first = await runBatch({ ...options, signal: stop.signal }).finally(() => clearInterval(poll));
+  assert.equal(first.manifest.status, 'aborted'); assert.equal(first.manifest.abort?.reason, 'interrupted');
+  const last = first.manifest.runs.at(-1)!;
+  assert.equal(last.reason, 'interrupted'); assert.equal(first.manifest.abort?.scenario, last.scenario);
+  await assert.rejects(readFile(lock), /ENOENT/, 'an interrupt releases the lock');
+  assert.equal(process.listenerCount('SIGINT'), listeners, 'no signal listener is left behind');
+  const resumed = await runBatch({ ...options, resume: first.directory });
+  assert.equal(resumed.manifest.status, 'complete');
+  assert.equal(resumed.manifest.runs.filter((run) => run.scenario === last.scenario).length, 2, 'the interrupted scenario ran again');
 });
 
 test('a quota stop aborts the rest of the batch, resume runs only unfinished scenarios, and a changed fingerprint is refused', async () => {

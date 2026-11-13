@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runScenario, type RunAuth, type ScenarioDefinition, type ScenarioName } from './eval-run.ts';
-import { authPreflight, executableVariables, readProtectionCheck, resolveLoginDirectory, type AuthPreflight, type ReadProtectionResult } from './eval-auth.ts';
+import { authPreflight, executableVariables, readProtectionCheck, resolveLoginDirectory, sentinelNames, type AuthPreflight, type ReadProtectionResult } from './eval-auth.ts';
 import { compareRuns, type Comparison, type Host, type RunRecord } from './evaluation.ts';
 import { probeVersion } from './eval-host.ts';
 import { entryId, scenarioCatalog, scenarioGroups, selectScenarios, type ScenarioEntry } from './eval-scenarios.ts';
@@ -20,11 +21,13 @@ export type BatchManifest = {
   fingerprint: { hostVersion: string; model: string; auth: BatchAuth; payload: string; runner: string };
   scenarios: string[]; rerunOf?: Record<string, string>;
   attempts: { at: string; authPreflight?: Omit<AuthPreflight, 'host'>; readProtection?: Omit<ReadProtectionResult, 'host' | 'pass'> }[];
-  runs: BatchRun[]; status: 'running' | 'complete' | 'aborted'; abort?: { reason: string; scenario?: string; stage: 'auth-preflight' | 'read-protection' | 'scenario' };
+  runs: BatchRun[]; status: 'running' | 'complete' | 'aborted'; abort?: { reason: string; scenario?: string; stage: 'login-lock' | 'auth-preflight' | 'read-protection' | 'scenario' };
 };
 export type BatchOptions = {
   host: Host; model: string; entries: ScenarioEntry[]; auth?: BatchAuth; executable?: string; executableArgs?: string[]; loginDirectory?: string;
   timeoutMs?: number; batchParent?: string; resume?: string; rerunOf?: Record<string, string>; repeat?: number;
+  /** Stops the batch like Ctrl+C does: after the current host run, with the lock released. */
+  signal?: AbortSignal;
 };
 
 async function tree(directory: string, base = directory): Promise<string[]> {
@@ -56,12 +59,14 @@ export async function readManifest(directory: string): Promise<BatchManifest> {
   if (manifest.kind !== 'maa-skills-evaluation-batch' || manifest.version !== 1) throw new Error('batch-manifest');
   return manifest;
 }
-/** A scenario counts as done once it has a record whose reason is not a host-level abort. */
-export const completedScenarios = (manifest: BatchManifest) => new Set(manifest.runs.filter((run) => !(abortReasons as readonly string[]).includes(run.reason)).map((run) => run.scenario));
+/** A run counts toward completion unless a host-level stop or the user's interrupt ended it. */
+const counts = (run: BatchRun) => !(abortReasons as readonly string[]).includes(run.reason) && run.reason !== 'interrupted';
+/** A scenario counts as done once it has a run that counts. */
+export const completedScenarios = (manifest: BatchManifest) => new Set(manifest.runs.filter(counts).map((run) => run.scenario));
 
 /**
  * Runs scenarios for one host and one fixed model, strictly one after another: one process at a time uses the host's login
- * directory, and there is no parallel option. Plan login runs the auth preflight and the read-protection check first and stops
+ * directory (a lock file beside it refuses a second batch, in any process), and there is no parallel option. Plan login runs the auth preflight and the read-protection check first and stops
  * the batch on any failure; a quota, auth or network failure during the batch aborts it, and `resume` runs only the rest.
  */
 export async function runBatch(options: BatchOptions): Promise<{ directory: string; manifest: BatchManifest }> {
@@ -95,41 +100,71 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
   const attempt: BatchManifest['attempts'][number] = { at: new Date().toISOString() };
   manifest.attempts.push(attempt);
   await save(directory, manifest);
-  let runAuth: RunAuth = auth === 'host-double' ? { mode: 'host-double' } : { mode: 'api-key' };
-  if (auth !== 'host-double') {
-    const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(loginDirectory ? { loginDirectory } : {}),
-      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
-    const { host: _host, ...recorded } = preflight; attempt.authPreflight = recorded;
-    if (preflight.status !== 'pass') return abort(preflight.category ?? 'other', 'auth-preflight');
-    if (auth === 'plan') {
-      // The check comes after the auth preflight and before the first scenario with tools; failure stops this host's batch.
-      const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: loginDirectory!, artifactDirectory: directory,
+  // One batch per login directory on this machine, across processes: an exclusive lock file beside (never inside) the directory.
+  // A missing parent means there is no login to share; the auth preflight then reports it.
+  let lock: string | undefined;
+  if (loginDirectory) {
+    const path = `${loginDirectory}.lock`;
+    try { await writeFile(path, JSON.stringify({ pid: process.pid, startedAt: attempt.at }), { flag: 'wx' }); lock = path; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') return abort('login-directory-busy', 'login-lock');
+      if (code !== 'ENOENT') return abort('login-directory-lock-failed', 'login-lock');
+    }
+  }
+  // Ctrl+C reaches the host child as well: the batch stops once the current host run returns and releases the lock. A second
+  // Ctrl+C releases the lock at once and exits.
+  const stop = new AbortController();
+  const onInterrupt = () => { if (stop.signal.aborted) { if (lock) rmSync(lock, { force: true }); process.exit(130); } stop.abort(); };
+  const interrupted = () => stop.signal.aborted || !!options.signal?.aborted;
+  process.on('SIGINT', onInterrupt);
+  try {
+    if (interrupted()) return await abort('interrupted', 'auth-preflight');
+    let runAuth: RunAuth = auth === 'host-double' ? { mode: 'host-double' } : { mode: 'api-key' };
+    if (auth !== 'host-double') {
+      const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(loginDirectory ? { loginDirectory } : {}),
         ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
-      const { host: _checked, pass, ...result } = check; attempt.readProtection = result;
-      if (check.status !== 'pass' || !pass) return abort(check.category ?? 'read-protection-failed', 'read-protection');
-      runAuth = { mode: 'plan', readProtection: pass };
+      const { host: _host, ...recorded } = preflight; attempt.authPreflight = recorded;
+      if (preflight.status !== 'pass') return await abort(preflight.category ?? 'other', 'auth-preflight');
+      if (auth === 'plan') {
+        // The check comes after the auth preflight and before the first scenario with tools; failure stops this host's batch.
+        const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: loginDirectory!, artifactDirectory: directory,
+          ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
+        const { host: _checked, pass, ...result } = check; attempt.readProtection = result;
+        if (check.status !== 'pass' || !pass) return await abort(check.category ?? 'read-protection-failed', 'read-protection');
+        // No sentinel, from this check or an interrupted earlier one, is left when the first scenario starts.
+        if ((await sentinelNames(loginDirectory!)).length) return await abort('sentinel-not-removed', 'read-protection');
+        runAuth = { mode: 'plan', readProtection: pass };
+      }
     }
-  }
-  await save(directory, manifest);
-  const done = completedScenarios(manifest);
-  const repeat = options.repeat ?? 1;
-  for (const entry of options.entries) {
-    const scenario = entryId(entry);
-    const finished = manifest.runs.filter((run) => run.scenario === scenario && !(abortReasons as readonly string[]).includes(run.reason)).length;
-    if (done.has(scenario) && finished >= repeat) continue;
-    for (let index = finished; index < repeat; index++) {
-      const outcome = await runScenario({ host: options.host, model: options.model, scenario: entry.definition as ScenarioName | ScenarioDefinition, executable, executableArgs,
-        auth: runAuth, artifactParent: directory, ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills,
-        ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(manifest.rerunOf?.[scenario] ? { rerunOf: manifest.rerunOf[scenario] } : {}) });
-      manifest.runs.push({ scenario, directory: relative(directory, outcome.artifactDirectory).replaceAll('\\', '/'), id: outcome.record.id, reason: outcome.reason,
-        grade: outcome.record.grade.status, ...(outcome.record.rerunOf ? { rerunOf: outcome.record.rerunOf } : {}) });
-      await save(directory, manifest);
-      if ((abortReasons as readonly string[]).includes(outcome.reason)) return abort(outcome.reason, 'scenario', scenario);
+    await save(directory, manifest);
+    const done = completedScenarios(manifest);
+    const repeat = options.repeat ?? 1;
+    for (const entry of options.entries) {
+      const scenario = entryId(entry);
+      const finished = manifest.runs.filter((run) => run.scenario === scenario && counts(run)).length;
+      if (done.has(scenario) && finished >= repeat) continue;
+      for (let index = finished; index < repeat; index++) {
+        if (interrupted()) return await abort('interrupted', 'scenario', scenario);
+        const outcome = await runScenario({ host: options.host, model: options.model, scenario: entry.definition as ScenarioName | ScenarioDefinition, executable, executableArgs,
+          auth: runAuth, artifactParent: directory, ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills,
+          ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(manifest.rerunOf?.[scenario] ? { rerunOf: manifest.rerunOf[scenario] } : {}) });
+        // A run the user interrupted is kept as saved, but the manifest marks it so that resume runs the scenario again.
+        const stopped = interrupted();
+        manifest.runs.push({ scenario, directory: relative(directory, outcome.artifactDirectory).replaceAll('\\', '/'), id: outcome.record.id,
+          reason: stopped ? 'interrupted' : outcome.reason, grade: outcome.record.grade.status, ...(outcome.record.rerunOf ? { rerunOf: outcome.record.rerunOf } : {}) });
+        await save(directory, manifest);
+        if (stopped) return await abort('interrupted', 'scenario', scenario);
+        if ((abortReasons as readonly string[]).includes(outcome.reason)) return await abort(outcome.reason, 'scenario', scenario);
+      }
     }
+    manifest.status = 'complete';
+    await save(directory, manifest);
+    return { directory, manifest };
+  } finally {
+    process.off('SIGINT', onInterrupt);
+    if (lock) await rm(lock, { force: true });
   }
-  manifest.status = 'complete';
-  await save(directory, manifest);
-  return { directory, manifest };
 }
 
 /**
@@ -139,8 +174,8 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
  */
 export async function batchRecords(directory: string): Promise<RunRecord[]> {
   const manifest = await readManifest(directory);
-  const finished = manifest.runs.filter((run) => !(abortReasons as readonly string[]).includes(run.reason));
-  const counted = finished.filter((run, index) => manifest.rerunOf?.[run.scenario] || !finished.slice(index + 1).some((later) => later.scenario === run.scenario));
+  const finished = manifest.runs.filter(counts);
+  const counted =finished.filter((run, index) => manifest.rerunOf?.[run.scenario] || !finished.slice(index + 1).some((later) => later.scenario === run.scenario));
   return Promise.all(counted.map(async (run) => JSON.parse(await readFile(join(directory, run.directory, 'run.json'), 'utf8')) as RunRecord));
 }
 export type BatchComparison = { overall: Comparison; scenarios: { host: Host; scenario: string; status: Comparison['status']; rerun: string[] }[]; rerunScenarios: string[] };
