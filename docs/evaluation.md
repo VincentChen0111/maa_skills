@@ -21,7 +21,7 @@ node scripts/eval-run.ts claude <fixed-model> approved-write
 
 ## 添加产品场景
 
-每个新 skill 起步 3–6 个场景，数量不是上限。可把第三个 CLI 参数改成自定义 JSON 文件；结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`）。第四个参数可指定 CLI 可执行文件，第五个参数指定待测 skill 源目录。例如：
+每个新 skill 起步 3–6 个场景，数量不是上限。可把第三个 CLI 参数改成自定义 JSON 文件；结构对应导出类型 `ScenarioDefinition`（`id`、`prompt`、不含秘密的 `policy`）。提示词里替用户贴进对话的合成值写在可选的 `chatSecrets`，评分时与样例的随机秘密一起检查秘密输出，并计入场景摘要。第四个参数可指定 CLI 可执行文件，第五个参数指定待测 skill 源目录。例如：
 
 ```text
 node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/maa-example
