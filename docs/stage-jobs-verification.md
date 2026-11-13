@@ -75,3 +75,104 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 六个模型场景、fixture 和固定框架不变。8e 的 CI/原生/32 次 after 证据及累计 96 次真实尝试按本页顶部完整保留；修后候选由根代理重新固定并执行相应原生、模型及 CI，不冒用旧头成功。PR41 保持草稿，15 仍进行中，16 依赖不解除。
 
 本次最终完整离线入口 `.tmp/stage-r3-final-check.txt` 退出 0：297 total / 295 pass / 0 fail / 2 skip（仍为短路径别名和非 Windows adapter 平台条件），tracker/privacy/metadata 无错误，评分自检 7 rules / 14 samples 通过。类型检查及差异空白检查通过，文档后续更新另核 tracker/privacy/metadata；逐文件检查新回归和完整 R3 记录均为合成/公开数据。prepare 回归同时拒绝未知、不满足、重复或与主作业重复的备选，明确删减后未选资产不落盘。上述作者结果不替代 R4 独立结论或新候选的远程原生/模型/CI。
+
+## 29 匹配改进作者验证（2026-11-13）
+
+基点 `4a1fd26`（PR 49 合并后的 main），分支 `claude/29-stage-job-matching`；工单 [29](issues/29-stage-job-matching-improvements.md)。本节是作者记录，不代替独立审查、真实模型评测或实机运行。来源、固定提交和逐项结论见[作业接口核对](stage-jobs-sources.md)「29 匹配改进核对」。
+
+### 逐项结论
+
+| 项 | 核实结论 | 交付 |
+| --- | --- | --- |
+| 线上后端 | 线上是 ZootPlusBackend `746b394`（`/version` 实读）；MaaCopilotServer `e3f9cbf` 已归档，不是线上版本；15 用到的参数和端点在线上仍成立 | 只更新核对记录，查询不用改 |
+| 没写要求的旧作业 | MAA 对缺省 requirements 不作要求，没有按稀有度的默认值；MAA-PRTS 的默认表是其用户定的规则 | 缺省、null、空对象记为「要求未写明，待核」；不给推定值 |
+| 借助战 | 成立：MAA 恰好缺一组时借助战补位，只按名字和技能挑人；列表模式的开关是界面运行状态 | 候选标为 support（需借助战），单列、批准时 `supportJobs` 点名，记录借的位置；不写 SupportMode |
+| 评分 | 字段含义成立；「≤50 票评分不足」只在源码默认值上成立，线上分界是 10 票；详情接口有缓存 | 评分取自查询摘要，按作业站自己的标记和随票数上升的好评率门槛分三档排序 |
+| 关卡后缀 | 有：`#s`（SIX_STAR，45 条），协议没有对应难度位 | `stages` 返回 `tableDifficulty`；`#s` 继续 unsupported，补测试 |
+| 动作里的干员名 | 名字可以是干员名或群组名；设置单位坐标可登记装置；召唤物、装置在游戏表里是 TOKEN/TRAP | 未声明的干员和无法识别的名字记为待核并列出；在线查询另读固定干员表 |
+| 接口语义 | `level_keyword` 匹配关卡名、levelId、stageId（不含章节 ID），没命中时不筛关卡；`~` 排除成立 | 每关记录返回的作业 ID，报告区分没有作业、其他关卡、疑似退回、覆盖不足 |
+
+核实后没有实施的部分：`operator` 参数（含 `~` 排除）不用于查询，因为服务端只索引 `opers` 的名字、不含群组成员，按名字排除会误删群组里另有可用成员的作业；按稀有度的默认练度不采用（见上表）；`has_next` 在恰好装满的最后一页也为真，只会让报告多标一次未穷尽，不改；`limit` 上限是 50，但每关 3 页×20 条是 15 的规格上限，本票不改；作业站前端的评分文字分档只作背景，没有采用。
+
+### 测试先行与实际运行
+
+新增 `tests/stage-jobs-matching.test.ts`，每项都先在共享 CLI 或导出函数接缝写失败测试，用合成作业和合成账号快照，网络只用边界替身。逐项观察到的红灯：没写要求的条目返回 ready（`.tmp/29/red1.txt`）；评分排序下主作业仍是接口第一份（`red2.txt`）；检索结果字段不存在（`red3.txt`）；未声明干员的作业仍是 ready（`red4.txt`）；缺一人的作业是 unknown 而不是 support（`red5.txt`）；准备时点名的需借助战作业被拒（`red6.txt`）；`stages` 没有原始难度（`red7.txt`）。这些文件在被忽略的 `.tmp/29`，不随提交。
+
+新文件 11 项测试：
+
+- `operator entries without written requirements stay 待核 instead of passing on ownership alone`、`CLI query reports unstated requirements as 待核 in Markdown`；
+- `ratings only reorder ready candidates: …`、`online collection reads rating counts from the query summary, not the cached detail view`；
+- `search results distinguish no jobs, unrelated fallback results and insufficient coverage`；
+- `operators referenced by actions but not declared in opers or groups keep the job 待核`、`online table loading reads the pinned character table for queries and degrades to unclassified names when it is unavailable`；
+- `a job missing exactly one operator the account does not own is listed separately as 需借助战`、`a 需借助战 job is prepared only when the approval names it; the plan records the borrowed slot`；
+- `reports in the earlier match structure no longer verify, so their approvals do not carry over`；
+- `the six-star #s stage spelling is listed but not matched: …`。
+
+15 的既有测试保留，只做了两处结构适配，断言没有放宽：`tests/stage-jobs-regressions.test.ts` 的「derived groups preserve …」把只作分配用途的「仅甲」组成员从无要求改为 `{ elite: 0 }`，因为本票有意让无要求条目待核，这个用例要测的唯一分配和派生内容不变；「approval binds displayed execution and search coverage …」里手工改写的检索覆盖补上新的 `ids: []` 字段，仍断言改动后被拒。准备入口把「报告无法重新核对」统一按批准不匹配拒绝，旧结构报告因此不能沿用批准；报告指纹、批准绑定和派生执行内容的校验逻辑没有改。
+
+`tests/stage-scenarios.test.ts` 在两种安装布局实际调用共享 CLI，覆盖原有六个和新增四个场景（`daily-stage-requirements-unstated`、`daily-stage-support-named`、`daily-stage-rating-order`、`daily-stage-undeclared-action`），并核对新增场景的状态、单列和排序。
+
+实际运行（本机 Windows，Node 24）：`npm run typecheck` 通过；单文件 `tests/stage-jobs-matching.test.ts` 11/11、`stage-jobs.test.ts` 6/6、`stage-jobs-regressions.test.ts` 11/11、`stage-scenarios.test.ts` 1/1、`stage-demo.test.ts` 1/1、`maa-config.test.ts` 59/59、`doctor.test.ts` 74/74、`doctor-scenarios.test.ts` 6/6 通过。完整离线入口 `node scripts/check.ts` 在文档提交前（`.tmp/29/check-1.txt`）退出 0：394 项，393 通过、0 失败、1 跳过（非 Windows 适配器在本平台不适用），tracker、privacy、metadata 无错误，评分自检 7 rules / 14 samples 通过。最终提交上第一次完整运行（`check-final.txt`）有 1 项失败：`tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI …」在第一次关闭合成 GUI 时报 `maa-close-timeout`。该文件单独重跑三次：通过、通过、失败（同一步骤，同一错误，用时 36.9 秒）；从基点 `4a1fd26` 导出的副本单独运行三次全部通过。失败的步骤只调用 `maa-process.ts` 关闭合成窗口，本分支没有改这个文件和这个测试，本机同时有其他构建在跑；按已知的关闭超时问题记录，未进一步定位。随后在同一提交上第二次完整运行（`check-final-2.txt`）退出 0：394 项，393 通过、0 失败、1 跳过，tracker、privacy、metadata 无错误，评分自检通过。
+
+### 报告结构变化（供 16、17 合并时对照）
+
+- 候选状态多了 `support`（需借助战）；只有 `ready`，或在 `supportJobs` 点名的 `support`，能进入批准。
+- 每份候选新增 `rating`、`actionNames`、`support`；每关新增 `supportCandidates`、`searchResult`；`search[]` 每项新增 `ids`；`tables` 新增 `characters`（只含用到的条目）和 `charactersSource`；`stages` 动作返回 `tableDifficulty`。
+- 主作业和备选的建议顺序按评分分档，同档保持接口顺序；`candidates` 仍按接口顺序完整保留。
+- 批准的 `selections[]` 可带 `supportJobs`；待执行记录的 `ApprovedJob` 可带 `support: { slot, members }`。
+- 报告指纹随这些字段变化，旧报告上的批准不沿用。
+
+### 未验证
+
+- 六个原有 stage 场景和四个新增场景的同模型前后评测没有运行：28 正在并行实现，评测专用登录目录还没有登录，按规则不调用真实模型。记为未验证，由 [26](issues/26-v0-1-0-release-validation.md) 发布验收补上；26 正文目前只列出原有六个场景。
+- 没有运行真实 MAA、模拟器或游戏：借助战补位、「借助战」开关和「补漏」档位只有固定源码和合成配置证据；MAA 能否在好友助战里找到对应干员取决于实际助战列表。
+- 在线查询读取固定干员表只用边界替身测试；作者 2026-11-13 匿名下载该文件（15.6 MB）用于核对，CLI 在线路径没有实跑。
+- 线上评分分界（10 票）来自一次 300 份作业的抽样，作业站配置以后可能改变；本工具直接使用作业站的标记，不依赖这个数字。
+
+### R1 审查修复（2026-11-13）
+
+协调者转来独立 R1 的结论：有条件通过，P1 0、P2 1、P3 4；协调者逐条复核后全部接受，另接受审查员在同一段匹配代码里找到的三处 15 既有缺陷（同属关卡身份一类）。审查记录由协调者保存，本节只记修复和证据。本轮基点是上一轮的最后提交 `f493cdc`。
+
+| 意见 | 修复 | 证据 |
+| --- | --- | --- |
+| P2：同一关卡关键字下返回的作业不在别名里时被说成「本次检索条件下这一关没有作业」，第 9 章突袭因此报没有作业 | 新增唯一的关卡身份判断 `resolveJobStage`，逐份地图核对和每关检索结果分类共用；只有确属其他地图的结果才可以说没有作业，同图无法证明和关卡名无法确定另列 | `tests/stage-identity.test.ts`「a chapter-9 raid job named by the normal stageId …」「search results on the same map or with unresolvable names …」 |
+| 15 既有 (c)：第 9 章突袭作业全部判为地图不符 | 同上：同 levelId、同代号、同难度组的普通/突袭孪生关卡算本关，由作业的难度位决定能否用于突袭 | 同上，及一致性测试逐个列出 17 对 |
+| 15 既有 (b)：act50side_ex01/ex02 的 levelId 互换，levelId 末段别名让写着 TD-EX-2 的作业通过 TD-EX-1 的核对 | 不再接受 levelId 末段；MAA 列表模式按作业自己的 stage_name 查关卡并按它的代号导航（固定源码），所以这份作业会跑到 TD-EX-2，现判为其他关卡 | 「stage identity conformance on pinned table cases …」「the per-job map check uses the same predicate …」 |
+| 15 既有 (a)：难度 0 或缺省一律判为不符 | 按 MAA 图形界面的处理，0 或缺省只算普通；突袭仍不用，理由写成 `difficulty-unstated-normal-only` | 「difficulty 0 or missing means normal only …」 |
+| P3：规格正文没有评分门槛数字，不足 5 票不设门槛没有登记 | 正文写明 5 票 65%、按对数过渡到 100 票 85%、更多票不再提高、不足 5 票不设门槛；默认值表同一行补上不足 5 票的理由 | `docs/spec.md` 29 段与「默认值及其来源」 |
+| P3：缺场景 | 新增 `daily-stage-six-star-unsupported`，安装后两种布局实调 `stages` 和 `query` | `tests/stage-scenarios.test.ts` |
+| P3：工单 26 只列 15 的六个场景 | 26 登记 29 的模型验收延期和新增五个场景 | 工单 26 正文 |
+| P3：作业接口核对说难度只有 1/2/3 | 改为 0 或缺省未设置、1 普通、2 突袭、3 两者，并补 R1 补核一节 | `docs/stage-jobs-sources.md` |
+
+一致性测试用 `tests/fixtures/stage-identity-cases.ts`：从固定关卡表摘出的 46 条记录，只含 ID、代号、区域、难度、难度组和解锁条件，不含名称或描述。覆盖全部 17 对第 9 章孪生关卡、act50side 的互换、只写 levelId 末段的 NONE 关卡（`training_1`）、普通的 NONE 普通/突袭关卡、`#s`、以及 TOUGH/EASY 共用代号的情形。同一测试还核对两处使用方给出的结论相同。
+
+测试先行：先写 `tests/stage-identity.test.ts`。由于新判断尚未导出，整文件先因导入失败报红；另把不依赖新导出的三项复制到被忽略的 `.tmp/29/r1-red-raid.test.ts` 对旧代码运行，`.tmp/29/r1-red2.txt` 记录 3 项全部失败：第 9 章突袭的两份作业是 blocked；写着 `act50side_ex02` 的作业在 TD-EX-1 下是 ready（错关会被准备）；没写难度的作业在普通关是 blocked。实现后这些用例通过。
+
+与 15 相比还有两处行为变化，都是同一判断的直接结果：只写 levelId 末段、而末段不是任何 stageId 的作业（例如 `training_1`）现在判为无法确定，MAA 同样查不到它；写完整 levelId、而这个 levelId 被两个同难度的关卡共用时（固定表有 71 个这样的 levelId、共 142 关），现在判为同图无法证明，不再接受。（R2 更正：R1 的实现漏了「一个普通一个突袭」这个条件，其中同代号、同难度组的 27 个 levelId（54 关，act1–6 bossrush 的 `_tm` 系列和 act21side_03/04/05 的 `_m1`/`_m2`）在写另一关 stageId 时仍判为本关；R2 已改，见下文。）
+
+本轮只改了上一轮自己的 29 测试，15 的测试没有改：检索结果多了 `sameMap`、`unresolved` 两个计数；「名称相近的其他关卡」用例给合成关卡表补了一条 `synthetic_010`，因为查不到的名字不再算作其他关卡；`#s` 用例的理由从 `map-mismatch` 改为 `stage-same-map-unproven`。
+
+报告结构在上文所列之外又多了：候选的 `stageMatch`；每关 `searchResult` 的 `sameMap`、`unresolved` 计数，以及 `same-map-unproven`、`unresolved` 两种结果；`tables.stages` 除所选关卡外还保留作业关卡名解析到的条目（所选关卡在前，其余按 ID 排序），准备时据此重新解析出同样的结论。
+
+本轮实际运行（本机 Windows，Node 24）：
+- `npm run typecheck` 通过。
+- 单文件：`stage-identity` 5/5、`stage-jobs-matching` 11/11、`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`stage-demo` 1/1、`maa-config` 59/59、`doctor` 74/74。
+- 在 `d9ca582` 上两次完整运行 `node scripts/check.ts`（`.tmp/29/r1-check.txt`、`r1-check-2.txt`），结果相同：399 项，397 通过、1 失败、1 跳过。失败项都是 `tests/maa-process.test.ts`「Windows launches and normally closes a temporary GUI …」在第一次关闭合成 GUI 时报 `maa-close-timeout`。该入口在测试失败后不再跑后续检查，所以另外直接调用同样的导出函数：tracker、privacy、metadata 无错误，`scripts/eval-selftest.ts` 7 rules / 14 samples 通过。
+- `maa-process.test.ts` 单独跑三次：第一次 2 项失败（同一关闭用例，另有 native observer 用例报 `maa-process-command-failed`），第二次 1 项失败（同一关闭用例），第三次 15/15 通过。本分支没有改 `maa-process.ts` 和这个测试文件；当时本机有 33 个 node/PowerShell 进程在跑（其他构建并行）。协调者转述：审查员在完整运行里见过一次这个关闭超时，单独跑三次都是 15/15。
+
+未验证（本轮新增）：检索结果分类没有可离线运行的评测场景。评测的网络替身只服务固定提交的 GitHub JSON，而且只对 operator-cost 和 cultivation-gaps 两个脚本生效；要为作业站接口加替身，得改共享评测框架，而工单 28 正在改这部分。所以这类结果目前只有导出函数和 CLI 接缝的测试，模型怎样转述它们没有评测，已登记到工单 26。
+
+### R2 审查修复（2026-11-13）
+
+协调者转来独立 R2 的结论：有条件通过，P1 0、P2 0、P3 2，R1 的修复成立，两项 P3 都接受。本轮基点 `7cf1568`。
+
+- P3-1，孪生关卡规则与文档不一致：R1 的实现没有要求「一个普通一个突袭」，同 levelId、同代号、同难度组、同难度的两关会互判为本关。固定表里共用 levelId 的同难度关卡有 71 个 levelId、142 关，其中同代号、同难度组的 27 个 levelId（54 关：act1–6 bossrush 的 `_tm` 系列，act21side_03/04/05 的 `_m1`/`_m2`）受影响，其余 44 个代号不同，本来就不算本关。现在孪生关卡的条件加上了难度必须不同；用固定全表逐对核对，写同 levelId 另一关 stageId 的 142 种情形全部判为同图无法证明。一致性样例补上 `act21side_03_m1`/`_m2`（现为 48 条）。作业接口核对里关于「原有别名」的旧说法已改。
+- P3-2，MAA 地图数据的 levelId 是小写：只读核对固定 MAA 的 `resource/Arknights-Tile-Pos/overview.json`，4334 条的 levelId 全部小写，TileDef.hpp 第 43 行区分大小写比较。现在 levelId 按小写建索引、与作业的 stage_name 区分大小写比较：关卡表的混合大小写写法判为无法确定，小写写法按 MAA 的方式解析。测试改了原来断言混合大小写写法为本关的几处，并加上小写写法的用例。同时核对了其他字段：两边都有的 3164 关里，code 有 14 关、名称有 19 关不同，另有 218 个活动关卡和 102 个 CLIMB_TOWER 关卡不在固定版本的地图数据里。这些写进了作业接口核对，没有改代码，理由见该节。
+
+测试先行：先改 `tests/stage-identity.test.ts` 并扩充样例，对旧代码运行时一致性测试失败（`.tmp/29/r2-red.txt`）。另用 `.tmp/29/r2-red-probe.ts` 记下旧行为：`act21side_03_m2` 对 `_m1` 判为本关，小写 levelId 判为无法确定，混合大小写 levelId 判为本关。改后三者依次是同图无法证明、本关、无法确定。
+
+本轮实际运行（本机 Windows，Node 24）：
+- `npm run typecheck` 通过。
+- 单文件：`stage-identity` 5/5、`stage-jobs-matching` 11/11、`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`stage-demo` 1/1。
+- 在 `b550495` 上完整运行一次 `node scripts/check.ts`（`.tmp/29/r2-check.txt`）：399 项，396 通过、2 失败、1 跳过。两项失败都在本分支没有改过的 `tests/maa-process.test.ts`：「Windows launches and normally closes a temporary GUI …」报 `maa-start-timeout`，「the native Windows observer handles a nonexistent selected process …」报 `maa-process-command-failed`。
+- 该入口遇到测试失败就停下，所以另外直接运行了 tracker、privacy、metadata 的导出函数和 `scripts/eval-selftest.ts`：都没有错误，7 rules / 14 samples。
