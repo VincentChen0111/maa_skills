@@ -258,7 +258,7 @@ const failures: Record<string, string> = { 'host-unavailable': '无法启动独�
  * The status banner, the kind's body, and the review, correction and approval records. Every value that did not
  * come from these templates goes through the research layer's single Markdown inertness function.
  */
-export function formatAdviceReportMarkdown(state: ReportState, view: { title: string; body: string[]; scope: (item: ApprovedItem) => string[] }): string {
+export function formatAdviceReportMarkdown(state: ReportState, view: { title: string; body: string[]; scope: (item: ApprovedItem) => string[]; carriesOut?: string }): string {
   const review = state.review, accepted = review?.outcome === 'reviewed' ? review.findings.filter(finding => finding.decision === 'accepted') : [];
   const failed = state.failures.map(failure => failures[failure.reason] ?? inline(failure.reason)).join('、');
   const banner = state.status === 'pending-review' ? '**【待审查】** 这份报告还没有经过默认的独立审查；审查完成前不能批准。'
@@ -269,7 +269,7 @@ export function formatAdviceReportMarkdown(state: ReportState, view: { title: st
       state.content.revisionOf.changedResults.length ? '改正后重新读取或重新计算的结果与原版本不同（见「审查后的改动」），这些变化没有经过审查，请先看再批准。' : ''}`
     : `**【已审查】** 一名独立审查员审了一轮，报告 ${review?.outcome === 'reviewed' ? review.findings.length : 0} 项意见，接受 0 项。`;
   const lines = [`# ${view.title}`, '', `> ${banner}`, '', `- 报告：${state.kind}/${state.hash}`, `- 生成时间：${inline(state.content.createdAt)}`,
-    '- 审查通过不等于批准，批准也不等于执行：maa-account 不写 MAA 配置、不执行培养；只有你批准的条目会交给 maa-daily，由它按自己的流程重新核对后执行。', '', ...view.body, ''];
+    `- 审查通过不等于批准，批准也不等于执行：maa-account 不写 MAA 配置、不执行${view.carriesOut ?? '培养'}；只有你批准的条目会交给 maa-daily，由它按自己的流程重新核对后执行。`, '', ...view.body, ''];
   lines.push('## 审查记录', '');
   if (review?.outcome === 'reviewed') {
     lines.push(`- 审查员：${reviewers[review.reviewer.host]}；审查说明 SHA-256：${review.briefSha256}；记录时间：${inline(review.recordedAt)}`);

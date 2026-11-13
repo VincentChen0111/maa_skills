@@ -57,6 +57,8 @@ MAA 的 GUI 缓存字段与回调事实仅作只读接口核对，源文件指�
 
 `skills/maa-core/scripts/base-query.ts` 参考维护者自有原型，剥离个人路径、名册、生产规则及依赖后重写；原型 SHA256、范围和隐私核对见 [base 来源记录](docs/base-sources.md)。未引入原项目历史或第三方排班代码。
 
+基建排班的生成与检查（`base-plan.ts`）和基建报告（`base-report.ts`）是独立实现，没有复制第三方代码、数据或排班。排班文件格式和 MAA 的处理方式只核对了固定 MAA v6.21.4 的接口事实（AGPL 源码只读，不复制）；检查清单的思路对照了 KayChung17/arknights-base-skill（MIT）、dongwlin/La-pluma-next（MIT）、GuanxiYi1987/ark-base-schedule（MIT）和 Closure-RIIC/RIIC-knowledge（CC BY 4.0 与 CC BY-NC-SA 4.0 分区许可），核对的提交见 [22 验证记录](docs/base-plan-verification.md)。
+
 专精计算及排程独立实现，复用共享成本和基建查询。固定公开游戏表与 MAA 原生字段/回调的核对见[训练来源记录](docs/training-sources.md)；未复制 MAA 的 AGPL 实现、游戏表或私人训练原型，不引入第三方排程算法。仅保留接口事实、指纹及必要的技能描述匹配条件；游戏数据权利不因本仓库许可而转移。
 
 NGA 读取（`skills/maa-core/scripts/nga.ts`）与调研共用层（`research.ts`、`research-transport.ts`）独立实现，没有读取或移植维护者的私人 NGA 工具，也没有复制第三方代码。接口和返回格式的事实来自公开资料：ludoux/ngapost2md、JackBoosY/dsh-nga（均为 MIT）只读事实；UNICKON/StealthReader、tyro668/harmony-open-nga（未声明正式许可）只读事实，不取代码或样例。固定提交与逐条事实见 [NGA 来源核对](docs/nga-sources.md)。测试里的帖子、用户名和凭据都是合成数据。

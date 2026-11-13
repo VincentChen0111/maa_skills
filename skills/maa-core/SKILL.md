@@ -15,7 +15,10 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
 | `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |
-| `scripts/doctor.ts` | 共用配置/锁检查、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
+| `scripts/doctor.ts` | doctor 八组检查、运行日志分析与转介摘要、脱敏最近记录，按点名批准核对或恢复 | [检查与恢复接口](../maa-doctor/references/checks.md) |
+| `scripts/checks.ts`、`scripts/doctor-checks.ts` | setup/doctor 共用的检查原因与修法表，以及按用途判断哪些错误挡住的 `blockingChecks`（退出码、关卡重试前的核对）；远程控制、私有文件、skill 版本与目录联接的只读检查 | [检查与恢复接口](../maa-doctor/references/checks.md) |
+| `scripts/maa-version.ts` | 读 MAA.exe 产品版本并对照随包核实记录，setup 与 doctor 共用 | [检查与恢复接口](../maa-doctor/references/checks.md) |
+| `scripts/maa-log.ts` | 解析 MAA 日志里的结构化回调，划分运行并分类失败，白名单脱敏 | [排查与转介对照](../maa-doctor/references/triage.md) |
 | `scripts/account-snapshot.ts` | 读取 MAA 本地识别摘要，保存账号快照 | [账号导入接口](../maa-account/references/import.md) |
 | `scripts/skland-account.ts` | 用用户已保存的森空岛 token 只读读取账号数据，保存森空岛快照，对比 MAA 与森空岛两份快照 | [森空岛接口](../maa-account/references/skland.md) |
 | `scripts/skland-session.ts` | 两个森空岛读取器（账号快照、社区帖子）共用的唯一会话：读取用户保存的 token、换取、两级刷新、请求签名与请求头、记录凭据结果 | [森空岛接口](../maa-account/references/skland.md)、[社区调研接口](references/research.md) |
@@ -28,6 +31,8 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/nga.ts`、`scripts/research.ts`、`scripts/research-transport.ts` | NGA 只读检索与读帖；调研共用的引用结果格式、缓存、跨进程限速与风控停止、按平台的传输 | [社区调研接口](references/research.md) |
 | `scripts/skland-community.ts`、`scripts/bilibili.ts`、`scripts/research-fetch.ts` | 用用户自己设置的森空岛凭据只读读取其给出链接的森空岛社区帖子（经共用会话签名，不检索）；B 站视频信息与字幕只读读取（实验性）；两者共用的内容判定、缓存与结果组装（B 站另用其中的受闸门请求） | [社区调研接口](references/research.md) |
 | `scripts/advice-report.ts`、`scripts/cultivation-report.ts` | 建议报告的保存、默认独立审查（两个宿主共用一份审查说明模板）、明确跳过、改正与逐项批准；培养报告复用共享缺口计算和调研资料 | [建议报告接口](references/advice-report.md)、[培养报告接口](../maa-account/references/cultivation-report.md) |
+| `scripts/base-plan.ts`、`scripts/base-report.ts` | 基建排班的生成与检查（六条规则、MAA 干员名表、15 项验收门、数据新鲜度），只在私有目录写排班文件；基建报告复用基建技能查询和建议报告协议 | [排班生成与检查接口](references/base-plan.md)、[基建报告接口](../maa-account/references/base-report.md) |
+| `scripts/base-apply.ts`、`scripts/base-config.ts` | 应用已批准的基建排班：重新核对批准、数据新鲜度和全部验收门，经唯一配置事务写所选基建任务并安装排班副本 | [基建排班应用](../maa-daily/references/base-apply.md) |
 
 调用方的约定：
 
