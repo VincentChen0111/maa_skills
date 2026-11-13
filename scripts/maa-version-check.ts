@@ -192,13 +192,14 @@ type Release = { tag: string; version: string; prerelease: boolean };
 export type TargetReport = { version: string; tag: string; commit: string | null; outcome: 'unchanged' | 'changed' | 'already-verified' | 'older-than-record'; entries: EntryResult[] };
 export type ActionReport = { kind: 'pull-request' | 'issue'; key: string; title: string; state: 'planned' | 'created' | 'already-notified'; url?: string };
 export type DailyReport = { checkedAt: string; stable: TargetReport | null; beta: TargetReport | null; actions: ActionReport[] };
-export type DailyOptions = { registry: Registry; record: RecordFile; fetcher: typeof fetch; token?: string; publish: boolean; repository?: string; now?: Date };
+/** `baseCommit` is the commit the registry and record were read from (the Action's checkout); the PR branch starts there. */
+export type DailyOptions = { registry: Registry; record: RecordFile; fetcher: typeof fetch; token?: string; publish: boolean; repository?: string; baseCommit?: string; now?: Date };
 
 function api(fetcher: typeof fetch, token: string | undefined) {
   const request = async (method: string, url: string, body?: unknown, accept = 'application/vnd.github+json') => {
-    const headers: Record<string, string> = { Accept: accept, 'User-Agent': 'maa-skills-version-check', 'X-GitHub-Api-Version': '2022-11-28' };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const headers = new Headers({ Accept: accept, 'User-Agent': 'maa-skills-version-check', 'X-GitHub-Api-Version': '2022-11-28' });
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (body !== undefined) headers.set('Content-Type', 'application/json');
     const response = await fetcher(url, { method, redirect: 'error', signal: AbortSignal.timeout(limits.requestMs), headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const bytes = await boundedBytes(response, limits.apiBytes);
     return { status: response.status, text: Buffer.from(bytes).toString('utf8') };
@@ -330,11 +331,19 @@ export async function runDailyCheck(options: DailyOptions): Promise<DailyReport>
           action.url = String(created.html_url);
         } else {
           const branch = `${notificationLabel}/v${candidate.version}`;
+          // A branch left by an earlier run whose labelling failed also counts as notified: never a second PR.
+          const existingBranch = await github.request('GET', `https://api.github.com/repos/${repository}/git/ref/heads/${branch}`);
+          if (existingBranch.status === 200) { action.state = 'already-notified'; actions.push(action); continue; }
+          if (existingBranch.status !== 404) throw new Error('github-request-failed');
           const nextRegistry = addSourceVerified(registry, candidate.version!);
           const files = [[registryPath, JSON.stringify(nextRegistry, null, 2) + '\n'], [recordPath, JSON.stringify(generateRecord(nextRegistry, record), null, 2) + '\n']] as const;
-          const main = await github.json('GET', `https://api.github.com/repos/${repository}/git/ref/heads/main`) as { object?: { sha?: unknown } };
-          if (typeof main?.object?.sha !== 'string' || !sha1.test(main.object.sha)) throw new Error('github-request-failed');
-          await github.json('POST', `https://api.github.com/repos/${repository}/git/refs`, { ref: `refs/heads/${branch}`, sha: main.object.sha });
+          let base = options.baseCommit;
+          if (base === undefined) {
+            const main = await github.json('GET', `https://api.github.com/repos/${repository}/git/ref/heads/main`) as { object?: { sha?: unknown } };
+            base = typeof main?.object?.sha === 'string' ? main.object.sha : '';
+          }
+          if (!sha1.test(base)) throw new Error('github-request-failed');
+          await github.json('POST', `https://api.github.com/repos/${repository}/git/refs`, { ref: `refs/heads/${branch}`, sha: base });
           for (const [path, content] of files) {
             const current = await github.json('GET', `https://api.github.com/repos/${repository}/contents/${path}?ref=${encodeURIComponent(branch)}`) as { sha?: unknown };
             if (typeof current?.sha !== 'string') throw new Error('github-request-failed');
@@ -392,7 +401,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       const publish = args.includes('--publish'), token = process.env.GITHUB_TOKEN || undefined;
       if (publish && (!token || !process.env.GITHUB_REPOSITORY)) throw new Error('publish-requires-token');
       const report = await runDailyCheck({ registry: await readRegistry(registryFile), record: await readRecord(recordFile), fetcher: fetch, token, publish,
-        ...(process.env.GITHUB_REPOSITORY ? { repository: process.env.GITHUB_REPOSITORY } : {}) });
+        ...(process.env.GITHUB_REPOSITORY ? { repository: process.env.GITHUB_REPOSITORY } : {}),
+        ...(sha1.test(process.env.GITHUB_SHA ?? '') ? { baseCommit: process.env.GITHUB_SHA } : {}) });
       emit(report);
     } else throw new Error('usage');
   } catch (error) {

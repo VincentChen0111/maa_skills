@@ -16,7 +16,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const blob = (text: string) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
 const MAA = 'MaaAssistantArknights/MaaAssistantArknights';
 const repository = 'synthetic-owner/synthetic-skills';
-const token = 'synthetic-token-must-not-leak-7d1e';
+const token = '<synthetic-token-must-not-leak-7d1e>';
 
 // A fixed synthetic "MAA source tree": no MAA code, only placeholder text.
 const base: Record<string, string> = {
@@ -72,7 +72,7 @@ test('the verification record lists only versions every entry has verified, and 
 });
 
 type World = { releases: Record<string, unknown>[]; commits: Record<string, string>; files: Record<string, Record<string, string | null>>; issues: { number: number; body: string }[];
-  labelExists?: boolean; failReleases?: boolean };
+  labelExists?: boolean; failReleases?: boolean; branches?: string[] };
 type Call = { method: string; url: string; body?: Record<string, unknown>; auth: boolean };
 function github(world: World) {
   const calls: Call[] = []; let next = 40;
@@ -99,7 +99,8 @@ function github(world: World) {
     if (method === 'POST' && path === 'labels') { world.labelExists = true; return Response.json({}, { status: 201 }); }
     if (method === 'POST' && path === 'issues') { const number = next++; world.issues.push({ number, body: String((calls.at(-1)!.body as { body: string }).body) }); return Response.json({ number, html_url: `https://github.com/${repository}/issues/${number}` }, { status: 201 }); }
     if (method === 'GET' && path === 'git/ref/heads/main') return Response.json({ object: { sha: 'a'.repeat(40) } });
-    if (method === 'POST' && path === 'git/refs') return Response.json({}, { status: 201 });
+    if (method === 'GET' && path.startsWith('git/ref/heads/maa-version-check/')) return (world.branches ?? []).includes(path.slice('git/ref/heads/'.length)) ? Response.json({}) : new Response('{}', { status: 404 });
+    if (method === 'POST' && path === 'git/refs') { (world.branches ??= []).push(String(calls.at(-1)!.body!.ref).slice('refs/heads/'.length)); return Response.json({}, { status: 201 }); }
     if (method === 'GET' && path.startsWith('contents/')) return Response.json({ sha: 'b'.repeat(40) });
     if (method === 'PUT' && path.startsWith('contents/')) return Response.json({}, { status: 200 });
     if (method === 'POST' && path === 'pulls') { const number = next++; world.issues.push({ number, body: String((calls.at(-1)!.body as { body: string }).body) }); return Response.json({ number, html_url: `https://github.com/${repository}/pull/${number}` }, { status: 201 }); }
@@ -135,6 +136,15 @@ test('an unchanged stable release opens one PR adding it to the source-verified 
   const repeated = await runDailyCheck({ registry: registry(), record: record(), fetcher, token, publish: true, repository });
   assert.deepEqual(repeated.actions.map(action => action.state), ['already-notified']);
   assert.equal(calls.slice(before).some(call => call.method !== 'GET'), false, 'no duplicate PR, branch or label');
+  // A branch left behind by a run whose labelling failed also stops a second PR; the branch starts at the checked-out commit.
+  const unlabelled = github({ ...world(base), branches: ['maa-version-check/v6.22.0'] });
+  const left = await runDailyCheck({ registry: registry(), record: record(), fetcher: unlabelled.fetcher, token, publish: true, repository });
+  assert.deepEqual(left.actions.map(action => action.state), ['already-notified']);
+  assert.equal(unlabelled.calls.some(call => call.url.endsWith('/pulls') || call.url.endsWith('/git/refs') || call.method === 'PUT'), false);
+  const based = github(world(base));
+  await runDailyCheck({ registry: registry(), record: record(), fetcher: based.fetcher, token, publish: true, repository, baseCommit: '9'.repeat(40) });
+  assert.equal(based.calls.find(call => call.url.endsWith('/git/refs'))!.body!.sha, '9'.repeat(40));
+  assert.equal(based.calls.some(call => call.url.endsWith('/git/ref/heads/main')), false);
 });
 
 test('a stable release with a changed or missing entry opens an issue naming entries and skills, and certifies nothing', async () => {
