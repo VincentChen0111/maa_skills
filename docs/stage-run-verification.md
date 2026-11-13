@@ -52,7 +52,7 @@ PR 的 Ubuntu CI 上，`tests/stage-run.test.ts`「run record and summaries keep
   - 运行记录不再存 MAA 目录。`decide` 和 `progress` 必须由调用方给出 MAA 目录，CLI 本来就从设置传入；缺少时报 `maa-directory-required`。
   - 测试改为同时查原路径和 JSON 转义后的形式，并写明是哪一份文本泄露。
   - 测试里直接调用这两个导出函数的地方，改为显式传入 MAA 目录。
-- 先红后绿（Windows）：加强后的测试在修复前失败，报 `record leaked C:\…\maa`；修复后 `npm run typecheck` 通过，依次单独运行全部通过：
+- 先红后绿（Windows）：加强后的测试在修复前失败，报 `record leaked <临时目录>\maa`；修复后 `npm run typecheck` 通过，依次单独运行全部通过：
   - `stage-run` 14/14；
   - `stage-run-rerun-gate` 11/11；
   - `stage-run-flow` 4/4；
