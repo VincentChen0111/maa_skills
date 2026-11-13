@@ -10,7 +10,7 @@ Blocked by: [07: setup 接入现有环境](07-setup-existing-environment.md)
 
 ## 背景与目标
 
-实施进度：未开始。
+实施进度：进行中。
 
 NGA、森空岛账号和实验性 B 站功能可能需要用户凭据。凭据输入应留在用户操作的本地脚本中。
 
