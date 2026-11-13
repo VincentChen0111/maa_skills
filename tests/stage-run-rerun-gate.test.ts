@@ -295,3 +295,59 @@ test('a late report of manual play or a manual login turns the last job-type res
   assert.deepEqual(after.environment.map(item => item.category), ['manual-login']);
   assert.equal(after.next, 'verify');
 });
+
+/**
+ * Ticket 17 review round 1 (P1): runs done per stage are the latest user statement plus the 3-star runs proven in runs
+ * started after it, and never fewer than the batch's proven 3-star runs. Both consumers use that one count: the alternate
+ * switch (runs written) and the retry start (entries still ticked). SYN-1 is approved 3 times; run 1 ends unknown in
+ * battle and the user states 1 done; the retry clears SYN-1 once more, then its next item fails or disconnects.
+ */
+async function statedThenProven(t: test.TestContext, lastItem: 'failed' | 'disconnect' | null) {
+  const batch = await preparedBatch(3); t.after(() => batch.dispose());
+  Object.assign(batch.state, { running: true, treeExited: false, idle: true, ready: true });
+  const paths = { maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory }, files = batch.files, t0 = fromNow(-900), t1 = fromNow(-300);
+  const first = await startStageRun({ ...paths, operation: batch.operation, reference: '开始' });
+  const c: Context = { batch, paths, runId: first.runId };
+  await batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
+  await observe(c); assert.equal((await verify(c)).next, 'ask-progress');
+  await recordStageProgress({ privateDirectory: paths.privateDirectory, runId: first.runId, reference: '用户：断连那一把打完了，三星', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  await decideStageRun({ ...paths, runId: first.runId, decision: 'retry-within-approval', reason: '用户说明 SYN-1 完成一次' });
+  const file = join(batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
+  config.Configurations['Synthetic profile'].Copilot.TaskList[0].IsChecked = false;
+  await writeFile(file, JSON.stringify(config));
+  const second = await startStageRun({ ...paths, operation: batch.operation, reference: '重新点开始', retryOf: first.runId });
+  const retry: Context = { ...c, runId: second.runId };
+  if (!lastItem) return { first: c, retry, file };
+  const third = core(t1 + 60, 'SubTaskExtraInfo', { ...chain(1), class: 'asst::MultiCopilotTaskPlugin', what: 'CopilotListLoadTaskFileSuccess',
+    details: { stage_name: 'synthetic', file_name: files[2], id: 2 } });
+  const last = lastItem === 'failed' ? attempt(t1 + 60, 2, files[2]!, 'failed') : [third, connection(t1 + 62, 'Disconnect')];
+  await batch.core(retag([...copilotStart(t1, { files: files.slice(1) }), ...attempt(t1 + 10, 1, files[1]!, 'three-star'), ...last, ...chainEnd(t1 + 100, 'TaskChainError')], 2));
+  return { first: c, retry, file };
+}
+test('runs done = the latest statement plus 3-star runs proven after it, for both the switch and the retry start (ticket 17 review)', async t => {
+  const consumers: { name: string; lastItem: 'failed' | 'disconnect'; check(context: Awaited<ReturnType<typeof statedThenProven>>): Promise<void> }[] = [
+    { name: 'switch writes only the runs left', lastItem: 'failed', check: async ({ retry }) => {
+      await observe(retry);
+      await decideStageRun({ ...retry.paths, runId: retry.runId, decision: 'switch-alternate', reason: 'MAA 报告 SYN-1 作战失败' });
+      const switched = await switchStageRun({ ...await switchRequest(retry), runId: retry.runId }, retry.batch.maa);
+      assert.deepEqual(switched.runs[0], { stageId: 'synthetic_01', job: 2, runs: 1 }, '3 approved - (1 stated + 1 proven after it)');
+    } },
+    { name: 'retry start allows only the runs left ticked', lastItem: 'disconnect', check: async ({ retry, file }) => {
+      await observe(retry);
+      assert.ok((await verify(retry)).allowedDecisions.includes('retry-within-approval'));
+      await decideStageRun({ ...retry.paths, runId: retry.runId, decision: 'retry-within-approval', reason: '没进战斗就断连，已核对' });
+      await assert.rejects(startStageRun({ ...retry.paths, operation: retry.batch.operation, reference: '再点开始', retryOf: retry.runId }), /finished-items-ticked/,
+        'items 1 and 2 still ticked, but only 3 - (1 + 1) = 1 run is left');
+      const config = JSON.parse(await readFile(file, 'utf8'));
+      config.Configurations['Synthetic profile'].Copilot.TaskList[1].IsChecked = false;
+      await writeFile(file, JSON.stringify(config));
+      assert.equal((await startStageRun({ ...retry.paths, operation: retry.batch.operation, reference: '取消勾选了打完的', retryOf: retry.runId })).retryOf, retry.runId);
+    } },
+  ];
+  for (const consumer of consumers) await t.test(consumer.name, async sub => consumer.check(await statedThenProven(sub, consumer.lastItem)));
+});
+test('a progress statement is refused while a later run of the batch is still tracking', async t => {
+  const { first } = await statedThenProven(t, null);
+  await assert.rejects(recordStageProgress({ privateDirectory: first.paths.privateDirectory, runId: first.runId, reference: '用户：又打完一次', stages: [{ stageId: 'synthetic_01', completedRuns: 2 }] }),
+    /run-unresolved/);
+});

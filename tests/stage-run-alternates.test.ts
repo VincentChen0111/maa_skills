@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { executeConfigWrite, inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { approvedJobFile, approvedJobList, type ApprovedJobPlan } from '../skills/maa-core/scripts/stage-job-plan.ts';
-import { decideStageRun, loadBatchView, observeStageRun, readStageRun, stageRunOutcome, startStageRun, switchStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
+import { decideStageRun, loadBatchView, observeStageRun, readStageRun, recordStageProgress, stageRunOutcome, startStageRun, switchStageRun, verifyStageRun }
+  from '../skills/maa-core/scripts/stage-run.ts';
 import { attempt, chainEnd, connection, copilotStart, core, preparedBatch, type PreparedBatch } from './fixtures/stage-run-data.ts';
 
 const pendingPlan = async (privateDirectory: string, operation: string): Promise<ApprovedJobPlan> => {
@@ -37,8 +38,8 @@ const retag = (lines: string[], taskid: number) => lines.map(line => line.replac
 /** A Fight task with medicine, stone and expiring-medicine fields: a switch must leave every byte of it alone. */
 const fight = { TaskType: 'Fight', IsEnable: true, UseMedicine: true, MedicineCount: 2, UseStone: false, StoneCount: 0, UseExpireMedicine: false, Stage1: '1-7' };
 type Tracked = { batch: PreparedBatch; paths: { maaDirectory: string; privateDirectory: string }; runId: string };
-async function tracked(t: test.TestContext): Promise<Tracked> {
-  const batch = await preparedBatch(); t.after(() => batch.dispose());
+async function tracked(t: test.TestContext, syn1Loops = 2): Promise<Tracked> {
+  const batch = await preparedBatch(syn1Loops); t.after(() => batch.dispose());
   Object.assign(batch.state, { running: true, treeExited: false, idle: true, ready: true });
   const file = join(batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
   config.Configurations['Synthetic profile'].TaskQueue = [fight];
@@ -219,4 +220,30 @@ test('the unified writer accepts only the continuation list of approved jobs; th
   const body = { runId: c.runId, stageId: 'synthetic_01', expectedRevision: before, host: 'claude' };
   assert.deepEqual(call({ ...body, extra: 1 }), { ok: false, status: 'check-required', reason: 'request-invalid' });
   assert.deepEqual(call(body), { ok: false, status: 'check-required', reason: 'switch-not-decided' });
+});
+
+/**
+ * Review round 1 (P1): a progress statement counts the runs done up to when it was made; 3-star runs proven in a run
+ * started after it add to it. SYN-1 is approved 3 times: run 1 ends unknown in battle, the user states 1 done, the retry
+ * clears SYN-1 once more and then MAA reports a failure. Only 1 run is left, so the alternate gets 1, not 2.
+ */
+test('runs done add a statement and the 3-star runs proven after it: the alternate gets only the runs left', async t => {
+  const c = await tracked(t, 3), files = c.batch.files, t0 = fromNow(-900), t1 = fromNow(-300);
+  await c.batch.core([...copilotStart(t0, { files }), ...attempt(t0 + 10, 0, files[0]!, 'open', [connection(t0 + 20, 'Disconnect')]), ...chainEnd(t0 + 21, 'TaskChainError')]);
+  assert.equal((await observe(c)).next, 'verify');
+  assert.equal((await verifyStageRun({ ...c.paths, runId: c.runId }, c.batch.maa)).next, 'ask-progress');
+  await recordStageProgress({ ...c.paths, runId: c.runId, reference: '合成用户：断连那一把其实打完了，三星', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户说明 SYN-1 完成一次，原批准范围内重试' });
+  const file = join(c.batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
+  config.Configurations['Synthetic profile'].Copilot.TaskList[0].IsChecked = false;
+  await writeFile(file, JSON.stringify(config));
+  const retry = await startStageRun({ ...c.paths, operation: c.batch.operation, reference: '合成用户：重新点开始', retryOf: c.runId });
+  await c.batch.core(retag([...copilotStart(t1, { files: files.slice(1) }), ...attempt(t1 + 10, 1, files[1]!, 'three-star'), ...attempt(t1 + 60, 2, files[2]!, 'failed'),
+    ...chainEnd(t1 + 100, 'TaskChainError')], 2));
+  const failed = await observe(c, retry.runId);
+  assert.ok(failed.allowedDecisions.includes('switch-alternate'), JSON.stringify(failed.allowedDecisions));
+  await decideStageRun({ ...c.paths, runId: retry.runId, decision: 'switch-alternate', reason: 'MAA 报告 SYN-1 作战失败，换备选 2' });
+  const switched = await switchStageRun(await switchRequest(c, retry.runId), c.batch.maa);
+  assert.deepEqual(switched.runs, [{ stageId: 'synthetic_01', job: 2, runs: 1 }, { stageId: 'synthetic_02', job: 4, runs: 1 }], '1 stated + 1 proven after it = 2 of 3 done');
+  assert.deepEqual(await listed(c), [[2, 0], [4, 1]]);
 });

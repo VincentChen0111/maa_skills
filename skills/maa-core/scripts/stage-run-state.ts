@@ -452,19 +452,30 @@ const latestChainOwner = (batch: BatchView) => {
   const last = batch.evidence?.chains.at(-1);
   return last ? batch.records.find(record => record.state.chain && sameChain(record.state.chain, last)) : undefined;
 };
+/**
+ * The one count of runs per stage. `proven` (callback-proven settled runs, failures included) is only the floor a progress
+ * statement may not undercut. `done` is what every re-run consumer subtracts from the approved runs (the retry start's
+ * ticked entries, the alternate switch's runs): the latest statement covers the batch up to when it was made, so the
+ * 3-star runs proven in runs started after it are added; it is never fewer than the batch's proven 3-star runs. A failed
+ * or non-3-star run is not done: a switch's alternate makes it up, and a record with one is never retried.
+ */
 const stageRuns = (batch: BatchView) => {
-  const proven = new Map<string, number>(), succeeded = new Map<string, number>(), stated = new Map<string, { at: string; runs: number }>();
-  for (const record of batch.records) {
+  const proven = new Map<string, number>(), stated = new Map<string, { at: string; runs: number }>();
+  const succeeded = batch.records.map(record => {
     const assessment = assessRun(record);
     for (const stageId of assessment.settled) proven.set(stageId, (proven.get(stageId) ?? 0) + 1);
-    for (const stageId of assessment.succeeded) succeeded.set(stageId, (succeeded.get(stageId) ?? 0) + 1);
     for (const statement of record.state.progress) for (const stage of statement.stages) {
       if ((stated.get(stage.stageId)?.at ?? '') <= statement.at) stated.set(stage.stageId, { at: statement.at, runs: stage.completedRuns });
     }
-  }
-  return { proven: (stageId: string) => proven.get(stageId) ?? 0, completed: (stageId: string) => Math.max(proven.get(stageId) ?? 0, stated.get(stageId)?.runs ?? 0),
-    /** Runs that count as done for a switch: 3-star proven, or the user's statement when it says more. A failed or non-3-star run is made up by the alternate. */
-    cleared: (stageId: string) => Math.max(succeeded.get(stageId) ?? 0, stated.get(stageId)?.runs ?? 0) };
+    return { createdAt: record.createdAt, stages: assessment.succeeded };
+  });
+  const successes = (stageId: string, after?: string) => succeeded.filter(record => after === undefined || record.createdAt > after)
+    .reduce((total, record) => total + record.stages.filter(id => id === stageId).length, 0);
+  return { proven: (stageId: string) => proven.get(stageId) ?? 0,
+    done: (stageId: string) => {
+      const statement = stated.get(stageId);
+      return Math.max(successes(stageId), statement ? statement.runs + successes(stageId, statement.at) : 0);
+    } };
 };
 
 /**
@@ -482,8 +493,8 @@ export function stageCandidates(view: RunView) {
 export type SwitchTarget = { stageId: string; from: number; to: number; trigger: 'job-failure' | 'environment'; continuation: { stageId: string; job: number; runs: number }[] };
 /**
  * What a switch from this run would write: the stage whose last attempt did not succeed moves to its next approved
- * candidate for the runs it still has (approved minus cleared); every other stage keeps its job and its remaining runs;
- * stages with nothing left drop out. Only the gate decides whether it may happen.
+ * candidate for the runs it still has (this batch's runs minus `done`); every other stage keeps its job and its remaining
+ * runs; stages with nothing left drop out. Only the gate decides whether it may happen.
  */
 export function switchTarget(view: RunView, batch: BatchView): SwitchTarget | { reason: string } {
   const assessment = assessRun(view), last = assessment.lastAttempt;
@@ -491,8 +502,8 @@ export function switchTarget(view: RunView, batch: BatchView): SwitchTarget | { 
   const candidate = stageCandidates(view).find(item => item.stageId === last.stageId);
   if (!candidate || candidate.job === null) return { reason: 'no-stage-to-switch' };
   if (candidate.next === null) return { reason: 'alternates-exhausted' };
-  const { cleared } = stageRuns(batch.records.some(item => item.runId === view.runId) ? batch : { records: [view], evidence: null });
-  const runs = (stage: StageEntry) => Math.max(0, stage.loops - cleared(stage.stageId));
+  const { done } = stageRuns(batch.records.some(item => item.runId === view.runId) ? batch : { records: [view], evidence: null });
+  const runs = (stage: StageEntry) => Math.max(0, stage.loops - done(stage.stageId));
   if (runs(view.stages.find(stage => stage.stageId === last.stageId)!) < 1) return { reason: 'nothing-left-to-switch' };
   const jobs = new Map(stageCandidates(view).map(item => [item.stageId, item.job]));
   const continuation = view.stages.filter(stage => runs(stage) > 0 && jobs.get(stage.stageId) !== null)
@@ -506,12 +517,14 @@ export function switchTarget(view: RunView, batch: BatchView): SwitchTarget | { 
  * - retry or alternate: the record's own evidence allows it, nothing in the batch is unresolved (untracked or
  *   unattributed chains, log gaps, records that are still tracking, hard blocks, battles with unknown outcome and no user
  *   statement), and the record owns the batch's latest chain;
- * - a progress statement never undercuts what callbacks prove;
+ * - a progress statement never undercuts what callbacks prove, and is taken only while no run of the batch is tracking
+ *   (it then covers every run started before it; see `stageRuns`);
  * - the first start of a batch: nothing since the preparation submitted or loaded the batch's approved job files, and
  *   the logs reach back to the preparation;
  * - start without `retryOf`: no record is tracking and no Copilot chain, callback or gap is in the batch's logs;
  * - start with `retryOf`: the recorded retry decision still passes, no chain started since (one chain per decision), and
- *   the GUI list has no more ticked entries per stage than approved minus completed (user-stated or callback-proven);
+ *   the GUI list has no more ticked entries per stage than approved minus `done` (the latest statement plus the 3-star
+ *   runs proven after it, never fewer than the batch's proven 3-star runs);
  * - alternate (ticket 17): additionally, the stage whose last attempt did not succeed has a next approved candidate and
  *   runs left, and no switch from this batch was requested yet unless the writer refused it before writing (one switch
  *   per batch; any other switch state means MAA's list was or may have been replaced, so only stopping remains);
@@ -533,6 +546,7 @@ export function rerunGate(batch: BatchView, request: RerunRequest): GateResult {
     const assessment = assessRun(view);
     if (request.kind === 'progress') {
       if (!assessment.ended) return deny('run-tracking');
+      if (batch.records.some(record => !assessRun(record).ended)) return deny('run-unresolved');
       const { proven } = stageRuns(batch);
       return request.stages.some(stage => stage.completedRuns < proven(stage.stageId)) ? deny('progress-contradicts-evidence') : allow('progress');
     }
@@ -562,11 +576,11 @@ export function rerunGate(batch: BatchView, request: RerunRequest): GateResult {
   if (!verdict.allowed) return deny(verdict.reason === 'not-latest-run' ? 'chain-already-started' : verdict.reason);
   const ticks = batch.evidence.ticks;
   if (!ticks) return deny('list-unreadable');
-  const { completed } = stageRuns(batch);
+  const { done } = stageRuns(batch);
   for (const stage of previous.stages) {
     const indexes = new Set(previous.list.filter(item => item.stageId === stage.stageId).map(item => item.index));
     const ticked = ticks.filter(item => item.checked && indexes.has(item.index)).length;
-    if (ticked > Math.max(0, stage.loops - completed(stage.stageId))) return deny('finished-items-ticked');
+    if (ticked > Math.max(0, stage.loops - done(stage.stageId))) return deny('finished-items-ticked');
   }
   return allow('retry-decided');
 }
