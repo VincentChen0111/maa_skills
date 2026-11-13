@@ -83,6 +83,32 @@ test('the Skland scenarios and the skill agree: a linked post is read with the u
   assert.match(step, /不改用[^。]*网页抓取/);
 });
 
+test('the skill and the interface give the credential input command only when the repair is to enter it: retry later, use Windows and check the time do not', async () => {
+  const skill = await readFile(new URL('../skills/maa-account/SKILL.md', import.meta.url), 'utf8');
+  const research = await readFile(new URL('../skills/maa-core/references/research.md', import.meta.url), 'utf8');
+  const skland = [skill.split('\n').find((line) => line.includes('skland-community.ts read'))!, research.split('\n').find((line) => line.startsWith('- 森空岛社区（'))!];
+  const bilibili = [skill.split('\n').find((line) => line.includes('bilibili.ts read'))!, research.split('\n').find((line) => line.startsWith('- B 站支持是实验性的'))!];
+  // A clause is one instruction: the text up to the next 「；」 or 「。」.
+  const clauses = (text: string) => text.split(/[；。]/);
+  for (const text of [...skland, ...bilibili]) {
+    for (const clause of clauses(text).filter((item) => /credentials\.ts input/.test(item))) {
+      assert.doesNotMatch(clause, /retry-later|use-windows|check-system-time|protection-failed|windows-required|稍后再试/, `the input command is not given for a repair that is not to enter it: ${clause}`);
+    }
+  }
+  for (const text of skland) {
+    assert.match(text, /`repair`/, 'the Skland branches follow the result\'s repair');
+    assert.match(text, /`enter-credential`[^；。]*`reenter-credential`[^；。]*credentials\.ts input skland/);
+    assert.match(text, /`retry-later`[^；。]*稍后再试/); assert.match(text, /`use-windows`[^；。]*保存凭据的 Windows 用户/);
+    assert.match(text, /`check-system-time`[^；。]*系统时间/);
+    assert.match(text, /不要请用户重新输入/);
+  }
+  for (const text of bilibili) {
+    assert.match(text, /`protection-failed`[^；。]*稍后再试/); assert.match(text, /`windows-required`[^；。]*保存凭据的 Windows 用户/);
+    assert.match(text, /credentials\.ts input bilibili/);
+    assert.match(text, /不要请用户重新输入/);
+  }
+});
+
 test('a redirect in the synthetic Skland world is seen and never followed: the installed reader stops with risk control and the next read sends nothing', async (t) => {
   const scenario = communityScenarios.find((item) => item.id === 'account-skland-community-read')!;
   const fixture = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)),
