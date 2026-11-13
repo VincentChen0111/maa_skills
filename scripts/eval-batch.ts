@@ -131,10 +131,16 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
   return { directory, manifest };
 }
 
-/** Saved records only; nothing here rewrites an earlier record. */
+/**
+ * The records that count toward completion, read from saved files only; nothing here rewrites an earlier record. A host-level
+ * stop (quota, auth, network) is kept on disk but never compared; outside a rerun batch each scenario contributes its last
+ * finished record, and a rerun batch contributes every finished rerun.
+ */
 export async function batchRecords(directory: string): Promise<RunRecord[]> {
   const manifest = await readManifest(directory);
-  return Promise.all(manifest.runs.map(async (run) => JSON.parse(await readFile(join(directory, run.directory, 'run.json'), 'utf8')) as RunRecord));
+  const finished = manifest.runs.filter((run) => !(abortReasons as readonly string[]).includes(run.reason));
+  const counted = finished.filter((run, index) => manifest.rerunOf?.[run.scenario] || !finished.slice(index + 1).some((later) => later.scenario === run.scenario));
+  return Promise.all(counted.map(async (run) => JSON.parse(await readFile(join(directory, run.directory, 'run.json'), 'utf8')) as RunRecord));
 }
 export type BatchComparison = { overall: Comparison; scenarios: { host: Host; scenario: string; status: Comparison['status']; rerun: string[] }[]; rerunScenarios: string[] };
 export async function compareBatches(before: string, after: string, reruns: string[] = []): Promise<BatchComparison> {

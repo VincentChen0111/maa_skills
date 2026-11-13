@@ -127,9 +127,10 @@ test('the tracked compare command reads saved records only and names each scenar
     const runs = [];
     for (const record of records) {
       await mkdir(join(directory, record.id)); await writeFile(join(directory, record.id, 'run.json'), JSON.stringify(record));
-      runs.push({ scenario: record.scenario, directory: record.id, id: record.id, reason: 'completed', grade: record.grade.status });
+      runs.push({ scenario: record.scenario, directory: record.id, id: record.id, reason: record.reason ?? 'completed', grade: record.grade.status, ...(record.rerunOf ? { rerunOf: record.rerunOf } : {}) });
     }
-    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, runs }));
+    const rerunOf = Object.fromEntries(records.filter((record) => record.rerunOf).map((record) => [record.scenario, record.rerunOf!]));
+    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
     return directory;
   };
   const record = (id: string, scenario: string, status: 'pass' | 'fail', extra: Partial<RunRecord> = {}): RunRecord => ({ id, host: 'claude', hostVersion: '2.1.321', model: 'fixed-model',
@@ -148,6 +149,15 @@ test('the tracked compare command reads saved records only and names each scenar
   assert.deepEqual([await snapshot(before), await snapshot(after)], saved, 'comparison never rewrites a record');
   const doubled = await batch([record('d1', 'one', 'pass', { double: true }), record('d2', 'two', 'pass', { double: true })]);
   assert.equal((await compareBatches(before, doubled)).overall.status, 'incomparable', 'double records never enter a comparison');
+  // A resumed batch keeps the records of its host-level stops; only the records that count toward completion are compared.
+  const stopped = (id: string, scenario: string, reason: string, extra: Partial<RunRecord> = {}) => record(id, scenario, 'pass', { skillVersion: 'skill-b', reason, ...extra, grade: { status: 'unverified', score: 0, total: 8, failed: [] } });
+  const resumed = await batch([record('c1', 'one', 'pass', { skillVersion: 'skill-b' }), stopped('c2', 'two', 'quota-exhausted'), stopped('c3', 'two', 'auth-failed'),
+    record('c4', 'two', 'pass', { skillVersion: 'skill-b' })]);
+  const afterResume = await compareBatches(before, resumed);
+  assert.equal(afterResume.overall.status, 'pass', 'a resumed batch compares like an uninterrupted one');
+  assert.deepEqual(afterResume.scenarios.map((item) => [item.scenario, item.status]), [['one', 'pass'], ['two', 'pass']]);
+  const resumedReruns = await batch([stopped('s0', 'two', 'network-unavailable', { rerunOf: 'a2' }), ...[1, 2, 3].map((index) => record(`s${index}`, 'two', 'pass', { skillVersion: 'skill-b', rerunOf: 'a2' }))]);
+  assert.equal((await compareBatches(before, after, [resumedReruns])).overall.status, 'unstable', 'a resumed rerun batch counts its three finished reruns');
 });
 
 test('the batch CLI lists scenarios and refuses incomplete arguments; eval-run keeps its positional form', async () => {
