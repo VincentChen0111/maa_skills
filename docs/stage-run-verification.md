@@ -42,6 +42,23 @@
 - 第 2 轮修复后（维护者 2026-11-13 新规：作者不跑完整离线入口，由协调者按包串行运行；只跑类型检查和改动涉及的单个测试文件，逐个运行）：`npm run typecheck` 通过；单个文件逐个运行 `stage-run-rerun-gate` 8/8、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1、`stage-run-scenarios` 1/1。修复前一次（新规之前）`maa-callback`、`maa-log-window` 和专精 9 个文件合在一条命令里跑过 45/45，这一轮没有改这些文件。完整离线入口未由作者运行。
 - 第 3 轮修复后（同样只跑类型检查和单个文件，逐个运行）：新增的 3 项测试先写，旧代码下「同一份报告重新准备」「普通与突袭共用作业」两项失败（第二批第一次 `start` 以 `batch-may-have-run` 拒绝），「时间读不出」一项本来就通过（旧代码不看时间）；修复后 `npm run typecheck` 通过，`stage-run-rerun-gate` 11/11、`stage-run` 14/14、`stage-run-flow` 4/4、`stage-run-demo` 1/1。完整离线入口未由作者运行。
 
+## PR CI 发现后的修复（2026-11-14，交第五轮审查）
+
+PR 的 Ubuntu CI 上，`tests/stage-run.test.ts`「run record and summaries keep paths only for MAA debug images…」失败：`leaked /tmp/maa-stage-run-…/maa`。
+
+- 原因：运行记录存了 MAA 目录的完整路径（`StageRunRecord.maaDirectory`），只是给 `decide` 和 `progress` 在调用方没传目录时兜底。对外的摘要不含这个路径。
+- Windows 上测不出来：测试拿原路径去 JSON 文本里查，而 JSON 把 Windows 路径的反斜杠转义了，检查永远不会命中。
+- 修复：
+  - 运行记录不再存 MAA 目录。`decide` 和 `progress` 必须由调用方给出 MAA 目录，CLI 本来就从设置传入；缺少时报 `maa-directory-required`。
+  - 测试改为同时查原路径和 JSON 转义后的形式，并写明是哪一份文本泄露。
+  - 测试里直接调用这两个导出函数的地方，改为显式传入 MAA 目录。
+- 先红后绿（Windows）：加强后的测试在修复前失败，报 `record leaked C:\…\maa`；修复后 `npm run typecheck` 通过，依次单独运行全部通过：
+  - `stage-run` 14/14；
+  - `stage-run-rerun-gate` 11/11；
+  - `stage-run-flow` 4/4；
+  - `stage-run-demo` 1/1；
+  - `stage-run-scenarios` 1/1。
+
 ## 独立审查第 3 轮后的修复（2026-11-13）
 
 第 3 轮结论不通过（P2 1），协调者复核后接受：第一次 `start` 前的日志检查把任何时候提交或载入本批作业文件的行都算作「这一批可能跑过」，但作业文件路径 `stage-jobs/<报告哈希>/<作业号>.json` 只由报告和作业决定，同一份报告重新准备的下一批、共用同一作业的另一批（普通与突袭）会被上一批留下的行挡住。修复：`scanBeforeTracking` 只算时间不早于本批准备开始（`daily-runs.jsonl` 里 `complete` 记录的 `startedAt`）的行，时间读不出的行照算；「日志够不到准备开始」的检查不变。理由：准备要求 MAA 关闭并替换它的作业列表，准备开始之后出现的这类行只能是这一批或用户自己跑的。代码注释、规格正文、「规则来源」16 行、「默认值及其来源」开始跟踪一行和 `references/stage-run.md` 第 2 条里「批准的作业文件只属于这次批准」的说法一并改正。新测试的日志时间按当前时钟换算（`fromNow`），不依赖测试运行的时刻。

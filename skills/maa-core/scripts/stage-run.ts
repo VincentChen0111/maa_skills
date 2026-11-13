@@ -20,7 +20,7 @@ import { readSettings } from './preferences.ts';
  * `readStageRun`, `summarizeStageRun`, `stageRunOutcome` and the `StageRunRecord` type.
  */
 export type StageRunRecord = {
-  version: 1; runId: string; createdAt: string; reference: string; retryOf: string | null; maaDirectory?: string;
+  version: 1; runId: string; createdAt: string; reference: string; retryOf: string | null;
   batch: { operation: string; reportHash: string; map: string; profile: number; listCheck: 'matches' | 'subset';
     stages: { stageId: string; code: string; loops: number; primary: number; alternates: number[] }[]; list: RunList };
   anchors: Record<LogName, LogCursor>; cursors: Record<LogName, LogCursor>;
@@ -236,7 +236,7 @@ async function createRun(input: Paths, operation: string, reference: string, ret
     const entry = plan.entries.find(value => value.primary.id === item.CopilotId && value.code === item.Name)!;
     return { index: item.Index, stageId: entry.stageId, code: entry.code, jobId: item.CopilotId, fileKey: fileKey(item.FilePath) };
   });
-  const record: StageRunRecord = { version: 1, runId: randomUUID(), createdAt, reference, retryOf, maaDirectory: input.maaDirectory,
+  const record: StageRunRecord = { version: 1, runId: randomUUID(), createdAt, reference, retryOf,
     batch: { operation, reportHash: plan.reportHash, map: plan.map, profile: check.profile, listCheck: check.result,
       stages: plan.entries.map(entry => ({ stageId: entry.stageId, code: entry.code, loops: entry.loops, primary: entry.primary.id, alternates: entry.alternates.map(job => job.id) })), list },
     anchors, cursors: structuredClone(anchors), state: emptyRunState(), userReports: [], screenshots: [], verifications: [], decisions: [],
@@ -325,7 +325,7 @@ async function withJudgedRun<T>(input: { privateDirectory: string; maaDirectory?
   work: (record: StageRunRecord, batch: BatchView, maaDirectory: string) => Promise<T>): Promise<T> {
   const { operation } = (await readStageRun(input.privateDirectory, input.runId)).batch;
   return withOperation(input.privateDirectory, operation, () => withRun(input.privateDirectory, input.runId, async record => {
-    const maaDirectory = input.maaDirectory ?? record.maaDirectory ?? fail('maa-directory-required');
+    const maaDirectory = input.maaDirectory ?? fail('maa-directory-required');
     if (deriveRun(view(record), null).execution === 'tracking') { await refresh(record, maaDirectory); await save(input.privateDirectory, record); }
     return work(record, await batchViewFor(maaDirectory, input.privateDirectory, operation, record), maaDirectory);
   }));

@@ -99,7 +99,7 @@ test('every consumer refuses a re-run for every producer of an unproven chain or
     }
     let batch = await injectedRetry(c);
     assert.equal(rerunGate(batch, { kind: 'start', retryOf: c.runId }).allowed, false, `${name}: even with a recorded retry decision`);
-    const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：每关都打满了', stages: fullProgress });
+    const stated = await recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：每关都打满了', stages: fullProgress });
     if (producer.unlockedByProgress) assert.ok(stated.allowedDecisions.includes('retry-within-approval'), `${name}: the user's statement settles the unknown attempt`);
     else assert.deepEqual(stated.allowedDecisions, ['stop-and-tell-user'], `${name}: a statement does not lift a batch-wide hold`);
     batch = await injectedRetry(c);
@@ -143,9 +143,9 @@ test('stage progress below the callback evidence is refused; a retry needs the f
   await settledThenDisconnect(c);
   await observe(c);
   assert.equal((await verify(c)).next, 'ask-progress');
-  await assert.rejects(recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：一次都没打完', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] }),
+  await assert.rejects(recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：一次都没打完', stages: [{ stageId: 'synthetic_01', completedRuns: 0 }] }),
     /progress-contradicts-evidence/);
-  const stated = await recordStageProgress({ privateDirectory: c.paths.privateDirectory, runId: c.runId, reference: '用户：SYN-1 结算过一次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
+  const stated = await recordStageProgress({ ...c.paths, runId: c.runId, reference: '用户：SYN-1 结算过一次', stages: [{ stageId: 'synthetic_01', completedRuns: 1 }] });
   assert.deepEqual(stated.allowedDecisions, ['retry-within-approval', 'switch-alternate', 'stop-and-tell-user']);
   await decideStageRun({ ...c.paths, runId: c.runId, decision: 'retry-within-approval', reason: '用户已说明进度' });
   await assert.rejects(startStageRun({ ...c.paths, operation: c.batch.operation, reference: '全部还勾着', retryOf: c.runId }), /finished-items-ticked/);
