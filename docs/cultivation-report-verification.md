@@ -25,7 +25,7 @@
 | 1 读快照和玩法优先级，给出顺序、每步材料/龙门币花费和库存能支持到哪一步；缺偏好时说明假设或询问 | `tests/cultivation-report.test.ts`「a draft keeps the given order …」：步骤顺序、每步花费与 14 的 `costs[].total` 相同，累计结果与 14 对前缀的计算相同，`supportedThrough` 为 1；「without a stated priority …」：缺优先级返回 `priorities:missing` 且不保存，假设标为假设；「unknown stock or progress …」：未知库存保持待核，不算够 | 已核（离线） |
 | 2 用 14 的真实计算，结合 NGA 和作业站依据说明原因；资料带作者、日期、来源、可信度，事实与推断分开 | 同上文件「NGA citations come only from posts already read …」：引用与 `readNgaThread` 缓存结果逐字段相同，没有请求；「job-site evidence comes from the shared read-only query …」：要求行与 `collectStageJobs` 的结果相同；「facts and inferences are separated …」：理由、假设、总体推断标为推断，所有外部文字经 `inert` | 已核（离线） |
 | 3 作业站用只读入口、复用共享匹配；19 的结果按同一格式补充，缺少不阻塞 | 作业证据只调用 `loadStageTables` 和 `collectStageJobs`；「results from other research sources …」：共用格式条目标为转交，NGA 不能这样传；没有 19 的结果时报告照常生成 | 已核（离线） |
-| 4 交给 daily 的报告默认审查：一名审查员、一轮、只接受真正的错误；记录接受/拒绝理由；改正后不复审并列出改动 | `tests/advice-report.test.ts`「the default review runs once …」：没有审查说明不能记录结论；每条意见必须有决定和理由；同一版本第二次审查被拒；接受了错误的版本不能批准；改正版本必须覆盖接受的意见、不能改正被拒的意见；改正版本直接为已审查、不能再审，报告列出改动和不同的输入。逐条判断意见是 agent 行为，见下面「未验证」 | 协议已核（离线）；agent 行为未验证 |
+| 4（第 1 轮后补充：改正版本也列出重新读取后变化的结果）交给 daily 的报告默认审查：一名审查员、一轮、只接受真正的错误；记录接受/拒绝理由；改正后不复审并列出改动 | `tests/advice-report.test.ts`「the default review runs once …」：没有审查说明不能记录结论；每条意见必须有决定和理由；同一版本第二次审查被拒；接受了错误的版本不能批准；改正版本必须覆盖接受的意见、不能改正被拒的意见；改正版本直接为已审查、不能再审，报告列出改动和不同的输入。逐条判断意见是 agent 行为，见下面「未验证」 | 协议已核（离线）；agent 行为未验证 |
 | 5 两宿主共用自包含审查说明；Claude 用新上下文，Codex 用新 codex exec 进程；无法完成时如实标明 | 同一文件：审查说明由同一模板生成，内含报告正文和 JSON 全文、没有状态或作者结论，SHA-256 与文件一致；「an unfinished review is never shown or approved as reviewed」：未完成标「审查未完成」、不能批准，之后可以重审或跳过。两宿主的发起方式写在接口说明和宿主说明里 | 说明与记录已核（离线）；真实宿主发起未验证 |
 | 6 用户当次明确跳过时不审，报告醒目标「未审查」；随口问答不套用报告审查 | 同一文件「an explicit skip …」：报告第一段就是「【未审查】」和用户原话，跳过后不能再审；`tests/report-scenarios.test.ts`：随口问答场景不保存报告，留下待审报告的运行被评为 `report-review` 失败 | 已核（离线）；模型行为未验证 |
 | 7 条目逐项批准并写明范围；审查通过不等于执行授权；account 不写 MAA 配置、不执行培养 | 同一文件：只批准点名的 S1，S2 没有批准；批准记录写明范围（daily 只能安排专精训练，其余由用户在游戏里完成，不包括刷关、碎石和用药、加工和兑换）；`resolveApprovedItem` 只认已批准条目；整个流程只写私有目录 `reports/`，MAA 配置没有变化 | 已核（离线） |
@@ -37,7 +37,7 @@
 - 数字只来自 14；第 1 到第 k 步一起计算得到累计与「支持到第几步」；同一干员只占一步。
 - 玩法优先级必须是用户原话或标明的假设，缺少时不保存；agent 写的内容标为推断。
 - NGA 只从缓存引用已读的楼层、不发请求；检索结果不能引用；作业站只经共享只读查询；其他来源原样转交并标明。
-- 每个版本一次审查结论；改正生成新版本，必须覆盖接受的意见，不复审，列出改动和不同的输入。
+- 每个版本一次审查结论；改正生成新版本，必须覆盖接受的意见，不复审，列出改动、不同的输入和重新读取后变化的结果。
 - 审查未完成不算一轮、不能批准，可以再发起或由用户明确跳过。
 - 跳过只认用户当次原话，偏好原话不能代替。
 - 只能批准已审查或明确跳过的版本，逐项点名；daily 只能据培养条目安排专精训练。
@@ -59,6 +59,15 @@
 - skill 目录有新增文件：`tests/account-installation.test.ts` 2 项、`tests/help-installation.test.ts` 6 项：全部通过。
 - `node scripts/tracker.ts`：无错误。
 - 没有运行：完整离线入口（隐私检查、元数据检查和全部测试），由协调者统一运行。另用一个临时脚本检查了本票改动文档里的相对链接，没有断链。
+
+## 第 1 轮审查后的修复
+
+协调者对第 1 轮的三项 P3 全部接受，本轮修复（审查记录由协调者写）：
+
+- P3-1：改正版本原来只比较 agent 的输入，重新读取的快照、NGA 缓存、作业结果和公开表变化后，工具数字变了，报告却写「无」。现在 `revisionOf.changedResults` 列出所有变化的字段（快照读取时间、来源时间和覆盖状态，每步花费、累计和够不够，支持到第几步，每条资料的各字段，共享计算的结果；公开表按仓库、提交、文件和内容 SHA-256 比较，同一张固定表晚些时候重读不算变化）。有变化时报告顶部提示这些变化没有经过审查。仍可批准，没有新增拒绝规则。测试：`tests/advice-report.test.ts`「a correction drafted after the account snapshot changed …」。
+- P3-2：评测观察器把审查接受了错误、却没有改正版本的报告记为待改正，审查不算通过；有改正版本指向它时，两版都算已审查。测试：`tests/report-scenarios.test.ts` 的默认审查场景增加了这两种情况。
+- P3-3：maa-help 里「用到凭据的读取和调研是后续能力」与已交付的 NGA 读取矛盾，改为：NGA 凭据已用于 account 的只读检索和读帖，森空岛账号和 B 站凭据目前只能设置和检查状态（12、19 不在本分支）。这是 agent 可见文字，没有离线测试，模型评测未验证。
+- 先写失败测试：新增和修改的断言在修复前运行，`tests/advice-report.test.ts` 5 项中 2 项失败（新测试，以及原测试对 `changedResults: []` 的断言），`tests/report-scenarios.test.ts` 失败（观察器给出 `reviewed` 而不是 `needs-correction`）。修复后：`npm run typecheck` 通过；`tests/advice-report.test.ts` 5 项、`tests/report-scenarios.test.ts` 1 项、`tests/cultivation-report.test.ts` 8 项通过。审查员的两个离线复现脚本重新运行：改正版本顶部出现未审查变化的提示；待改正的报告在默认审查场景里评为 `report-review` 失败。
 
 ## 未验证
 
