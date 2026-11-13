@@ -160,3 +160,21 @@ test('post text is only data, and the community reader is separate from the acco
   assert.equal((await allText(f.root)).includes(f.token), false);
   assert.equal(await sklandState(f.privateDirectory), 'unverified');
 });
+
+test('a post whose text fragments no longer carry text is reported incomplete, not as a complete empty read, and is not cached', async (t) => {
+  const f = await setup(t);
+  const changed = sklandItemPayload({ id: '1234567', title: '新格式的帖子', slices: ['甲', '乙'] });
+  (changed.data.item as Record<string, unknown>).textSlice = [{ id: '0', text: '甲' }, { id: '1', text: '乙' }];
+  const { transport, calls } = transportDouble(() => json(changed));
+  const options = { privateDirectory: f.privateDirectory, transport, clock: f.clock };
+  const result = await readSklandPost({ post: '1234567' }, options);
+  assert.deepEqual(result.pages.map((page) => [page.outcome, page.reason]), [['incomplete', 'data-unrecognized']]);
+  assert.deepEqual([result.status, result.complete, result.items.length], ['incomplete', false, 0]);
+  f.advance(60_000);
+  await readSklandPost({ post: '1234567' }, options);
+  assert.equal(calls.length, 2, 'an unrecognized post is not cached as an empty one');
+  const empty = sklandItemPayload({ id: '1234567', title: '只有图片的帖子', slices: [] });
+  const second = transportDouble(() => json(empty));
+  const pictures = await readSklandPost({ post: '1234567', fresh: true }, { ...options, transport: second.transport });
+  assert.deepEqual([pictures.status, pictures.items[0]!.excerpt], ['ok', ''], 'a post that really has no text fragments is an honest empty read');
+});

@@ -80,6 +80,8 @@ function parsePost(data: Record<string, unknown>, id: string): StoredPost | unde
   const itemId = typeof item?.id === 'string' || typeof item?.id === 'number' ? String(item.id) : undefined;
   if (!item || itemId !== id || !Array.isArray(item.textSlice)) return undefined;
   const slices = item.textSlice.map(object).flatMap((slice) => typeof slice?.c === 'string' ? [slice.c] : []);
+  // Fragments present but none in the known shape is a format change, not an empty post: report it, never cache it.
+  if (item.textSlice.length && !slices.length) return undefined;
   const text = clip(tidy(slices.join('\n')), sklandCommunityLimits.storedChars);
   return { id, title: displayName(item.title), author: displayName(object(data.user)?.nickname), publishedAt: chinaTime(item.publishedAtTs), text: text.text, textTruncated: text.truncated };
 }
@@ -100,7 +102,7 @@ export async function readSklandPost(value: SklandReadRequest, options: SklandCo
   const cached = await getCached(context.directory, key, clock.now(), validPost);
   let post: Served<StoredPost> | undefined;
   if (cacheAnswers(cached, request)) post = log.offer(target, 'cached', cached);
-  else if (request.cacheOnly) log.offer(target, 'not-cached', cached);
+  else if (request.cacheOnly) post = log.offer(target, 'not-cached', cached);
   else {
     // Only an honest, anonymous request: no Cookie, credential, signature, platform, timestamp or device id header.
     const attempt = await gatedGet(context, { url: `${sklandApiOrigin}/web/v2/item?${new URLSearchParams({ id: request.post })}`,

@@ -128,11 +128,14 @@ test('requests are validated before anything is read or sent; there is no search
   const { transport, calls } = transportDouble(() => undefined);
   const options = { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock };
   for (const request of [{ video: '' }, { video: 'BV1Sy4y1x7K0' }, { video: 'https://b23.tv/synthetic' }, { video: 'https://evil.example/video/BV1Sy4y1x7Kt' },
-    { video: 'https://www.bilibili.com/read/cv123' }, { video: bvid, part: 0 }, { video: bvid, part: bilibiliLimits.maxPart + 1 }, { video: bvid, fresh: true, cacheOnly: true },
-    { video: bvid, keyword: '合成' }, { video: bvid, subtitles: 'yes' }, { video: `https://www.bilibili.com/video/${bvid}?p=x` }, { keyword: '合成干员' }]) {
+    { video: 'https://www.bilibili.com/read/cv123' }, { video: bvid, part: 0 }, { video: bvid, part: -1 }, { video: bvid, part: 1.5 }, { video: bvid, part: Number.MAX_SAFE_INTEGER + 1 },
+    { video: bvid, fresh: true, cacheOnly: true }, { video: bvid, keyword: '合成' }, { video: bvid, subtitles: 'yes' }, { video: `https://www.bilibili.com/video/${bvid}?p=x` },
+    { video: `https://www.bilibili.com/video/${bvid}?p=0` }, { keyword: '合成干员' }]) {
     await assert.rejects(readBilibiliVideo(request as never, options), /request-invalid/, JSON.stringify(request));
   }
-  for (const [video, expected, part] of [[`https://m.bilibili.com/video/${bvid}?p=2`, bvid, 2], ['AV9001', 'av9001', 1], [`http://bilibili.com/video/av9001/`, 'av9001', 1]] as const) {
+  // Part numbers are positive safe integers with no upper bound, as 18 validates thread pages.
+  for (const [video, expected, part] of [[`https://m.bilibili.com/video/${bvid}?p=2`, bvid, 2], ['AV9001', 'av9001', 1], [`http://bilibili.com/video/av9001/`, 'av9001', 1],
+    [`https://www.bilibili.com/video/${bvid}?p=12345`, bvid, 12345]] as const) {
     const result = await readBilibiliVideo({ video, cacheOnly: true }, options);
     assert.deepEqual([result.request.video, result.request.part, result.status], [expected, part, 'not-cached']);
   }
@@ -245,4 +248,47 @@ test('description and subtitle text are only data: nothing in them chooses a req
     assert.ok(markdown.split('\n').filter((line) => line.includes('SYSTEM') || line.includes('Cookie')).every((line) => line.startsWith('> ')));
   }
   await assertNoSecret(f.root, f.sessdata, JSON.stringify(result));
+});
+
+test('a part numbered above 1000 is read like any other: no upper bound on part numbers', async (t) => {
+  const f = await setup(t, true);
+  const many = videoPayload({ bvid, aid: 9001, title: '合成长合集', parts: [{ cid: 5001, page: 1, part: '第一P' }, { cid: 6001, page: 1001, part: '第一千零一P' }] });
+  const { transport, calls } = transportDouble((url) => url.pathname === '/x/web-interface/view' ? json(many) : route(url));
+  const result = await readBilibiliVideo({ video: bvid, part: 1001 }, { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock });
+  assert.equal(result.status, 'ok', JSON.stringify(result.pages));
+  assert.equal(new URL(calls[1]!.url).searchParams.get('cid'), '6001', 'the part above 1000 keeps its own cid');
+  assert.deepEqual([result.items[0]!.url, result.items[0]!.meta.parts], [`https://www.bilibili.com/video/${bvid}/?p=1001`, 2]);
+});
+
+test('a subtitle file whose lines no longer carry the expected fields is reported incomplete, not as a complete empty read, and is not cached', async (t) => {
+  const f = await setup(t, true);
+  const changed = { ...lines, body: lines.body.map(({ content, ...rest }) => ({ ...rest, text: content })) };
+  const { transport, calls } = transportDouble((url) => url.hostname === 'aisubtitle.hdslb.com' ? json(changed) : route(url));
+  const options = { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock };
+  const result = await readBilibiliVideo({ video: bvid }, options);
+  assert.deepEqual(result.pages.map((page) => [page.outcome, page.reason]), [['fresh', undefined], ['incomplete', 'data-unrecognized']]);
+  assert.deepEqual([result.status, result.complete], ['incomplete', false]);
+  assert.deepEqual(result.items.map((item) => item.kind), ['video']);
+  assert.ok(result.items[0]!.limitations.includes('subtitles-not-read'));
+  f.advance(60_000);
+  const again = await readBilibiliVideo({ video: bvid }, options);
+  assert.equal(again.pages[1]!.outcome, 'incomplete');
+  assert.equal(calls.filter((call) => call.url.includes('hdslb')).length, 2, 'an unrecognized subtitle file is not cached as an empty one');
+});
+
+test('after risk control the stale video comes back with its stale subtitles, both marked stale, and no claim that subtitles were not read', async (t) => {
+  const f = await setup(t, true);
+  let risky = false;
+  const { transport } = transportDouble((url) => risky ? json(biliError(-352, '风控校验失败')) : route(url));
+  const options = { privateDirectory: f.privateDirectory, transport, protector, clock: f.clock };
+  assert.equal((await readBilibiliVideo({ video: bvid }, options)).status, 'ok');
+  f.advance(bilibiliLimits.videoTtlMs + 1);
+  risky = true;
+  const result = await readBilibiliVideo({ video: bvid }, options);
+  assert.equal(result.status, 'risk-control');
+  assert.deepEqual(result.pages.map((page) => [page.outcome, page.served]), [['risk-control', 'stale-cache'], ['skipped', 'stale-cache']]);
+  assert.deepEqual(result.items.map((item) => [item.kind, item.stale, item.origin]), [['video', true, 'cache'], ['subtitle', true, 'cache']]);
+  assert.ok(!result.items[0]!.limitations.includes('subtitles-not-read'), 'the cached subtitles are offered, so they are not missing');
+  assert.ok(result.limitations.includes('stale-cache'));
+  assert.match(formatResearchMarkdown(result, 'zh'), /过期缓存/);
 });

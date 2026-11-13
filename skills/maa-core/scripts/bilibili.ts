@@ -18,7 +18,7 @@ import { assembleResult, blockedOutcome, cacheAnswers, chinaTime, clip, decodeJs
  */
 export const bilibiliLimits = {
   minIntervalMs: 3_000, riskStopMs: 30 * 60_000, lockStaleMs: 120_000, maxWaitMs: 150_000, timeoutMs: 20_000, maxResponseBytes: 4 * 1024 * 1024,
-  videoTtlMs: 24 * 3_600_000, subtitleTtlMs: 24 * 3_600_000, maxPart: 1_000, storedDescriptionChars: 4_000, storedSubtitleChars: 8_000, excerptChars: 600,
+  videoTtlMs: 24 * 3_600_000, subtitleTtlMs: 24 * 3_600_000, storedDescriptionChars: 4_000, storedSubtitleChars: 8_000, excerptChars: 600,
 } as const;
 export const bilibiliApiOrigin = 'https://api.bilibili.com';
 export const experimentalNotice = 'Bilibili support is experimental: it may stop working at any time; do not rely on it.';
@@ -27,6 +27,8 @@ const videoHosts = new Set(['www.bilibili.com', 'bilibili.com', 'm.bilibili.com'
 /** Subtitle files are fetched only from these Bilibili file hosts, and only from the address the player answer names. */
 const subtitleHosts = new Set(['aisubtitle.hdslb.com', 'i0.hdslb.com', 'i1.hdslb.com', 'i2.hdslb.com']);
 const bvPattern = /^BV1[1-9A-HJ-NP-Za-km-z]{9}$/;
+/** Part numbers, like NGA thread pages, are any positive safe integer; there is no upper bound. */
+const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 
 export type BilibiliOptions = { privateDirectory: string; transport?: ResearchTransport; protector?: Protector; clock?: Clock };
 export type BilibiliReadRequest = { video: string; part?: number; subtitles?: boolean; fresh?: boolean; cacheOnly?: boolean };
@@ -53,7 +55,7 @@ function parseVideo(value: unknown): { id: VideoId; linkPart?: number } {
   if (!id) throw invalid();
   const p = url.searchParams.get('p');
   if (p === null) return { id };
-  if (!/^\d{1,4}$/.test(p)) throw invalid();
+  if (!/^[1-9]\d{0,15}$/.test(p) || !positive(Number(p))) throw invalid();
   return { id, linkPart: Number(p) };
 }
 function readRequest(value: unknown) {
@@ -63,7 +65,7 @@ function readRequest(value: unknown) {
   for (const key of ['subtitles', 'fresh', 'cacheOnly']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw invalid();
   if (input.fresh === true && input.cacheOnly === true) throw invalid();
   const part = input.part ?? linkPart ?? 1;
-  if (typeof part !== 'number' || !Number.isInteger(part) || part < 1 || part > bilibiliLimits.maxPart) throw invalid();
+  if (!positive(part)) throw invalid();
   return { id, part, subtitles: input.subtitles !== false, fresh: input.fresh === true, cacheOnly: input.cacheOnly === true };
 }
 
@@ -110,7 +112,7 @@ function parseVideoData(data: Record<string, unknown>, id: VideoId): StoredVideo
   if (!bvid || aid === undefined || aid <= 0 || (id.kind === 'bvid' ? bvid !== id.value : aid !== id.value)) return undefined;
   const parts = (Array.isArray(data.pages) ? data.pages : []).map(object).flatMap((row) => {
     const page = integer(row?.page), cid = integer(row?.cid);
-    return page !== undefined && page >= 1 && page <= bilibiliLimits.maxPart && cid !== undefined && cid > 0 ? [{ page, cid }] : [];
+    return positive(page) && positive(cid) ? [{ page, cid }] : [];
   });
   const description = clip(tidy(typeof data.desc === 'string' ? data.desc : ''), bilibiliLimits.storedDescriptionChars);
   const duration = integer(data.duration);
@@ -136,14 +138,20 @@ function subtitleAddress(raw: string): string | undefined {
 function parseSubtitle(data: Record<string, unknown>, video: StoredVideo, part: number, language: string): StoredSubtitle | undefined {
   const lines: { from: number; text: string }[] = [];
   let used = 0, truncated = false;
-  for (const row of (data.body as unknown[]).map(object)) {
+  const rows = data.body as unknown[];
+  for (const row of rows.map(object)) {
     const from = typeof row?.from === 'number' && Number.isFinite(row.from) && row.from >= 0 ? row.from : undefined;
     const text = typeof row?.content === 'string' ? tidy(row.content).replace(/\n/g, ' ') : '';
     if (from === undefined || !text) continue;
     const size = [...text].length;
-    if (used + size > bilibiliLimits.storedSubtitleChars) { truncated = true; break; }
+    if (used + size > bilibiliLimits.storedSubtitleChars) {
+      if (!lines.length) lines.push({ from: Math.round(from * 10) / 10, text: clip(text, bilibiliLimits.storedSubtitleChars).text });
+      truncated = true; break;
+    }
     lines.push({ from: Math.round(from * 10) / 10, text }); used += size;
   }
+  // A file that has lines but none in the known shape is a format change, not an empty subtitle: report it, never cache it.
+  if (rows.length && !lines.length) return undefined;
   return { bvid: video.bvid, part, language, machine: language.startsWith('ai-'), lines, truncated };
 }
 
@@ -198,7 +206,7 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
   const cachedVideo = await getCached(context.directory, videoKey, clock.now(), validVideo);
   let video: Served<StoredVideo> | undefined;
   if (cacheAnswers(cachedVideo, request)) video = log.offer(videoTarget, 'cached', cachedVideo);
-  else if (request.cacheOnly) log.offer(videoTarget, 'not-cached', cachedVideo);
+  else if (request.cacheOnly) video = log.offer(videoTarget, 'not-cached', cachedVideo);
   else {
     const params: Record<string, string> = request.id.kind === 'bvid' ? { bvid: request.id.value } : { aid: String(request.id.value) };
     const attempt = await gatedGet(context, { url: `${bilibiliApiOrigin}/x/web-interface/view?${new URLSearchParams(params)}`, headers }, classifyApi);
@@ -225,9 +233,9 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
     const cached = await getCached(context.directory, key, clock.now(), validSubtitle);
     const cid = video?.value.parts.find((item) => item.page === request.part)?.cid;
     if (cacheAnswers(cached, request)) subtitle = log.offer(target, 'cached', cached);
-    else if (request.cacheOnly) log.offer(target, 'not-cached', cached);
-    else if (halted || !video) log.offer(target, 'skipped', cached);
-    else if (cid === undefined) log.offer(target, 'unavailable', cached, 'part-missing');
+    else if (request.cacheOnly) subtitle = log.offer(target, 'not-cached', cached);
+    else if (halted || !video) subtitle = log.offer(target, 'skipped', cached);
+    else if (cid === undefined) subtitle = log.offer(target, 'unavailable', cached, 'part-missing');
     else {
       const state = (await inspectCredentials(privateDirectory, new Date(clock.now()))).credentials.find((item) => item.service === source)?.state ?? 'unknown';
       let blocked: { outcome: PageOutcome; reason?: string } | undefined = credentialStates[state] ? { outcome: credentialStates[state]! } : undefined;
@@ -237,7 +245,7 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
           credential = { revision: saved.revision, sessdata: saved.values.sessdata! };
         } catch (error) { blocked = { outcome: error instanceof CredentialError && error.message === 'credential-unset' ? 'credential-required' : 'credential-unreadable' }; }
       }
-      if (blocked) log.offer(target, blocked.outcome, cached);
+      if (blocked) subtitle = log.offer(target, blocked.outcome, cached);
       else {
         const params = new URLSearchParams({ bvid: video.value.bvid, cid: String(cid) });
         const attempt = await gatedGet(context, { url: `${bilibiliApiOrigin}/x/player/wbi/v2?${params}`, headers: { ...headers, ...sessionHeader(credential!.sessdata) } }, classifyApi);
@@ -248,9 +256,9 @@ export async function readBilibiliVideo(value: BilibiliReadRequest, options: Bil
           const track = signedIn ? chooseTrack(data) : undefined;
           const address = track ? subtitleAddress(track.url) : undefined;
           if (signedIn) credentialResult = 'usable';
-          if (!signedIn) { extra.push('login-not-recognized'); log.offer(target, 'unavailable', cached, 'login-not-recognized'); }
-          else if (!track) log.offer(target, 'unavailable', cached, 'no-subtitles');
-          else if (!address) log.offer(target, 'unavailable', cached, 'subtitle-host-refused');
+          if (!signedIn) { extra.push('login-not-recognized'); subtitle = log.offer(target, 'unavailable', cached, 'login-not-recognized'); }
+          else if (!track) subtitle = log.offer(target, 'unavailable', cached, 'no-subtitles');
+          else if (!address) subtitle = log.offer(target, 'unavailable', cached, 'subtitle-host-refused');
           else {
             // The subtitle file host needs no credential: nothing but the address the player named is sent.
             const file = await gatedGet(context, { url: address, headers }, classifyFile);
