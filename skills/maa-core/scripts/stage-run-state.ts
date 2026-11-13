@@ -370,18 +370,21 @@ export function scanBatchLines(evidence: BatchEvidence, lines: string[]) {
   }
 }
 /**
- * Producer before the batch's first record: whether any Core line (current and rotated log) submitted or loaded one of the
- * batch's approved job files. The files exist only for this approval, so a mention at any time means the batch may have
- * run. `earliest` is the first readable line time, to tell whether the logs reach back to the preparation.
+ * Producer before the batch's first record: whether any Core line (current and rotated log) at or after `since` (the
+ * preparation's start) submitted or loaded one of the batch's approved job files. The file path depends only on the
+ * report and the job, so an earlier batch of the same report, or another batch sharing the job, leaves such lines before
+ * this preparation. Preparation needs MAA closed and replaces its job list, so a mention after it can only be this batch
+ * or the user's own run. A mention whose time cannot be read counts. `earliest` is the first readable line time, to tell
+ * whether the logs reach back to the preparation.
  */
-export function scanBeforeTracking(lines: string[], files: ReadonlySet<string>) {
+export function scanBeforeTracking(lines: string[], files: ReadonlySet<string>, since: number) {
   let earliest = Infinity, mentioned = false;
   const approved = (value: unknown) => typeof value === 'string' && files.has(fileKey(value));
   for (const line of lines) {
     const at = time(/^\[([^\]]+)\]/.exec(line)?.[1] ?? '');
     if (Number.isFinite(at)) earliest = Math.min(earliest, at);
     const entry = parseCoreLogLine(line);
-    if (!entry) continue;
+    if (!entry || at < since) continue;
     if (entry.method === 'append_task') {
       const params = record(parseTaskSubmission(entry.body)?.params);
       if (approved(params.filename) || (Array.isArray(params.copilot_list) && params.copilot_list.some(item => approved(record(item).filename)))) mentioned = true;

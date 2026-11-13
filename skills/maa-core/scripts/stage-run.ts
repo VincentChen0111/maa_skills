@@ -129,7 +129,8 @@ async function fileLines(path: string): Promise<string[]> {
 /**
  * The evidence `rerunGate` decides from. Records are read from disk except `current`, which is newer in memory. With
  * records, the Core log is read from the batch's earliest anchor; before the first record, the current and rotated Core
- * logs are searched for the batch's approved job files. Any read failure leaves the evidence unavailable.
+ * logs are searched for the batch's approved job files mentioned since the preparation began. Any read failure leaves
+ * the evidence unavailable.
  */
 async function batchViewFor(maaDirectory: string, privateDirectory: string, operation: string, current?: StageRunRecord): Promise<BatchView> {
   const records = (await operationRecords(privateDirectory, operation)).filter(record => record.runId !== current?.runId);
@@ -145,7 +146,7 @@ async function batchViewFor(maaDirectory: string, privateDirectory: string, oper
     } else {
       const lines = [...await fileLines(join(maaDirectory, logFiles.asst.rotated)), ...await fileLines(join(maaDirectory, logFiles.asst.current))];
       const files = new Set(approvedJobList(plan, privateDirectory).map(item => fileKey(item.FilePath)));
-      const { earliest, mentioned } = scanBeforeTracking(lines, files), since = Date.parse(preparedAt);
+      const since = Date.parse(preparedAt), { earliest, mentioned } = scanBeforeTracking(lines, files, since);
       evidence.beforeTracking = mentioned ? 'batch-may-have-run' : !Number.isFinite(since) || Number.isFinite(earliest) && earliest > since ? 'batch-evidence-incomplete' : null;
     }
     evidence.ticks = (await listCheck(maaDirectory, privateDirectory, plan, profileName)).ticks;

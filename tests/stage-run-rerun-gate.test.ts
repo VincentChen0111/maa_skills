@@ -4,7 +4,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { decideStageRun, loadBatchView, observeStageRun, recordStageProgress, startStageRun, verifyStageRun } from '../skills/maa-core/scripts/stage-run.ts';
 import { rerunGate, type BatchView } from '../skills/maa-core/scripts/stage-run-state.ts';
-import { attempt, chainEnd, connection, copilotStart, core, gui, preparedBatch, type PreparedBatch } from './fixtures/stage-run-data.ts';
+import { inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
+import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
+import { matchStageJobs, prepareStageJobs } from '../skills/maa-core/scripts/stage-jobs.ts';
+import { stageJob, stageSnapshot, stageTables } from './fixtures/stage-data.ts';
+import { attempt, chainEnd, connection, copilotStart, core, gui, preparedBatch, runJobs, runRequest, runTables, type PreparedBatch } from './fixtures/stage-run-data.ts';
 
 /**
  * Conformance for the one re-run gate (`rerunGate`). Every producer of "a chain may have run / the outcome is unproven"
@@ -175,8 +179,62 @@ test('start is refused while another record of the batch is still tracking; a re
 
 test('a batch whose approved job was already loaded before any tracking is not started', async t => {
   const batch = await preparedBatch(); t.after(() => batch.dispose());
-  const later = Math.ceil((Date.now() - Date.UTC(2026, 10, 13, 2, 0, 0)) / 1000) + 60;
+  const later = fromNow(60);
   await batch.core([...copilotStart(later, { files: batch.files }), loaded(later + 10, batch.files[0]!), ...chainEnd(later + 60, 'TaskChainCompleted')]);
+  await assert.rejects(startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '开始' }), /batch-may-have-run/);
+});
+
+/** Fixture log seconds relative to now (the fixture's clock starts at 2026-11-13 02:00 UTC). */
+function fromNow(seconds: number) { return Math.floor((Date.now() - Date.UTC(2026, 10, 13, 2, 0, 0)) / 1000) + seconds; }
+/** Re-prepares from a report with MAA closed, as `prepare` requires, and leaves MAA running again. */
+async function prepareAgain(batch: PreparedBatch, report: ReturnType<typeof matchStageJobs>, selections: { stageId: string; primary: number; alternates: number[]; loops: number }[]) {
+  Object.assign(batch.state, { running: false, treeExited: true, ready: false });
+  const result = await prepareStageJobs({ report, approval: { reportHash: report.hash, reference: '合成用户再次批准', map: 'synthetic_map', selections }, snapshot: stageSnapshot(),
+    maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, profile: 0, host: 'codex', closedConfirmed: true,
+    expectedRevision: (await inspectConfiguration(batch.maaDirectory)).revision }, batch.maa);
+  Object.assign(batch.state, { running: true, treeExited: false, idle: true, ready: true });
+  assert.equal(result.status, 'complete');
+  return result.operation as string;
+}
+
+test('job files mentioned only before this preparation do not block its first start: the same report re-prepared', async t => {
+  const batch = await preparedBatch(); t.after(() => batch.dispose());
+  const paths = { maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory };
+  Object.assign(batch.state, { running: true, treeExited: false, idle: true, ready: true });
+  const first = await startStageRun({ ...paths, operation: batch.operation, reference: '开始第一批' });
+  const earlier = fromNow(-600);
+  await batch.core([...copilotStart(earlier, { files: batch.files }), ...attempt(earlier + 10, 0, batch.files[0]!, 'three-star'), ...attempt(earlier + 50, 1, batch.files[1]!, 'three-star'),
+    ...attempt(earlier + 90, 2, batch.files[2]!, 'three-star'), ...chainEnd(earlier + 130, 'TaskChainCompleted')]);
+  assert.equal((await observe({ batch, paths, runId: first.runId })).execution, 'completed');
+  const report = matchStageJobs(stageSnapshot(), runTables, runRequest, runJobs());
+  assert.equal(report.hash, batch.reportHash, 'the same report writes the same job file paths');
+  const selections = [{ stageId: 'synthetic_01', primary: 1, alternates: [2], loops: 2 }, { stageId: 'synthetic_02', primary: 4, alternates: [], loops: 1 }];
+  const again = await prepareAgain(batch, report, selections);
+  assert.equal((await startStageRun({ ...paths, operation: again, reference: '再跑一批' })).retryOf, null);
+  const third = await prepareAgain(batch, report, selections);
+  await batch.core(copilotStart(fromNow(60), { files: batch.files }));
+  await assert.rejects(startStageRun({ ...paths, operation: third, reference: '第三批' }), /batch-may-have-run/, 'a submission after this preparation still refuses');
+});
+
+test('two batches sharing one job file (normal and raid): the second batch starts after the first was tracked', async t => {
+  const batch = await preparedBatch(); t.after(() => batch.dispose());
+  const paths = { maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory };
+  const request = { stages: [{ stageId: 'synthetic_01', code: 'SYN-1', difficulty: 'normal' as const, loops: 1 }, { stageId: 'synthetic_01#f#', code: 'SYN-1', difficulty: 'raid' as const, loops: 1 }],
+    completions: { synthetic_00: 'PASS' as const, synthetic_01: 'COMPLETE' as const }, completionEvidence: '合成用户确认前置通过', maaVersion: 'v6.21.4' };
+  const report = matchStageJobs(stageSnapshot(), stageTables, request, [stageJob(7, 3)]);
+  const normal = await prepareAgain(batch, report, [{ stageId: 'synthetic_01', primary: 7, alternates: [], loops: 1 }]);
+  const run = await startStageRun({ ...paths, operation: normal, reference: '开始普通难度' });
+  const file = approvedJobFile(batch.privateDirectory, report.hash, 7), earlier = fromNow(-600);
+  await batch.core([...copilotStart(earlier, { files: [file] }), ...attempt(earlier + 10, 0, file, 'three-star'), ...chainEnd(earlier + 50, 'TaskChainCompleted')]);
+  assert.equal((await observe({ batch, paths, runId: run.runId })).execution, 'completed');
+  const raid = await prepareAgain(batch, report, [{ stageId: 'synthetic_01#f#', primary: 7, alternates: [], loops: 1 }]);
+  assert.equal((await startStageRun({ ...paths, operation: raid, reference: '开始突袭' })).retryOf, null);
+});
+
+test('a job file submission whose time cannot be read counts as after the preparation', async t => {
+  const batch = await preparedBatch(); t.after(() => batch.dispose());
+  const unreadable = copilotStart(0, { files: batch.files })[0]!.replace(/^\[[^\]]+\]/, '[not-a-time]');
+  await batch.core([unreadable]);
   await assert.rejects(startStageRun({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, operation: batch.operation, reference: '开始' }), /batch-may-have-run/);
 });
 
