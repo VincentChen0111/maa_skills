@@ -24,7 +24,8 @@
 | 30 的前后比较与 27 新增那一行合成一行、一批：「前」都是 `6f95f27`（27 合并后，也就是 30 合并前的 main）；30 受影响的场景取走 `maa-config.ts` 读写的 daily 场景（05 的七个、27 的五个）和 core 三个。B 部分第 1 轮修正时按协调者转来的意见加 | 30 改的 skill 文字是 maa-daily 的配置事务（`SKILL.md` 第 2–4 步、`references/configuration.md`）和 maa-core 的 `SKILL.md`。走别的入口的 daily 场景（关卡、专精、基建排班、运行跟踪、备选）所在各行的「后」都在 30 之后，那几行的比较已经跨过 30 |
 | 26 H（框架修复包，2026-11-14）的报告审查用替身（分诊决定 D2，协调者定）：带 skill 的夹具在工作区 `.eval-bin` 放 `codex.cmd` 和 POSIX `codex` 两个垫片并放到 PATH 最前面，运行 `eval/review-double.mjs`；替身只回应 skill 写明的调用（`codex exec`，说明经标准输入），说明与本次运行私有目录里某一份 `review-brief.md` 一致才回复 `findings: []`，比较前两边都去掉开头的 BOM、统一换行、去掉结尾换行 | 审查员是另一个宿主进程，属于系统边界，工作规则允许替身；第一批真实运行里沙箱找不到 `codex`、登录目录又被拒绝读取，两个默认审查场景结构上不能通过。BOM、换行和结尾换行是 Windows 管道的传输差异，审查员照样读得懂；字符被换掉（例如 PowerShell 5.1 把中文换成 `?`）就不是这份说明。另一个方案（`reviewerAvailable:false` 变体）测不到默认审查协议本身 |
 | 运行器自己启动的宿主在夹具之外解析（`hostExecutable`）：显式路径照用、落在夹具里就拒绝；裸名字只在夹具以外的 PATH 目录里按进程启动器的规则找；找不到记 `host-unavailable`，不启动任何程序 | 垫片在夹具 PATH 的最前面，POSIX 上同名的可执行文件会顶替宿主；按启动器的规则（Windows 上只加 `.com`、`.exe`）找、跳过夹具目录，宿主还是原来那个。替身被误当宿主时报宿主替身的版本前缀，那次运行带替身标记，不会成为基线 |
-| Codex 沙箱 shell 不继承 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（`shell_environment_policy.exclude`，出自 `codexPermissionArguments`）；读保护检查的执行探针在同一配置下列一次环境，有变量的值含登录目录的任何形式（或探针没有结果）就不通过，不启动模型 | 第一批真实运行里模型列出环境变量，登录目录随 `CODEX_HOME` 出现在输出里。要用模型才能列环境的办法不可取，所以沿用执行探针的写法（不调用模型）；真实 Codex 是否照这条配置排除未验证，探针不通过就停，是失败即停的方向。Claude 一侧没有可以离线核实的排除办法，Claude 的真模型评测暂缓，恢复前要解决 |
+| Codex 沙箱 shell 不继承 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（`shell_environment_policy.exclude`，出自 `codexPermissionArguments`）；读保护检查的执行探针在同一配置下列一次环境，有变量的值含登录目录的任何形式（或探针没有结果）就不通过，不启动模型 | 第一批真实运行里模型列出环境变量，登录目录随 `CODEX_HOME` 出现在输出里。要用模型才能列环境的办法不可取，所以沿用执行探针的写法（不调用模型）；真实 Codex 是否照这条配置排除未验证，探针不通过就停，是失败即停的方向（2026-11-14 H2 补记：协调者的诊断显示 `codex sandbox` 照办了，`exec` 仍未验证，见「框架修复包 H2：沙箱 shell 的 PATH」）。Claude 一侧没有可以离线核实的排除办法，Claude 的真模型评测暂缓，恢复前要解决 |
+| 26 H2（框架修复包，协调者定）：Codex 权限参数用 `shell_environment_policy.set` 把沙箱 shell 的 `PATH` 固定为运行器交给 Codex 的子进程环境里的 `PATH`。只有 `scripts/eval-host.ts` 的 `codexPermissionArguments` 生成它：它接收这个 PATH 值，`exec` 和读保护检查的执行探针传同一个值，探针查的仍是模型运行时的环境。PATH 只由 `childPath` 从子进程环境里取（Windows 上名字不分大小写，取法与 Node 启动子进程相同：排序后第一个忽略大小写等于 `PATH` 的名字）。值写成 TOML 基本字符串，转义 `\` 和 `"`；不用 TOML 字面字符串，它装不下 `'`。值含控制字符（Unicode `Cc`，制表符也算）或孤立的代理项时不编码。没有 PATH（或为空）、或者编码不了时不运行：读保护检查记 `read-protection-failed`（`sandbox-path-missing`、`sandbox-path-unencodable`），不写哨兵、不启动探针和模型；场景运行记 `sandbox-path-refused`，不启动宿主。`exclude` 和环境探针不变，探针仍是守卫 | 框架 `4247383` 上的最终候选批次全部在读保护检查停下（`login-directory-in-environment`）：Codex 把自己的 arg0 辅助目录（`<CODEX_HOME>/tmp/arg0-windows/codex-arg0<随机>`）放在沙箱 shell 的 `PATH` 最前面，而 `CODEX_HOME` 就是登录目录；`exclude` 只能去掉整个变量，去不掉 `PATH` 里的一项。协调者的诊断（只打印变量名）显示加上 `set` 的 PATH 后环境干净。登录目录也是评分的秘密，模型打印 `PATH` 会判 `secret-output`。后果：评测时沙箱 shell 的 `PATH` 上没有 Codex arg0 目录里的 `apply_patch` 别名；整个仓库（场景、评分器、宿主替身、skill）搜 `apply_patch` 没有结果，再搜 `patch` 只有与它无关的函数名和替身里的读取补丁，没有场景依赖它 |
 | 合成森空岛世界的凭据和账号标识（换取码、cred、签名密钥前缀、用户 id、帖子作者 id）每次运行新生成，只以 base64 写进 `.eval-network-responses.json`，不放进环境变量，按夹具秘密评分；场景定义只保留用户自己那份 token（在世界里加密存放）。一致性测试核对任何场景的秘密都不以明文出现在框架文件、环境变量和夹具写进工作区的文件里，例外只有世界本来存放秘密的两处：夹具的合成凭据文件 `private/credentials.json`、`doctor-remote-control` 的 MAA 配置 | 第一批真实运行里模型读了预加载器源码，把写在里面的明文复述出来。base64 输出里没有 `-`，带 `-` 的合成值不会碰巧出现在编码里。那两处例外模拟的是用户本来就有的秘密，技能规定不读、不复述，复述就是真实的泄漏 |
 | `daily-unknown`（分诊决定 D3 方案 a，协调者定）：世界里放提示词说的遗留锁（复用 doctor 场景的锁），maa-doctor 用场景字段 `companions` 装成同伴（提示词仍只点名 maa-daily），doctor check 写的最近检查记录是可选授权：字面值授权加 `optional: true` 的 `checkedAt`；评分器为此新增生成时间字段的 `optional` | maa-daily 规定把未知结果交给 maa-doctor 核对，doctor check 写自己的脱敏记录是设计行为（doctor 场景都授权了）；另一个方案是改载荷、禁止 daily 跑 doctor，等于在规格之外加限制。可选字段没写不算缺少，写了照样只认确切位置和执行窗口 |
 | `daily-unknown` 在 `ddd0ca8`（06 之前，没有 maa-doctor）上不比较，记「未验证」；在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」交给 doctor 核对、只因它写的旧格式记录挂 `authorization` 时，这一对记「未验证」，不当作「分数不降」的依据 | 入口在 `ddd0ca8` 上以 `payload-skill-missing` 拒绝。后三个载荷上不跑 doctor 的正确做法能通过（离线核对），按「不论怎样做都通不过才不安排」的规则照常比较；跑 doctor 的做法失败是评分契约晚于载荷，与 doctor 五相同，不是模型做错 |
@@ -672,6 +673,20 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 **两个默认审查场景依赖包 P（维护者要知道，26 H 第 1 轮审查后记，2026-11-14）。**`account-report-default-review`、`base-report-default-review` 要模型把审查说明经标准输入交给 `codex exec`。评测宿主上模型的 shell 是 Windows PowerShell 5.1：直接用 PowerShell 管道（`Get-Content -Raw <说明文件> | codex exec … -`）时，PowerShell 把文字重新编码，中文变成 `?`（控制台代码页 65001 时还加 BOM），说明的字节变了；审查员替身按设计只认本次运行的说明，就拒绝它（退出 1），审查落到「审查未完成」。让 skill 改用不改字节的写法（例如 `cmd /d /c "codex exec --sandbox read-only --ephemeral --skip-git-repo-check - < <说明文件>"`）是包 P 的修复。包 P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷；P 合入之后再失败才要查。框架一侧由 `tests/eval-fixture.test.ts`「26 H: from Windows PowerShell a Chinese brief redirected by cmd…」覆盖：Windows 上用真实 `powershell.exe -NoProfile`，在控制台代码页 65001 和 936 下，cmd 重定向的中文说明经 `.eval-bin/codex.cmd` 垫片得到 `findings: []`；`Get-Content -Raw`（带不带 `-Encoding UTF8` 都一样）管道过去的被拒绝。其他平台跳过。
 
+### 框架修复包 H2：沙箱 shell 的 PATH（2026-11-14）
+
+**发生了什么。**框架 `4247383` 上的最终候选批次在任何模型启动之前全部停下。评测检出 `.tmp/evaluations/` 下的 13 批（按开始时间：`batch-Ce1ksC`、`batch-hGKFBM`、`batch-yWAsbu`、`batch-WPrmS1`、`batch-HkusiO`、`batch-mZdLqm`、`batch-b9aNJP`、`batch-WwOUqG`、`batch-mO9QqJ`、`batch-bCabwc`、`batch-EZHqxD`、`batch-Jte7VQ`、`batch-sjxaeI`；构建者只读核对了各批清单）的 `abort.reason` 都是 `read-protection-failed`，`detail` 都是 `login-directory-in-environment`：26 H 加的环境探针按设计拦下了它们。
+
+**诊断（协调者，2026-11-14）。**只打印变量名、不打印值，没有调用模型：在同一配置下运行真实的 `codex sandbox`。`CODEX_HOME` 已经不在，`shell_environment_policy.exclude` 生效；`PATH` 的第 0 项是 `<CODEX_HOME>/tmp/arg0-windows/codex-arg0<随机>`，Codex 把自己的 arg0 辅助目录放在最前面，而这个目录在登录目录下面。`exclude` 去掉的是整个变量，去不掉 `PATH` 里的一项。同一条 `codex sandbox` 再加上 `-c shell_environment_policy.set={PATH='<运行器交给 Codex 的环境里的 PATH>'}`，列出的结果干净：没有任何变量含登录目录的任何形式。这也关系评分：登录目录是评分的秘密（`scripts/eval-run.ts` 把它的每种形式交给评分器），第一批真实运行里两个场景因模型列出环境变量判了 `secret-output`，模型打印 `PATH` 也会一样。
+
+**记录里不写 PATH 值（PR #96 CI 后补，2026-11-14）。**固定的 PATH 可能含有脱敏不认识的位置：npm 会把仓库以上每一级目录的 `node_modules/.bin` 加进 PATH，CI 上仓库的上一级目录也叫 `maa_skills`；用户自己的 PATH 也有别的条目。所以 `invocation.json` 里的参数经 `recordedArguments`（与 `codexPermissionArguments` 同在 `scripts/eval-host.ts`）把这个值换成 `<shell-path>`，交给宿主的参数不变；脱敏一致性测试在运行器的 PATH 最前面放一个标记目录，断言它不出现在任何产物里。
+
+**修复（设计默认值，2026-11-14，协调者定，见文首）。**`codexPermissionArguments` 在 `exclude` 之后加 `-c shell_environment_policy.set={PATH="<子进程环境的 PATH>"}`，PATH 值由调用方传入：读保护检查（探针和模型那次 `exec`）与场景运行都传 `childPath(<交给 Codex 的子进程环境>)`，所以探针查的仍是模型运行时的环境；场景运行的 PATH 只在最前面多了夹具里的审查员垫片目录（26 H，夹具与登录目录不重叠由登录目录检查保证）。`childPath` 是从子进程环境里取 PATH 的唯一办法，`hostExecutable` 也改用它；Node 交不出 PATH 时，Windows 会把运行器自己的 PATH 补进子进程，`childPath` 不跟着补，而是让检查拒绝。值按 TOML 基本字符串写（`tomlBasicString`，转义 `\` 和 `"`）；没有 PATH 或编码不了时（`sandboxPathRefusal`）不运行，`codexPermissionArguments` 自己也拒绝生成，调用方漏了检查也启动不了。诊断用的是 TOML 字面字符串 `'…'`，运行器用基本字符串 `"…"`：字面字符串装不下 `'`，这是协调者定的写法。场景运行保存的 `invocation.json` 不带这段 PATH 的值，只记 `shell_environment_policy.set={PATH=<shell-path>}`（`recordedArguments`，见上一段，PR #96 CI 后补）；模型自己打印 PATH 时，输出照旧经统一脱敏写出（主目录、仓库、登录目录等换成占位符），这些记录只留在本地忽略目录。
+
+**宿主替身。**替身新增两项，照诊断看到的真实 CLI 行为：`arg0: true` 时，把 `<CODEX_HOME>/tmp/arg0-windows/codex-arg0<随机>` 放在它所运行命令的 PATH 最前面；照办 `shell_environment_policy.set`（解析 TOML 基本字符串，Windows 上名字不分大小写），`setPolicy: 'ignore'` 时不照办，命令看到的与没有 `set` 时相同。替身的环境记录多记一项它收到的 PATH。离线能说明的：两处调用都带同一个 `set`，值解析回来正好是交给宿主的 PATH；照办 `set` 的 Codex 通过探针，不照办的被探针拦下，模型不启动；模型列环境时，照办则不泄露，不照办则判 `secret-output`。离线说明不了的：真实 `codex exec` 是否照办 `set`；真实 Codex 是否照样接受基本字符串写法（它若不接受，`codex sandbox` 会报配置错误，探针记 `error`，检查不通过，整批不开，也是失败即停）。
+
+**重跑范围。**H2 改了 `scripts/eval-host.ts`、`scripts/eval-auth.ts`、`scripts/eval-run.ts`，三个都在 `runnerSources` 和 `scenarioHashSources` 里，所以场景指纹和运行器指纹又变了。「前」「后」、基线三类批次都在含 H2 的新最终候选上全部重跑（D4 照旧：框架检出等于最终候选）。`4247383` 上的 13 批只作诊断证据，不进任何 `compare`。
+
 ## 许可与第三方检查
 
 工单的验收条目「逐文件检查公开内容与第三方声明」。本包实际核对了：
@@ -812,12 +827,36 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node --test tests/docs-consistency.test.ts` | 5 项通过（文档改完后跑） |
 | `node scripts/privacy.ts` | `ok: true`，无发现 |
 
+### 26 H2 运行的命令（2026-11-14）
+
+框架修复包 H2（沙箱 shell 的 PATH）在自己的工作树里只跑了下面这些，逐个单独运行；没有启动真实宿主，没有调用模型，没有联网（依赖用 `npm ci --ignore-scripts --offline` 从本机缓存装）；完整离线入口没有跑（由协调者在冻结的头上跑）。
+
+先红：新测试写好、实现之前，`tests/eval-auth.test.ts` 的两项 H2 测试失败：带 arg0 目录的替身让检查记 `read-protection-failed`/`login-directory-in-environment`（就是真实批次的失败），去掉 PATH 时检查照样通过、没有拒绝；`tests/eval-host-double.test.ts` 因为还没有 `childPath` 等导出而加载失败。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 退出 0 |
+| `node --test tests/eval-host-double.test.ts` | 17 项通过（新增「26 H2: a Codex scenario run pins the sandboxed shell…」「…written as a TOML basic string…」「childPath picks the PATH a spawned process receives…」） |
+| `node --test tests/eval-auth.test.ts` | 17 项通过（新增「26 H2: Codex puts its helper directory under the login directory first on PATH…」「26 H2: a child environment without a PATH…」） |
+| `node --test tests/eval-run.test.ts` | 5 项通过 |
+| `node --test tests/eval-fixture.test.ts` | 9 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/evaluation.test.ts` | 13 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/eval-redact.test.ts` | 6 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 8 项通过（文档改完后跑） |
+| `node scripts/eval-selftest.ts`（临时 home，同离线入口的做法） | 7 条规则、25 份样例，`ok: true` |
+| `node scripts/eval-preflight.ts`（临时 home，同离线入口的做法） | `status: pass`，两个宿主各三个替身运行都 `pass` |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts` | 第一次报新测试里三处带盘符的样例路径（`private-path`），改成不带盘符的样例后 `ok: true`、无发现；tracker `errors: []` |
+
+`childPath` 的测试顺带核实了一件 Windows 上的事实：交给子进程的环境里没有 PATH 时，子进程仍会拿到运行器自己的 PATH（Node/libuv 在 Windows 上补进去）。所以 `childPath` 取不到 PATH 时按拒绝处理，不能当作「子进程没有 PATH」。
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
 
 - 所有真实模型验收：未验证。
-- 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否对 `sandbox` 和 `exec` 都按 `shell_environment_policy.exclude` 排除变量、是否还会自己再注入 `CODEX_HOME` 未验证（读保护检查的环境探针不通过时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
+- 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否照办 `shell_environment_policy`，现在答了一部分（26 H2，协调者 2026-11-14 的诊断，只看变量名）：`codex sandbox` 照办了 `exclude`（`CODEX_HOME` 不在）和 `set` 的 PATH（用的是 TOML 字面字符串写法）；`exec` 是否同样照办、是否还会自己再注入登录目录，以及运行器现在用的基本字符串写法是否同样被接受，要等一批真实运行通过探针并真正跑起来才算核实（探针不通过或报错时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
 - 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（见 [载荷修复验证](release-payload-verification.md)）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
 - **用这个办法清不掉的发布门禁（需要维护者）**：33 对比较（每个宿主）。其中 32 对是当前评分器下「前」载荷不能通过的，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」；第 33 对是 05 的 daily-unknown（ddd0ca8，payload-skill-missing）：26 H 让它要 maa-doctor 同伴，`ddd0ca8` 早于 06，入口拒绝。明细和复现见「当前评分器下「前」载荷能不能通过」和「26 H 改过的场景重新核对」。另有三对是有条件的未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」那次运行交给 doctor 核对（`doctor.ts check`）时，只因这些载荷的 doctor 写的是旧格式记录而挂 `authorization`，那一对记「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，同样交维护者，不当作「分数不降」的依据（这三对是 15、24、07 受影响的 `daily-unknown`，看 `compare` 时按「26 H 改过的场景重新核对」末段的办法判断）。33 对涉及 05 七个 daily 场景里四个写入场景和 `daily-unknown` 的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。

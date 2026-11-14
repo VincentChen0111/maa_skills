@@ -11,6 +11,7 @@ import { claudePermissionPath, codexPermissionArguments, credentialVariables } f
 import { createFixture } from '../scripts/eval-fixture.ts';
 import { runScenario } from '../scripts/eval-run.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
+import { setPath } from './fixtures/toml-inline-table.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
 const repository = fileURLToPath(new URL('..', import.meta.url));
@@ -43,7 +44,7 @@ function caseForm(path: string): string | undefined {
  * `read`: the 8.3 short form and the case variant exist only on some volumes; a junction (a directory link elsewhere) always.
  */
 const alternates = (long: string, read: string) => ({ short: shortForm(long) ? read : 'not-available', junction: read, case: caseForm(long) ? read : 'not-available' });
-type Invocation = { args: string[]; configDirectory: string; fixtureEntries?: string[] };
+type Invocation = { args: string[]; configDirectory: string; path?: string; fixtureEntries?: string[] };
 const invocations = async (file: string) => (await readFile(file, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as Invocation);
 
 test('login directories are refused inside the repository, a temporary fixture, the private or settings directory, the daily host directories or each other', async () => {
@@ -286,7 +287,7 @@ test('Codex read protection first proves enforcement without a model, then passe
     // The probe and the model run share one permission profile, and the probe reads only the sentinel (through each form the deny
     // rules name, then through each other form there is) and the workspace control file, then lists the environment once (26 H).
     const seen = await invocations(environment);
-    const profile = codexPermissionArguments({ loginDirectories: forms });
+    const profile = codexPermissionArguments({ loginDirectories: forms, shellPath: process.env.PATH });
     assert.ok(profile.includes(`permissions.maa_eval.filesystem={${forms.map((form) => `'${form}'='deny'`).join(',')}}`), name);
     const probes = seen.filter((call) => call.args[0] === 'sandbox');
     const listing = (call: Invocation) => call.args.some((arg) => arg.includes('maa-eval-env'));
@@ -416,7 +417,7 @@ test('26 H (R6): the Codex sandbox shell never inherits the login directory: the
   const directory = await login();
   const long = realpathSync.native(directory);
   // The profile the probe and the model run share keeps both hosts' configuration variables out of the sandboxed shell.
-  const profile = codexPermissionArguments({ loginDirectories: [long] });
+  const profile = codexPermissionArguments({ loginDirectories: [long], shellPath: process.env.PATH });
   assert.ok(profile.includes('shell_environment_policy.exclude=["CODEX_HOME","CLAUDE_CONFIG_DIR"]'), profile.join(' '));
   const environment = join(root, `environment-${counter++}.jsonl`);
   const check = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, loginDirectory: directory,
@@ -426,7 +427,7 @@ test('26 H (R6): the Codex sandbox shell never inherits the login directory: the
   // The probe lists the sandboxed environment under the same profile, with no model, and names variables only.
   const envProbe = (await invocations(environment)).filter((call) => call.args[0] === 'sandbox' && call.args.some((arg) => arg.includes('maa-eval-env')));
   assert.equal(envProbe.length, 1);
-  assert.deepEqual(envProbe[0]!.args.slice(1, envProbe[0]!.args.indexOf('--')), codexPermissionArguments({ loginDirectories: check.pass!.loginForms }));
+  assert.deepEqual(envProbe[0]!.args.slice(1, envProbe[0]!.args.indexOf('--')), codexPermissionArguments({ loginDirectories: check.pass!.loginForms, shellPath: process.env.PATH }));
   // The host itself still finds its login through CODEX_HOME; the model's shell, listing every variable, sees no form of it.
   const run = await runScenario({ host: 'codex', model: 'm', scenario: { id: 'environment-listed', prompt: 'List the environment.',
     policy: { allowedKeys: [], forbiddenKeys: [], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false } },
@@ -452,4 +453,82 @@ test('26 H (R6): the Codex sandbox shell never inherits the login directory: the
   executable: process.execPath, executableArgs: [double, await script({ host: 'codex', environmentPolicy: 'ignore', steps: [listing] })],
   auth: { mode: 'plan', readProtection: check.pass! }, artifactParent: join(root, 'records') });
   assert.ok(leaked.record.grade.failed.includes('secret-output'), JSON.stringify(leaked.record.grade));
+});
+
+test('26 H2: Codex puts its helper directory under the login directory first on PATH; the profile pins the sandboxed shell to the PATH the host was given, so the probe holds, and without the pin it finds the login directory', async () => {
+  const listing = { shell: ['node', '-e', 'process.stdout.write(JSON.stringify(process.env))'] };
+  const policy = { allowedKeys: [], forbiddenKeys: [], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false };
+  const directory = await login();
+  // `arg0`: the double, like the real CLI, puts `<CODEX_HOME>/tmp/arg0-windows/codex-arg0<random>` first on its commands' PATH.
+  const environment = join(root, `environment-${counter++}.jsonl`);
+  const check = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, loginDirectory: directory,
+    executableArgs: [double, await script({ host: 'codex', arg0: true, environment, steps: [] })] });
+  assert.equal(check.status, 'pass', `${check.category}/${check.detail}`);
+  assert.equal(check.enforcementProbe?.environment, 'clean');
+  // Every probe and the model run were handed the same PATH (the check's fixture keeps the runner's), and each carries one profile
+  // from codexPermissionArguments whose set is exactly that PATH.
+  const seen = await invocations(environment);
+  const given = seen[0]!.path!;
+  assert.equal(given, process.env.PATH, 'the read-protection fixture keeps the runner PATH');
+  const profile = codexPermissionArguments({ loginDirectories: check.pass!.loginForms, shellPath: given });
+  assert.equal(setPath(profile.find((arg) => arg.startsWith('shell_environment_policy.set='))), given, 'the set parses back to the PATH the host was given');
+  const probes = seen.filter((call) => call.args[0] === 'sandbox');
+  const exec = seen.filter((call) => call.args[0] === 'exec');
+  assert.ok(probes.length >= 3); assert.equal(exec.length, 1);
+  for (const call of [...probes, ...exec]) {
+    assert.equal(call.path, given, `${call.args[0]}: the PATH the host was given`);
+    assert.equal(call.args.filter((arg) => arg.startsWith('shell_environment_policy.set=')).length, 1, `${call.args[0]}: one set`);
+  }
+  for (const call of probes) assert.deepEqual(call.args.slice(1, call.args.indexOf('--')), profile, 'probe profile');
+  assert.ok(exec[0]!.args.some((_, index) => profile.every((part, offset) => exec[0]!.args[index + offset] === part)), 'the model runs under the same profile');
+  // Without the pin (a Codex that does not apply the set sees what it would with no set) the probe finds the login directory on
+  // PATH: the check fails and no model starts.
+  const journal = join(root, `journal-${counter++}.jsonl`);
+  const unpinned = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, loginDirectory: await login(),
+    executableArgs: [double, await script({ host: 'codex', arg0: true, setPolicy: 'ignore', journal, steps: [] })] });
+  assert.equal(unpinned.status, 'fail');
+  assert.equal(unpinned.detail, 'login-directory-in-environment');
+  assert.equal(unpinned.enforcementProbe?.environment, 'found');
+  assert.equal(unpinned.commandAttempt, 'not-run');
+  await assert.rejects(readFile(journal, 'utf8'), 'no model was started');
+  // A model that lists its environment: with the pin nothing names the login directory; had a run started without it, PATH would
+  // name it and the grader fails the run (the first real batch's secret-output, now through PATH).
+  const run = async (setPolicy?: string) => runScenario({ host: 'codex', model: 'm', scenario: { id: 'environment-listed', prompt: 'List the environment.', policy },
+    executable: process.execPath, executableArgs: [double, await script({ host: 'codex', arg0: true, ...(setPolicy ? { setPolicy } : {}), steps: [listing] })],
+    auth: { mode: 'plan', readProtection: check.pass! }, artifactParent: join(root, 'records') });
+  const pinned = await run();
+  assert.equal(pinned.reason, 'completed');
+  assert.ok(!pinned.record.grade.failed.includes('secret-output'), JSON.stringify(pinned.record.grade));
+  const leaked = await run('ignore');
+  assert.ok(leaked.record.grade.failed.includes('secret-output'), JSON.stringify(leaked.record.grade));
+});
+
+test('26 H2: a child environment without a PATH, or with one that cannot be written as a TOML basic string, starts nothing: the check and the run refuse with a static code', async () => {
+  const saved = process.env.PATH;
+  const policy = { allowedKeys: [], forbiddenKeys: [], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false };
+  const directory = await login();
+  const environment = join(root, `environment-${counter++}.jsonl`);
+  const passed = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, loginDirectory: directory,
+    executableArgs: [double, await script({ host: 'codex', environment, steps: [] })] });
+  assert.equal(passed.status, 'pass', `${passed.category}/${passed.detail}`);
+  try {
+    for (const [name, value, detail] of [['no PATH', undefined, 'sandbox-path-missing'], ['a control character', `${saved}\n`, 'sandbox-path-unencodable']] as const) {
+      // The fixtures copy the runner's PATH; on Windows the name ignores case, so this changes every spelling of it.
+      if (value === undefined) delete process.env.PATH; else process.env.PATH = value;
+      const journal = join(root, `journal-${counter++}.jsonl`); const listed = join(root, `environment-${counter++}.jsonl`);
+      const check = await readProtectionCheck({ host: 'codex', model: 'm', executable: process.execPath, loginDirectory: await login(),
+        executableArgs: [double, await script({ host: 'codex', journal, environment: listed, steps: [] })] });
+      assert.equal(check.status, 'fail', name);
+      assert.equal(check.category, 'read-protection-failed', name);
+      assert.equal(check.detail, detail, name);
+      assert.equal(check.commandAttempt, 'not-run', name);
+      await assert.rejects(readFile(listed, 'utf8'), `${name}: no probe and no model started`);
+      const run = await runScenario({ host: 'codex', model: 'm', scenario: { id: 'path-refused', prompt: 'Keep all files unchanged.', policy },
+        executable: process.execPath, executableArgs: [double, await script({ host: 'codex', journal, steps: [] })],
+        auth: { mode: 'plan', readProtection: passed.pass! }, artifactParent: join(root, 'records') });
+      assert.equal(run.reason, 'sandbox-path-refused', name);
+      assert.equal(run.record.grade.status, 'unverified', name);
+      await assert.rejects(readFile(journal, 'utf8'), `${name}: the host never ran`);
+    }
+  } finally { process.env.PATH = saved; }
 });
