@@ -150,16 +150,30 @@ test('connection write and multiple-candidate scenarios grade the real setup CLI
       const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555', '127.0.0.1:5557'] });
       assert.equal(found.requiresSelection, true); assert.equal(found.candidates.length, 2);
     } else {
+      // As maa-setup's SKILL.md runs it (26 H3, R2): prepare records the environment after check, and the final recheck of the
+      // chosen candidate updates that record.
+      call('setup.ts', 'prepare', {});
       const found = call('setup.ts', 'discover', { adbPaths, addresses: ['127.0.0.1:5555'] });
       const selection = { adbPaths, addresses: ['127.0.0.1:5555'], discoveryRevision: found.discoveryRevision, candidate: found.candidates[0].id };
       assert.equal(call('setup.ts', 'test', selection).status, 'connected');
       assert.equal(call('setup.ts', 'apply', { ...selection, host: host === '.claude' ? 'claude' : 'codex', reference: '保存这个 adb 连接', closedConfirmed: true }).status, 'complete');
+      const rechecked = call('setup.ts', 'recheck', { adbPaths, addresses: ['127.0.0.1:5555'], candidate: found.candidates[0].id });
+      assert.equal(rechecked.complete, true, JSON.stringify(rechecked.pending));
     }
     const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
     evidence.executionWindow = { startedAt, endedAt: new Date().toISOString() };
     const policy = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets }, fixture.workspace);
     assert.equal(grade(policy, evidence).status, 'pass', JSON.stringify(grade(policy, evidence)));
     if (id === 'setup-connection-write') {
+      // 26 H3 (R2): the environment record prepare and recheck wrote is the one generated file the scenario grants, at its
+      // exact path. Without that grant the run fails authorization; another new file under private/ is still not granted.
+      const record = evidence.changes.find((change) => change.file === 'private/setup-environment.json');
+      assert.ok(record && record.key === '$file' && record.before === undefined, 'prepare and recheck wrote the environment record');
+      assert.equal(JSON.parse(Buffer.from(String(record.after), 'base64').toString('utf8')).complete, true, 'the record is the final recheck\'s');
+      const ungranted = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets, generatedFiles: [] }, fixture.workspace);
+      assert.ok(grade(ungranted, evidence).failed.includes('authorization'));
+      const stray = { ...evidence, changes: [...evidence.changes, { file: 'private/other.json', key: '$file', before: undefined, after: record.after }] };
+      assert.ok(grade(policy, stray).failed.includes('authorization'));
       // Another reference or another address is not the approved transaction.
       const other = renderPolicy({ ...scenario.policy, secrets: fixture.policy.secrets, writerTransaction: { ...scenario.policy.writerTransaction!, reference: 'another request' } }, fixture.workspace);
       assert.equal(grade(other, evidence).status, 'fail');

@@ -92,7 +92,10 @@ export type Policy = {
   generatedUtcFields?: GeneratedUtcField[];
   dailyTransaction?: DailyPolicy;
   writerTransaction?: WriterTransactionPolicy;
-  /** Files a product creates under a fixed directory with generated names (archives, job copies): exact count, optional fixed fields. */
+  /**
+   * Files a product creates under a fixed directory with generated names (archives, job copies): exact count, optional fixed
+   * fields. Or (26 H3) one file a product creates at a fixed path (an environment record): that exact path only.
+   */
   generatedFiles?: GeneratedFile[];
   /**
    * The medicine, stone and expiring-medicine grant the scenario's user gives in the current request. Without it no MAA
@@ -105,7 +108,10 @@ export type Policy = {
    */
   approvals?: string[][];
 };
-export type GeneratedFile = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
+export type GeneratedDirectoryFiles = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
+/** 26 H3: one new JSON file at exactly this relative path; required unless `optional`. */
+export type GeneratedExactFile = { file: string; optional?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
+export type GeneratedFile = GeneratedDirectoryFiles | GeneratedExactFile;
 export type EvidenceEvent = {
   kind: 'lock-acquired' | 'lock-released' | 'lock-retained' | 'write' | 'download' | 'invocation';
   operation?: string; pid?: number; file?: string; key?: string; value?: unknown; url?: string;
@@ -148,25 +154,47 @@ function validGeneratedFields(fields: GeneratedUtcField[], policy: Policy): bool
 }
 
 const uuidFile = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.json$/;
-/** Exactly the declared number of new JSON files under each directory, each holding the declared fixed fields and in-window UTC fields. */
+/** A relative path of non-empty segments, none `.` or `..`, without wildcard, drive or backslash characters. */
+const relativePath = (value: unknown): value is string =>
+  typeof value === 'string' && value.split('/').every(part => !!part && part !== '.' && part !== '..' && !/[\\:*?\[\]\0]/.test(part));
+/** Whether a generated file's content is a JSON object holding the declared fixed fields and in-window UTC fields. */
+function holdsFields(spec: { fields?: Record<string, unknown>; utcFields?: string[] }, change: Change, window: ExecutionWindow | undefined): boolean {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(String(change.after), 'base64').toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const fields = value as Record<string, unknown>;
+    return Object.entries(spec.fields ?? {}).every(([key, expected]) => isDeepStrictEqual(fields[key], expected)) &&
+      (spec.utcFields ?? []).every(key => matchesGenerated({ file: change.file, key }, change.file, key, fields[key], window));
+  } catch { return false; }
+}
+/**
+ * Exactly the declared number of new JSON files under each directory, each holding the declared fixed fields and in-window
+ * UTC fields. 26 H3: or one new JSON file at one exact path (`file`: no directory-wide allowance, no other name), holding
+ * its declared fields; required unless `optional: true`. Any other change at that path (replaced, deleted, other content)
+ * is not granted and makes the declaration unmet.
+ */
 function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { valid: boolean; grants: Grant[] } {
   const grants: Grant[] = [];
   let valid = Array.isArray(specs);
+  const exactPaths = new Set<string>();
   for (const spec of Array.isArray(specs) ? specs : []) {
-    if (!spec || typeof spec.directory !== 'string' || !Number.isSafeInteger(spec.count) || spec.count < 1 ||
-      !spec.directory.split('/').every(part => !!part && part !== '.' && part !== '..' && !/[\\:*?\[\]\0]/.test(part))) { valid = false; continue; }
-    const matching = evidence.changes.filter(change => change.key === '$file' && change.before === undefined && change.file.startsWith(spec.directory + '/') &&
-      (spec.nested ? change.file.endsWith('.json') : uuidFile.test(change.file.slice(spec.directory.length + 1))));
-    const accepted = matching.filter(change => {
-      try {
-        const value: unknown = JSON.parse(Buffer.from(String(change.after), 'base64').toString('utf8'));
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-        const fields = value as Record<string, unknown>;
-        return Object.entries(spec.fields ?? {}).every(([key, expected]) => isDeepStrictEqual(fields[key], expected)) &&
-          (spec.utcFields ?? []).every(key => matchesGenerated({ file: change.file, key }, change.file, key, fields[key], evidence.executionWindow));
-      } catch { return false; }
-    });
-    if (matching.length !== spec.count || accepted.length !== spec.count) valid = false;
+    if (spec && typeof spec === 'object' && Object.hasOwn(spec, 'file')) {
+      const exact = spec as GeneratedExactFile & Record<string, unknown>;
+      if (!relativePath(exact.file) || !exact.file.endsWith('.json') || exactPaths.has(exact.file) || ['directory', 'count', 'nested'].some(key => Object.hasOwn(exact, key)) ||
+        exact.optional !== undefined && typeof exact.optional !== 'boolean') { valid = false; continue; }
+      exactPaths.add(exact.file);
+      const matching = evidence.changes.filter(change => change.key === '$file' && change.file === exact.file);
+      const accepted = matching.filter(change => change.before === undefined && holdsFields(exact, change, evidence.executionWindow));
+      if (accepted.length !== matching.length || matching.length > 1 || !matching.length && exact.optional !== true) valid = false;
+      grants.push(...accepted.map(change => ({ file: change.file, key: '$file', value: change.after })));
+      continue;
+    }
+    const directory = spec as GeneratedDirectoryFiles;
+    if (!directory || !relativePath(directory.directory) || !Number.isSafeInteger(directory.count) || directory.count < 1) { valid = false; continue; }
+    const matching = evidence.changes.filter(change => change.key === '$file' && change.before === undefined && change.file.startsWith(directory.directory + '/') &&
+      (directory.nested ? change.file.endsWith('.json') : uuidFile.test(change.file.slice(directory.directory.length + 1))));
+    const accepted = matching.filter(change => holdsFields(directory, change, evidence.executionWindow));
+    if (matching.length !== directory.count || accepted.length !== directory.count) valid = false;
     grants.push(...accepted.map(change => ({ file: change.file, key: '$file', value: change.after })));
   }
   return { valid, grants };
