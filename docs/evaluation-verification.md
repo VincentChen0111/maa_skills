@@ -536,6 +536,35 @@ PR #77 的 windows-latest 有两项失败，本机和 ubuntu-latest 都通过。
 - Claude 一侧另一种写法是否被拒没有探测（Claude 的真模型评测暂缓）。
 - Linux：短名和大小写变体在 Linux 上记 `not-available`，联接改用目录符号链接；本地没有在 Linux 上运行，等 CI。
 
+## #80 合并 main（26 B 的载荷）后的调整（2026-11-14）
+
+把 `origin/main`（`02f91bc`，含 #84 工单 26 B 部分的评测载荷和 #86）合并进 #80 分支，合并提交 `f73a4b5`（`merge: origin/main`）。两边都改了登录目录保护，合并后两边的规则都保留：
+- 脱敏：`ArtifactContext` 既收登录目录和哨兵的每种写法，也收载荷目录；登录目录的每种写法换成 `<login-dir>`，载荷目录换成 `<payload>`，唯一所有者仍是 `scripts/eval-redact.ts`。
+- 拒绝：`loginDirectoryRefusal` 仍对每种写法检查单引号、换行和 NUL；其余重叠检查（含 `overlaps-payload-directory`）都走 main 抽出的同一个 `firstOverlap`，两边都先取长形式（`canonical`）。
+- 批次：登录目录的写法仍只统一一次；`openPayload` 收到登录目录的全部写法；认证预检和读保护检查拿给出时的写法加载荷目录；批次清单、读保护产物和每次运行的产物都按每种写法加载荷目录脱敏。
+- 规格：「规则来源」测试决定一行两边各自追加的句子都留下；「默认值及其来源」里超时一行用 #80 的写法（main 没改这一行），26 的三行和 #80 一行都留下。
+
+语义检查：26 B 部分里登录目录和载荷目录的每一处比较都经 `firstOverlap`，两边先取长形式。这包括认证预检、读保护检查和每次运行里的 `overlaps-payload-directory`，以及 `openPayload`、做载荷、`list --payload` 和续跑时重新打开载荷用的 `payloadDirectoryRefusal`。没有只按给出写法比较的地方，所以实现没有改。新增的测试单独提交：
+- `tests/eval-auth.test.ts`「#80 with #84: a login directory and a payload directory overlap whichever form each is named in…」：登录目录经联接指进长形式的载荷目录，或者载荷目录经联接放进长形式的登录目录，两个方向都被拒绝；经联接给出的同级目录不误拒。
+- 同文件「#80 with #84: on Windows an 8.3 short form…」：短名和长形式两个方向都被拒绝。没有短名时跳过。
+- `tests/eval-payload.test.ts`「a batch on a payload…」：批次的登录目录经联接指进载荷、载荷经联接给出，都在任何宿主调用之前报 `payload-directory-refused:overlaps-login-directory`。
+- 先红：实现本来就对，新增测试在合并结果上直接通过。为了说明测试管用，把 `firstOverlap` 临时改成只按给出写法（`resolve`）比较，跑一次 `eval-auth`：4 项失败，即两条新增用例和两条原有的长形式用例。日志在 `.tmp/logs/f80-merge-mutation-eval-auth.log`，跑完已恢复。
+
+运行器指纹：合并改了 `eval-auth.ts`、`eval-batch.ts`、`eval-redact.ts`、`eval-run.ts` 的内容，合并后的运行器指纹与两边各自的都不同。两边任何一边之前的批次都不能与之后的比较，也不能续跑。
+
+按负载规则一次一个运行（Windows，Node 24，在合并加新测试的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-redact`、`eval-run`、`eval-host-double`、`eval-batch` | 14、6、5、12、10 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`eval-payload`、`offline-network`、`docs-consistency` | 12、7、7、4、3、5 项通过 |
+| `node scripts/privacy.ts`、`node scripts/eval-selftest.ts` | 无发现；7 条规则、25 个样例通过 |
+| `node scripts/tracker.ts`（只检查）、`node scripts/metadata.ts` | `errors` 为空；通过 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
+未验证：同上一节，另加两边的真实模型批次都没有运行。
+
 # 26 B 部分验证记录：前后比较的载荷（2026-11-14）
 
 工单 26 的同模型「前后分数不降」要求两批只换产品。28 的入口原来只装运行检出自己的 `skills/`，旧提交又没有评测框架，所以加了载荷参数：`eval-batch.ts payload --commit <提交> --out <目录>` 只读地做出载荷目录，`run`/`resume`/`list --payload` 让宿主从这里装 skill，批次清单记载荷来源，`compare` 只允许载荷不同并可只比较一个场景子集，载荷做不了的场景在宿主调用之前拒绝。用法见[行为评测](evaluation.md)「载荷」，验收计划和不调用模型的试运行见[发布验证记录](release-verification.md)「Codex 评测计划」。没有运行任何真实模型。

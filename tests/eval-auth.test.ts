@@ -114,6 +114,39 @@ test('on Windows the overlap check matches 8.3 short names both ways round, as o
     assert.equal(await loginDirectoryRefusal(join(shortRoot!, 'settings', 'login')), 'overlaps-settings-directory');
   });
 
+test('#80 with #84: a login directory and a payload directory overlap whichever form each is named in: a junction against the long form, either way round', async () => {
+  const link = async (target: string) => { const path = join(root, `forms-link-${counter++}`); await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir'); return path; };
+  // A payload directory named in the long form; a login directory inside it (absent) or the same place, named through a junction.
+  const payload = join(longRoot, `forms-payload-${counter++}`); await mkdir(payload);
+  const toPayload = await link(payload);
+  assert.equal(await loginDirectoryRefusal(join(toPayload, 'login'), { payloadDirectory: payload }), 'overlaps-payload-directory');
+  assert.equal(await loginDirectoryRefusal(toPayload, { payloadDirectory: payload }), 'overlaps-payload-directory');
+  assert.equal(await payloadDirectoryRefusal(payload, { loginDirectories: [join(toPayload, 'login')] }), 'overlaps-login-directory');
+  // The reverse: a login directory named in the long form; a payload directory inside it (absent), named through a junction.
+  const login = join(longRoot, `forms-login-${counter++}`); await mkdir(login);
+  const toLogin = await link(login);
+  assert.equal(await loginDirectoryRefusal(login, { payloadDirectory: join(toLogin, 'payload') }), 'overlaps-payload-directory');
+  assert.equal(await payloadDirectoryRefusal(join(toLogin, 'payload'), { loginDirectories: [login] }), 'overlaps-login-directory');
+  // A sibling named through a junction to the parent is still allowed: the forms are compared, not merely refused.
+  const toRoot = await link(longRoot);
+  assert.equal(await loginDirectoryRefusal(join(toRoot, `forms-sibling-${counter++}`), { payloadDirectory: payload }), undefined);
+  assert.equal(await payloadDirectoryRefusal(join(toRoot, `forms-sibling-${counter++}`), { loginDirectories: [login] }), undefined);
+});
+
+test('#80 with #84: on Windows an 8.3 short form of the login or the payload directory overlaps the other\'s long form, either way round',
+  { skip: shortRoot ? false : 'no 8.3 short names here (not Windows, or short names are off on this volume)' }, async () => {
+    // A payload directory named in the long form; a login directory inside it that does not exist yet, named in the short form.
+    const payload = join(longRoot, `short-payload-${counter++}`); await mkdir(payload);
+    const shortLogin = join(shortRoot!, basename(payload), 'login');
+    assert.equal(await loginDirectoryRefusal(shortLogin, { payloadDirectory: payload }), 'overlaps-payload-directory');
+    assert.equal(await payloadDirectoryRefusal(payload, { loginDirectories: [shortLogin] }), 'overlaps-login-directory');
+    // The reverse: a login directory named in the long form; a payload directory inside it, named in the short form.
+    const login = join(longRoot, `short-login-${counter++}`); await mkdir(login);
+    const shortPayload = join(shortRoot!, basename(login), 'payload');
+    assert.equal(await loginDirectoryRefusal(login, { payloadDirectory: shortPayload }), 'overlaps-payload-directory');
+    assert.equal(await payloadDirectoryRefusal(shortPayload, { loginDirectories: [login] }), 'overlaps-login-directory');
+  });
+
 test('plan login strips every API key even when MAA_EVAL keys are set; API-key mode forwards only the explicit key', async (t) => {
   Object.assign(process.env, { MAA_EVAL_ANTHROPIC_API_KEY: 'synthetic-eval-key', ANTHROPIC_API_KEY: 'synthetic-daily-key', MAA_EVAL_OPENAI_API_KEY: 'synthetic-eval-key', OPENAI_API_KEY: 'synthetic-daily-key' });
   t.after(() => { for (const name of ['MAA_EVAL_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY', 'MAA_EVAL_OPENAI_API_KEY', 'OPENAI_API_KEY']) delete process.env[name]; });
