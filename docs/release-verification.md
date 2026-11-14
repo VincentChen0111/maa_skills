@@ -668,7 +668,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 - **D4：框架检出等于最终候选提交。**第 1 步的 `<最终检出>` 就是最终候选那个提交本身，不允许框架停在某个更早的提交、只用 `--payload` 换载荷。后果：载荷包 P 对 `skills/maa-core/scripts/preferences.ts`（也在 `runnerSources` 里）的改动同时改变运行器指纹，所以三类批次都要等 H 和 P 都合并、版本号改好、最终候选冻结之后才开始，「前」也不例外；H 冻结之后不能先跑「前」。
 - **D5：评分器只比对退出码的弱点（G1）不在这一轮修。**期望某个调用以非 0 退出的场景，解析失败造成的 exit 1 也会被当作预期的拒绝；分诊抽查的 4 个通过运行没有发现假通过，其余没有逐一核对。修它要改 `scripts/evaluation.ts` 和 `eval/observe-node.mjs`，另开后续工单。人工核实时，这类场景（期望 `exitCode` 非 0 的调用）要看 `host.jsonl` 里那次调用的输出是不是预期的拒绝原因，不是解析失败。
 
-载荷包 P 的验证记录是 `docs/release-payload-verification.md`，随包 P 合入（本分支上还没有这个文件，所以这里写路径、不写成链接，免得 P 合并之前离线入口的相对链接检查报 `broken-link`）。
+载荷包 P 的验证记录见 [载荷修复验证](release-payload-verification.md)，两包都已合入。
 
 **两个默认审查场景依赖包 P（维护者要知道，26 H 第 1 轮审查后记，2026-11-14）。**`account-report-default-review`、`base-report-default-review` 要模型把审查说明经标准输入交给 `codex exec`。评测宿主上模型的 shell 是 Windows PowerShell 5.1：直接用 PowerShell 管道（`Get-Content -Raw <说明文件> | codex exec … -`）时，PowerShell 把文字重新编码，中文变成 `?`（控制台代码页 65001 时还加 BOM），说明的字节变了；审查员替身按设计只认本次运行的说明，就拒绝它（退出 1），审查落到「审查未完成」。让 skill 改用不改字节的写法（例如 `cmd /d /c "codex exec --sandbox read-only --ephemeral --skip-git-repo-check - < <说明文件>"`）是包 P 的修复。包 P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷；P 合入之后再失败才要查。框架一侧由 `tests/eval-fixture.test.ts`「26 H: from Windows PowerShell a Chinese brief redirected by cmd…」覆盖：Windows 上用真实 `powershell.exe -NoProfile`，在控制台代码页 65001 和 936 下，cmd 重定向的中文说明经 `.eval-bin/codex.cmd` 垫片得到 `findings: []`；`Get-Content -Raw`（带不带 `-Encoding UTF8` 都一样）管道过去的被拒绝。其他平台跳过。
 
@@ -818,7 +818,7 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 
 - 所有真实模型验收：未验证。
 - 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否对 `sandbox` 和 `exec` 都按 `shell_environment_policy.exclude` 排除变量、是否还会自己再注入 `CODEX_HOME` 未验证（读保护检查的环境探针不通过时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
-- 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（P 的验证记录 `docs/release-payload-verification.md`，随包 P 合入）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
+- 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（见 [载荷修复验证](release-payload-verification.md)）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
 - **用这个办法清不掉的发布门禁（需要维护者）**：33 对比较（每个宿主）。其中 32 对是当前评分器下「前」载荷不能通过的，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」；第 33 对是 05 的 daily-unknown（ddd0ca8，payload-skill-missing）：26 H 让它要 maa-doctor 同伴，`ddd0ca8` 早于 06，入口拒绝。明细和复现见「当前评分器下「前」载荷能不能通过」和「26 H 改过的场景重新核对」。另有三对是有条件的未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」那次运行交给 doctor 核对（`doctor.ts check`）时，只因这些载荷的 doctor 写的是旧格式记录而挂 `authorization`，那一对记「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，同样交维护者，不当作「分数不降」的依据（这三对是 15、24、07 受影响的 `daily-unknown`，看 `compare` 时按「26 H 改过的场景重新核对」末段的办法判断）。33 对涉及 05 七个 daily 场景里四个写入场景和 `daily-unknown` 的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。
