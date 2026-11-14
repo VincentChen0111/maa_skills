@@ -1,14 +1,52 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
-import { runScenario } from '../scripts/eval-run.ts';
+import { runScenario, scenarioHarnessFiles, type ScenarioDefinition } from '../scripts/eval-run.ts';
+import { entryId, scenarioCatalog } from '../scripts/eval-scenarios.ts';
 const source = { repository: 'synthetic/public-data', commit: 'a'.repeat(40), file: 'data/table.json' };
 const url = `https://raw.githubusercontent.com/${source.repository}/${source.commit}/${source.file}`;
+
+test('26 H (R7): no scenario\'s graded secret is in plaintext in a harness file, in the environment or in any file the fixture writes, except the world\'s own stores', async () => {
+  // Harness files: every module under eval/ (the sources the fixture installs, and the doubles) and the installed copies below.
+  const evalDirectory = fileURLToPath(new URL('../eval/', import.meta.url));
+  const harness = await Promise.all((await readdir(evalDirectory)).filter((name) => name.endsWith('.mjs')).map(async (name) => [`eval/${name}`, await readFile(join(evalDirectory, name), 'utf8')] as const));
+  const found: string[] = []; const traps: string[] = []; let skland = 0;
+  for (const entry of scenarioCatalog()) {
+    const definition = entry.definition as ScenarioDefinition; const id = entryId(entry);
+    // The fixture exactly as runScenario creates it, and the secrets runScenario grades with.
+    const fixture = await createFixture({ companionSkills: entry.companionSkills, ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}),
+      ...(definition.jsonInputs ? { jsonInputs: definition.jsonInputs } : {}), ...(definition.jsonFiles ? { jsonFiles: definition.jsonFiles } : {}),
+      maaProcess: definition.maaProcess, ...(definition.networkFixtures ? { networkFixtures: definition.networkFixtures } : {}), ...(definition.setupBoundary ? { setupBoundary: true } : {}) });
+    try {
+      const secrets = [...fixture.policy.secrets, ...(definition.chatSecrets ?? [])];
+      assert.ok(secrets.length > 0 && secrets.every((secret) => secret.length >= 9), id);
+      if (definition.networkFixtures) {
+        skland++;
+        // The synthetic Skland world's credentials are generated for this run, graded with the fixture's secrets and kept out of definitions.
+        assert.equal(fixture.policy.secrets.filter((secret) => secret.startsWith('synthetic-eval-skland-')).length, 5, id);
+        assert.ok(!JSON.stringify(definition).includes('synthetic-eval-skland-grant'), id);
+      }
+      const where = (text: string) => secrets.some((secret) => text.includes(secret));
+      for (const [file, text] of harness) if (where(text)) found.push(`${id}: ${file}`);
+      for (const [name, value] of Object.entries(fixture.env)) if (value && where(value)) found.push(`${id}: env ${name}`);
+      for (const [file, bytes] of fixture.original) {
+        if (!where(bytes.toString('utf8'))) continue;
+        // The fixture's own synthetic credential file is a trap in the world: the skills never read it, and printing it is a leak.
+        if (file === 'private/credentials.json') traps.push(id); else found.push(`${id}: ${file}${scenarioHarnessFiles.includes(file) ? ' (harness)' : ''}`);
+      }
+    } finally { await fixture.dispose(); }
+  }
+  assert.ok(skland > 0);
+  assert.equal(traps.length, scenarioCatalog().length, 'every world keeps the synthetic credential trap');
+  // The one other world store holding a graded value by design: MAA's own configuration keeps the remote-control identity.
+  assert.deepEqual(found, ['doctor-remote-control: config/gui.new.json']);
+});
 
 test('trusted network fixtures replace only the named product CLI boundary and retain real invocation/FS evidence', async t => {
   const root = await mkdtemp(join(tmpdir(), 'maa-network-source-')); t.after(() => rm(root, { recursive: true, force: true }));
