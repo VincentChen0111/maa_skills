@@ -8,6 +8,8 @@
 
 CLI 的 stdin、stdout、退出码和 PID 由预加载观察器记录。open、append、rename、unlink 委托原生文件系统，观察器只记录成功操作及当时的锁、配置与备份字节。场景正常执行产品 CLI，锁、配置、备份、JSONL 都落在真实临时目录；不会让模型生成一份成功记录代替调用。
 
+评分器读记录的 stdin 只经 `scripts/eval-daily.ts` 的 `recordedStdinJson`（26 H3）：它用产品 CLI 自己的读取器 `decodeStdinJson`（maa-core 的 `stdin-json.ts`）解码观察器记下的字节，所以 Windows PowerShell 5.1 管道放在开头的 BOM 和结尾的 CRLF 与 CLI 一样被读过去，BOM 加 `?` 与 CLI 一样判 `input-encoding-lossy`；评分器不会比 CLI 多读出一个请求。观察器把 stdin 字节整段保存、退出时解码一次。stdin 读取器拒绝、什么都没做的写入（退出码 1，输出整个就是读取器的拒绝 `{ ok: false, status: 'rejected', reason: <读取器的代码> }`，没有观察到任何动作，共享解码器也以同一代码拒绝记录的输入）不算一次写入：maa-core 要调用方把这样的请求转义后重发。其余写入一律计数，包括带漂移动作的被拒写入；只有被拒的写入时，没有执行过写入。`tests/eval-recorded-stdin.test.ts` 列出评测框架里每个读 stdin 或碰到记录 stdin 的文件，任何文件自己解析记录的 stdin 都会失败。
+
 专用 journal 位于临时 workspace，供两个宿主的工作区写权限使用；运行器从该 journal 与最终文件差异建立 Evidence。模型自行写 `events.jsonl` 不满足 daily 事务证明。缺失观察、损坏记录或没有产品调用时不能通过。这沿用行为评测的信任范围：它是受信预加载观察器产生的回归证据，不是抵御恶意模型重写观察器或整套夹具的安全隔离边界。
 
 进程替身只验证产品在给定 MAA 状态下的行为，不代表 Windows 原生进程适配器、真实 MAA 或设备已通过；原生适配器由对应工具测试覆盖。
