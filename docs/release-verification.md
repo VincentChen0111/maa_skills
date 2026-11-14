@@ -1,6 +1,6 @@
 # 26 发布验证记录（v0.1.0）
 
-本文件是[工单 26](issues/26-v0-1-0-release-validation.md)的验证记录。本包是 A 部分：离线的发布工具、打包清单、两个临时宿主的原生安装试运行、人工核实清单、Codex 评测计划、许可检查和发布说明草稿。真实模型运行、版本号改动、打标签和发布不在本包里（见「设计默认值」）。下文把实际运行过的和未验证的分开写；未运行的项一律写「未验证」，不写成通过。
+本文件是[工单 26](issues/26-v0-1-0-release-validation.md)的验证记录。本包是 A 部分：离线的发布工具、打包清单、两个临时宿主的原生安装试运行、人工核实清单、Codex 评测计划、许可检查和发布说明草稿。真实模型运行、版本号改动、打标签和发布不在本包里（见「设计默认值」）；版本号改动后来由发布候选包（26 RC，2026-11-14）在发布候选分支上做，见「设计默认值」D6 和「发布候选包（26 RC）」。下文把实际运行过的和未验证的分开写；未运行的项一律写「未验证」，不写成通过。
 
 ## 设计默认值（2026-11-14）
 
@@ -8,7 +8,7 @@
 
 | 设计默认值，2026-11-14 | 理由 |
 | --- | --- |
-| 本包不改版本号、不打标签、不发布任何东西，版本号保持 `0.1.0-dev.0` | 发布步骤排在模型门禁和维护者的决定之后；模型门禁还没有跑，维护者也还没有决定能否只凭 Codex 发布 |
+| 本包不改版本号、不打标签、不发布任何东西，版本号保持 `0.1.0-dev.0`。2026-11-14 改了计划：发布候选包（26 RC）在发布候选分支上把版本号改成 `0.1.0`，main 上的版本号仍保持 `0.1.0-dev.0`，直到模型门禁通过、维护者决定发布（D6）；仍然不打标签、不发布 | 发布步骤排在模型门禁和维护者的决定之后；模型门禁还没有跑，维护者也还没有决定能否只凭 Codex 发布。改计划的理由见 D6：D4 要求最终批次的载荷已经带发布版本号 |
 | 更新记录放在仓库根目录 `CHANGELOG.md`，每个版本的发布说明放在 `docs/releases/v<版本>.md` | 规格只说「每次发布附更新记录」「发布说明写明实机已核的 MAA 版本」，没有写位置。插件安装以仓库根目录为插件，根目录的更新记录随插件一起到用户手里；按版本分文件的发布说明可以原样作为 GitHub Release 的正文 |
 | 预发布和正式发布由版本号本身区分：带语义化版本预发布后缀（如 `0.1.0-dev.0`）是预发布，`X.Y.Z` 是正式发布 | 不另设一个会和版本号对不上的标志文件；预发布后缀是语义化版本的标准写法 |
 | 每个 PR 的离线入口核对各清单的版本号（`scripts/metadata.ts`），也核对更新记录和发布说明的版本与状态（`tests/release-check.test.ts` 在本仓库上按版本号自己的模式运行 `inspectVersions`，不加 `--release`）；只有发布说明里的 MAA 版本两行留给 `--release` 和标签检查逐字核对。2026-11-14 第 1 轮审查后改正：原句写成离线入口只比较清单版本号，与实际不符 | 25 的每日 Action 开的 PR 只改注册表和核实记录两个文件（规格「MAA 版本跟踪」），如果离线入口要求发布说明里的 MAA 版本与核实记录一致，这类 PR 会因为已经发布的旧说明而失败 |
@@ -30,6 +30,9 @@
 | `daily-unknown`（分诊决定 D3 方案 a，协调者定）：世界里放提示词说的遗留锁（复用 doctor 场景的锁），maa-doctor 用场景字段 `companions` 装成同伴（提示词仍只点名 maa-daily），doctor check 写的最近检查记录是可选授权：字面值授权加 `optional: true` 的 `checkedAt`；评分器为此新增生成时间字段的 `optional` | maa-daily 规定把未知结果交给 maa-doctor 核对，doctor check 写自己的脱敏记录是设计行为（doctor 场景都授权了）；另一个方案是改载荷、禁止 daily 跑 doctor，等于在规格之外加限制。可选字段没写不算缺少，写了照样只认确切位置和执行窗口 |
 | `daily-unknown` 在 `ddd0ca8`（06 之前，没有 maa-doctor）上不比较，记「未验证」；在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」交给 doctor 核对、只因它写的旧格式记录挂 `authorization` 时，这一对记「未验证」，不当作「分数不降」的依据 | 入口在 `ddd0ca8` 上以 `payload-skill-missing` 拒绝。后三个载荷上不跑 doctor 的正确做法能通过（离线核对），按「不论怎样做都通不过才不安排」的规则照常比较；跑 doctor 的做法失败是评分契约晚于载荷，与 doctor 五相同，不是模型做错 |
 | D4（协调者定）：框架检出等于最终候选提交；三类批次都在 H 和载荷包 P 都合并、最终候选冻结之后才跑。D5（协调者定）：评分器只比对退出码的弱点（G1）不在这一轮修，另开后续工单；人工核实时期望非 0 退出的调用要看输出是不是预期的拒绝 | P 改的 `preferences.ts` 也在运行器指纹里，框架若停在更早的提交，P 的改动只能经载荷进来，运行器与最终候选不一致；G1 要改评分器和观察器，是另一轮框架改动 |
+| D6（协调者定，2026-11-14）：最终候选是发布候选分支上的一个提交，不在 main 上。最终批次都在它上面跑；main 保持 `0.1.0-dev.0`，直到模型门禁通过、维护者决定发布，那时这个分支的 PR 以 squash 合并，给合并提交打标签 | 这样满足 D4（最终批次的载荷已经带发布版本号：`skills/maa-core/package.json` 和 `.claude-plugin/plugin.json` 都在载荷里），main 也不会在门禁之前就写着一个正式版本 |
+| D7（协调者定，2026-11-14）：「打标签提交的 `skills/` 和 `.claude-plugin/` 等于最终批次的载荷」用 `skills/` 树和载荷内容摘要核对，不比提交 id。做法：`node scripts/eval-batch.ts payload --commit <打标签的提交> --out <仓库外的新空目录>`，输出的 `trees.skills`、`trees[".claude-plugin"]` 和 `digest` 必须分别等于最终「后」批次和基线批次 `manifest.json` 里 `payload.trees.skills`、`payload.trees[".claude-plugin"]` 和 `payload.digest`。冻结之后 `skills/`、`.claude-plugin/`，或者框架的 `runnerSources`、`scenarioHashSources` 里任何文件一改，就是新的候选，「后」批次和基线批次都要重跑（后两类文件一改，「前」的批次也不能再比，见「可比性」） | squash 合并一定会产生新的提交，候选之后还可能有只改文档的提交（例如结果记录），提交 id 本来就会不同；`payload` 输出和批次清单的 `payload` 都是 `scripts/eval-payload.ts` 的同一个记录，`trees` 是两个载荷目录各自的 git 树，`digest` 是逐文件内容摘要。`tree`（整个提交的根树）和 `commit` 随文档提交变，不用来核对；清单的 `fingerprint.payload` 是场景定义加装入 skill 的另一个指纹，不是这里比的值 |
+| 发布候选包（26 RC）把 `.claude-plugin/plugin.json` 描述里的「implementation in progress」和 README 开头英文简介里的「no playable automation is shipped yet」随版本号一起改掉（设计默认值，2026-11-14） | 本记录「许可与第三方检查」原来就写明这两处「随版本号改动一起改」；`plugin.json` 在载荷里，冻结之后再改就要重跑「后」和基线批次（D7），所以在候选上一起改。README 不在载荷里，新句子只说还没有在真实 MAA、模拟器和游戏上核对，并指向发布说明 |
 | 两个临时宿主的原生安装从本地仓库安装，不从 GitHub | 本分支没有推送（构建规则不许推送），GitHub 上没有这个提交；本地安装用的仍是宿主自己的安装器，差别只在来源。最终验收要在发布载荷的公开提交上重做 |
 
 ## 版本一致与标签
@@ -446,7 +449,7 @@ A 部分第 2 轮审查指出：第 3 步和记录格式要求 `compare` 另一�
 
 ### 前后载荷
 
-「后」都是**最终候选载荷**：30 合并之后、版本号已经改成 `0.1.0` 的那个提交（`<最终候选>`）。30 已经合并（`89db659`），改了 maa-daily 和 maa-core 的文字，所以最终载荷一定在 30 之后；版本号改动会改 `skills/maa-core/package.json`，它在载荷里，所以改版本号必须在最终批次之前，打标签的提交的 `skills/` 和 `.claude-plugin/` 必须与最终批次清单里记的载荷（提交、树和内容摘要）相同。
+「后」都是**最终候选载荷**：30 合并之后、版本号已经改成 `0.1.0` 的那个提交（`<最终候选>`），在发布候选分支上，不在 main 上（D6）。30 已经合并（`89db659`），改了 maa-daily 和 maa-core 的文字，所以最终载荷一定在 30 之后；版本号改动会改 `skills/maa-core/package.json` 和 `.claude-plugin/plugin.json`，它们在载荷里，所以改版本号必须在最终批次之前。模型门禁通过、维护者决定发布之后，发布候选分支的 PR 以 squash 合并，标签打在合并提交上。打标签的提交的 `skills/` 和 `.claude-plugin/` 必须等于最终批次的载荷，按 D7 用树和内容摘要核对，不比提交 id（squash 合并一定产生新提交，候选之后还可能有只改文档的提交）：`node scripts/eval-batch.ts payload --commit <打标签的提交> --out <仓库外的新空目录>` 输出的 `trees.skills`、`trees[".claude-plugin"]` 和 `digest`，分别等于最终「后」批次和基线批次 `manifest.json` 里的 `payload.trees.skills`、`payload.trees[".claude-plugin"]` 和 `payload.digest`。冻结之后 `skills/`、`.claude-plugin/`，或者框架的 `runnerSources`（`scripts/eval-batch.ts`）、`scenarioHashSources`（`scripts/eval-run.ts`）里任何文件一改，就是新的候选，「后」批次和基线批次都要重跑；后两类文件一改，「前」的批次也不能再比（见「可比性」）。门禁期间（冻结到打标签）先不要在 main 上合并会改 `skills/` 或 `.claude-plugin/` 的 PR，例如 25 的每日 Action 开的、改 `skills/maa-core/references/verified-versions.json` 的 PR：发布候选分支合并时会把它带进发布内容，D7 的核对和 `release-check tag`（`release-notes: maa-versions-stale`）会如实拒绝，就成了新的候选（26 RC 独立审查第 1 轮的运作提醒，2026-11-14）。
 
 下表「daily 三」是 `daily-inspect`、`daily-forbidden`、`daily-unknown`；「daily 的四个写入场景」是 `daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure`。「不比较」一列是当前评分器下「前」载荷不能通过、从计划里去掉的场景，见下一节；它们只在基线批次里跑，比较记「未验证」。
 
@@ -539,12 +542,16 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 26 B 部分给 28 的入口加了载荷参数（用法见[行为评测](evaluation.md)「载荷」）：`payload` 只读地把一个提交的 `skills/` 和 `.claude-plugin/` 做成仓库外的一个新目录，记下提交、树和内容摘要；`run`/`resume`/`list` 的 `--payload` 让宿主从这个目录装 skill，场景、评分器、夹具、宿主适配、脱敏和预检仍是运行检出自己的；批次清单记下载荷来源；`compare` 只允许载荷不同，`--scenarios` 只比较一个子集。所以「前」「后」都在**同一个检出**里跑，只换载荷：
 
-1. 冻结框架：在最终候选的一个干净检出里运行下面所有命令，整个验收期间不换。
+1. 冻结框架：在最终候选的一个干净检出里运行下面所有命令，整个验收期间不换。`<最终候选>` 是发布候选分支（D6）上版本号已经是 `0.1.0` 的那个提交，不是 main 上的提交；检出用提交 id 建，不用分支名，所以分支之后再加只改文档的提交也不影响冻结的检出。建好后先核对版本，要 `ok: true`、`mode: release`：
 
    ```text
+   git rev-parse <发布候选分支>
    git worktree add --detach <最终检出> <最终候选>
    cd <最终检出>
+   node scripts/release-check.ts versions --release
    ```
+
+   第一行输出的提交 id 就是 `<最终候选>`，记进结果记录。
 
 2. 做载荷：最终候选和上表每个「前」各一个，放在仓库外的新空目录里（不能与私有目录、设置目录、宿主日常配置或专用登录目录重叠），再用 `list` 确认每个载荷能做它那一行计划比较的全部场景（输出里那些场景没有 `refused`）。`list` 只看 skill、脚本和数据提交在不在，不看评分契约；最终候选和本记录核对时用的 `24deeb4` 之间若评分器又改了，先按「当前评分器下「前」载荷能不能通过」重新核对再跑。
 
@@ -635,7 +642,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 - 12 个载荷都做出来了，每个都带 `.claude-plugin/`；`list` 没有拒绝任何一行原来计划的场景。但 `list` 只看 skill、脚本和数据提交在不在，不看评分契约：「能做」不等于「能通过」。当前评分器下不能通过的 32 对见「当前评分器下「前」载荷能不能通过」，已经从计划里去掉，记「未验证」。这是 26 H 之前的框架（`24deeb4`）上的结果；26 H 让 `daily-unknown` 要 maa-doctor 同伴之后，`ddd0ca8` 那一行的 `daily-unknown` 由入口以 `payload-skill-missing` 拒绝，是第 33 对未验证（见「26 H 改过的场景重新核对」）。
 - 计划里的成本、缺口场景（`370ed68`、`6c582e7`、`ac03ba8` 及之后）没有一个报 `payload-data-commit-missing`：这些载荷固定的公开数据提交与当前框架的网络夹具相同，与 A 部分人工核对的结论一致，由入口自动检查。
 - `f1ec4ed`（27 合并前）也能做 27 的五个场景：它们要的脚本都在，只是功能还没有，所以它不适合当 27 新增场景的「前」；表里 27 那一行的「前」是 `6f95f27`。
-- 最终候选还没有（要等版本号），表里 `HEAD` 一行只是暂代；`HEAD` 与 `6f95f27` 的 `skills/` 树不同，差别是 A 部分补上的 `skills/maa-account/LICENSE` 和 30 对 maa-core、maa-daily 的改动。
+- 最终候选还没有（要等版本号），表里 `HEAD` 一行只是暂代（2026-11-14 起最终候选在发布候选分支上，见「发布候选包（26 RC）」）；`HEAD` 与 `6f95f27` 的 `skills/` 树不同，差别是 A 部分补上的 `skills/maa-account/LICENSE` 和 30 对 maa-core、maa-daily 的改动。
 
 ### 可比性
 
@@ -701,11 +708,11 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 | `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
 | 打包检查里的隐私规则 | 本分支载荷按两种安装方式复制后，没有发现（`tests/release-package.test.ts` 最后一项） |
 
-发布时还要改、本包没有改的：README 开头的英文简介还写着「no playable automation is shipped yet」，`.claude-plugin/plugin.json` 的描述还写着「implementation in progress」；它们随版本号改动一起改。`claude plugin validate` 另提示市场描述没有 `description`、插件没有图标、README 没有一行安装命令，都是建议，不影响校验通过，是否补上由发布那一步决定。
+发布时还要改、本包没有改的：README 开头的英文简介还写着「no playable automation is shipped yet」，`.claude-plugin/plugin.json` 的描述还写着「implementation in progress」；它们随版本号改动一起改。发布候选包（26 RC，2026-11-14）已经随版本号改掉这两处（见「设计默认值」）。`claude plugin validate` 另提示市场描述没有 `description`、插件没有图标、README 没有一行安装命令，都是建议，不影响校验通过，是否补上由发布那一步决定；RC 没有补。前两项要改 `.claude-plugin/`，它在载荷里，冻结之后再补就是新的候选（D7）。
 
 ## 发布说明草稿
 
-[v0.1.0 发布说明](releases/v0.1.0.md)和[更新记录](../CHANGELOG.md)是草稿，状态分别是「草稿」和「未发布」。发布说明写明：源码已核 v6.22.0（由随包核实记录生成，发布时逐字核对）；实机已核：无；离线测试、合成用例、宿主替身、机器评分和起点 skill 在 v6.21.4 上的历史经验都不算实机核对。
+A 部分写的时候，[v0.1.0 发布说明](releases/v0.1.0.md)和[更新记录](../CHANGELOG.md)是草稿，状态分别是「草稿」和「未发布」；发布候选包（26 RC）把它们改成「已发布」和候选日期 2026-11-14，正文写明这是发布候选、还没有发布，见「发布候选包（26 RC）」。发布说明写明：源码已核 v6.22.0（由随包核实记录生成，发布时逐字核对）；实机已核：无；离线测试、合成用例、宿主替身、机器评分和起点 skill 在 v6.21.4 上的历史经验都不算实机核对。
 
 ## 本包运行的命令
 
@@ -851,6 +858,37 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 
 `childPath` 的测试顺带核实了一件 Windows 上的事实：交给子进程的环境里没有 PATH 时，子进程仍会拿到运行器自己的 PATH（Node/libuv 在 Windows 上补进去）。所以 `childPath` 取不到 PATH 时按拒绝处理，不能当作「子进程没有 PATH」。
 
+## 发布候选包（26 RC，2026-11-14）
+
+发布候选包在发布候选分支上做，基点是含框架修复包 H（#93）和载荷修复包 P（#94）的 main `53b7ac7`；按 D6 不合并到 main，等模型门禁通过、维护者决定发布。改动：
+
+- 版本号改成 `0.1.0`：`package.json`、`package-lock.json`（根和 `packages[""]`）、`.claude-plugin/plugin.json`、`skills/maa-core/package.json`。`skills/` 下别的文件都没改。
+- `.claude-plugin/plugin.json` 的描述去掉「implementation in progress」，README 开头英文简介去掉「no playable automation is shipped yet」（见「设计默认值」）。
+- 更新记录最上面一条改成 `## 0.1.0 - 2026-11-14`，说明这是发布候选、日期是候选日期、还没有发布；发布说明「状态：已发布」，开头说明这是发布候选的说明、标签和发布在模型门禁和维护者决定之后；两行 MAA 版本用 `node scripts/maa-version-check.ts notes` 重新生成，与原来逐字相同；「验证状态」没有改，模型评测仍是「未验证」。
+- 本记录：D6、D7 和上面那条设计默认值，「前后载荷」里打标签提交的核对办法，第 1 步的冻结命令；规格「发布与维护流程」和两张来源表同步。
+
+只跑了下面这些，一次一个；没有启动真实宿主，没有调用模型，没有联网（开发依赖用 `npm ci --ignore-scripts --offline` 从本机缓存装）；完整离线入口没有跑（由协调者在冻结的头上跑）。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/release-check.test.ts` | 6 项通过（含「本仓库按自己版本号的模式一致」和「由本仓库做出的发布提交通过 `--release`」，现在本仓库就是正式发布模式） |
+| `node --test tests/metadata.test.ts` | 3 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 8 项通过 |
+| `node --test tests/help-installation.test.ts` | 6 项通过 |
+| `node scripts/release-check.ts versions` | `{"ok":true,"version":"0.1.0","target":"0.1.0","mode":"release","errors":[]}` |
+| `node scripts/release-check.ts versions --release` | 同上，退出 0 |
+| `node scripts/maa-version-check.ts notes` | 两行与发布说明里的逐字相同 |
+| `node scripts/metadata.ts` | 退出 0 |
+| `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
+| `node scripts/tracker.ts` | `errors: []` |
+| `node scripts/eval-batch.ts payload --commit HEAD --out <系统临时目录下的新空目录>`（HEAD 是改版本号的提交 `b63007b`） | `commit` `b63007bc160b`，`trees.skills` `401732ac5c8f62f67649eeeef037a9badc15fea4`，`trees[".claude-plugin"]` `e69d80fa425fe0693da3ba6f1b08c40374a88439`，`digest` `7b33877cdadcd468ae7267c49f3994608873124d1d35195190263bf9611cada7` |
+| `node scripts/eval-batch.ts list --payload <同一目录>` | 117 个场景，没有一个 `refused`；第 3 步「后」批次的 86 个（三个组展开后）和基线批次的 31 个合起来正好是这 117 个，没有重叠。用完目录已删除 |
+
+`trees` 和 `digest` 只随载荷变：这之后只改文档的提交（例如本记录这一段）不改变它们，冻结时在 `<最终候选>` 上重做载荷，这三个值应当与上表相同（D7）。
+
+未验证：标签检查（`release-check.ts tag`）没有跑，还没有标签；两个宿主在这个候选上的原生安装与更新没有跑；三类模型批次都没有跑。
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
@@ -859,6 +897,6 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 - 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否照办 `shell_environment_policy`，现在答了一部分（26 H2，协调者 2026-11-14 的诊断，只看变量名）：`codex sandbox` 照办了 `exclude`（`CODEX_HOME` 不在）和 `set` 的 PATH（用的是 TOML 字面字符串写法）；`exec` 是否同样照办、是否还会自己再注入登录目录，以及运行器现在用的基本字符串写法是否同样被接受，要等一批真实运行通过探针并真正跑起来才算核实（探针不通过或报错时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
 - 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（见 [载荷修复验证](release-payload-verification.md)）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
 - **用这个办法清不掉的发布门禁（需要维护者）**：33 对比较（每个宿主）。其中 32 对是当前评分器下「前」载荷不能通过的，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」；第 33 对是 05 的 daily-unknown（ddd0ca8，payload-skill-missing）：26 H 让它要 maa-doctor 同伴，`ddd0ca8` 早于 06，入口拒绝。明细和复现见「当前评分器下「前」载荷能不能通过」和「26 H 改过的场景重新核对」。另有三对是有条件的未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」那次运行交给 doctor 核对（`doctor.ts check`）时，只因这些载荷的 doctor 写的是旧格式记录而挂 `authorization`，那一对记「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，同样交维护者，不当作「分数不降」的依据（这三对是 15、24、07 受影响的 `daily-unknown`，看 `compare` 时按「26 H 改过的场景重新核对」末段的办法判断）。33 对涉及 05 七个 daily 场景里四个写入场景和 `daily-unknown` 的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
-- 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
+- 版本号改为 `0.1.0`、更新记录带候选日期、发布说明标「已发布」：2026-11-14 在发布候选分支上做了（26 RC，D6），main 上没有改。合并到 main、打标签、发布：未做，排在模型门禁和维护者决定之后；在另一天发布时，更新记录的日期改成发布当天，更新记录和发布说明里「还没有发布」的说明改成发布时的说法（都是只改文档，不动载荷）。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。
 - 真实 MAA、模拟器和游戏上的验证：未验证；发布说明照实写「无」。
