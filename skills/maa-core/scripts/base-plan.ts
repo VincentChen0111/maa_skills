@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { baseGameSource, queryBaseSkills } from './base-query.ts';
 import { readPublicJson } from './public-data.ts';
 import { readSettings } from './preferences.ts';
@@ -470,7 +471,8 @@ function parsePlan(raw: unknown, index: number, errors: string[], warnings: stri
 
 const verdict = (failed: boolean, open: boolean): Verdict => failed ? 'fail' : open ? 'unverified' : 'pass';
 const hm = (minute: number) => `${String(Math.floor(minute / 60) % 24).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
-const optimal = /最优|最佳|最好|最强|最高效|optimal|optimum|\bbest\b/i;
+/** Gate 15: words that call a plan optimal. Refused in the plan and report texts even when negated (ticket 26 docs say so). */
+export const optimalClaim = /最优|最佳|最好|最强|最高效|optimal|optimum|\bbest\b/i;
 
 /** Parses a plan file and runs every rule and gate against it; a gate that cannot be decided says so. */
 export function checkPlanText(text: string, context: CheckContext): PlanCheck {
@@ -951,7 +953,7 @@ export function checkPlanText(text: string, context: CheckContext): PlanCheck {
   // 15. Wording: nothing unproven is called optimal.
   {
     const texts = [file.title, file.description, ...plans.flatMap(plan => plan.texts), ...(context.texts ?? [])].filter(filled);
-    add(15, texts.filter(entry => optimal.test(entry)).map(entry => `用了「最优」一类说法：${entry}`), [], ['没有把未证明最优的方案称为最优']);
+    add(15, texts.filter(entry => optimalClaim.test(entry)).map(entry => `用了「最优」一类说法：${entry}`), [], ['没有把未证明最优的方案称为最优']);
   }
   open.push(...gates.filter(entry => entry.verdict === 'unverified').map(entry => `gate-${entry.gate}`));
   return { applicable: errors.length === 0 && gates.every(entry => entry.verdict !== 'fail'), errors: [...new Set(errors)], warnings: [...new Set(warnings)], unverified: [...new Set(open)],
@@ -1094,8 +1096,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['generate', 'check', 'candidates'].includes(action!)) throw new Error('plan-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = JSON.parse(raw) as unknown;
+    const input = await readStdinJson({ maxBytes: null, invalidCode: 'plan-input-invalid' });
     if (!isObject(input) || input.format !== undefined && !['json', 'markdown'].includes(String(input.format))) throw new Error('plan-input-invalid');
     const markdown = input.format === 'markdown';
     if (action === 'generate') {
@@ -1115,7 +1116,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         : JSON.stringify({ ok: true, rooms }));
     }
   } catch (error) {
-    const code = error instanceof Error && /^(plan|base|public-data)-[a-z0-9-]+$/.test(error.message) ? error.message : 'plan-check-failed';
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(plan|base|public-data)-[a-z0-9-]+$/.test(error.message) ? error.message : 'plan-check-failed');
     process.stdout.write(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
   }
 }

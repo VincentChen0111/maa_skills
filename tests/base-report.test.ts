@@ -8,6 +8,7 @@ import { draftBaseReport, formatBaseReportMarkdown, formatBaseReportBody, change
   type BaseContent } from '../skills/maa-core/scripts/base-report.ts';
 import { loadAdviceReport, recordReview, recordReviewSkip, writeReviewBrief, resolveApprovedItem } from '../skills/maa-core/scripts/advice-report.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import { optimalClaim } from '../skills/maa-core/scripts/base-plan.ts';
 import { planInput, planHome, planNetwork, planSnapshot, planTables } from './fixtures/base-plan-data.ts';
 
 // Synthetic layout, roster, skills and MAA name table only. The network is the only replaced boundary.
@@ -34,6 +35,20 @@ test('a draft writes the plan in the private directory, keeps facts and inferenc
     '每天换班 2 次', '## 数据新鲜度（生成时）', '账号快照：新鲜', '## 未建模', 'maa-account 不写 MAA 配置、不执行排班', '总体推断：两班轮换']) assert.ok(markdown.includes(text), text);
   assert.ok(!markdown.includes('不执行培养'), 'the shared banner speaks about the base plan, not cultivation');
   assert.deepEqual(await readdir(join(home, 'maa'), { recursive: true }), maaBefore, 'no MAA file changes');
+});
+
+// Ticket 26 (R4): gate 15 refuses optimal-claim words in the plan and report texts even when negated, so the report's own
+// template never uses them either: a model echoing the template into its summary would otherwise fail the gate.
+test('the report template says the plan was only checked, without a word gate 15 refuses', async (t) => {
+  const home = await planHome(); t.after(() => rm(home, { recursive: true, force: true }));
+  const result = await draftBaseReport(draft(), { home, fetcher: planNetwork() });
+  assert.equal(result.status, 'saved', JSON.stringify(result));
+  if (result.status !== 'saved') return;
+  const markdown = formatBaseReportMarkdown(result.state);
+  const gateRows = /^\| \d+ \|/;
+  const claims = markdown.split('\n').filter(line => !gateRows.test(line) && optimalClaim.test(line));
+  assert.deepEqual(claims, [], 'only the gate table names the gate itself');
+  assert.ok(markdown.includes('文本百分比不是最终收益，不作排名或加总；这份排班只通过了上面的检查，没有和其他排法比较过。'));
 });
 
 // Ticket 25: the report records the MAA version and the verification-record version read when it is generated. The

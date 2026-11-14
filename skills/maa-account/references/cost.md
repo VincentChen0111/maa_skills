@@ -2,7 +2,7 @@
 
 加工、材料券及多目标共用库存的比较走[缺口接口](gaps.md)；本页的原始需求和纯库存差额语义保持不变。
 
-用 Node 24 运行相邻 `../maa-core/scripts/operator-cost.ts query`，输入一个 JSON 对象；干员名、路径和目标通过标准输入传递。脚本读取设置的私有目录内 `account-snapshot.json`，或用户明确指定的 `snapshotFile`。只读已有快照和固定提交的公开游戏数据，不启动识别、不保存报告、不操作游戏。缺少共享脚本时按入口的同版安装步骤处理。
+用 Node 24 运行相邻 `../maa-core/scripts/operator-cost.ts query`，输入一个 JSON 对象；干员名、路径和目标通过标准输入传递。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。脚本读取设置的私有目录内 `account-snapshot.json`，或用户明确指定的 `snapshotFile`。只读已有快照和固定提交的公开游戏数据，不启动识别、不保存报告、不操作游戏。缺少共享脚本时按入口的同版安装步骤处理。
 
 1. 收集干员名与本次明确目标。`name` 必填；候选只取公开目录中可获取的 `char_` 干员记录，召唤物和装置不参加培养查询。同名或同名不同形态返回候选时，让用户指定 `operatorId`，只使用该 ID 的快照事实。精英等级以 0/1/2 表示；涉及精英化或等级的目标必须同时给出 `elite` 与 `level`。只传本次请求的目标，不擅自补满级、前置培养或其他技能。
 2. 调用 `query`，按 `issues` 补齐待核输入。快照没有的当前事实可以由用户确认后放入 `current`，必须带 `source: "user-confirmed"`；与已知快照冲突时先核对，不覆盖快照。MAA 识别不提供技能等级、专精和模组等级；未练专精/未开模组也需用户明确确认 0，不能从 null 推定。

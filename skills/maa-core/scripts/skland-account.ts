@@ -1,6 +1,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings, startup } from './preferences.ts';
 import type { Protector } from './credential-protection.ts';
 import { saveAccountSnapshot, snapshotFiles, type AccountSnapshot, type BaseOperator, type BaseRoom, type Coverage, type Operator } from './account-snapshot.ts';
@@ -422,8 +423,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2] ?? '';
     if (!['inspect', 'import', 'compare'].includes(action)) throw new Error('unknown-action');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = request(JSON.parse(raw || '{}'), action);
+    const input = request(await readStdinJson({ maxBytes: null, empty: {} }), action);
     const settings = await readSettings();
     const { language } = startup(settings, input.currentLanguage ?? 'zh-CN');
     if (action === 'compare') {
@@ -447,6 +447,6 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       else console.log(JSON.stringify(outcome.body));
     }
   } catch (error) {
-    fail({ error: (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required' });
+    fail({ error: stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required') });
   }
 }

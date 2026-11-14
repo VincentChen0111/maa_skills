@@ -8,6 +8,7 @@ import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -143,10 +144,9 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv.length !== 3 || process.argv[2] !== 'query') throw new Error();
-    let text = ''; for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 1024 * 1024) throw new Error(); }
-    const request = object(JSON.parse(text));
+    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 }));
     if (request.format !== undefined && !['json', 'markdown'].includes(String(request.format))) throw new Error();
     const output = await queryTraining(request), summary = formatTraining(output.result, output.language);
     console.log(request.format === 'markdown' ? summary : JSON.stringify({ ok: true, ...output, summary }));
-  } catch { console.error(JSON.stringify({ ok: false, error: 'training-query-failed' })); process.exitCode = 1; }
+  } catch (error) { console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? 'training-query-failed' })); process.exitCode = 1; }
 }

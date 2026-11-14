@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink, realpath } from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
 import { queryTraining } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, type TrainingPlan } from './training-state.ts';
@@ -227,8 +228,7 @@ const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolv
 if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   try {
     if (process.argv.length !== 3) throw new Error('training-action-invalid');
-    let text = ''; for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('training-input-too-large'); }
-    const request = object(JSON.parse(text)); let result: unknown;
+    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown;
     if (process.argv[2] === 'prepare') result = summarizeTrainingPlan(await prepareTrainingPlan(request));
     else if (process.argv[2] === 'read') result = summarizeTrainingPlan(await readTrainingPlan(String(request.id)));
     else if (process.argv[2] === 'refresh') result = summarizeTrainingPlan(await refreshTrainingMaterials(request));
@@ -245,5 +245,5 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       }
     } else throw new Error('training-action-invalid');
     console.log(JSON.stringify({ ok: process.exitCode !== 1, result }));
-  } catch { console.error(JSON.stringify({ ok: false, error: 'training-plan-check-required' })); process.exitCode = 1; }
+  } catch (error) { console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? 'training-plan-check-required' })); process.exitCode = 1; }
 }

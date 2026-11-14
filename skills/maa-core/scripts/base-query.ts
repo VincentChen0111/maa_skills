@@ -4,6 +4,7 @@ import type { AccountSnapshot } from './account-snapshot.ts';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings, startup } from './preferences.ts';
 import { readPublicJson, type PublicJsonResult } from './public-data.ts';
 
@@ -213,8 +214,7 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv[2] !== 'query') throw new Error('base-input-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = request(JSON.parse(raw)), settings = await readSettings();
+    const input = request(await readStdinJson({ maxBytes: null, invalidCode: 'base-input-invalid' })), settings = await readSettings();
     const language = startup(settings, input.currentLanguage ?? 'zh-CN').language;
     const snapshotFile = input.snapshotFile ?? (settings?.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null);
     if (!snapshotFile) throw new Error('base-snapshot-required');
@@ -231,7 +231,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const stable = new Set(['base-data-invalid', 'base-input-invalid', 'base-snapshot-invalid', 'base-snapshot-required', 'base-room-invalid', 'base-cross-check-invalid',
       'public-data-input-invalid', 'public-data-network-failed', 'public-data-http-failed', 'public-data-too-large', 'public-data-json-invalid']);
     console.error(JSON.stringify(error instanceof AmbiguousName ? { ok: false, error: 'base-name-ambiguous', candidates: error.candidates }
-      : { ok: false, error: error instanceof Error && stable.has(error.message) ? error.message : 'base-query-check-required' }));
+      : { ok: false, error: stdinJsonCode(error) ?? (error instanceof Error && stable.has(error.message) ? error.message : 'base-query-check-required') }));
     process.exitCode = 1;
   }
 }

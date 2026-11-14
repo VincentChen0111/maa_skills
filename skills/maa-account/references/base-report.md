@@ -6,7 +6,7 @@
 
 ## 命令
 
-`node <maa-core>/scripts/base-report.ts <动作>`，参数经标准输入传入。动作 `draft`、`read`、`brief`、`review`、`fail`、`skip`、`approve` 的用法和 [建议报告接口](../../maa-core/references/advice-report.md) 一样，另有：
+`node <maa-core>/scripts/base-report.ts <动作>`，参数经标准输入传入（Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发）。动作 `draft`、`read`、`brief`、`review`、`fail`、`skip`、`approve` 的用法和 [建议报告接口](../../maa-core/references/advice-report.md) 一样，另有：
 
 | 动作 | 输入 | 结果 |
 | --- | --- | --- |
@@ -18,9 +18,11 @@
 - 条目只有一个：`P1` 应用这份排班文件。范围写明 maa-daily 只能把这一份文件（路径和 SHA-256）写进 MAA 的自定义基建设置，写之前要重新跑全部校验和验收门、核对数据新鲜度、把未核实的项交用户决定；不包括切换生产线、训练室、刷关、碎石和用药、抽卡礼包付费登录、maa-account 写 MAA 配置、点游戏或操作设备。
 - 方案不可应用（有错误或不通过的验收门）时报告照常保存并写明是哪一项，但 `approve` 拒绝 `P1`（`base-plan-not-applicable`）。未核实的项记进批准范围。
 - 改正时只比较内容：哪些结果变了只由 `changedReportResults` 一个函数判断（快照内容、干员事实、检查结果、排班文件、名表、固定表、协议版本），读取时间不算。
+- 方案和报告的文字（`title`、`summary`、`assumptions`、`reasons` 等，完整清单见排班接口）里不写「最优」「最佳」「最好」「最强」「最高效」「optimal」「optimum」「best」，否定句也不写（例如「本方案不声称最优」）：第 15 项验收门见到这些词就不通过，报告停在不可应用。要说明局限时，写做了哪些检查、没有和其他排法比较过。
+- 给用户看报告只用 `read` 的输出（`format: "markdown"`），不另存副本：当前目录、工作区和私有目录里都不另写报告文件。需要给文件位置时，指向脚本在私有目录 `reports/base/<reportHash>/` 下写出的文件。
 
 退出码与错误代码同建议报告接口；本入口另有 `base-action-invalid`、`base-input-invalid`、`base-plan-not-applicable` 和排班工具的 `plan-*`。
 
 ## 边界
 
-maa-account 只写报告和私有目录里的排班文件，不写 MAA 配置，不执行排班；批准的排班由 maa-daily 按 [基建排班应用](../../maa-daily/references/base-apply.md) 重新检查后写进 MAA；审查通过不等于批准，批准不等于执行。抽卡、礼包、付费、登录任何情况下都不碰；结果未知只核对、不重放；不点游戏、不操作设备；不输入凭据，不打印凭据。
+maa-account 只经脚本写报告和私有目录里的排班文件（不自己另存报告副本），不写 MAA 配置，不执行排班；批准的排班由 maa-daily 按 [基建排班应用](../../maa-daily/references/base-apply.md) 重新检查后写进 MAA；审查通过不等于批准，批准不等于执行。抽卡、礼包、付费、登录任何情况下都不碰；结果未知只核对、不重放；不点游戏、不操作设备；不输入凭据，不打印凭据。

@@ -1,6 +1,7 @@
 import { mkdir, readFile, open, rename, unlink, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { randomUUID } from 'node:crypto';
 import { readSettings, settingsHome, startup } from './preferences.ts';
 // Adapted from nhyo/dsh-maa-cli src/operators/{depot,operator-box}.js
@@ -175,13 +176,16 @@ export function formatAccountSummary(snapshot: AccountSnapshot, language = 'zh-C
   const scanLabel = english ? 'Original scan time (operators / inventory)' : '原扫描时间（干员 / 仓库）';
   return `# ${labels[0]}\n\n${labels[2]}\n\n${labels[1]}：${snapshot.readAt}\n\n${scanLabel}：${snapshot.sourceTimes.operators ?? labels[6]} / ${snapshot.sourceTimes.inventory ?? labels[6]}\n\n- ${labels[3]}：${snapshot.coverage.operators.status} (${snapshot.operators.length})\n- ${labels[4]}：${snapshot.coverage.inventory.status} (${Object.keys(snapshot.items).length})\n- ${labels[5]}：${snapshot.lmd ?? labels[6]}\n- ${labels[7]}\n- ${labels[8]}\n\n${labels[9]}\n`;
 }
+/** Static codes thrown above (request checks, callback parsing, settings); each names its own cause and carries no input. */
+const accountErrorCodes: ReadonlySet<string> = new Set(['unknown-action', 'object-required', 'invalid-request', 'invalid-format', 'conflicting-input',
+  'maa-directory-required', 'settings-unreadable', 'recognition-failed', 'done-required', 'invalid-item-id', 'unsupported-source', 'operators-required',
+  'invalid-ownership', 'invalid-number', 'invalid-string', 'invalid-read-time', 'invalid-scan-time']);
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2];
     if (!['inspect', 'import'].includes(action ?? '')) throw new Error('unknown-action');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = importRequest(JSON.parse(raw));
+    const input = importRequest(await readStdinJson({ maxBytes: null }));
     const settings = await readSettings();
     const { language } = startup(settings, input.currentLanguage ?? 'zh-CN');
     const snapshot = action === 'import' ? await importMaaSnapshot(input) : await inspectMaaSnapshot(input);
@@ -190,7 +194,11 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     else console.log(JSON.stringify({ ok: true, saved: action === 'import', readAt: snapshot.readAt, sourceTimes: snapshot.sourceTimes, coverage: snapshot.coverage,
       operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd, summary }));
   } catch (error) {
-    console.error(JSON.stringify({ ok: false, error: (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required' }));
+    // Ticket 26: the static codes this script throws are reported as they are, so a refusal says why. Anything else (a file
+    // that cannot be read, a failed save) stays account-check-required and prints no path or system message.
+    const code = stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy'
+      : error instanceof Error && accountErrorCodes.has(error.message) ? error.message : 'account-check-required');
+    console.error(JSON.stringify({ ok: false, error: code }));
     process.exitCode = 1;
   }
 }

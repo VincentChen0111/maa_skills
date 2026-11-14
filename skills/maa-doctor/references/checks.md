@@ -1,6 +1,6 @@
 # 检查与恢复接口
 
-共享入口是相邻 `../../maa-core/scripts/doctor.ts`，动作为 `check [--json] [--online]`、`analyze [--json]` 和 `repair [--json]`。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒（`analyze` 为运行已完成）；1 存在错误、修法拒绝、输入被拒或结果未知（`analyze` 为失败、停止或未知）；2 意外失败。错误不回显配置、路径、原始异常或批准文本。`check` 的退出码把所有错误算上；关卡运行重试前的核对（maa-daily 的 `stage-run.ts verify`）调用同一组检查，但只让与重试有关的检查挡住，两者都由 `checks.ts` 的 `blockingChecks` 判断，划分见规格「默认值及其来源」。
+共享入口是相邻 `../../maa-core/scripts/doctor.ts`，动作为 `check [--json] [--online]`、`analyze [--json]` 和 `repair [--json]`。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒（`analyze` 为运行已完成）；1 存在错误、修法拒绝、输入被拒或结果未知（`analyze` 为失败、停止或未知）；2 意外失败。错误不回显配置、路径、原始异常或批准文本。`check` 的退出码把所有错误算上；关卡运行重试前的核对（maa-daily 的 `stage-run.ts verify`）调用同一组检查，但只让与重试有关的检查挡住，两者都由 `checks.ts` 的 `blockingChecks` 判断，划分见规格「默认值及其来源」。
 
 `check` 返回 `checkedAt`、`exitCode`、`checks`、`recovery`、`version` 和 `skills`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`group`、`status`（normal/warning/error）、`reason`、`repair`（id、executor 为 skill/user、description；执行者为 skill 时另有 `channel`，即执行它的现有脚本入口），新增各项另有 `message` 一句说明和可选的 `details`（只含字段种类、文件名或 skill 名）。setup 和 doctor 共用 `maa-core/scripts/checks.ts` 的原因与修法表，安装组与 `setup.ts check` 是同一个函数（`inspectInstallation`）；导出的 `runChecks(context, maa)` 的 context 需要 `home`（设置目录）。本接口不替 setup 推定下载或人工操作授权。
 
@@ -19,7 +19,7 @@
 
 `remote-control` 只报告已配置或未配置：任何一个配置的 `Gui.RemoteControl.RemoteControlGetTaskEndpointUri` 非空即为已配置（提醒），因为固定版本的 MAA 会轮询该端点，远端可以下发包括抽卡在内的任务，且不经过本项目的写入器。修法执行者是用户：在 MAA 设置里决定是否保留。写入器不管理这些字段，doctor 不提供自动修法，也不输出端点或身份标识。
 
-执行者为 skill 的修法只经 `channel` 所列的现有入口执行：`doctor.ts repair`（遗留写入的两个修法）、`setup.ts prepare`（私有目录骨架）、`preferences.ts set`（首次设置，需要用户给出的选择）、`setup.ts discover|test|apply`（maa-setup 的连接流程，`apply` 仍需它自己的批准原话和关闭确认）、`doctor.ts check --online`（只读查询发布）。doctor 没有第二套写入逻辑。
+执行者为 skill 的修法只经 `channel` 所列的现有入口执行：`doctor.ts repair`（遗留写入的两个修法）、`setup.ts prepare`（私有目录骨架）、`preferences.ts set`（首次设置，需要用户给出的选择）、`setup.ts discover|test|apply`（maa-setup 的连接流程，`apply` 仍需它自己的批准原话和关闭确认）、`doctor.ts check --online`（联网查询发布）。doctor 没有第二套写入逻辑。
 
 `checks` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 setup 及 `credentials.ts check` 是同一个函数（`inspectCredentials`）。这三项另有 `message` 一句说明，`reason` 是 `credential-<状态>` 代码；人类可读输出显示 `message`。检查只读、不解密、不联网，最近记录里也只有状态。它们的修法执行者都是用户：`repair` 的批准列表含 `enter-credential`、`verify-by-use`、`replace-credential` 或 `reenter-credential` 时整体拒绝，返回 `user-manual-repair`，不执行同一请求里的其他修法。状态和修法见 [凭据接口](../../maa-core/references/credentials.md)。
 

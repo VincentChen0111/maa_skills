@@ -1,6 +1,6 @@
 # 训练查询与原生排程
 
-用户交办专精、查询助手或续接已有训练时读取本页。`training-time.ts` 只读；`training-plan.ts` 保存私有记录并调用唯一配置写入器。所有参数经 JSON stdin。按偏好语言转述，JSON 的诊断码不是给用户的游戏规则。
+用户交办专精、查询助手或续接已有训练时读取本页。`training-time.ts` 只读；`training-plan.ts` 保存私有记录并调用唯一配置写入器。所有参数经 JSON stdin。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。按偏好语言转述，JSON 的诊断码不是给用户的游戏规则。
 
 ## 查询与事实
 

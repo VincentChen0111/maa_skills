@@ -3,6 +3,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readPublicJson, type PublicJsonResult, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 
@@ -272,8 +273,7 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv[2] !== 'query') throw new Error('cost-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input: unknown = JSON.parse(raw); const result = await queryOperatorCost(input);
+    const input = await readStdinJson({ maxBytes: null, invalidCode: 'cost-input-invalid' }); const result = await queryOperatorCost(input);
     console.log(object(input).format === 'markdown' ? formatOperatorCostMarkdown(result) : JSON.stringify(result));
-  } catch (error) { const code = error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'cost-input-invalid'; console.error(JSON.stringify({ error: code })); process.exitCode = 1; }
+  } catch (error) { const code = stdinJsonCode(error) ?? (error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'cost-input-invalid'); console.error(JSON.stringify({ error: code })); process.exitCode = 1; }
 }

@@ -1,6 +1,6 @@
 # 关卡运行跟踪
 
-共享入口为 `node <本目录>/../maa-core/scripts/stage-run.ts <action>`，JSON 走标准输入。先读偏好，用已保存语言解释结果。脚本对 MAA 只读：读配置摘要、MAA 自己的 `debug/asst.log` 和 `debug/gui.log`、看进程状态；不启动、不关闭、不点游戏、不操作设备，也不改配置。唯一的例外是换备选的 `switch`（见「换备选」）：判断允许后，经统一写入通道把作业列表换成已批准的备选，写入通道会关闭并重开 MAA；它同样不点游戏、不操作设备，开始仍由用户点。运行记录存在私有目录 `stage-runs/<runId>.json`，换备选的记录在 `stage-runs/switches/`。
+共享入口为 `node <本目录>/../maa-core/scripts/stage-run.ts <action>`，JSON 走标准输入。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。先读偏好，用已保存语言解释结果。脚本对 MAA 只读：读配置摘要、MAA 自己的 `debug/asst.log` 和 `debug/gui.log`、看进程状态；不启动、不关闭、不点游戏、不操作设备，也不改配置。唯一的例外是换备选的 `switch`（见「换备选」）：判断允许后，经统一写入通道把作业列表换成已批准的备选，写入通道会关闭并重开 MAA；它同样不点游戏、不操作设备，开始仍由用户点。运行记录存在私有目录 `stage-runs/<runId>.json`，换备选的记录在 `stage-runs/switches/`。
 
 ## 开始信号
 
@@ -27,7 +27,7 @@
 
 ## 核对和决定
 
-9. `next` 为 `verify` 时运行 `verify`（`{"runId":"<runId>"}`）。它只读：MAA 进程、批准的列表和作业文件、共享 doctor 检查；理智、理智药、源石和关卡进度一律标为未知，不沿用批准时的值，需要时请用户告诉你或重新读取。`verification.blocking` 列出挡住重试的检查（MAA 安装与配置、连接、写入锁等），不为空时只能停下，把这些检查和它们的修法告诉用户；`verification.notBlocking` 列出与重试无关的错误（例如凭据过期、skill 目录联接损坏），不挡重试，但也要告诉用户，修法照 doctor 的说明由用户决定。
+9. `next` 为 `verify` 时运行 `verify`（`{"runId":"<runId>"}`）。它读取 MAA 进程、批准的列表和作业文件，运行共享 doctor 检查，不改 MAA 配置和作业文件；这次核对的结果记进运行记录，doctor 的检查会更新私有目录里的最近检查记录。理智、理智药、源石和关卡进度一律标为未知，不沿用批准时的值，需要时请用户告诉你或重新读取。`verification.blocking` 列出挡住重试的检查（MAA 安装与配置、连接、写入锁等），不为空时只能停下，把这些检查和它们的修法告诉用户；`verification.notBlocking` 列出与重试无关的错误（例如凭据过期、skill 目录联接损坏），不挡重试，但也要告诉用户，修法照 doctor 的说明由用户决定。
 10. 能不能再打（重试、换备选、重新 `start`）只看脚本的判断，`allowedDecisions`、`decide`、`progress` 和 `start` 用的是同一个判断（整批日志），不要自己推。某一项已经进入战斗或到了结算画面、结果却未知（`unresolvedAttempts` 非空，`next` 为 `ask-progress`）时，只能停下：告诉用户哪一关、哪一次结果未知，请用户自己看游戏并说明这一批里这一关到现在一共打完了几次（包括之前的记录），等用户回答后再用 `progress` 原样记下：`{"runId":"<runId>","reference":"<用户原话>","stages":[{"stageId":"<关卡>","completedRuns":<次数>}]}`。不要替用户填次数；用户说不清就停下，不猜。这一批还有记录在跟踪时 `progress` 拒绝（`run-unresolved`）：等它结束再问。问之前先看摘要的 `runsDone`：每关已经记下打完几次（`done`），依据的是哪一次说明（`statement` 里的次数和原话），以及那次说明之后 MAA 又证明了几次三星（`provenSince`）。告诉用户「这一关已经记下 N 次」，请他说明到现在一共打完了几次：这是一个总数，包括之前说明过的次数和之后 MAA 证明的三星，不能只说最近这一把。新的次数少于已经记下的次数、或者少于回调已经证明打完的次数时，`progress` 拒绝（`progress-contradicts-evidence`）：把已记下的次数和 MAA 的证据告诉用户，请他再看一次；记下的次数不会往下改。脚本只会在这次说明之后新开始的记录里，自己加上回调证明的三星。
 11. 核对清楚、也没有未决的结果后 `next` 为 `decide`，由你在 `allowedDecisions` 里选一项并用 `decide` 记录理由：`{"runId":"<runId>","decision":"<选项>","reason":"<理由>"}`。
     - `retry-within-approval`：同一批准范围内重试。先请用户在 MAA 的作业列表里取消勾选已经打完的条目，以及结果未知、用户也说不清的条目（MAA 只在三星时自己取消勾选），确认后再 `start` 并带 `"retryOf":"<runId>"`，然后请用户点开始。`start` 会读 MAA 保存的勾选状态：每关仍勾选的条目不能多于批准次数减去已打完的次数（摘要 `runsDone` 的 `done`：用户最近一次说明的总数，加上那次说明之后新开始的记录里回调证明的三星次数，且不少于这一批回调证明的三星总数），否则拒绝（`finished-items-ticked`），请用户取消勾选后再试。不增加任何药剂或碎石授权，也不改启动方式。一个重试决定只对应一条任务链：重试的任务链开始后，或用户在 `start` 之前自己先点了开始，同一个决定都不能再用。

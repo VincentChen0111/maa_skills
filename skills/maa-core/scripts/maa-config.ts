@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, trainingTaskFields, type TrainingGrant, type TrainingAsset } from './training-config.ts';
@@ -620,9 +621,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     if (process.argv.length !== 3) throw new Error('action-invalid');
     if (process.argv[2] === 'read') console.log(JSON.stringify({ ok: true, configuration: await inspectConfiguration(settings.maaDirectory) }));
     else if (process.argv[2] === 'write' || process.argv[2] === 'preview') {
-      let input = '';
-      for await (const chunk of process.stdin) { input += String(chunk); if (Buffer.byteLength(input) > 1024 * 1024) throw new Error('input-too-large'); }
-      const body = object(JSON.parse(input));
+      const body = object(await readStdinJson({ maxBytes: 1024 * 1024 }));
       // Ticket 30: a preview takes the write's request without the fingerprint it is about to produce.
       const keys = ['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes', ...(process.argv[2] === 'write' ? ['diffFingerprint'] : [])];
       if (Object.keys(body).some(key => !keys.includes(key))) throw new Error('request-invalid');
@@ -646,8 +645,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         if (result.status !== 'complete') process.exitCode = 1;
       }
     } else throw new Error('action-invalid');
-  } catch {
-    console.log(JSON.stringify({ ok: false, status: 'check-required' })); process.exitCode = 1;
+  } catch (error) {
+    // Ticket 26: a request refused while reading standard input reached neither MAA nor a file, so it is a plain rejection.
+    const refused = stdinJsonCode(error);
+    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : { ok: false, status: 'check-required' })); process.exitCode = 1;
   }
 }
 export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess) { return writeConfiguration(request, maa); }

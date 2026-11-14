@@ -5,6 +5,7 @@ import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -407,14 +408,13 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv[2] !== 'query' || process.argv.length > 4 || process.argv[3] !== undefined && process.argv[3] !== '--no-craft') throw new Error('gaps-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const parsed: unknown = JSON.parse(raw);
+    const parsed = await readStdinJson({ maxBytes: null, invalidCode: 'gaps-input-invalid' });
     if (object(parsed) !== parsed) throw new Error('gaps-input-invalid');
     const input = process.argv[3] === '--no-craft' ? { ...object(parsed), mode: 'no-craft' } : parsed;
     const result = await queryCultivationGaps(input);
     console.log(object(input).format === 'markdown' ? formatCultivationGapsMarkdown(result) : JSON.stringify(result));
   } catch (error) {
-    const code = error instanceof Error && /^(gaps|cost)-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'gaps-input-invalid';
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(gaps|cost)-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'gaps-input-invalid');
     console.error(JSON.stringify({ error: code })); process.exitCode = 1;
   }
 }

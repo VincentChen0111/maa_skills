@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { readPrivateFile, type GateResult, type Freshness, type PlanInputs } from './base-plan.ts';
@@ -200,8 +201,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['check', 'apply'].includes(action!)) throw new Error('base-apply-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 1024 * 1024) throw new Error('base-apply-input-invalid'); }
-    const input = JSON.parse(raw) as unknown;
+    const input = await readStdinJson({ maxBytes: 1024 * 1024, tooLargeCode: 'base-apply-input-invalid', invalidCode: 'base-apply-input-invalid' });
     if (action === 'check') {
       const result = await checkBaseApply(input);
       process.stdout.write(JSON.stringify({ ok: result.status === 'ready', ...result }));
@@ -217,6 +217,6 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (result.status !== 'complete' && result.status !== 'unchanged') process.exitCode = 1;
     }
   } catch (error) {
-    process.stdout.write(JSON.stringify({ ok: false, error: code(error) })); process.exitCode = 1;
+    process.stdout.write(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? code(error) })); process.exitCode = 1;
   }
 }

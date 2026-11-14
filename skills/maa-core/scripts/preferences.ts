@@ -2,6 +2,7 @@ import { mkdir, readFile, open, rename, unlink, realpath, stat, link } from 'nod
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { randomUUID } from 'node:crypto';
 
 export type Settings = { language: string | null; languageAsked: boolean; privateDirectory: string; maaDirectory: string | null; server: 'CN' };
@@ -166,10 +167,7 @@ export async function appendPreference(value: unknown, home = settingsHome()): P
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw || '{}'); } catch { throw new InputError('json-required'); }
-    const input = record(parsed);
+    const input = record(await readStdinJson({ maxBytes: null, empty: {}, invalidCode: 'invalid-input' }));
     if (process.argv[2] === 'read') console.log(JSON.stringify({ ok: true, ...startup(await readSettings(), String(input.currentLanguage ?? 'zh-CN')) }));
     else if (process.argv[2] === 'set') {
       const settings = await updateSettings(input);
@@ -177,8 +175,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     } else if (process.argv[2] === 'append') { await appendPreference(input); console.log(JSON.stringify({ ok: true, appended: true })); }
     else throw new InputError('unknown-action');
   } catch (error) {
-    const code = error instanceof InputError ? 'invalid-input'
-      : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : 'preferences-check-required';
+    const code = stdinJsonCode(error) ?? (error instanceof InputError ? 'invalid-input'
+      : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : 'preferences-check-required');
     console.error(JSON.stringify({ ok: false, error: code }));
     process.exitCode = 1;
   }
