@@ -53,9 +53,9 @@ node scripts/eval-batch.ts compare <之前的批次目录> <之后的批次目�
 | `payload-script-missing` | 场景命令模式或期望调用里写的 `node *<脚本>.ts …`，在装入的 skill 里找不到这个文件名；附脚本文件名 |
 | `payload-data-commit-missing` | 网络夹具地址里固定的公开数据提交，在装入的 skill 文本里找不到（产品会去请求别的提交，夹具只回答固定的那个，结果说明不了什么）；附提交号 |
 
-载荷里有这个脚本、但功能还没做的场景照常运行；「前」失败、「后」通过不算回归。`run` 的退出码只有在批次完成、全部通过并且没有拒绝的场景时为 0。
+载荷里有这个脚本、但功能还没做的场景照常运行；「前」失败、「后」通过不算回归。这三种代码不看评分契约：评分要的记录或动作晚于载荷时（例如 25 的待执行记录 `versions`、30 的预览与差异指纹），载荷里有脚本也一定失败，入口不拒绝；这样一对比较什么也说明不了，发布验收计划不安排，逐对记「未验证」（见 [26 发布验证记录](release-verification.md)「当前评分器下「前」载荷能不能通过」）。`run` 的退出码只有在批次完成、全部通过并且没有拒绝的场景时为 0。
 
-**比较两个载荷**：`compare` 先比两份批次清单，只允许载荷不同。宿主、宿主 CLI 版本、模型、认证方式和运行器指纹（评分器、夹具、宿主适配、脱敏、场景目录等运行器源码）必须相同，两边都要记了载荷来源，任何一边是宿主替身也不行；不相同就是无法比较，并列出静态原因（`host-differs`、`cli-version-differs`、`model-differs`、`auth-differs`、`runner-differs`、`payload-unrecorded:<边>`、`fingerprint-missing:<边>`、`host-double:<边>`）。重跑批次与之后的批次比，条件同上，载荷摘要也必须相同（`rerun-payload-differs`，前缀 `rerun-` 的其他原因同理）。然后逐条记录比较场景身份（见下文「固定版本与回归判断」），场景身份不同的场景记 `scenario-identity-differs:<场景>`。`--scenarios` 把两边（和重跑）都限定在一个子集上（场景 id、组名或 `all`，逗号分隔），这样几次比较可以共用一个包含全部场景的「后」批次；子集里的场景两边都要有完成的记录，某一边拒绝过的记 `scenario-refused:<边>:<场景>`，没跑过的记 `scenario-not-run:<边>:<场景>`。没有子集时两边场景集合不同记 `scenario-sets-differ`。输出另有每个场景前后的评分状态、`passToFail`（之前通过、之后失败的场景，各需单独重跑三次）和两边的载荷来源；重跑和 pass→fail 的规则不变。
+**比较两个载荷**：`compare` 先比两份批次清单，只允许载荷不同。宿主、宿主 CLI 版本、模型、认证方式和运行器指纹（评分器、夹具、宿主适配、脱敏、场景目录等运行器源码）必须相同，两边都要记了载荷来源，任何一边是宿主替身也不行；不相同就是无法比较，并列出静态原因（`host-differs`、`cli-version-differs`、`model-differs`、`auth-differs`、`runner-differs`、`payload-unrecorded:<边>`、`fingerprint-missing:<边>`、`host-double:<边>`）。重跑批次与之后的批次比，条件同上，载荷摘要也必须相同（`rerun-payload-differs`，前缀 `rerun-` 的其他原因同理）。然后逐条记录比较场景身份（见下文「固定版本与回归判断」），场景身份不同的场景记 `scenario-identity-differs:<场景>`。`--scenarios` 把两边（和重跑）都限定在一个子集上（场景 id、组名或 `all`，逗号分隔），这样几次比较可以共用一个包含它们全部场景的「后」批次；子集里的场景两边都要有完成的记录，某一边拒绝过的记 `scenario-refused:<边>:<场景>`，没跑过的记 `scenario-not-run:<边>:<场景>`。没有子集时两边场景集合不同记 `scenario-sets-differ`。输出另有每个场景前后的评分状态、`passToFail`（之前通过、之后失败的场景，各需单独重跑三次）和两边的载荷来源；重跑和 pass→fail 的规则不变。
 
 ## 两道预检
 

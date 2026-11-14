@@ -6,7 +6,7 @@ import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { batchRecords, compareBatches, runBatch } from '../scripts/eval-batch.ts';
+import { batchRecords, compareBatches, runBatch, runnerFingerprint } from '../scripts/eval-batch.ts';
 import { materializePayload, payloadDigest, payloadRecordName } from '../scripts/eval-payload.ts';
 import { entryId, scenarioCatalog, selectScenarios } from '../scripts/eval-scenarios.ts';
 import type { RunRecord } from '../scripts/evaluation.ts';
@@ -41,7 +41,8 @@ const git = (cwd: string, ...args: string[]) => {
 const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(cwd, 'scripts/eval-batch.ts'), ...args], { cwd, encoding: 'utf8', windowsHide: true });
 
 // A copy of the framework in its own Git repository with two commits. The older one is an "old payload": it lacks maa-setup and
-// base-plan.ts, pins another commit for one public data source, and marks maa-core's SKILL.md. The newer one is this checkout.
+// base-plan.ts, pins another commit for one public data source, and marks maa-core's SKILL.md and its own copies of the three
+// shared modules the graders and the runner fingerprint read (those stay the checkout's). The newer one is this checkout.
 const marker = `PayloadMarker${Math.random().toString(36).slice(2, 8)}`;
 const crossCommit = 'a07b4255b43a7171e519b26a13ddb12668a2cf0a';
 const copy = join(root, 'framework');
@@ -55,9 +56,14 @@ assert.ok(costText.includes(crossCommit), 'operator-cost.ts pins the cross data 
 await writeFile(cost, costText.replaceAll(crossCommit, '2'.repeat(40)));
 await rm(plan); await rm(join(copy, 'skills/maa-setup'), { recursive: true });
 await writeFile(coreSkill, `${coreSkillText}\n${marker}\n`);
+const sharedModules = await Promise.all(['preferences.ts', 'consumption-grant.ts', 'config-projection.ts'].map(async (name) => {
+  const path = join(copy, 'skills/maa-core/scripts', name); return { path, text: await readFile(path, 'utf8') };
+}));
+for (const { path, text } of sharedModules) await writeFile(path, `${text}\n// ${marker}\n`);
 git(copy, 'add', '-A'); git(copy, 'commit', '--quiet', '-m', 'old payload');
 const oldCommit = git(copy, 'rev-parse', 'HEAD');
 await writeFile(cost, costText); await writeFile(plan, planText); await writeFile(coreSkill, coreSkillText);
+for (const { path, text } of sharedModules) await writeFile(path, text);
 await cp(join(repository, 'skills/maa-setup'), join(copy, 'skills/maa-setup'), { recursive: true });
 git(copy, 'add', '-A'); git(copy, 'commit', '--quiet', '-m', 'new payload');
 const newCommit = git(copy, 'rev-parse', 'HEAD');
@@ -168,6 +174,8 @@ test('a batch on a payload installs the payload\'s skills, refuses what it canno
   assert.deepEqual(manifest.refused, [{ scenario: 'setup-inspect-existing', code: 'payload-skill-missing', detail: 'maa-setup' },
     { scenario: 'base-report-default-review', code: 'payload-script-missing', detail: 'base-plan.ts' }]);
   assert.deepEqual(manifest.runs.map((run) => run.scenario), ['core-language']);
+  // The payload's own preferences.ts, consumption-grant.ts and config-projection.ts differ; the runner fingerprint is still the checkout's.
+  assert.equal(manifest.fingerprint.runner, await runnerFingerprint(), 'the runner fingerprint never reads the payload');
   assert.equal((await readFile(journal, 'utf8')).trim().split('\n').length, 1, 'the host ran once, for the one servable scenario');
   assert.deepEqual((await batchRecords(directory)).map((record) => record.scenario), ['core-language'], 'a refused scenario is neither pass nor fail');
   const made = JSON.parse(await readFile(join(oldPayload, payloadRecordName), 'utf8'));
