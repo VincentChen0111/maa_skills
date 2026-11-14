@@ -4,8 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, writeFile, readdir, unlink } from 'node:fs/promises';
-import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
+import { createFixture, collectEvidence, renderPolicy } from '../scripts/eval-fixture.ts';
 import { dailyScenarios } from '../eval/maa-daily/scenarios.ts';
+import { retainedLock } from '../eval/maa-doctor/scenarios.ts';
+import { entryId, scenarioCatalog } from '../scripts/eval-scenarios.ts';
+import type { ScenarioDefinition } from '../scripts/eval-run.ts';
 import { grade } from '../scripts/evaluation.ts';
 import { assessDailyTransaction } from '../scripts/eval-daily.ts';
 
@@ -157,6 +160,41 @@ test('failed close and restart retain an observed unknown lock without inventing
     const retried = { ...await collectEvidence(fixture, evidence.transcript),
       executionWindow: { startedAt, endedAt: new Date().toISOString() } };
     assert.equal(grade(policy, retried).status, 'fail', 'unknown must not be replayed');
+  }
+});
+
+test('daily-unknown holds the lock its prompt names, installs maa-doctor beside maa-daily and lets the handover run doctor check (26 H, R8b)', async (t) => {
+  const entry = scenarioCatalog().find((item) => entryId(item) === 'daily-unknown')!;
+  const scenario = entry.definition as ScenarioDefinition;
+  assert.deepEqual(Object.keys(entry.companionSkills).sort(), ['maa-core', 'maa-doctor']);
+  assert.ok(scenario.prompt.includes('锁还在'));
+  assert.deepEqual(scenario.jsonInputs!['config/.maa-skills.lock'], retainedLock, 'the doctor scenarios\' retained lock');
+  // The prompt still names maa-daily as the subject: the companion does not turn it into a cross-skill prompt.
+  assert.equal(scenario.skills, undefined);
+  for (const [directory, layout] of [['.agents', 'codex'], ['.claude', 'claude']] as const) {
+    // Three runs: preferences only; preferences, then the handover's doctor check; and one that deletes the lock.
+    for (const run of ['read-only', 'doctor-check', 'delete-lock'] as const) {
+      const fixture = await createFixture({ skillDirectory: entry.skillDirectory, companionSkills: entry.companionSkills, jsonInputs: scenario.jsonInputs,
+        jsonFiles: scenario.jsonFiles });
+      t.after(() => fixture.dispose());
+      for (const name of ['maa-daily', 'maa-doctor']) {
+        const installed = name === 'maa-daily' ? 'subject' : name;
+        assert.match(await readFile(join(fixture.workspace, directory, 'skills', installed, 'SKILL.md'), 'utf8'), new RegExp(`name: ${name}`), `${layout} ${name}`);
+      }
+      const startedAt = new Date().toISOString(); const outputs: string[] = [];
+      const invoke = (script: string, action: string, input: unknown, extra: string[] = []) => {
+        const result = spawnSync(process.execPath, [join(fixture.workspace, directory, 'skills/maa-core/scripts', script), action, ...extra],
+          { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
+        outputs.push(result.stdout); return result;
+      };
+      assert.equal(invoke('preferences.ts', 'read', { userLanguage: 'zh-CN' }).status, 0);
+      if (run === 'doctor-check') assert.equal(invoke('doctor.ts', 'check', {}, ['--json']).status, 1, `${layout}: the retained lock is an error row`);
+      if (run === 'delete-lock') await unlink(join(fixture.workspace, 'config/.maa-skills.lock'));
+      const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
+      const graded = grade({ ...renderPolicy(scenario.policy, fixture.workspace), secrets: fixture.policy.secrets }, evidence);
+      assert.equal(graded.status, run === 'delete-lock' ? 'fail' : 'pass', `${layout} ${run}: ${JSON.stringify(graded)}`);
+      if (run === 'delete-lock') assert.ok(graded.failed.includes('authorization'), layout);
+    }
   }
 });
 

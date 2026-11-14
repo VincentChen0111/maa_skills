@@ -196,17 +196,19 @@ test('configuration field checks validate the fields this project writes and nam
 });
 
 /**
- * Issue #82 (2026-11-14): the switches the pinned MAA GUI (v6.21.4) saves when the user turns stone on without "allow saving".
- * The `UseStone` setter in FightTaskUserControlModel.cs stores null for stone, sets MedicineCount to 999 and, when medicine was off,
- * stores the same null for medicine; after an MAA restart `OnDeserialized` resets only UseStone to false. `UseMedicine` is `bool?`
- * in MAA and the read summary and the consumption predicate treat null as on (spending: tests/maa-config.test.ts), so the field
- * check accepts it: no blocking error with a misleading "invalid field" reason. Other non-boolean medicine switches stay errors.
+ * Issue #82 (2026-11-14), corrected for Issue #89: explicit null switches. When the user turns stone on without "allow saving",
+ * the `UseStone` setter in FightTaskUserControlModel.cs of the pinned MAA GUI (v6.21.4) sets stone to null in memory ("this run
+ * only"), sets MedicineCount to 999 and, when medicine was off, sets medicine to the same null. MAA saves with `WhenWritingNull`,
+ * so these nulls never reach the file (the omitted keys are the next test); an explicit null in the file can only come from a
+ * write outside MAA, and MAA reads it as a `bool?` null (after a restart `OnDeserialized` resets only UseStone to false). The
+ * read summary and the consumption predicate treat null as on (spending: tests/maa-config.test.ts), so the field check tolerates
+ * it: no blocking error with a misleading "invalid field" reason. Other non-boolean medicine switches stay errors.
  */
 const guiStoneOnStates = [
-  ['as the GUI saves it', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
-  ['after an MAA restart', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
+  ['explicit nulls, as the GUI holds them in memory', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
+  ['explicit nulls after an MAA restart reads them', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
 ] as const;
-test('the medicine and stone switches the MAA GUI saves when stone is turned on without allow-save are valid fields and block no stage retry', async (t) => {
+test('explicit null medicine and stone switches (the GUI memory state when stone is turned on without allow-save) are valid fields and block no stage retry', async (t) => {
   const fight = { $type: 'FightTask', TaskType: 'Fight', IsEnable: true, StoneCount: 0 };
   for (const [name, state] of guiStoneOnStates) await t.test(name, async (t) => {
     const f = await fixture(t);
@@ -234,10 +236,27 @@ test('the medicine and stone switches the MAA GUI saves when stone is turned on 
 });
 
 /**
+ * Issue #89 (2026-11-14): what the pinned MAA actually writes after that GUI action. ConfigFactory.cs saves with
+ * `WhenWritingNull`, so both null switch keys are omitted and MedicineCount 999 is written; after a restart MAA reads both
+ * switches as false. A missing switch was already a valid field (`Object.hasOwn`); this pins that state.
+ */
+test('the medicine and stone switch keys MAA omits on save after stone is turned on without allow-save are valid fields and block no stage retry', async (t) => {
+  const f = await fixture(t);
+  const config = structuredClone(f.config);
+  config.Configurations[profile].TaskQueue = [{ $type: 'FightTask', TaskType: 'Fight', IsEnable: true, StoneCount: 0, MedicineCount: 999, UseStoneAllowSave: false }];
+  await writeFile(f.file, JSON.stringify(config));
+  const result = await runChecks(f.context, f.maa, quiet);
+  assert.deepEqual([row(result, 'configuration-fields').status, row(result, 'configuration-fields').reason], ['normal', 'managed-fields-valid']);
+  assert.equal(blockingChecks(result.checks, 'stage-retry').blocking.includes('configuration-fields'), false);
+  assert.equal(result.exitCode, windows ? 0 : 1);
+});
+
+/**
  * Merge of 27 with 10 (2026-11-14): the field check keeps 10's scope (task, medicine and timer fields). Stone and expiring
- * medicine are not judged; the read summary classifies them through the consumption predicate. Corrected for Issue #82: the
- * state the GUI saves when stone is turned on without "allow saving" is the test above. The first task here (stone null,
- * medicine off) is not a state the GUI's switch setters produce; it stays as an extra case: the stone switch is not judged at all.
+ * medicine are not judged; the read summary classifies them through the consumption predicate. Corrected for Issues #82 and #89:
+ * MAA never writes a null switch to the file (it omits null keys on save); the GUI's in-memory nulls and the omitted keys MAA
+ * writes are the two tests above. The first task here (stone null, medicine off) is not even a state the GUI's switch setters
+ * produce; it stays as an extra case of an explicit null written outside MAA: the stone switch is not judged at all.
  */
 test('stone and expiring-medicine states are not configuration-field errors and block nothing', async (t) => {
   const f = await fixture(t);

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createFixture, collectEvidence, renderPolicy, type MaaProcessMode } from './eval-fixture.ts';
 import { normalizeHost, grade, scenarioIdentity, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
-import { claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, probeVersion, reportedUsage,
+import { claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, hostExecutable, probeVersion, reportedUsage,
   type RunReason } from './eval-host.ts';
 import { childEnvironment, isReadProtectionPass, loginDirectoryRefusal, type ReadProtectionPass } from './eval-auth.ts';
 import { artifactWriter } from './eval-redact.ts';
@@ -26,15 +26,21 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
  */
 export const scenarioHashSources = ['./evaluation.ts', './eval-fixture.ts', './eval-run.ts', './eval-daily.ts', './eval-host.ts', './eval-auth.ts', './eval-transaction.ts',
   './eval-redact.ts', '../eval/report-observer.ts', '../eval/base-plan-observer.ts'];
-/** Harness files the fixture installs next to the workspace (observers, process and network doubles); each one's text is part of the scenario hash. */
-export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs', '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs'];
+/**
+ * Harness files the fixture installs next to the workspace (observers, process and network doubles, the reviewer double and its
+ * shims); each one's text is part of the scenario hash.
+ */
+export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-observer.mjs', '.eval-maa-process.mjs', '.eval-setup-boundary.mjs', '.eval-network-fixture.mjs',
+  '.eval-review-double.mjs', '.eval-bin/codex.cmd', '.eval-bin/codex'];
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.
+ * `companions` names repository skills installed beside the subject under their own names (the batch entry resolves them, like
+ * its group's companions); unlike `skills`, the prompt still names only the subject (daily-unknown hands over to maa-doctor).
  * `chatSecrets`: synthetic values the prompt itself pastes into the chat; they are graded like the fixture secret.
  */
 export type ScenarioDefinition = { id: string; prompt: string; policy: Omit<Policy, 'secrets'>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; commands?: string[];
-  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[]; chatSecrets?: string[] };
+  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[]; companions?: string[]; chatSecrets?: string[] };
 /**
  * plan: the maintainer's plan login in the dedicated directory; tool-enabled runs need a pass object from readProtectionCheck.
  * The API-key mode is an explicit opt-in that forwards only MAA_EVAL_* keys. host-double: only `eval/host-double.mjs`, never a model.
@@ -76,7 +82,9 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     // form (the first); the deny rules, the grader's secret paths and the redaction take every form.
     const loginForms = auth.mode === 'plan' ? auth.readProtection?.loginForms : undefined;
     const loginDirectory = loginForms?.[0];
-    const version = probeVersion(executable, executableArgs, fixture.workspace, fixture.env);
+    // The host is resolved outside the fixture, never through the reviewer shims on the fixture PATH (`hostExecutable`).
+    const binary = hostExecutable(executable, fixture.env, fixture.root);
+    const version = binary ? probeVersion(binary, executableArgs, fixture.workspace, fixture.env) : { available: false, version: 'unavailable', double: false };
     let raw = ''; let stderr = ''; let exitCode: number | null = null;
     let executionWindow: ExecutionWindow | undefined;
     let reason: RunReason = version.available ? 'not-run' : 'host-unavailable';
@@ -103,7 +111,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       else {
         // Never copy the caller's auth files: plan login is used in place in its dedicated directory, API keys only from MAA_EVAL_*.
         const startedAt = new Date().toISOString();
-        const execution = spawnSync(executable, [...executableArgs, ...args], { cwd: fixture.workspace, env, input: prompt, encoding: 'utf8',
+        const execution = spawnSync(binary!, [...executableArgs, ...args], { cwd: fixture.workspace, env, input: prompt, encoding: 'utf8',
           timeout: options.timeoutMs ?? defaultTimeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
         executionWindow = { startedAt, endedAt: new Date().toISOString() };
         raw = execution.stdout ?? ''; stderr = execution.stderr ?? ''; exitCode = execution.status;
@@ -141,7 +149,8 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       ...(executionWindow ? { durationMs: Date.parse(executionWindow.endedAt) - Date.parse(executionWindow.startedAt) } : {}),
     };
     // Paths are replaced by fixed placeholders before anything reaches disk.
-    const save = artifactWriter(artifactDirectory, { ...(loginForms ? { loginDirectory: loginForms } : {}), fixture, executable, ...(options.payloadDirectory ? { payload: options.payloadDirectory } : {}) });
+    const save = artifactWriter(artifactDirectory, { ...(loginForms ? { loginDirectory: loginForms } : {}), fixture, executable: binary ?? executable,
+      ...(options.payloadDirectory ? { payload: options.payloadDirectory } : {}) });
     await save('run.json', JSON.stringify(record, null, 2));
     await save('evidence.json', JSON.stringify(evidence, null, 2));
     await save('host.jsonl', raw);

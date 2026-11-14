@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
+import { delimiter, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Host } from './evaluation.ts';
 
 /** Version output prefix of `eval/host-double.mjs`; a run whose host reports it is a double, never a host success. */
@@ -46,13 +48,21 @@ export function claudeSettings(loginDirectories: readonly string[] = []): string
 /** `loginDirectories`: every form of the login directory the runner holds (`loginDirectoryForms`), each denied. */
 export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectories?: readonly string[] };
 /**
- * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base and
- * one deny entry per form of the login directory. `exec` and the read-protection enforcement probe (`codex sandbox`) both take it from here.
+ * Variables the sandboxed shell never inherits (26 H, R6): the host's own process needs `CODEX_HOME` to find the plan login, which
+ * the runner points at the login directory, but a command the model runs must not see it (a first real run listed it). The Claude
+ * configuration variable is excluded too, so neither host's configuration directory reaches a Codex shell.
+ */
+export const sandboxExcludedVariables = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR'];
+/**
+ * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base, one
+ * deny entry per form of the login directory and the shell environment exclusion. `exec` and the read-protection enforcement
+ * probe (`codex sandbox`) both take it from here.
  */
 export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }): string[] {
   return [...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
     '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
-    ...(options.loginDirectories?.length ? ['-c', `permissions.maa_eval.filesystem={${options.loginDirectories.map((directory) => `'${directory}'='deny'`).join(',')}}`] : [])];
+    ...(options.loginDirectories?.length ? ['-c', `permissions.maa_eval.filesystem={${options.loginDirectories.map((directory) => `'${directory}'='deny'`).join(',')}}`] : []),
+    '-c', `shell_environment_policy.exclude=[${sandboxExcludedVariables.map((name) => `"${name}"`).join(',')}]`];
 }
 /** `codex sandbox` running one command under exactly the profile `exec` gets for the same options; no model is involved. */
 export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }, command: string[]): string[] {
@@ -170,6 +180,34 @@ export function claudeIsolationProblems(raw: string, expected: { tools: string[]
   return problems;
 }
 
+
+/**
+ * The host binary the runner itself starts for a run (26 H, R5). The fixture puts the reviewer shims first on the PATH the model's
+ * shell inherits; the runner never starts its host through them. A path (absolute or with a directory part) is used as given unless
+ * it lies inside the fixture; a bare name is looked up on the PATH entries outside the fixture the way the process spawner looks it
+ * up (on Windows the name itself when it has an extension, then with .com and .exe appended; elsewhere an executable file of that
+ * name). Undefined when nothing outside the fixture matches: the host is then unavailable and nothing is started.
+ */
+export function hostExecutable(executable: string, env: NodeJS.ProcessEnv, fixtureRoot: string): string | undefined {
+  const root = resolve(fixtureRoot);
+  const inside = (path: string) => { const from = relative(root, resolve(path)); return !from || !from.startsWith('..') && !isAbsolute(from); };
+  if (isAbsolute(executable) || /[\\/]/.test(executable)) return inside(executable) ? undefined : resolve(executable);
+  const windows = process.platform === 'win32';
+  const names = windows ? [...(extname(executable) ? [executable] : []), `${executable}.com`, `${executable}.exe`] : [executable];
+  for (const entry of (env.PATH ?? env.Path ?? '').split(delimiter)) {
+    const directory = entry.replace(/^"(.*)"$/, '$1');
+    if (!directory || !isAbsolute(directory) || inside(directory)) continue;
+    for (const name of names) {
+      const candidate = join(directory, name);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        if (!windows) accessSync(candidate, constants.X_OK);
+        return candidate;
+      } catch { /* not here */ }
+    }
+  }
+  return undefined;
+}
 
 export function probeVersion(executable: string, executableArgs: string[], cwd: string, env: NodeJS.ProcessEnv): { available: boolean; version: string; double: boolean } {
   const result = spawnSync(executable, [...executableArgs, '--version'], { cwd, env, encoding: 'utf8', timeout: 10_000, windowsHide: true });

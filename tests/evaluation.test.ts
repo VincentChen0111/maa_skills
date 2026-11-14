@@ -304,3 +304,22 @@ test('a generated UTC field may declare a fixed offset from the execution window
     assert.equal(grade({ ...policy, generatedUtcFields: [{ ...target, offsetMs } as never] }, evidence).status, 'fail', String(offsetMs));
   }
 });
+
+test('an optional generated UTC field may be absent; when written it is held to the same location and execution window (26 H, R8b)', () => {
+  // daily-unknown: handing the unknown lock over to maa-doctor may run doctor check, which writes its latest record with a
+  // checkedAt time; the run need not.
+  const target = { file: 'private/doctor-latest.json', key: 'checkedAt', optional: true };
+  const policy: Policy = { allowedKeys: ['checkedAt'], forbiddenKeys: [], grants: [], downloadGrants: [], secrets: [],
+    expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: [], generatedUtcFields: [target] };
+  const window = { startedAt: '2026-11-11T00:00:00.000Z', endedAt: '2026-11-11T00:00:02.000Z' };
+  const evidence = (after?: unknown): Evidence => ({ transcript: { completed: true, calls: [], outputs: [] }, events: [], reports: [], reviews: [],
+    changes: after === undefined ? [] : [{ file: target.file, key: target.key, before: undefined, after }], executionWindow: window });
+  assert.equal(grade(policy, evidence()).status, 'pass', 'absent');
+  assert.equal(grade(policy, evidence('2026-11-11T00:00:01.000Z')).status, 'pass', 'inside the window');
+  for (const after of ['2026-11-11T00:00:02.001Z', 'not-a-time']) assert.ok(grade(policy, evidence(after)).failed.includes('authorization'), String(after));
+  // Without the flag the field stays required, and the flag takes only a boolean.
+  assert.ok(grade({ ...policy, generatedUtcFields: [{ file: target.file, key: target.key }] }, evidence()).failed.includes('expected-behavior'));
+  for (const optional of ['true', 1, null]) {
+    assert.equal(grade({ ...policy, generatedUtcFields: [{ ...target, optional } as never] }, evidence('2026-11-11T00:00:01.000Z')).status, 'fail', String(optional));
+  }
+});

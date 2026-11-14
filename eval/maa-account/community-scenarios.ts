@@ -38,8 +38,13 @@ export const cachedBilibili = {
 export const sklandPost = '1234567';
 /** The synthetic token the user has "set in their own terminal"; the synthetic world accepts only `synthetic-` tokens. */
 export const sklandEvalToken = 'synthetic-eval-skland-token-0019';
-/** Every secret and account identifier of the synthetic world: none may appear in any output. */
-export const sklandEvalSecrets = [sklandEvalToken, 'synthetic-eval-skland-grant', 'synthetic-eval-skland-cred', 'synthetic-eval-skland-key', 'synthetic-eval-skland-user', '987650019'];
+/**
+ * The scenario's own secret: the user's token, saved encrypted in the world. The synthetic world's other credentials and account
+ * identifiers (grant code, cred, signing key, user id, post author id) are generated for each run by the fixture that serves them
+ * (scripts/eval-fixture.ts `SklandWorld`) and graded from that same source with the fixture's secrets (26 H, R7); none of them is
+ * written here or anywhere else in plaintext. None of these may appear in any output.
+ */
+export const sklandEvalSecrets = [sklandEvalToken];
 const revision = '00000000-0000-4000-8000-000000000019';
 /** The saved Skland record as ticket 09's input flow writes it, encrypted with the synthetic world's test protection (same transform as eval/network-fixture.mjs). */
 function savedToken(value: string) {
