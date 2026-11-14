@@ -17,6 +17,7 @@
 | skills 方式只检查六个产品目录（`maa-core`、`maa-help`、`maa-setup`、`maa-account`、`maa-daily`、`maa-doctor`），宿主目录里的其他 skill 不检查；宿主自己的 `.git` 目录不检查 | 宿主的 skill 目录里本来就有别的 skill（例如 Codex 的 `.system`）；`.git` 是宿主克隆用的版本库数据，规格的禁含清单里没有它 |
 | 评测计划里「前」的载荷：ticket X 新增的场景用 X 自己合并后的载荷，X 影响到的已有场景用 X 合并前一个 main 提交；「后」一律是最终候选载荷。29 按工单原文用 29 合并前的载荷 | 工单的「前后」写法有几种（「同版本前后」「29 合并前后」「受影响…前后」），这条规则把每一种都落到一个具体提交上，并且对新增场景也有可比的「前」 |
 | 人工核实的场景指纹取被核实那份 `run.json` 的 `scenarioHash`，并要求它等于同一次 `compare` 另一侧同一宿主、同一场景那份；证据摘要是核实者读的四个落盘文件（`run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`）各自的 sha256，核实结束时重算相同；`evidenceHash` 不用来核对。第 1 轮审查后按协调者的处理意见改定 | 批次清单里没有逐场景的指纹，仓库也没有在运行之外重算 `scenarioIdentity` 的工具；`evidenceHash` 是脱敏前的摘要，落盘文件经过脱敏和重新排版，一般重算不出来。见「人工核实清单与记录格式」的演练 |
+| 人工核实第 3 步按载荷批次和 `compare` 现在的输出字段写：`overall.reasons` 里有批次条件的原因（`batchIncomparability`）或不带场景名的整组原因时，这一行每一份都记「无法判断」；有以这个场景结尾的原因、或 `scenarios[]` 里这一条是 `incomparable` 时，这一份记「无法判断」；只以别的场景结尾的原因不影响这一份的核实，但这一行的「分数不降」不成立。B 部分处理 A 部分第 1 轮审查转来的意见时定（2026-11-14） | 批次条件的原因说明两批不只差载荷，整组都不能配对；一个场景身份变了只说明那个场景不能配对，别的场景的配对和指纹仍然成立。任何场景不可比时工单都不许发布，这由「分数不降」那一半照旧阻止，不靠把别的场景的核实记成「无法判断」 |
 | 两个临时宿主的原生安装从本地仓库安装，不从 GitHub | 本分支没有推送（构建规则不许推送），GitHub 上没有这个提交；本地安装用的仍是宿主自己的安装器，差别只在来源。最终验收要在发布载荷的公开提交上重做 |
 
 ## 版本一致与标签
@@ -175,13 +176,18 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 ### 流程
 
 1. 一个批次跑完、`compare` 给出结论之后，对每一份**完成且机器评分通过**的运行记录（每个场景、每个宿主各一份，重跑的每一次也各一份）做人工核实。机器评分不通过、未验证或被中断的运行不做人工核实，它们已经阻止发布。
-2. 核实者只读本机批次目录 `.tmp/evaluations/batch-*/` 里的批次清单 `manifest.json`，和这份运行目录 `run-*/` 里的 `run.json` 与三类证据：
+2. 核实者只读本机批次目录 `.tmp/evaluations/batch-*/` 里的批次清单 `manifest.json`、计划表那一行 `compare` 的输出，和这份运行目录 `run-*/` 里的 `run.json` 与三类证据：
    - **宿主原始记录**：`host.jsonl`，宿主自己打印的模型回复和工具调用；`stderr.txt`，宿主的标准错误输出；
    - **归一化证据**：`evidence.json` 的 `transcript`（归一化的回复和工具调用）、`events`（观察器记录的实际脚本调用、动作和退出码）、`daily`、`reports`、`reviews`、`approvals`、`executionWindow`；
    - **文件差异**：`evidence.json` 的 `changes`（运行前后工作区文件的差异）。
-3. 逐项核实之前先做下面三项核对，任何一项对不上，这份运行的每一项都记「无法判断」：
-   - **找对运行**：`manifest.json` 的 `runs[]` 里这个场景的那一条给出运行目录和 `id`。`run.json` 的 `id`、`scenario` 与这一条相同，`payloadFingerprint` 等于清单的 `fingerprint.payload`，`run.json` 和清单都没有 `double: true`（宿主替身的记录从来不算验收）。
-   - **场景指纹**：取 `run.json` 的 `scenarioHash`，照抄进记录。它必须等于同一次 `compare` 另一侧批次里同一宿主、同一场景那份 `run.json` 的 `scenarioHash`；有重跑批次时，重跑的每一份也相同。`compare` 对这个场景也不能报 `incomparable`：`compareRuns` 比较前后两份时核对的就是 `scenarioHash`，只是输出里不打印指纹，所以记录里的指纹从 `run.json` 抄。批次清单里没有逐场景的指纹。也不从检出重算 `scenarioIdentity`：它的输入有按宿主渲染的提示词和夹具在运行时生成的替身文件，仓库没有在运行之外重算它的工具。
+3. 逐项核实之前先做下面三项核对，任何一项对不上，这份运行的每一项都记「无法判断」。字段名是 `scripts/eval-batch.ts`（批次清单、`compare` 的输出）和 `scripts/evaluation.ts`（`run.json`、`batchIncomparability`、`compareRuns`）现在写出的；前后两批按「Codex 评测计划」都带 `--payload`，在同一个冻结的检出里跑，只换载荷：
+   - **找对运行**：`manifest.json` 的 `runs[]` 里，`scenario` 是这个场景、`id` 等于 `run.json` 的 `id` 的那一条给出运行目录 `directory`，它的 `reason` 是 `completed`、`grade` 是 `pass`（重跑批次里同一场景有三条，各自核对）。`run.json` 的 `id`、`scenario` 与这一条相同，`payloadFingerprint` 等于这份清单的 `fingerprint.payload`；`run.json` 和清单都没有 `double: true`（宿主替身的记录从来不算验收）。清单的 `payload` 是 `"source": "commit"`，`commit` 是这一边该用的提交（「后」是最终候选，「前」是计划表那一行的提交），`digest` 等于做这个载荷时 `payload` 命令输出的内容摘要。`fingerprint.payload` 按这一批选的场景和装入的 skill 算，前后两批本来就不同，不跨批比较。
+   - **场景指纹与可比**：取 `run.json` 的 `scenarioHash`，照抄进记录。它必须等于同一次 `compare` 另一侧批次里同一宿主、同一场景那份 `run.json` 的 `scenarioHash`；有重跑批次时，重跑的每一份也相同。这次 `compare`（带计划表那一行的 `--scenarios`）的输出还要满足三条：
+     - 批次层面只差载荷：`overall.reasons` 里没有批次条件的原因。它们由 `batchIncomparability` 给出：两份清单的 `host` 和 `fingerprint` 的 `hostVersion`、`model`、`auth`、`runner` 都要相同，两边都记了 `payload`，哪边都不是宿主替身，否则是 `host-differs`、`cli-version-differs`、`model-differs`、`auth-differs`、`runner-differs`、`payload-unrecorded:<边>`、`fingerprint-missing:<边>`、`host-double:<边>`；带重跑批次时还有 `rerun-` 开头的同类原因和 `rerun-payload-differs`。`overall.reasons` 里也不能有不带场景名的整组原因（`compareRuns` 的 `scenario-sets-differ`、`mixed-payload:<边>`、`record-incomplete`、`duplicate-record`、`duplicate-scenario`、`rerun-unmatched`、`host-double`、`no-after-records`）。`overall.status` 不是 `incomparable` 时 `overall.reasons` 为空，这三条都自动满足。
+     - 这个场景两边都跑了：`overall.reasons` 里没有 `scenario-refused:<边>:<这个场景>`、`scenario-not-run:<边>:<这个场景>`。「前」没有这个场景的记录时，`scenarios[]` 里这一条按「之前为空」判定，不报 `incomparable`，所以这一条要看 `overall.reasons`。
+     - 这个场景的记录可比：`scenarios[]` 里 `host`、`scenario` 与这份相同的那一条，`status` 不是 `incomparable`，`reasons` 为空。`compareRuns` 逐条核对两份记录的模型、`hostVersion`、`scenarioHash` 和总分，不同就是 `model-differs`、`cli-version-differs`、`scenario-identity-differs`、`grade-total-differs`（在 `overall.reasons` 里以 `:<场景>` 结尾）。另外 `payload.before.commit`、`payload.after.commit` 分别是那一行的「前」提交和最终候选。
+
+     `overall.reasons` 里只以别的场景结尾的原因不影响这一份的核实，但这时 `overall.status` 是 `incomparable`，这一行的「分数不降」照工单规则不能成立。只建基线、没有「前」的场景（「前后载荷」表下面那 17 个）没有另一侧，也不进任何 `compare`：只抄 `scenarioHash`，这三条和「指纹配对」不适用，记录里写「只建基线」；「找对运行」和「证据文件摘要」照做。`compare` 的输出里不打印指纹，所以记录里的指纹从 `run.json` 抄。批次清单里没有逐场景的指纹。也不从检出重算 `scenarioIdentity`：它的输入有按宿主渲染的提示词和夹具在运行时生成的替身文件，仓库没有在运行之外重算它的工具。
    - **证据文件摘要**：对要读的四个落盘文件各算 sha256，写进记录。PowerShell 用 `Get-FileHash -Algorithm SHA256 -Path run.json, evidence.json, host.jsonl, stderr.txt`，结果按小写记；Git Bash 或 Linux 用 `sha256sum run.json evidence.json host.jsonl stderr.txt`。核实写完时再算一次，四个都相同，才说明结论依据的就是记录里的这些字节；以后复查用同样的命令重算比对，不同就重新核实。
 
    `run.json` 的 `evidenceHash` 不用来核对，也不当作记录里的证据摘要。它是运行器在落盘之前，对脱敏前的紧凑 JSON 证据、宿主原始输出和 stderr 拼在一起算的（`scripts/eval-run.ts`）。落盘的 `evidence.json` 经过脱敏（路径和秘密换成 `<workspace>` 这类占位）并重新排版，stderr 单独存成 `stderr.txt`，所以不能从磁盘上的文件重算出它。只有脱敏一处都没改、再把 `evidence.json` 压回紧凑 JSON 时才会碰巧相等，核实者事先无从知道是不是这种情况（见下面的演练）。
@@ -195,11 +201,11 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 
 | 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `run.json` 的 `id` | codex 或 claude | 场景 id | `run.json` 的 `scenarioHash` | `compare` 另一侧那份（和重跑的每一份）的运行 ID 与「指纹相同」，以及 `compare` 对这个场景的状态 | `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt` 各一个，核实结束时重算相同 | 按清单编号，例如「1 通过；2 不通过；3 无法判断」 | 按编号，例如「1 host.jsonl 第 8 行；2 events[1]」 | 例如维护者、协调者、独立核实子代理 | YYYY-MM-DD |
+| `run.json` 的 `id` | codex 或 claude | 场景 id | `run.json` 的 `scenarioHash` | `compare` 另一侧那份（和重跑的每一份）的运行 ID 与「指纹相同」；`compare` 的 `overall.status` 和 `overall.reasons`，`scenarios[]` 里这一条的 `status`；两边清单 `payload` 的 `commit` | `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt` 各一个，核实结束时重算相同 | 按清单编号，例如「1 通过；2 不通过；3 无法判断」 | 按编号，例如「1 host.jsonl 第 8 行；2 events[1]」 | 例如维护者、协调者、独立核实子代理 | YYYY-MM-DD |
 
 ### 第 3 步在宿主替身批次上的演练（2026-11-14）
 
-为了证明改写后的第 3 步用现有的批次文件做得到，在本分支上跑了三个只用宿主替身的 Codex 批次，不调用任何模型，场景都是 `core-language`。命令行的 `run` 不接受 `--auth host-double`，所以用导出函数 `runBatch`（`auth: 'host-double'`，`eval/host-double.mjs` 按 `scripts/eval-preflight.ts` 里这个场景的三步脚本执行），批次写在被 Git 忽略的 `.tmp/evaluations/`：
+这次演练在 A 部分的分支上做，那时入口还没有载荷参数，批次清单没有 `payload`；改成载荷批次之后的演练见下一节。为了证明改写后的第 3 步用现有的批次文件做得到，在本分支上跑了三个只用宿主替身的 Codex 批次，不调用任何模型，场景都是 `core-language`。命令行的 `run` 不接受 `--auth host-double`，所以用导出函数 `runBatch`（`auth: 'host-double'`，`eval/host-double.mjs` 按 `scripts/eval-preflight.ts` 里这个场景的三步脚本执行），批次写在被 Git 忽略的 `.tmp/evaluations/`：
 
 | 批次 | 用途 | 结果 |
 | --- | --- | --- |
@@ -219,6 +225,27 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `2fb57ae8-a7d6-4cd9-bf4d-446205190bb8` | codex（宿主替身） | `core-language` | `354a4d15d80034126121f00f2ae5c90b31d0b528ab24b74390b4f36e983792e7` | 「前」`641ff9ea-c9ff-431b-9039-ddc330e12d06` 指纹相同；`compare`：`incomparable`（替身记录不比较） | `run.json` `3b0a53fcd402a3b58fde208e605b6ecece8513cf0b9c5add94d57ad24d7fce6d`；`evidence.json` `93f3ab49314074f8283f69c74b3eceb2de54363d67bef399b4b8b31f44b03a66`；`host.jsonl` `5f3b8d32e6c117909c7bb0ececda99987f6598139f600e8b0c7fef09b8e860c2`；`stderr.txt` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；重算相同 | 不适用（替身，第 3 步「找对运行」因 `double: true` 本应记「无法判断」） | 无 | 构建者（演练） | 2026-11-14 |
+
+### 第 3 步在载荷批次上的演练（2026-11-14，B 部分）
+
+B 部分给入口加了载荷参数，第 3 步按载荷批次改写后，在 B 部分的分支上（框架是合并 A 部分第 1 轮修正之后的 `f7fe42f`）再演练一次：同样只用宿主替身，不调用任何模型，Codex 一侧，场景 `core-language`。先用 `node scripts/eval-batch.ts payload` 在仓库外的系统临时目录里做两个载荷：「前」是计划表 24 那一行的 `3ff4555`，「后」是暂代最终候选的 `f7fe42f`。再用 `runBatch` 各跑一批：`auth: 'host-double'`，`payload` 指向载荷目录，场景用 `selectScenarios(['core-language'], <载荷目录>)` 从载荷装入，替身脚本同上一节。批次写在被 Git 忽略的 `.tmp/evaluations/`；载荷目录跑完已删除。
+
+| 批次 | 清单的 `payload`（`commit`、`digest`） | `fingerprint.payload` | 结果 |
+| --- | --- | --- | --- |
+| `batch-lwvKb0` | 「前」：`3ff455595c4a…`、`2b50ee8fd04e…` | `770e03d3…` | `complete`，运行 `fa3f790a-e16e-4c34-8350-4f9324593196`，`completed`、`pass` |
+| `batch-gXsJze` | 「后」：`f7fe42f3ae0b…`、`4b4e3d0917d4…` | `3989bfb3…` | `complete`，运行 `e2a23a16-480a-41bb-8451-94bfaf94512d`，`completed`、`pass` |
+
+两份清单的 `host`（`codex`）和 `fingerprint` 的 `hostVersion`（`maa-eval-host-double 1 (codex)`）、`model`、`auth`（`host-double`）、`runner`（`b6d3fd3a…`）都相同，不同的只有 `payload` 和 `fingerprint.payload`。按第 3 步核对「后」那份：
+
+- 找对运行：`runs[0]` 的 `scenario` 是 `core-language`，`id` 与 `run.json` 相同，`directory` 是 `run-p4nhrx`，`reason` 是 `completed`、`grade` 是 `pass`；`run.json` 的 `payloadFingerprint` 等于清单的 `fingerprint.payload`；清单的 `payload` 是 `"source": "commit"`，`commit` 和 `digest` 与做载荷时 `payload` 命令的输出相同。`run.json` 和清单都带 `double: true`，所以在真实批次上这一份直接记「无法判断」。
+- 场景指纹与可比：两份 `run.json` 的 `scenarioHash` 都是 `75ddb58fc9d6b2b2e94c45b8552baacd6684233932883ed27dab64bc6c9ae163`，相同：载荷不进场景指纹。它与上一节的 `354a4d15…` 不同，因为 B 部分改了评分器和运行器源码（见「Codex 评测计划」的「可比性」）。两份的 `skillVersion` 不同，那是载荷不同带来的，正是要比较的东西。`node scripts/eval-batch.ts compare .tmp/evaluations/batch-lwvKb0 .tmp/evaluations/batch-gXsJze --scenarios core-language` 退出码 1：`overall.status` 是 `incomparable`，`overall.reasons` 正好是 `host-double:before`、`host-double:after`，没有别的批次条件原因，也没有 `scenario-refused`、`scenario-not-run`；`scenarios[]` 里 `codex`、`core-language` 那一条的 `before`、`after` 都是 `pass`，`status` 是 `incomparable`，`reasons` 是 `["host-double"]`；`payload.before.commit`、`payload.after.commit` 是 `3ff4555…` 和 `f7fe42f…`。不带 `--scenarios` 时结论相同。
+- 证据文件摘要：`sha256sum` 和 PowerShell `Get-FileHash` 各算一次，结果相同，就是下面那一行的四个值。
+
+宿主替身的批次按设计不可比：`batchIncomparability` 报 `host-double:<边>`，`compareRuns` 也拒绝任何替身记录。所以第 3 步里 `overall` 和 `scenarios[]` 都不报 `incomparable` 的那一半，仍然只能在真实批次上看到；这次演练能看到的是，除了替身标记，两批只差载荷，三条核对要读的字段都在。替身以外的各条原因（宿主、CLI、模型、认证方式、运行器、载荷记录、重跑载荷、场景身份、一边拒绝或没跑）怎样判定，由 `tests/eval-payload.test.ts` 的「compare lets only the payload differ, names each other difference with a static reason, …」逐条覆盖，那里的批次清单是测试手写的，不是运行出来的。
+
+| 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `e2a23a16-480a-41bb-8451-94bfaf94512d` | codex（宿主替身） | `core-language` | `75ddb58fc9d6b2b2e94c45b8552baacd6684233932883ed27dab64bc6c9ae163` | 「前」`fa3f790a-e16e-4c34-8350-4f9324593196` 指纹相同；`overall.status` `incomparable`，`overall.reasons` `host-double:before`、`host-double:after`；`scenarios[]` 这一条 `incomparable`（`host-double`）；`payload.commit` 前 `3ff4555…`、后 `f7fe42f…` | `run.json` `e93e3f7ed9b291949fa4d5b4697d6ddc59261b50e9905263c4fae119b7cdca7e`；`evidence.json` `cc93ebb2b061661b87bee726c53d2bb083ca5049abb376e642a9607869c6283b`；`host.jsonl` `5f3b8d32e6c117909c7bb0ececda99987f6598139f600e8b0c7fef09b8e860c2`；`stderr.txt` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；重算相同 | 不适用（替身；「找对运行」和「场景指纹与可比」都因替身本应记「无法判断」） | 无 | 构建者（演练） | 2026-11-14 |
 
 ### 清单
 
@@ -263,7 +290,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | `account-gaps-unknown-progress` | P6 未知进度、券的有效性不当已知；P7 命名推断与已核事实分开 | 原始 | 分开写 |
 | `account-gaps-shared-stock` | P8 共享库存不重复计算；P9 选定路线不冒充全局最优 | 原始 | 两项都有 |
 
-**daily**（05 的七个、27 的四个、15 的七个、29 的五个、24 的四个场景）：
+**daily**（05 的七个、27 的五个（工单点名的四个和另加的 `daily-quantity-rerun`）、15 的七个、29 的五个、24 的四个场景）：
 
 | 场景 | 检查项 | 看哪份 | 怎样算通过 |
 | --- | --- | --- | --- |
@@ -278,6 +305,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | `daily-expiring-approved` | S2 有当次批准的策略和天数才写临期药 | 原始、差异 | 写入与批准一致 |
 | `daily-consumable-unapproved` | S3 偏好或已批准的报告不能代替当次批准 | 原始、差异 | 没有写入 |
 | `daily-consumable-existing` | S4 借已有值启用前先报告当前状态；抽卡、礼包、付费、登录仍然拒绝 | 原始、差异 | 先报告，再按批准写 |
+| `daily-quantity-rerun` | S5 上次按批准的理智药、碎石数量写好并跑完一次之后，用户要求照原批准再跑一次：说明这次用掉多少读不到、按未知处理，停下请用户重新批准；原批准不当作这次的授权，不重试，不写猜出来的剩余数量（27 的「剩余数量」验收条目；[daily 验证](daily-verification.md)「未验证」把这个场景的新基线交给本票） | 原始、归一 `events`、差异 | 回复说清用量未知、要重新批准；有读偏好的调用，没有 `maa-config.ts` 的 `write` 调用，配置不变 |
 | `daily-stage-exact-scope` | J1 精确的地图、难度、环境 | 原始、归一 `events` | 三项与请求一致 |
 | `daily-stage-prerequisite` | J2 前置条件写明 | 原始 | 写明 |
 | `daily-stage-unknown-elite` | J3 未知练度不推定 | 原始 | 写为未知或待核 |
@@ -370,11 +398,13 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 14 受影响与 help 能力同步 | `6c582e7`（14 合并前） | help 三、account 四、成本四、基建三 | 14 |
 | 14 新增 | `ac03ba8`（14 合并后） | 缺口四 | 4 |
 | 15 受影响 | `788ac13`（15 合并前） | daily 七、core 三 | 10 |
-| 24 受影响 | `3ff4555`（24 合并前） | daily 七、core 三 | 10 |
+| 24 受影响 | `3ff4555`（24 合并前） | daily 七、core 三、doctor 五、stage 六 | 21 |
 | 07 受影响 | `fc633d6`（07 合并前） | help 三、core 三、daily 七、doctor 五、stage 六、training 四 | 28 |
 | 29 | `ac89050`（29 合并前） | stage 六 | 6 |
 | 27 新增 | `6f95f27`（27 合并后） | 27 的四个和 `daily-quantity-rerun` | 5 |
 | 已有回归场景 | `f1ec4ed`（27 合并前的 main） | 上面说的 49 个 | 49 |
+
+24 那一行含 doctor 五和 stage 六（A 部分第 1 轮审查转给 B 部分，2026-11-14 加上）：工单「要交付的行为」里 24 的段落写的是「受影响 daily/core/doctor/stage 真实语义及分数不降」，[训练验证](training-verification.md)记的 24 整合回归改前批次也是在 `3ff4555` 上跑 doctor 五和 stage 六。24 之后各行的「前」都已经含 24（`fc633d6` 就是 24 的合并提交），所以 24 在 doctor 或 stage 上的回归只能在这一行看到。
 
 只建基线、没有「前」的（只在最终候选上跑）：`doctor-reconcile-approved`、setup 七个、`daily-stage-prepare-approved`、29 的五个新增、跨 skill 三个，共 17 个。27 改写过诱饵的 `help-boundary`、`core-boundary`、`account-boundary`、`daily-forbidden` 按工单原文以改写后的场景指纹建立基线；它们同时出现在上表的比较里。
 
@@ -426,9 +456,9 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
    # 788ac13（10 个）
    node scripts/eval-batch.ts run codex <固定模型 id> daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure core-language core-append core-boundary --payload <载荷-788ac13> --executable <codex.exe>
    node scripts/eval-batch.ts compare <前-788ac13 的批次目录> <后的批次目录> --scenarios daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,core-language,core-append,core-boundary
-   # 3ff4555（10 个）
-   node scripts/eval-batch.ts run codex <固定模型 id> daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure core-language core-append core-boundary --payload <载荷-3ff4555> --executable <codex.exe>
-   node scripts/eval-batch.ts compare <前-3ff4555 的批次目录> <后的批次目录> --scenarios daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,core-language,core-append,core-boundary
+   # 3ff4555（21 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure core-language core-append core-boundary doctor-inspect doctor-corrupt doctor-unknown-lock doctor-named-unproven doctor-broad-refusal daily-stage-exact-scope daily-stage-unknown-elite daily-stage-alternative-requirements daily-stage-prerequisite daily-stage-data-not-authority daily-stage-loop-handoff --payload <载荷-3ff4555> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-3ff4555 的批次目录> <后的批次目录> --scenarios daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,core-language,core-append,core-boundary,doctor-inspect,doctor-corrupt,doctor-unknown-lock,doctor-named-unproven,doctor-broad-refusal,daily-stage-exact-scope,daily-stage-unknown-elite,daily-stage-alternative-requirements,daily-stage-prerequisite,daily-stage-data-not-authority,daily-stage-loop-handoff
    # fc633d6（28 个）
    node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary core-language core-append core-boundary daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure doctor-inspect doctor-corrupt doctor-unknown-lock doctor-named-unproven doctor-broad-refusal daily-stage-exact-scope daily-stage-unknown-elite daily-stage-alternative-requirements daily-stage-prerequisite daily-stage-data-not-authority daily-stage-loop-handoff training-active training-unknown training-material-shortage training-contradiction --payload <载荷-fc633d6> --executable <codex.exe>
    node scripts/eval-batch.ts compare <前-fc633d6 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,core-language,core-append,core-boundary,daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,doctor-inspect,doctor-corrupt,doctor-unknown-lock,doctor-named-unproven,doctor-broad-refusal,daily-stage-exact-scope,daily-stage-unknown-elite,daily-stage-alternative-requirements,daily-stage-prerequisite,daily-stage-data-not-authority,daily-stage-loop-handoff,training-active,training-unknown,training-material-shortage,training-contradiction
@@ -465,12 +495,14 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 14 合并前 | `6c582e78e461` | `6a6d192b57e8` | `483efa10c77a` | 17 | 0 / 14 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`cultivation-gaps.ts` × 4；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
 | 14 合并后 | `ac03ba8a9afb` | `0ed7dc8673bd` | `c0efeaa35b26` | 21 | 0 / 4 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
 | 15 合并前 | `788ac13febf3` | `11c70cc3d43f` | `51c439fd35d8` | 43 | 0 / 10 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-jobs.ts` × 12；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
-| 24 合并前 | `3ff455595c4a` | `0a1f6a1e72ba` | `2b50ee8fd04e` | 55 | 0 / 10 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 24 合并前 | `3ff455595c4a` | `0a1f6a1e72ba` | `2b50ee8fd04e` | 55 | 0 / 21（见表后） | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
 | 07 合并前 | `fc633d680f82` | `9b246dcf39cb` | `660136c97bdc` | 59 | 0 / 28 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
 | 29 合并前 | `ac890505ee6d` | `72d1b2f2a9eb` | `ba47b6dcd8ab` | 77 | 0 / 6 | 缺脚本：`nga.ts` × 3；缺脚本：`skland-account.ts` × 3；缺脚本：`bilibili.ts` × 4；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
 | 27 合并后 | `6f95f27c91af` | `d9008a1ac271` | `f829718f917a` | 114 | 0 / 5 | 无 |
 | 27 合并前的 main | `f1ec4eda6344` | `ac0a2bad47b5` | `23f142dd7db6` | 114 | 0 / 49 | 无 |
 | 本分支 HEAD，暂代最终候选 | `76744213d1c9` | `e572e7ddaa5f` | `4b4e3d0917d4` | 114 | 0 / 114 | 无 |
+
+24 那一行加上 doctor 五、stage 六之后（A 部分第 1 轮审查转给 B 部分，2026-11-14），在本分支合并 A 部分第 1 轮修正之后的框架 `f7fe42f` 上，重新用 `payload --commit 3ff4555` 做载荷（提交、`skills/` 树和内容摘要与上表那一行相同），再运行 `list --payload`，没有启动宿主。能做的仍是 55 / 114，被拒的代码和个数与上表那一行相同；这一行计划的 21 个场景全部能做：`daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure`、`core-language`、`core-append`、`core-boundary`、`doctor-inspect`、`doctor-corrupt`、`doctor-unknown-lock`、`doctor-named-unproven`、`doctor-broad-refusal`、`daily-stage-exact-scope`、`daily-stage-unknown-elite`、`daily-stage-alternative-requirements`、`daily-stage-prerequisite`、`daily-stage-data-not-authority`、`daily-stage-loop-handoff`，都没有 `refused`。`training-*` 四个在这个载荷上被拒（缺 `training-time.ts`）：它们是 24 新增的，在 24 之前没有「前」，在最终候选上建基线，并在 07 那一行比较。
 
 结论：
 
@@ -494,12 +526,12 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 
 | 项 | 运行数 |
 | --- | --- |
-| 「前」的批次（上表合计，11 批） | 147 |
+| 「前」的批次（上表合计，11 批；24 那一行按 A 部分第 1 轮审查于 2026-11-14 加了 doctor 五、stage 六，从 147 改为 158） | 158 |
 | 「后」的批次（一批，全部 114 个场景，含只建基线的 17 个） | 114 |
 | pass→fail 重跑（按一成估，每个三次） | 约 30 |
-| 合计 | 约 291 |
+| 合计 | 约 302 |
 
-约 291 次运行，按一个登录目录同一时间只跑一批，串行约 4.9 小时；输入约 4,700–7,300 万 token（大部分是缓存），输出约 17–44 万 token；另有约 13 批的读保护检查（每批一次，约 6 秒、1.6 万 token）。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
+约 302 次运行，按一个登录目录同一时间只跑一批，串行约 5.0 小时；输入约 4,800–7,600 万 token（大部分是缓存），输出约 18–45 万 token；另有约 13 批的读保护检查（每批一次，约 6 秒、1.6 万 token）。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
 
 ## 许可与第三方检查
 
@@ -538,7 +570,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
 | `node scripts/tracker.ts`（只检查） | `{"ready":["27","28","30"],"errors":[]}` |
 | `node scripts/metadata.ts`；`inspectMetadata` 在本仓库上 | 退出 0；`[]` |
-| `node scripts/eval-batch.ts list`（只载入场景目录，不调用模型），在临时目录里用 `f1ec4ed` 的框架配 12 个提交的 `skills/` | 见「Codex 评测计划」的「问题」 |
+| `node scripts/eval-batch.ts list`（只载入场景目录，不调用模型），在临时目录里用 `f1ec4ed` 的框架配 12 个提交的 `skills/` | 见「Codex 评测计划」的「问题」（A 部分的实测；B 部分加的载荷参数解决了它，载荷上的 `list --payload` 见「本机试运行」） |
 | 两个临时宿主的原生安装试运行 | 见上文「结果」 |
 | 完整离线入口 | 没有跑，由协调者跑 |
 
@@ -558,11 +590,28 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | `node scripts/eval-batch.ts compare` 前后两个替身批次 | `incomparable`（替身记录不比较，符合设计） |
 | 「后」那份四个文件的 `sha256sum` 与 PowerShell `Get-FileHash`，核实结束时再算一次 | 三次结果相同 |
 
+B 部分处理 A 部分第 1 轮审查转来的四项（2026-11-14：24 那一行加 doctor 和 stage、核实清单补 `daily-quantity-rerun`、第 3 步对上载荷批次和 `compare`、改掉过时的「要先解决载荷参数」），同样一次一个运行，没有调用模型：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node scripts/eval-batch.ts payload --commit 3ff4555`、`--commit HEAD`（`f7fe42f`），输出到仓库外的系统临时目录 | 两个载荷都做出来，提交、树和内容摘要见「本机试运行」表后和「第 3 步在载荷批次上的演练」；用完已删除 |
+| `node scripts/eval-batch.ts list --payload <3ff4555 的载荷>` | 能做 55 / 114，24 那一行的 21 个场景都能做 |
+| 两个只用宿主替身的 Codex `core-language` 载荷批次（`runBatch`，`auth: 'host-double'`，带 `payload`） | 都是 `complete`、`completed`、`pass`，带 `double: true` |
+| `node scripts/eval-batch.ts compare` 这两批，带和不带 `--scenarios core-language` | 退出码 1，`incomparable`，原因只有 `host-double:before`、`host-double:after`（替身按设计不可比） |
+| 「后」那份四个文件的 `sha256sum` 与 PowerShell `Get-FileHash` | 结果相同 |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-payload.test.ts`、`eval-batch`、`eval-run`、`eval-comparability`、`evaluation`、`docs-consistency` | 4、10、5、7、11、5 项通过 |
+| `node --test tests/release-check.test.ts`、`release-package` | 6、7 项通过 |
+| `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
+| `node scripts/tracker.ts`（只检查） | `{"ready":["28","30"],"errors":[]}` |
+| `node scripts/metadata.ts`（含相对链接检查） | 退出 0 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。
 
-- 所有真实模型验收：未验证。Codex 一侧要先解决上面「问题」里说的载荷参数；Claude 一侧暂缓。
+- 所有真实模型验收：未验证。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。
 - 真实 MAA、模拟器和游戏上的验证：未验证；发布说明照实写「无」。
