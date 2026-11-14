@@ -406,11 +406,13 @@ test('the restore allowance needs the doctor-restore consumer, values equal to t
 });
 
 /**
- * Issue #82: doctor's field check accepts a null medicine switch, the value the pinned MAA GUI saves when stone is turned on
- * without "allow saving" (both switches null, MedicineCount 999; after an MAA restart only UseStone is reset to false). The
- * predicate still treats every null switch as on, so a task in that state is not activated or counted without the grants.
+ * Issue #82, corrected for Issue #89: doctor's field check accepts an explicit null medicine switch. Null is the pinned MAA GUI's
+ * in-memory state when stone is turned on without "allow saving" (both switches null, MedicineCount 999); MAA omits null keys on
+ * save (next test), so an explicit null in the file comes only from a write outside MAA, and an MAA restart that reads it resets
+ * only UseStone to false. The predicate treats every null switch as on, so a task in that state is not activated or counted
+ * without the grants.
  */
-test('the switches the MAA GUI saves for stone without allow-save stay on for the predicate, and no quantity grant opens them as saved', () => {
+test('explicit null switches (the GUI memory state for stone without allow-save) stay on for the predicate, and no quantity grant opens them as they are', () => {
   const current = { source: 'current-request' as const };
   const saved = fight({ IsEnable: true, UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false });
   const restarted = { ...saved, UseStone: false };
@@ -422,12 +424,29 @@ test('the switches the MAA GUI saves for stone without allow-save stay on for th
       assert.equal(decide({ ...current, medicineCount: 999, stoneCount: 999 }, [target], 'writer-whitelist').reason, 'medicine-settings-invalid');
     }
   }
-  // With medicine opened as the writer opens it, the saved null stone switch still needs the stone grant; after a restart stone is off.
+  // With medicine opened as the writer opens it, the null stone switch still needs the stone grant; after a restart stone is off.
   const medicineGrant = { ...current, medicineCount: 999 };
   assert.equal(decide(medicineGrant, [{ task: { ...saved, UseMedicine: true }, activated: true }], 'writer-whitelist').reason, 'stone-grant-required');
   assert.equal(decide(medicineGrant, [{ task: { ...restarted, UseMedicine: true }, activated: true }], 'writer-whitelist').allowed, true);
   // The read summary's classification: null switches, which the summary documents as on.
   assert.deepEqual(decide(current, [{ task: saved }], 'read-summary').tasks[0],
+    { medicine: { on: null, count: 999 }, stone: { on: null, count: 0, allowSave: false }, expiring: { on: false, days: 2, activity: false } });
+});
+
+/**
+ * Issue #89 (2026-11-14): the keys the pinned MAA writes after that GUI action. It saves with `WhenWritingNull`, so both null
+ * switches are omitted and MedicineCount 999 stays. A missing switch is null to the predicate and counts as on, so the task is
+ * still not activated or counted without the grants, and the read summary lists both switches as null.
+ */
+test('medicine and stone switch keys omitted as MAA writes them after stone is turned on without allow-save count as on for the predicate', () => {
+  const current = { source: 'current-request' as const };
+  const written: Record<string, unknown> = fight({ IsEnable: true, MedicineCount: 999, UseStoneAllowSave: false });
+  delete written.UseMedicine; delete written.UseStone;
+  for (const target of [{ task: written, activated: true }, { task: written, counted: true }]) {
+    const refused = decide(current, [target], 'writer-whitelist');
+    assert.deepEqual([refused.reason, refused.tasks[0]?.medicine.on, refused.tasks[0]?.stone.on], ['medicine-grant-required', null, null]);
+  }
+  assert.deepEqual(decide(current, [{ task: written }], 'read-summary').tasks[0],
     { medicine: { on: null, count: 999 }, stone: { on: null, count: 0, allowSave: false }, expiring: { on: false, days: 2, activity: false } });
 });
 

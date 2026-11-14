@@ -121,6 +121,8 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 
 2026-11-14 补充（Issue #82）：doctor 的字段检查改为接受 null 的理智药开关，依据是 MAA 界面打开碎石时 `FightTaskUserControlModel.cs` 的 `UseStone` setter 怎样存两个开关，以及 `FightTask.cs` 的 `OnDeserialized`。这两个文件已经在本条目里，所以只改了条目的说明，并在工单里加上 10（doctor 的字段检查）；文件、blob 和 `sourceVerified` 都不变。两个文件在 v6.21.4 上重新读取，blob 与条目一致。行号见 [daily 验证记录](daily-verification.md)「后续：界面开碎石后理智药开关的 null」。
 
+2026-11-14 更正（Issue #89）：上面说的「怎样存两个开关」只是界面内存里的值。界面把两个开关设为 null，MAA 写盘时按 `config-save-null-omission`（`ConfigFactory.cs` 第 64 行 `WhenWritingNull`）省略这两个键，文件里不会出现 null。条目说明已经改成「内存里设为 null、写盘时省略」。注册表不加文件、不改 blob 和 `sourceVerified`，`config-save-null-omission` 的工单也不加 10。理由：字段检查对缺键和显式 null 的判断相同，消耗谓词也一样，所以 MAA 写盘方式变了，本项目的行为也不变。
+
 ## 30 交付时登记的条目（2026-11-14）
 
 30（配置写入器加固：投影指纹与差异核对）核实了 MAA 运行期间自己写回 `gui.new.json` 的方式和字段，登记为条目 `config-runtime-writeback`。事实和行号记在 [daily 验证记录](daily-verification.md)「30 配置写入器加固」的「固定 MAA 源码核实」表，在 v6.21.4（`52d0b2a`）上核对。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob，只在本机临时目录比对，没有写进仓库。skill 是 maa-core（投影和写入器）、maa-daily（写入）、maa-doctor（恢复比较整份配置）和 maa-setup（专用入口用投影 revision）。
