@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scenarioCatalog, entryId } from '../scripts/eval-scenarios.ts';
 import type { ScenarioDefinition } from '../scripts/eval-run.ts';
@@ -769,4 +769,110 @@ test('the read-only scan finds the shapes it was built for, and passes claims li
   assert.equal(doc('`check` 不写任何文件。').length, 1);
   assert.deepEqual(doc('只运行只读的 `stage-jobs.ts query`（不加 `saveReport`）。'), []);
   assert.equal(doc('只运行只读的 `stage-jobs.ts query`。').length, 1);
+});
+
+/*
+ * Read preferences first (ticket 26, package P2). The first real Codex run found a maa-daily refusal sent before preferences
+ * were read (R11); package P added the clause to maa-daily alone, and the second run found maa-account doing the same (R4).
+ * By the recurrence rule: one rule with one owner, the 「先读偏好」 item of maa-core's caller convention. Every other SKILL.md
+ * that runs `preferences.ts read` points to it from a line that runs the read, and no other skill document restates it.
+ */
+const readFirstOwner = 'maa-core/SKILL.md';
+const readFirstItem = '- 先读偏好：';
+const readFirstLink = /\[[^\]]*「先读偏好」[^\]]*\]\(\.\.\/maa-core\/SKILL\.md\)/;
+/** Words of the owner's item that no other skill document uses: writing them restates the rule instead of pointing to it. */
+const readFirstWords = '任何答复';
+const preferenceReaders = ['maa-account/SKILL.md', 'maa-daily/SKILL.md', 'maa-doctor/SKILL.md', 'maa-setup/SKILL.md'];
+
+/** The items of the 「调用方的约定」 list in maa-core's SKILL.md. */
+function callerConvention(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const start = lines.indexOf('调用方的约定：');
+  const items: string[] = [];
+  if (start < 0) return items;
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith('- ')) items.push(line);
+    else if (line.trim() && !line.startsWith('  ')) break;
+  }
+  return items;
+}
+
+/**
+ * The read-first rule over skill documents (path under skills/ → text). The readers are the SKILL.md files, other than the
+ * owner, with a line that runs `preferences.ts read`, found two ways: the literal command, and the shared command extraction
+ * the script-contract test uses (it also sees `preferences.ts` named first and a bare `read` after it).
+ */
+function readFirstCheck(texts: Map<string, string>): { readers: string[]; problems: string[] } {
+  const problems: string[] = [];
+  const owner = texts.get(readFirstOwner) ?? '';
+  const owned = callerConvention(owner).filter((item) => item.startsWith(readFirstItem)).length;
+  const anywhere = owner.split(/\r?\n/).filter((line) => line.startsWith(readFirstItem)).length;
+  if (owned !== 1 || anywhere !== 1) problems.push(`${readFirstOwner}: the caller convention must hold the one 「先读偏好」 item (found ${owned} there, ${anywhere} in the file)`);
+  const readers: string[] = [];
+  for (const [file, text] of texts) {
+    if (file !== readFirstOwner && text.includes(readFirstWords)) problems.push(`${file}: restates the read-first rule ("${readFirstWords}"); point to maa-core instead`);
+    if (!file.endsWith('SKILL.md') || file === readFirstOwner) continue;
+    const lines = text.split(/\r?\n/);
+    const running = new Set(lines.flatMap((line, index) => /(?<![\w.-])preferences\.ts\s+read\b/.test(line) ? [index + 1] : []));
+    for (const mention of extractDocument(file, text).mentions) if (mention.script === 'preferences.ts' && mention.action === 'read') running.add(mention.line);
+    if (!running.size) continue;
+    readers.push(file);
+    if (![...running].some((line) => readFirstLink.test(lines[line - 1]!))) problems.push(`${file}: runs preferences.ts read without pointing to maa-core's 「先读偏好」 on that line`);
+  }
+  return { readers: readers.sort(), problems };
+}
+
+async function skillTexts(): Promise<Map<string, string>> {
+  return new Map(await Promise.all((await skillDocuments()).map(async (file) => [file, await readFile(join(skills, file), 'utf8')] as const)));
+}
+
+test('every SKILL.md that runs preferences.ts read points to the one read-first rule in maa-core', async () => {
+  const texts = await skillTexts();
+  // The scan reads every skill's SKILL.md: one per directory under skills/, none nested deeper.
+  const directories = (await readdir(skills, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => `${entry.name}/SKILL.md`).sort();
+  assert.deepEqual([...texts.keys()].filter((file) => basename(file) === 'SKILL.md'), directories);
+  const { readers, problems } = readFirstCheck(texts);
+  assert.deepEqual(problems, []);
+  // The enumeration is complete: exactly the four operating skills, and it covers every skill whose eval scenarios expect the read.
+  assert.deepEqual(readers, preferenceReaders);
+  const expected = new Set(scenarioCatalog().flatMap((entry) => {
+    const definition = entry.definition as ScenarioDefinition;
+    const reads = (definition.policy.expectedInvocations ?? []).some((call) => call.file === 'maa-core/scripts/preferences.ts' && call.action === 'read');
+    return reads && entry.skillDirectory ? [`${basename(entry.skillDirectory)}/SKILL.md`] : [];
+  }));
+  assert.deepEqual([...expected].sort(), preferenceReaders);
+});
+
+test('the read-first check fails when a skill drops the pointer, restates the rule, or the owner loses it', async () => {
+  const texts = await skillTexts();
+  const changed = (file: string, edit: (text: string) => string) => readFirstCheck(new Map([...texts, [file, edit(texts.get(file)!)]]));
+  for (const file of preferenceReaders) {
+    const dropped = changed(file, (text) => text.replace(new RegExp(readFirstLink.source, 'g'), '「先读偏好」'));
+    assert.deepEqual(dropped.problems, [`${file}: runs preferences.ts read without pointing to maa-core's 「先读偏好」 on that line`]);
+    assert.deepEqual(dropped.readers, preferenceReaders);
+  }
+  assert.equal(changed(readFirstOwner, (text) => text.replace(readFirstItem, '- ')).problems.length, 1);
+  assert.equal(changed(readFirstOwner, (text) => `${readFirstItem}副本。\n\n${text}`).problems.length, 1);
+  assert.deepEqual(changed('maa-daily/SKILL.md', (text) => `${text}\n在任何答复之前读偏好。\n`).problems,
+    ['maa-daily/SKILL.md: restates the read-first rule ("任何答复"); point to maa-core instead']);
+  // A new skill joins the readers, also when it names the script first and the action after it.
+  const added = readFirstCheck(new Map([...texts, ['maa-new/SKILL.md', '确认 `../maa-core/scripts/preferences.ts` 存在。\n\n1. 运行 `preferences.ts` 的 `read`。\n']]));
+  assert.deepEqual(added.readers, [...preferenceReaders, 'maa-new/SKILL.md'].sort());
+  assert.deepEqual(added.problems, ["maa-new/SKILL.md: runs preferences.ts read without pointing to maa-core's 「先读偏好」 on that line"]);
+});
+
+/*
+ * Never edit MAA's configuration directly (ticket 26, package P2, R6). On an older payload a model patched the MAA config file
+ * itself to turn gacha on, with no approval, no lock and no writer. One owner again: the 「不直接改 MAA 配置」 item of maa-core's
+ * caller convention; maa-account's boundary line points to it.
+ */
+test('maa-core owns the rule against editing MAA configuration directly, and maa-account\'s boundary points to it', async () => {
+  const core = await readFile(join(skills, 'maa-core/SKILL.md'), 'utf8');
+  const items = core.split(/\r?\n/).filter((line) => line.startsWith('- 不直接改 MAA 配置：'));
+  assert.equal(items.length, 1);
+  assert.ok(callerConvention(core).includes(items[0]!), 'the item sits in the caller convention');
+  const account = await readFile(join(skills, 'maa-account/SKILL.md'), 'utf8');
+  const boundary = account.split(/\r?\n/).filter((line) => line.includes('抽卡、礼包、付费、登录'));
+  assert.equal(boundary.length, 1);
+  assert.match(boundary[0]!, /\[[^\]]*「不直接改 MAA 配置」[^\]]*\]\(\.\.\/maa-core\/SKILL\.md\)/);
 });

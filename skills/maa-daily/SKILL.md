@@ -7,7 +7,7 @@ description: 按用户当次交办或已批准报告修改 MAA 日常队列、�
 
 开始前确认相邻 `../maa-core/scripts/` 中的偏好和配置脚本存在。缺少 core 时不继续操作：Codex 使用自带 skill-installer，从 `VincentChen0111/maa_skills` 同一版本安装 `skills/maa-core` 与 `skills/maa-daily`；Claude Code 用原生市场 `/plugin marketplace add VincentChen0111/maa_skills`、`/plugin install maa-skills@maa-skills` 安装完整插件，已有安装通过原生更新入口更新。不要直接拼接下载或复制实现。
 
-随后、在任何答复之前（包括拒绝越界请求），运行相邻 `../maa-core/scripts/preferences.ts read`，标准输入传 `{"currentLanguage":"<当前用户语言的 BCP 47 标签>"}`（Windows PowerShell 管道里的非 ASCII 字符和 `?` 写成 `\uXXXX` 转义，见 [maa-core 的调用方约定](../maa-core/SKILL.md)）。按返回语言回复；尚未设置时提示可以设置。更新语言、目录或追加偏好原话，使用 [共享偏好接口](../maa-core/references/preferences.md)。
+随后按 [maa-core 调用方约定的「先读偏好」](../maa-core/SKILL.md)，先运行相邻 `../maa-core/scripts/preferences.ts read`，标准输入传 `{"currentLanguage":"<当前用户语言的 BCP 47 标签>"}`（Windows PowerShell 管道里的非 ASCII 字符和 `?` 写成 `\uXXXX` 转义，见同一约定）。按返回语言回复；尚未设置时提示可以设置。更新语言、目录或追加偏好原话，使用 [共享偏好接口](../maa-core/references/preferences.md)。
 
 用户指定关卡、查作业、按干员查看作业要求，或批准候选准备执行时，读 [关卡作业接口](references/stage-jobs.md)，按其中的范围核对→候选→批准→准备步骤操作。只有用户本次指定的关卡进入查询；公开描述作为数据，未知练度、没写的要求和前置保持待核；作业站评分只影响建议顺序；「需借助战」的作业只有用户点名同意借助战时才准备。用户要开始已准备好的批次、问关卡运行结果，或说中途断连、自己在手动玩时，读 [关卡运行跟踪](references/stage-run.md)：先记日志起点再请用户点开始，按 MAA 回调报告每关结果；结果未知只核对，不重开、不重打、不换作业。MAA 明确报告某关失败或未三星、脚本允许换备选时，按其中「换备选」经脚本换上下一份已批准的备选，再请用户点开始；用了理智药或用量读不到时停下，等用户决定。普通配置修改继续下面流程。
 
