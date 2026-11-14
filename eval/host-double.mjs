@@ -191,7 +191,9 @@ for (const step of toolless ? [] : script.steps ?? []) {
   if (step.shell) {
     const command = step.shell.map(resolvePath);
     // `stdinFile`: the command reads a file on standard input (a path, or an earlier step's output such as a review brief's `file`).
-    const input = step.stdinFile !== undefined ? readFileSync(fill(step.stdinFile), 'utf8') : fill(step.input);
+    const filled = step.stdinFile !== undefined ? readFileSync(fill(step.stdinFile), 'utf8') : fill(step.input);
+    // `windowsPipe` (26 H3): the input arrives as a Windows PowerShell 5.1 pipe delivers it, a UTF-8 byte order mark first and CRLF at the end.
+    const input = step.windowsPipe ? `\uFEFF${typeof filled === 'string' ? filled : JSON.stringify(filled ?? {})}\r\n` : filled;
     calls.push({ kind: 'shell', text: command.map(quote).join(' '), ...execute(command, input) });
   } else if (step.shellRead) {
     const path = resolvePath(step.shellRead);

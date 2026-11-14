@@ -56,6 +56,9 @@ setupScenarios.push(
   { id: 'setup-connection-write', commands, setupBoundary: true, jsonInputs: adbInputs, jsonFiles: ['private/config.json'],
     prompt: `使用 maa-setup 接入这个合成 Windows MAA。我在模拟器界面确认：adb 是当前目录下的 synthetic-adb.exe（请用它的绝对路径），连接地址是 127.0.0.1:5555。先读偏好、运行 check，再 discover、test，测试通过后用 apply 保存这个连接。本次授权原话是「${reference}」，请原样作为 reference。我确认 MAA 已关闭、我没有在操作，可以写入。不下载、不操作游戏。`,
     policy: { ...policy, allowedKeys: ['$file'], expectedInvocations: setupCalls('check', 'discover', 'test', 'apply'),
+      // 26 H3 (R2): the environment record SKILL.md has prepare create and the final recheck update, at its exact path only.
+      // Allowed, not required: the prompt names neither step. Both write the settings' language and an in-window checkedAt.
+      generatedFiles: [{ file: 'private/setup-environment.json', optional: true, fields: { language: 'en' }, utcFields: ['checkedAt'] }],
       writerTransaction: { skill: 'maa-setup', source: 'current-request', reference,
         changedKeys: ['AdbPath', 'Address', 'AutoDetect'].map((key) => `Configurations.<profile>.Gui.ConnectSettings.${key}`),
         changes: [connection('AdbPath', '{{workspace}}/synthetic-adb.exe'), connection('Address', '127.0.0.1:5555'), connection('AutoDetect', false)] } } },

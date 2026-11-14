@@ -50,3 +50,18 @@ test('cross-skill scenarios install several operating skills under their own nam
     }
   });
 });
+
+test('26 H3 (R3): the cross-skill daily step approves the reminder diff in the present tense, as daily-diff-approved does, with nothing left to wait for in a one-turn run', () => {
+  const prompt = (entry('cross-skill-setup-account-daily').definition as ScenarioDefinition).prompt;
+  const diffApproved = (entry('daily-diff-approved').definition as ScenarioDefinition).prompt;
+  const step = prompt.slice(prompt.indexOf('3）'));
+  assert.ok(step.startsWith('3）'), 'the third step is there');
+  // No approval that waits on something the user has not seen yet (the summary, a later reply).
+  for (const conditional of ['看过', '之后批准', '后批准', '确认后', '等我']) assert.ok(!step.includes(conditional), conditional);
+  // The same present-tense approval of exactly the previewed diff, and the same write rule, as the daily scenario.
+  for (const sentence of ['我批准的就是把定时提醒 NotifyBeforeScheduledStart 从关改为开这一项，其他字段保持原样。', '预览出的差异正是这一项时，就按批准写入。']) {
+    assert.ok(diffApproved.includes(sentence), `daily-diff-approved still says: ${sentence}`);
+    assert.ok(step.includes(sentence), sentence);
+  }
+  assert.ok(step.includes('authorization.reference') && step.includes('「开启定时提醒」'));
+});

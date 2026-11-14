@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Evidence, Grant, EvidenceEvent } from './evaluation.ts';
 import { configDiff, projectionRevision } from '../skills/maa-core/scripts/config-projection.ts';
+import { decodeStdinJson, stdinJsonCode, stdinJsonCodes } from '../skills/maa-core/scripts/stdin-json.ts';
 
 /**
  * `drift` (ticket 30): the synthetic MAA changed the configuration by itself between the preview and the write
@@ -17,15 +18,81 @@ const object = (value: unknown): Value => {
   return value as Value;
 };
 const exact = (actual: unknown, expected: unknown) => { if (!isDeepStrictEqual(actual, expected)) throw new Error('evidence-mismatch'); };
-const decode = (bytes: unknown): string => {
+/** Canonical base64 only: anything else is not bytes the observer recorded. */
+const base64Bytes = (bytes: unknown): Buffer => {
   if (typeof bytes !== 'string' || Buffer.from(bytes, 'base64').toString('base64') !== bytes) throw new Error('bytes-required');
-  return Buffer.from(bytes, 'base64').toString('utf8');
+  return Buffer.from(bytes, 'base64');
 };
+const decode = (bytes: unknown): string => base64Bytes(bytes).toString('utf8');
 const utc = (value: unknown): number => {
   if (typeof value !== 'string' || new Date(value).toISOString() !== value) throw new Error('utc-required');
   return Date.parse(value);
 };
 const uuid = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
+
+/**
+ * 26 H3: the one place the grader takes a product CLI's recorded standard input from a daily observation: the exact bytes
+ * the CLI read, `inputBase64` (eval/daily-observer.mjs). A record written before 26 H3's round-1 fix has only `input`, those
+ * bytes decoded as UTF-8 (a byte that was not UTF-8 is already U+FFFD there); it is still read. A record with both is not one
+ * the observer writes and is refused. `tests/eval-recorded-stdin.test.ts` fails when anything else reads either field.
+ */
+function recordedStdinBytes(observation: { input?: unknown; inputBase64?: unknown }): Buffer {
+  if (Object.hasOwn(observation, 'inputBase64')) {
+    if (Object.hasOwn(observation, 'input')) throw new Error('input-ambiguous');
+    return base64Bytes(observation.inputBase64);
+  }
+  if (typeof observation.input !== 'string') throw new Error('input-required');
+  return Buffer.from(observation.input, 'utf8');
+}
+/**
+ * 26 H3 (R1): the one way the grader reads a product CLI's recorded request. It decodes the recorded bytes with the CLI's
+ * own reader, `decodeStdinJson` in maa-core: a Windows PowerShell 5.1 pipe's byte order mark is removed, and a request the
+ * reader refuses (`input-encoding-lossy`, not UTF-8, not JSON) throws its `StdinJsonError`, so the grader never reads more
+ * into a request than the CLI did.
+ */
+export function recordedStdinJson(observation: object): unknown {
+  return decodeStdinJson(recordedStdinBytes(observation), { maxBytes: null });
+}
+/**
+ * Every UTF-16 code unit outside ASCII as `?`, in keys and in strings: what Windows PowerShell 5.1, with its default us-ascii
+ * `$OutputEncoding`, makes of a request on a pipe (a character outside the BMP becomes `??`). Keys that would merge are refused.
+ */
+function asciiView(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(/[^\x00-\x7f]/g, '?');
+  if (Array.isArray(value)) return value.map(asciiView);
+  if (value === null || typeof value !== 'object') return value;
+  const entries = Object.entries(value).map(([key, item]) => [asciiView(key) as string, asciiView(item)] as const);
+  if (new Set(entries.map(([key]) => key)).size !== entries.length) throw new Error('keys-merge');
+  return Object.fromEntries(entries);
+}
+/**
+ * 26 H3 round-1 fix: whether a write the stdin reader refused asked for exactly what the counted write asked, as far as the
+ * refused bytes can tell. Its bytes, with a leading byte order mark removed, are decoded and parsed by the shared reader
+ * (so bytes that are not UTF-8, or text that is not JSON, still cannot be read); the two requests must then be equal with
+ * every non-ASCII character as `?`: the same keys at every level, the same `closedConfirmed`, every ASCII character, every
+ * number and boolean. Anything that cannot be compared is not the same request.
+ */
+function refusedRequestMatches(refused: object, counted: object): boolean {
+  try {
+    const bytes = recordedStdinBytes(refused);
+    const mark = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+    return isDeepStrictEqual(asciiView(decodeStdinJson(bytes.subarray(mark), { maxBytes: null })), asciiView(recordedStdinJson(counted)));
+  } catch { return false; }
+}
+/**
+ * A write the CLI's stdin reader refused before it read a setting or touched a file: exit 1, the reader's rejection as the
+ * whole output, no observed action, and the shared decoder refuses the recorded input with the same code. maa-core tells the
+ * caller to resend such a request escaped. Such a write is left out of the run's writes only when it also came before the
+ * counted write and asked for the same thing (`assessDailyTransaction`); any other write counts.
+ */
+function refusedBeforeRunning(item: Value): boolean {
+  if (item.exitCode !== 1 || !Array.isArray(item.actions) || item.actions.length) return false;
+  let output: unknown;
+  try { output = JSON.parse(item.output); } catch { return false; }
+  const reason = (output as Value | null)?.reason;
+  if (!Object.values<string>(stdinJsonCodes).includes(reason) || !isDeepStrictEqual(output, { ok: false, status: 'rejected', reason })) return false;
+  try { recordedStdinJson(item); return false; } catch (error) { return stdinJsonCode(error) === reason; }
+}
 
 /** A fixed reminder transaction, not a general generated-file authorization language. */
 export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence): { valid: boolean; grants: Grant[]; events: EvidenceEvent[] } {
@@ -43,8 +110,18 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
         !Number.isSafeInteger(item.pid) || item.pid <= 0 || utc(item.startedAt) < start || utc(item.endedAt) > end || utc(item.endedAt) < utc(item.startedAt)) throw new Error('invocation-invalid');
     }
     const writes = observed.filter(item => item.action === 'write');
-    if (writes.length !== 1) throw new Error('single-write-required');
-    const write = writes[0]!;
+    const performed = writes.filter(item => !refusedBeforeRunning(item));
+    if (performed.length !== 1) throw new Error('single-write-required');
+    const write = performed[0]!;
+    // 26 H3 round-1 fix: a write the stdin reader refused is left out only when it came before the counted write (earlier in
+    // the journal and finished before the counted write started) and asked for the same request; a refused write after the
+    // counted write (a confirmation, a replay, a write without a new preview), or one that asked for anything else or cannot
+    // be compared, counts as a second write.
+    for (const item of writes) {
+      if (item !== write && !(observed.indexOf(item) < observed.indexOf(write) && utc(item.endedAt) <= utc(write.startedAt) && refusedRequestMatches(item, write))) {
+        throw new Error('single-write-required');
+      }
+    }
     const read = observed.slice(0, observed.indexOf(write)).filter(item => item.action === 'read' && item.exitCode === 0).at(-1);
     if (!read) throw new Error('read-required');
     const revision = object(object(JSON.parse(read.output)).configuration).revision;
@@ -63,11 +140,11 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const preview = observed.slice(observed.indexOf(read), observed.indexOf(write)).filter(item => item.action === 'preview' && item.exitCode === 0).at(-1);
     if (!preview) throw new Error('preview-required');
     exact(object(JSON.parse(preview.output)).diffFingerprint, diffFingerprint);
-    const input = object(JSON.parse(write.input));
+    const input = object(recordedStdinJson(write));
     const closedInput = Object.hasOwn(input, 'closedConfirmed') ? { closedConfirmed: false } : {};
     exact(input, { host, expectedRevision: revision, authorization, changes: [change], diffFingerprint, ...closedInput });
     const request = ({ closedConfirmed: _closed, diffFingerprint: _approved, ...rest }: Value) => rest;
-    exact(request(object(JSON.parse(preview.input))), request(input));
+    exact(request(object(recordedStdinJson(preview))), request(input));
     const result = object(JSON.parse(write.output));
     if (!uuid(result.operation)) throw new Error('operation-required');
     const id = result.operation;
