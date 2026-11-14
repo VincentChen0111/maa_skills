@@ -160,12 +160,14 @@ test('changing a field outside the projection changes no decision of the writer,
   });
 });
 
-test('no maa-skills code names a field outside the projection', async () => {
+test('no shipped skill code names a field outside the projection', async () => {
+  // The shipped scripts (skills/) are what reads and writes MAA's configuration; the eval harness under scripts/ and eval/
+  // names the window placement only to simulate MAA's own write (ticket 30's drift scenarios).
   // A field is searched as a property access or a quoted key: by its own key, or by its parent's when the key is a
   // generic word (`Update.Name`).
   const names = [...new Set(projectionExclusions.map(exclusion => exclusion.at(-1)!.length > 6 ? exclusion.at(-1)! : exclusion.at(-2)!))];
   const found: string[] = [];
-  for (const directory of ['skills', 'scripts']) for (const file of await codeFiles(join(repository, directory))) {
+  for (const file of await codeFiles(join(repository, 'skills'))) {
     if (file.endsWith('config-projection.ts')) continue;
     const text = await readFile(file, 'utf8');
     for (const name of names) if (new RegExp(`\\.${name}\\b|['"\`]${name}['"\`]`).test(text)) found.push(`${relative(repository, file)}: ${name}`);

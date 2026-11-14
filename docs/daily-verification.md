@@ -329,7 +329,7 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 
 ### 投影
 
-`skills/maa-core/scripts/config-projection.ts` 是唯一定义：投影是整份配置去掉 `projectionExclusions` 的 9 个字段，就是上表里 MAA 运行时自己写、并且本项目没有代码读或写的那些：根上的 `Gui.WindowPlacement`、`Gui.HotKeys`、`Update.Name`、`Update.UpdatePackage`、`Update.IsFirstBoot`、`AnnouncementInfo.DoNotShowAgain`，每个配置的 `TaskSelectedIndex`，任务里的 `CreditFightLastTime`、`VisitFriendsLastTime`。其他字段原样保留，键顺序和「省略与 null 不同」都不变。
+`skills/maa-core/scripts/config-projection.ts` 是唯一定义：投影是整份配置去掉 `projectionExclusions` 的 9 个字段，就是上表里 MAA 运行时自己写、并且随 skill 发布的代码不读也不写的那些（评测的合成 MAA 为模拟 MAA 自己的写入会改窗口位置）：根上的 `Gui.WindowPlacement`、`Gui.HotKeys`、`Update.Name`、`Update.UpdatePackage`、`Update.IsFirstBoot`、`AnnouncementInfo.DoNotShowAgain`，每个配置的 `TaskSelectedIndex`，任务里的 `CreditFightLastTime`、`VisitFriendsLastTime`。其他字段原样保留，键顺序和「省略与 null 不同」都不变。
 
 - `projectionRevision`：读取摘要的 `revision`、写入器的版本核对、setup 专用入口的 `expectedRevision` 和候选 `discoveryRevision`、doctor 恢复写入时传给写入器的 `expectedRevision`。基建应用、换备选、作业准备和专精计划经读取摘要的 `revision` 得到它。
 - `wholeConfigFingerprint`：只给 doctor 判断「当前配置等于备份」或「等于预期结果」用，整份精确比较，规则不变。
@@ -359,7 +359,7 @@ MAA 用 System.Text.Json 读这个文件（上表第一行；工单说明里写�
 
 1. 行为测试 `tests/config-writer-diff.test.ts` 先写，实现前整份失败（`maa-config.ts` 没有 `previewConfigWrite` 导出）。
 2. 逐字节测试「the writer replaces only the changed values: every other byte of the file stays as MAA wrote it」在旧的整份重写下失败（差异见上一节），换成最小修改后通过。
-3. 一致性测试 `tests/config-projection.test.ts`：把 `['Configurations', '*', 'TaskQueue', '#', 'UseStone']` 加进排除表后跑，「every field the writer writes or its decisions read is in the approval projection」「the projection function keeps every enumerated field and drops exactly the excluded ones」「changing a field outside the projection changes no decision ...」的 `UseStone` 子项、「no maa-skills code names a field outside the projection」四项失败，报出 `writer whitelist (maa-config.ts writerFields): Configurations.*.TaskQueue.#.UseStone` 和谓词表的同一字段；去掉后全部通过。测试里还保留了对每一个枚举字段的同样检查（「dropping any enumerated field from the projection makes the conformance check fail」）。
+3. 一致性测试 `tests/config-projection.test.ts`：把 `['Configurations', '*', 'TaskQueue', '#', 'UseStone']` 加进排除表后跑，「every field the writer writes or its decisions read is in the approval projection」「the projection function keeps every enumerated field and drops exactly the excluded ones」「changing a field outside the projection changes no decision ...」的 `UseStone` 子项、「no shipped skill code names a field outside the projection」四项失败，报出 `writer whitelist (maa-config.ts writerFields): Configurations.*.TaskQueue.#.UseStone` 和谓词表的同一字段；去掉后全部通过。测试里还保留了对每一个枚举字段的同样检查（「dropping any enumerated field from the projection makes the conformance check fail」）。
 4. 「a current request without the approved diff fingerprint ...」里 `jobPlan: null` 的子项，在把「是否带计划」写成「有这个键」时失败（空占位免掉了指纹要求），改成「键里有计划」后通过。
 
 一致性测试的内容：从导出表（`writerFields`、`taskDecisionFields`、`consumptionDecisionFields`、`timerDecisionFields`、`writerDependencies`、`connectionDecisionFields`）枚举字段并要求都在投影里；用代理对象追踪 `decideConsumption` 实际读的任务字段，必须正好是它的表；逐个改动排除字段，读取摘要、六种预览（提醒、重排、启用、定时、带批准的理智药、没批准的碎石）、字段检查、维护窗口和 setup 发现的结果都不变；检索 `skills/` 里每个计算或比较配置 revision 的位置，都经 `projectionRevision` 或读取摘要，只有 doctor 的比较用 `wholeConfigFingerprint`。
