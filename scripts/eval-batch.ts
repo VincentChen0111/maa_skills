@@ -9,7 +9,7 @@ import { compareRuns, type Comparison, type Host, type RunRecord } from './evalu
 import { probeVersion } from './eval-host.ts';
 import { entryId, scenarioCatalog, scenarioGroups, selectScenarios, type ScenarioEntry } from './eval-scenarios.ts';
 import { createFixture } from './eval-fixture.ts';
-import { artifactWriter, redactor } from './eval-redact.ts';
+import { artifactWriter, loginDirectoryForms, redactor } from './eval-redact.ts';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -77,13 +77,18 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
   const auth = options.auth ?? 'plan';
   const executable = options.executable ?? process.env[executableVariables[options.host]] ?? options.host;
   const executableArgs = options.executableArgs ?? [];
-  const loginDirectory = auth === 'plan' ? resolveLoginDirectory(options.host, options.loginDirectory) : undefined;
+  // The login directory as given (resolved), and its forms, decided once before any use by the one owner (`loginDirectoryForms`):
+  // the lock beside it and the sentinel check take the long form, the redaction every form. The preflight and the check are handed
+  // the given form and decide the same forms from it; the runs take the forms from the check's pass.
+  const givenLoginDirectory = auth === 'plan' ? resolveLoginDirectory(options.host, options.loginDirectory) : undefined;
+  const loginForms = givenLoginDirectory ? loginDirectoryForms(givenLoginDirectory) : undefined;
+  const loginDirectory = loginForms?.[0];
   const probeFixture = await createFixture();
   let version;
   try { version = probeVersion(executable, executableArgs, probeFixture.workspace, probeFixture.env); } finally { await probeFixture.dispose(); }
   const fingerprint = { hostVersion: version.version, model: options.model, auth, payload: await payloadFingerprint(options.entries), runner: await runnerFingerprint() };
   // The manifest is an artifact like any other: saved only through the one redaction (so it is compared in redacted form too).
-  const artifactContext = { ...(loginDirectory ? { loginDirectory } : {}), executable };
+  const artifactContext = { ...(loginForms ? { loginDirectory: loginForms } : {}), executable };
   let directory: string; let manifest: BatchManifest;
   if (options.resume) {
     directory = resolve(options.resume);
@@ -130,13 +135,13 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
     if (interrupted()) return await abort('interrupted', 'auth-preflight');
     let runAuth: RunAuth = auth === 'host-double' ? { mode: 'host-double' } : { mode: 'api-key' };
     if (auth !== 'host-double') {
-      const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(loginDirectory ? { loginDirectory } : {}),
+      const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(givenLoginDirectory ? { loginDirectory: givenLoginDirectory } : {}),
         ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
       const { host: _host, ...recorded } = preflight; attempt.authPreflight = recorded;
       if (preflight.status !== 'pass') return await abort(preflight.category ?? 'other', 'auth-preflight');
       if (auth === 'plan') {
         // The check comes after the auth preflight and before the first scenario with tools; failure stops this host's batch.
-        const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: loginDirectory!, artifactDirectory: directory,
+        const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: givenLoginDirectory!, artifactDirectory: directory,
           ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
         const { host: _checked, pass, ...result } = check; attempt.readProtection = result;
         if (check.status !== 'pass' || !pass) return await abort(check.category ?? 'read-protection-failed', 'read-protection');

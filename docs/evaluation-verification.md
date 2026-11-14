@@ -483,3 +483,55 @@ PR #77 的 windows-latest 有两项失败，本机和 ubuntu-latest 都通过。
 | 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
 
 未验证：windows-latest 和 ubuntu-latest 的 CI 要等协调者推送后才跑；ubuntu 上两个 Windows 短名测试跳过，联接测试改用目录符号链接，本地没有在 Linux 上运行。
+
+## #80 登录目录在评分、拒绝规则和读保护探测里的写法（2026-11-14）
+
+来源：[Issue #80](https://github.com/VincentChen0111/maa_skills/issues/80)，工单 28 第九轮独立审查在范围外看到的观察，协调者记为后续加固。默认登录目录是运行器按 home 拼出的长名，默认配置下不触发；用 `--login-dir` 或环境变量给出短名、经联接或大小写不同的写法时才会。
+
+原因：第九轮之后，重叠检查和产物脱敏都按长形式（`longPath`）比较，还有三处只用给出时的写法：
+1. 评分：`scripts/eval-run.ts` 的 `secrets` 只放给出时的写法（加两种斜杠变体），`grade` 用区分大小写的 `includes` 查。登录目录以短名或经联接给出、模型说出长名时判不出 `secret-output`（落盘产物仍有脱敏兜底）。
+2. 拒绝读取规则：`scripts/eval-host.ts` 给 Claude 的 `Read(...)` 和给 Codex 的 `permissions.maa_eval.filesystem` 只写给出时的写法。沙箱如果按字符串比对，模型用长名去读就可能不受拒绝。
+3. Codex 的强制探测也只经给出时的写法读哨兵，测不出沙箱是不是按字符串比对。
+
+修法（规格「默认值及其来源」新增一行，「测试决定」同步）：
+- 一处归一：`scripts/eval-redact.ts` 新增 `loginDirectoryForms`，长形式在前，给出时的写法与它不同时在后，数组冻结。认证预检、读保护检查和批次在使用之前各算一次；场景运行取读保护通过对象里的 `loginForms`，也就是检查证明过的那一组。宿主的配置目录变量、哨兵和提示词、批次锁文件用长形式；两个宿主的拒绝规则、评分的秘密路径、脱敏和强制探测用全部写法。
+- 评分：`Policy` 新增 `secretPaths`，运行器把登录目录的全部写法放进去；`grade` 用 `scripts/eval-redact.ts` 新导出的 `pathMatcher` 查。它就是脱敏用的那组模式：给出的、解析后的、长形式三种写法，任意分隔符、JSON 转义和百分号编码，不分大小写。没有另写匹配器；合成秘密仍按原值查。
+- 拒绝规则：Claude 每种写法一条 `Read(...)`；Codex 的 `filesystem` 表每种写法一项。
+- 强制探测：先经每种写到的写法读哨兵，再经三种没有写到的写法各读一次：8.3 短名（`shortPath`：Windows 上用 `cmd` 的 `%~s`，路径经环境变量传入，`/u` 输出 UTF-16，结果必须与原路径是同一个长形式）；在这次检查的临时目录里建的联接（读完即删，删不掉时 `probe-junction-not-removed`）；大小写互换（长形式相同时）。记录为 `enforcementProbe.alternates`；有的写法都必须 `denied`，三种都没有时 `alternate-form-unavailable`。
+- `loginDirectoryRefusal` 对每种写法检查单引号、换行和 NUL：经联接给出、联接指向的名字里有单引号时，长形式也会写进 Codex 的 TOML 拒绝项。
+- 宿主替身（`eval/host-double.mjs`）：`enforce` 改为按文件本身判断（两边取 `realpath`），新增 `by-name`（按字符串精确比对的沙箱）；运行记录带 `fixtureEntries`，用来证明模型启动时联接已经不在。
+
+这一轮的选择（设计默认值，2026-11-14，不是维护者原话）：
+- 三种另一种写法都找不到时检查不通过，不跳过放行。「如实跳过」在这里指记为 `not-available`、不当作拒绝；只用规则写到的写法证明不了沙箱按文件本身拒绝，放行就是失效放行。实际上联接几乎总能建（Windows 建联接不需要提权，其他系统用目录符号链接）。
+- 有的另一种写法全部都读，不只取一种：三种写法测的是不同的绕过方式（短名、重解析点、大小写），每种只多一次不调用模型的 `codex sandbox`。
+- Claude 一侧不往提示词里加另一种写法的读取尝试：Claude 没有不经模型的探测，加进提示词的尝试只能靠真模型验证，而 Claude 的真模型评测按维护者 2026-11-14 的选择暂缓。拒绝规则照样写两种写法。
+- 评分查路径在所有平台上都不分大小写（脱敏也是）；在区分大小写的系统上只会多判，不会漏判。
+- 场景回放文件 `scenario.json` 的 `policy.secrets` 照旧只写占位符 `<login-dir>`；`secretPaths` 就是登录目录本身，不落盘。
+
+先红后绿（Windows，Node 24；本机系统盘有 8.3 短名、不分大小写，三种写法都走到）：
+- 红：`.tmp/logs/f80-red-evaluation.log`（1 项失败）、`f80-red-eval-auth.log`（5 项）、`f80-red-eval-host-double.log`（1 项）。
+- `tests/evaluation.test.ts`「#80: a secret path (the login directory) is found in every spelling…」：登录目录经联接给出，回复里出现长名（原样、全大写、全小写、正斜杠、JSON、`file:` URL、`encodeURIComponent`）都判 `secret-output`，同级目录不判。
+- `tests/eval-auth.test.ts`「#80: a login directory given in short, junction or case-variant form is used in its long form…」：联接、8.3 短名、大小写变体三种给法，经宿主替身走完读保护检查和一次场景运行：通过对象的 `loginForms` 是长形式加给出时的写法；每次宿主启动的配置目录都是长形式；Codex 的拒绝项和 Claude 的 `Read(...)` 规则都含两种写法；回复说出长名判 `secret-output`，不说不判。没有短名或区分大小写的卷上，那两种给法记一条诊断后跳过，联接照常跑。
+- 同文件「#80: the Codex enforcement probe also reads the sentinel through forms the deny rules do not name…」：登录目录按长形式给出；`enforce` 下三种写法都 `denied`、检查通过；`by-name` 下三种都 `read`、检查不通过、不启动模型；联接在检查自己的临时目录里，模型启动时已经不在。期望值按本机能取到的写法算（Linux 上短名和大小写记 `not-available`，只读联接）。
+- 同文件「#80: a login directory whose long form holds a refused character…」：经联接给出、指向含单引号的名字时拒绝。
+- `tests/eval-redact.test.ts`「#80: the 8.3 short form of a login directory…」：路径含 `%PATH%`、`^&()!`、空格和中文时照样取到短名，并指回同一处；`loginDirectoryForms` 的顺序。
+- `tests/eval-host-double.test.ts`：两个宿主的拒绝规则各含两种写法。原有的 Codex 探测用例改为按写法数核对读取次数和顺序（写到的写法、另一种写法、对照）。
+
+运行器指纹和场景身份：`scripts/evaluation.ts`、`eval-run.ts`、`eval-host.ts`、`eval-auth.ts`、`eval-redact.ts`、`eval-batch.ts` 都是运行器源码，运行器指纹随之改变；前五个在场景摘要的来源里，每个场景的场景摘要也变了。载荷指纹不变（场景定义和 skill 没改）。这是预期的：本节之前的记录不能与之后的比较，也不能用之后的运行器续跑（续跑核对运行器指纹，不同就拒绝）。
+
+按负载规则一次一个运行（Windows，Node 24，在本节提交的代码上）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts`、`eval-redact`、`eval-run`、`eval-host-double`、`eval-batch` | 12、6、5、12、10 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-comparability`、`eval-fixture`、`docs-consistency` | 12、7、7、5 项通过 |
+| `node scripts/privacy.ts` | 无发现 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
+简报列出的 `eval-payload` 没有单独的测试文件；载荷指纹的测试在 `tests/eval-batch.test.ts` 里。
+
+未验证：
+- 真实 Codex（MXC 沙箱）是否接受两条拒绝项、是否按文件本身拒绝经短名、联接和大小写变体的读取：要维护者登录后的真实读保护检查。按字符串比对时检查不通过、不启动模型，交回维护者决定。
+- Claude 一侧另一种写法是否被拒没有探测（Claude 的真模型评测暂缓）。
+- Linux：短名和大小写变体在 Linux 上记 `not-available`，联接改用目录符号链接；本地没有在 Linux 上运行，等 CI。

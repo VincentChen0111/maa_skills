@@ -96,6 +96,23 @@ test('on Windows a login directory named in the 8.3 short form is redacted in it
     }
   });
 
+test('#80: the 8.3 short form of a login directory, for the read-protection probe, survives any character in the path and names the same place',
+  { skip: shortRoot ? false : 'no 8.3 short names here (not Windows, or short names are off on this volume)' }, async () => {
+    const { longPath, shortPath, loginDirectoryForms } = await import('../scripts/eval-redact.ts');
+    // The path reaches cmd through a variable: percent signs, carets, ampersands, parentheses and non-ASCII names are not parsed.
+    const long = join(longRoot, `odd %PATH% ^&()! 张三 ${unique()}`, 'codex-home-long-name');
+    await mkdir(long, { recursive: true });
+    const short = shortPath(long);
+    assert.ok(short, 'a short form exists on this volume');
+    assert.equal(short!.toLowerCase().includes('codex-home-long-name'), false, 'it is the short form');
+    assert.equal(longPath(short!), long, 'and names the same place');
+    const absent = shortPath(join(long, 'absent'));
+    assert.equal(absent && longPath(absent), join(long, 'absent'), 'below a missing part only the existing part is shortened, and it still names the same place');
+    // The forms the runner holds: the long form first, then the given one where it differs.
+    assert.deepEqual(loginDirectoryForms(short!), [long, short]);
+    assert.deepEqual(loginDirectoryForms(long), [long]);
+  });
+
 test('every producer writes every artifact through the one redaction: no private path survives in any file a batch writes', async () => {
   for (const host of ['claude', 'codex'] as const) {
     const loginMarker = `LoginMarker${unique()}`;

@@ -33,27 +33,29 @@ export function claudePermissionPath(path: string): string {
   return drive ? `//${drive[1]!.toLowerCase()}/${drive[2]}` : `/${posix}`;
 }
 
-export function claudeSettings(loginDirectory?: string): string {
+/** One deny rule per form of the login directory the runner holds (`loginDirectoryForms`: the long form, then the given one). */
+export function claudeSettings(loginDirectories: readonly string[] = []): string {
   return JSON.stringify({
     disableAllHooks: true, autoMemoryEnabled: false,
     enabledPlugins: Object.fromEntries(claudeBuiltinPlugins.map((name) => [name, false])),
-    permissions: { blockReadsOutsideWorkingDirectories: true, deny: loginDirectory ? [`Read(${claudePermissionPath(loginDirectory)}/**)`] : [] },
+    permissions: { blockReadsOutsideWorkingDirectories: true, deny: loginDirectories.map((directory) => `Read(${claudePermissionPath(directory)}/**)`) },
     sandbox: { enabled: true },
   });
 }
 
-export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectory?: string };
+/** `loginDirectories`: every form of the login directory the runner holds (`loginDirectoryForms`), each denied. */
+export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectories?: readonly string[] };
 /**
  * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base and
- * the deny entry for the login directory. `exec` and the read-protection enforcement probe (`codex sandbox`) both take it from here.
+ * one deny entry per form of the login directory. `exec` and the read-protection enforcement probe (`codex sandbox`) both take it from here.
  */
-export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectory?: string }): string[] {
+export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }): string[] {
   return [...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
     '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
-    ...(options.loginDirectory ? ['-c', `permissions.maa_eval.filesystem={'${options.loginDirectory}'='deny'}`] : [])];
+    ...(options.loginDirectories?.length ? ['-c', `permissions.maa_eval.filesystem={${options.loginDirectories.map((directory) => `'${directory}'='deny'`).join(',')}}`] : [])];
 }
 /** `codex sandbox` running one command under exactly the profile `exec` gets for the same options; no model is involved. */
-export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectory?: string }, command: string[]): string[] {
+export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }, command: string[]): string[] {
   return ['sandbox', ...codexPermissionArguments(options), '--', ...command];
 }
 /** One argument set for every authentication mode, so plan-login and API-key records share the runner fingerprint. */
@@ -69,7 +71,7 @@ export function hostArguments(host: Host, options: HostArgumentOptions): string[
   return ['-p', '--model', options.model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--permission-prompts', 'none',
     '--safe-mode', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--tools', ...tools,
     ...(options.toolless ? [] : ['--allowedTools', 'Read', ...commands.map((command) => `Bash(${command})`), '--add-dir', options.workspace]),
-    '--settings', claudeSettings(options.loginDirectory)];
+    '--settings', claudeSettings(options.loginDirectories)];
 }
 
 export function expectedClaudeTools(options: { commands?: string[]; toolless?: boolean }): string[] {

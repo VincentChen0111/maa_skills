@@ -70,7 +70,10 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     }
     const executable = options.executable ?? options.host;
     const executableArgs = options.executableArgs ?? [];
-    const loginDirectory = auth.mode === 'plan' ? auth.readProtection?.loginDirectory : undefined;
+    // The forms the read-protection check normalised once and proved denied (`loginDirectoryForms`): every use takes the long
+    // form (the first); the deny rules, the grader's secret paths and the redaction take every form.
+    const loginForms = auth.mode === 'plan' ? auth.readProtection?.loginForms : undefined;
+    const loginDirectory = loginForms?.[0];
     const version = probeVersion(executable, executableArgs, fixture.workspace, fixture.env);
     let raw = ''; let stderr = ''; let exitCode: number | null = null;
     let executionWindow: ExecutionWindow | undefined;
@@ -84,9 +87,10 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
         : `先读 ${layout}/skills/${installed[0]}/SKILL.md，再按待测 skill 说明操作。`);
     const commands = options.reviewBrief ? [] : custom ? custom.commands ?? custom.policy.expectedCalls : ['node probe.ts write'];
     const args = hostArguments(options.host, { model: options.model, workspace: fixture.workspace, commands, readOnly: !!options.reviewBrief,
-      ...(loginDirectory ? { loginDirectory } : {}) });
+      ...(loginForms ? { loginDirectories: loginForms } : {}) });
     const env = childEnvironment(fixture, options.host, auth.mode, loginDirectory);
-    const secrets = [...fixture.policy.secrets, ...(loginDirectory ? [loginDirectory, loginDirectory.replaceAll('\\', '/'), loginDirectory.replaceAll('\\', '\\\\')] : [])];
+    // Every form of the login directory is a secret path: found in any spelling the redaction recognises, in either case.
+    const secretPaths = loginForms ? [...loginForms] : [];
     if (version.available) {
       if (auth.mode === 'host-double' && !version.double) reason = 'host-double-required';
       else if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) reason = 'ci-disabled';
@@ -118,7 +122,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     const source = async (file: string) => readFile(new URL(file, import.meta.url), 'utf8');
     const sources = Object.fromEntries(await Promise.all(scenarioHashSources.map(async (file) => [file, await source(file)] as const)));
     const skill = JSON.stringify([...fixture.original].filter(([file]) => file.startsWith('.agents/skills/')));
-    let graded = grade({ ...fixture.policy, secrets }, evidence);
+    let graded = grade({ ...fixture.policy, secretPaths }, evidence);
     if (!transcript.completed && reason === 'completed') reason = 'incomplete-transcript';
     // Every reason other than a completed run stays unverified; a completed run with unlisted loads is not a baseline either.
     if (reason !== 'completed') graded = { ...graded, status: 'unverified', score: 0 };
@@ -134,7 +138,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       ...(executionWindow ? { durationMs: Date.parse(executionWindow.endedAt) - Date.parse(executionWindow.startedAt) } : {}),
     };
     // Paths are replaced by fixed placeholders before anything reaches disk.
-    const save = artifactWriter(artifactDirectory, { ...(loginDirectory ? { loginDirectory } : {}), fixture, executable });
+    const save = artifactWriter(artifactDirectory, { ...(loginForms ? { loginDirectory: loginForms } : {}), fixture, executable });
     await save('run.json', JSON.stringify(record, null, 2));
     await save('evidence.json', JSON.stringify(evidence, null, 2));
     await save('host.jsonl', raw);
