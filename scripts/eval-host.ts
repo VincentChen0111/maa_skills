@@ -99,6 +99,15 @@ export function codexPermissionArguments(options: { readOnly?: boolean; loginDir
     '-c', `shell_environment_policy.exclude=[${sandboxExcludedVariables.map((name) => `"${name}"`).join(',')}]`,
     '-c', `shell_environment_policy.set={PATH=${tomlBasicString(options.shellPath!)}}`];
 }
+/**
+ * The arguments as a record keeps them: the pinned PATH value becomes `<shell-path>`. The PATH can name places the path redaction
+ * does not know (npm adds `node_modules/.bin` of every directory above the repository, and a user's PATH has its own entries), so its
+ * value never reaches disk; the arguments given to the host are unchanged. It is the same child-environment PATH the run used.
+ */
+export const recordedShellPath = '<shell-path>';
+export function recordedArguments(args: readonly string[]): string[] {
+  return args.map((arg) => (arg.startsWith('shell_environment_policy.set=') ? `shell_environment_policy.set={PATH=${recordedShellPath}}` : arg));
+}
 /** `codex sandbox` running one command under exactly the profile `exec` gets for the same options; no model is involved. */
 export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[]; shellPath?: string }, command: string[]): string[] {
   return ['sandbox', ...codexPermissionArguments(options), '--', ...command];

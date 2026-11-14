@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createFixture, collectEvidence, renderPolicy, type MaaProcessMode } from './eval-fixture.ts';
 import { normalizeHost, grade, scenarioIdentity, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
 import { childPath, claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, hostExecutable, probeVersion, reportedUsage,
-  sandboxPathRefusal, type RunReason } from './eval-host.ts';
+  recordedArguments, sandboxPathRefusal, type RunReason } from './eval-host.ts';
 import { childEnvironment, isReadProtectionPass, loginDirectoryRefusal, type ReadProtectionPass } from './eval-auth.ts';
 import { artifactWriter } from './eval-redact.ts';
 import { observeReports, withReportEvidence } from '../eval/report-observer.ts';
@@ -159,7 +159,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
     await save('evidence.json', JSON.stringify(evidence, null, 2));
     await save('host.jsonl', raw);
     await save('stderr.txt', stderr);
-    await save('invocation.json', JSON.stringify({ args, prompt, reason }, null, 2));
+    await save('invocation.json', JSON.stringify({ args: recordedArguments(args), prompt, reason }, null, 2));
     // The login directory never reaches disk, in any spelling: the saved scenario names it by placeholder only.
     await save('scenario.json', JSON.stringify({ policy: { ...fixture.policy, secrets: [...fixture.policy.secrets, ...(loginDirectory ? ['<login-dir>'] : [])] }, jsonInputs: custom?.jsonInputs ?? {}, jsonFiles: fixture.jsonFiles, commands: custom?.commands,
       maaProcess: custom?.maaProcess, networkFixtures: custom?.networkFixtures, setupBoundary: custom?.setupBoundary, skills: custom?.skills }, null, 2));
