@@ -147,7 +147,7 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 | `UseStoneAllowSave`（bool，「允许保存碎石状态」） | 同一文件第 134 行 | 同上 | 25 |
 | 读入配置后的 `OnDeserialized`：`UseStoneAllowSave` 为 false 时把 `UseStone` 置为 false | 同一文件第 154–159 行 | 同上 | 25 |
 | 界面设置到 MaaCore 参数的换算：`medicine` 在 `UseMedicine` 不为 false 时取 `MedicineCount`，否则为 0；`stone` 同理取 `StoneCount`；`medicine_expire_days` 取「`UseExpiringMedicine` 时的 `MedicineExpireDays`」与「当前活动两天内结束且 `UseExpireMedicineForActivity` 时到鹰历周末的天数」两者的较大值 | [FightTaskUserControlModel.cs 第 1337–1361 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L1337-L1361) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` | 25 |
-| 界面打开碎石：保存开关没开时改存 null（不保存）；打开时把理智药数量设为 999，理智药没开就一起打开；关闭理智药时一起关闭碎石 | 同一文件第 379–437 行 | 同上 | 25 |
+| 界面打开碎石：保存开关没开时改存 null（不保存）；打开时把理智药数量设为 999，理智药原来关着时把理智药开关存成与碎石开关相同的值（保存开关没开时两者都是 null）；关闭理智药时一起关闭碎石。2026-11-14 更正（Issue #82）：原写「理智药没开就一起打开」，不准确 | 同一文件第 379–437 行 | 同上 | 25 |
 | 打开「允许使用源石保存状态」时弹出警告，图标用危险色，默认按钮是取消 | 同一文件第 1060–1083 行 | 同上 | 25 |
 | 参数的 JSON 名是 `medicine`、`medicine_expire_days`、`stone` | [AsstFightTask.cs 第 37–50 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Models/AsstTasks/AsstFightTask.cs#L37-L50) | `883cc83738acd64bd8fd7c2b97e2c6b4380b0f00` | 25 |
 | MaaCore 读入 `medicine`、`medicine_expire_days`（负数拒绝；旧参数 `expiring_medicine` 换算为 2 天）和 `stone` | [FightTask.cpp 第 70–89 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/Interface/FightTask.cpp#L70-L89) | `7dfbdf4cfbfd9073407068b6b42d8a5f9da8b65e` | 25 |
@@ -292,7 +292,9 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 6. doctor（10）：
    - 并存：`doctor.ts` 的命令行同时有 10 的 `analyze`（`run`、`interfaceUnobscured`、`conclusion`、`processExitCode`）和 27 的 `repair` 输入白名单（加 `stoneCount`、`expiringMedicine`）；文档一致性测试的接口表两项都列。27 的恢复规则在 `executeConfigRecovery` 里，10 的检查行和 `blockingChecks` 不经过恢复，互不改动。maa-doctor 的 skill 正文按 10 的新结构合并，27 的恢复说明落在第 9 步。
    - 一个判断（记在这里，不是产品限制）：10 的字段检查 `inspectManagedFields` 只核对任务、理智药和定时字段，不扩到碎石和临期药。理由：MAA 自己会存 null 的碎石开关（界面打开碎石而没有允许保存时），这一行出错会挡住关卡运行（`blockingChecks`），扩进来就会把 MAA 的正常状态当作阻塞错误；这些字段的状态已经由读取摘要按谓词列出。函数注释写明了这一点。
-   - `tests/doctor-checks.test.ts` 的「stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing」：null 的碎石开关、开着的碎石和临期药，字段检查为 `normal`，退出码 0。这是合并后的现状，测试一写就通过，用来防止以后扩检查时把这些状态变成阻塞错误。
+     - 2026-11-14 更正（Issue #82）：这里说「MAA 自己存的碎石状态不算阻塞错误」，合并时并不成立。同一个界面操作在理智药原来关着时，把 `UseMedicine` 也存成 null；当时的字段检查把它判为 `fight.UseMedicine` 无效，会挡住关卡重试。现在字段检查接受 null 的理智药开关，见下文「后续：界面开碎石后理智药开关的 null（Issue #82）」。
+   - `tests/doctor-checks.test.ts` 的「stone and expiring-medicine states are not configuration-field errors and block nothing」：null 的碎石开关、开着的碎石和临期药，字段检查为 `normal`，Windows 上退出码 0。这是合并后的现状，测试一写就通过，用来防止以后扩检查时把这些状态变成阻塞错误。
+     - 2026-11-14 更正（Issue #82）：测试原名带「MAA itself saves」，但第一个任务的状态（碎石 null、理智药 false）不是界面开关能产生的。现在改了名，作为额外样例保留。界面真正存下的状态由 Issue #82 一节的新测试覆盖。
    - 运行：`doctor` 97 项、`doctor-checks` 28 项、`doctor-scenarios` 22 项、`check-purposes` 5 项，全部通过。
 
 ## 30 配置写入器加固：投影指纹与差异核对
@@ -444,3 +446,75 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 - 没有在真实 MAA 上让它读按准备顺序写出的作业列表；System.Text.Json 按属性名读取、和键顺序无关，是库的行为，不是在 MAA 上实测的。这个库只要求多态任务的 `$type` 在最前；写入器整项写出的对象都在改动路径之下（作业列表项、房间列表的行等），改动路径从不指向带 `$type` 的任务本身，任务队列重排时每个任务保留原字节，所以不会挪动 `$type`。
 - MAA 启动时一定会整份保存一次，是按源码和 Fody 的默认行为推断的（「验收 1」）。
 - 真模型评测没有运行，原因同上。
+
+## 2026-11-14 后续：界面开碎石后理智药开关的 null（Issue #82）
+
+来源：27 第四轮独立审查接受的一条 P3，按三轮上限转为 [Issue #82](https://github.com/VincentChen0111/maa_skills/issues/82)。用户在 MAA 界面做了一次普通操作之后，doctor 把 MAA 自己存下的 `UseMedicine: null` 判为 `fight.UseMedicine` 无效。结果是 `configuration-fields` 报阻塞错误、挡住关卡重试，给出的原因还是「字段无效」。方向是失败即拒绝，没有发生消耗。
+
+协调者决定采用 Issue 的修法 (a)：`inspectManagedFields` 接受 null 的理智药开关。
+
+- 理由：MAA v6.21.4 里这个字段是 `bool?`；界面在普通操作后自己存下 null；消耗谓词和读取摘要本来就把 null 当作开启。
+- 不用 (b)：保留阻塞会让一次普通的界面操作挡住关卡重试，原因还让人误解。
+- 规格已登记，设计默认值，2026-11-14：「默认值及其来源」里 10 配置字段检查一行、「规则来源」10 一行、「检查与修法」正文。
+
+### 固定 MAA 源码复核（Issue #82）
+
+2026-11-14 经 `raw.githubusercontent.com` 只读取固定提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`（v6.21.4）上的三个文件，用 `git hash-object` 算 blob。结果与上文「固定 MAA 源码核实」表、依赖条目 `fight-stone-expiring-medicine` 的 blob 一致；这三个文件在 v6.22.0 上 blob 相同，见 [MAA 版本来源](maa-version-sources.md)。文件只放在本机临时目录，没有写进仓库。
+
+| 事实 | 文件与行 | blob |
+| --- | --- | --- |
+| `UseMedicine`、`UseStone` 是 `bool?`，默认 false | [FightTask.cs 第 35–45 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs#L35-L45) | `c0a047df055c553410ef417ccf16a614f73337e0` |
+| `OnDeserialized`：`UseStoneAllowSave` 为 false 时只把 `UseStone` 置为 false，不动 `UseMedicine` | 同一文件第 154–159 行 | 同上 |
+| `UseStone` 的 setter：没开允许保存而值为 true 时改为 null；值不为 false 时先把理智药数量设为 999，`UseMedicine` 为 false 时把它设为同一个值；最后存碎石开关 | [FightTaskUserControlModel.cs 第 416–437 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L416-L437) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` |
+| 界面的碎石勾选框直接绑定 `UseStone`：左键勾上传 true，再按上一行改为 null；右键直接设为 null。理智药勾选框同样能右键设为 null | [FightTaskUserControl.xaml 第 46–60 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L46-L60) | `a42b1ce8012bff323fcd6b3c2dac47d6020678ea` |
+| `UseStoneDisplay` 读的是 `UseStone != false`，写时原样转给 `UseStone`；xaml 只在第 45、79 行以 `IsEnabled` 单向读取它，用来在碎石开着时禁用理智药勾选框和数量框，碎石勾选框不经过它；`UseMedicine` 的 setter 在值为 false 时经它关闭碎石（第 390 行） | [FightTaskUserControlModel.cs 第 442–447 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L442-L447)；[FightTaskUserControl.xaml 第 45、79 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L45-L79) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b`；`a42b1ce8012bff323fcd6b3c2dac47d6020678ea` |
+| `UseMedicine` 的 setter：值为 false 时经 `UseStoneDisplay` 一并关闭碎石 | [FightTaskUserControlModel.cs 第 379–395 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L379-L395) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` |
+
+由此可知：
+
+- 理智药原来关着时，用户勾上碎石而没开「允许保存」，配置里存下 `{UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false}`。
+- MAA 重启后变成 `{UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false}`。
+- 按上文表里第 1337–1361 行的换算，两种状态下 MaaCore 都拿到 999 瓶理智药（`UseMedicine` 不为 false），第一种还拿到碎石数量。
+- 理智药原来开着时 `UseMedicine` 保持 true，字段检查本来就接受。
+- 上文表里「理智药没开就一起打开」的说法已经更正。
+
+### 改动（Issue #82）
+
+- `skills/maa-core/scripts/maa-config.ts`：`inspectManagedFields` 对 `UseMedicine` 接受布尔值和 null，其他值照旧是错误；函数注释改正 `50cb199` 的说法。
+- 测试：`tests/doctor-checks.test.ts`、`tests/consumption-grant.test.ts`、`tests/maa-config.test.ts` 各加一项，见下表；`50cb199` 的测试改名、改注释。
+- 文字：本文件「合并 28 最终版和 main 之后的适配」第 6 项和「固定 MAA 源码核实」表；规格三处；依赖条目的说明。
+
+### 验收对照（Issue #82）
+
+| 要求 | 证据 |
+| --- | --- |
+| 界面真正存下的状态（重启前、重启后）字段检查为正常，`blockingChecks(..., 'stage-retry')` 不含 `configuration-fields` | `tests/doctor-checks.test.ts`「the medicine and stone switches the MAA GUI saves when stone is turned on without allow-save are valid fields and block no stage retry」的两个子项 |
+| 先红后绿 | 改代码之前，上面两个子项失败：实际 `['error', 'managed-fields-invalid']`，期望 `['normal', 'managed-fields-valid']`；其余 4 个子项通过。改之后 7 项全部通过 |
+| 其他非法值仍是错误 | 同一测试的 4 个子项：字符串、数字、对象、数组，都报 `fight.UseMedicine` 错误并挡住关卡重试 |
+| 消耗谓词照旧把 null 当作开启 | `tests/consumption-grant.test.ts`「the switches the MAA GUI saves for stone without allow-save stay on for the predicate, and no quantity grant opens them as saved」。两种状态被启用或计数时都是 `medicine-grant-required`；理智药和碎石数量授权一起给，仍是 `medicine-settings-invalid`。按写入器的方式打开理智药之后，重启前的 null 碎石开关仍要 `stone-grant-required`；重启后碎石已关，可以放行 |
+| 没有授权时，启用、重排、定时都被拒绝 | `tests/maa-config.test.ts`「the switches the MAA GUI saves for stone without allow-save still count as on: no write runs that task without the grants」，两种状态各 5 个写入样例。启用、开着时重排、启用跑它的定时都是 `medicine-grant-required`，在访问进程之前拒绝，不写文件；带两种数量授权仍是 `medicine-settings-invalid`；只用当次请求关掉 null 的开关可以完成 |
+| 读取摘要列为开启 | 同一测试的「the read summary lists the null switches」：`medicine.on` 为 null，碎石重启前为 null、重启后为 false。读取摘要约定 null 按开启处理，见 maa-daily 的 `references/configuration.md` |
+| 两个消耗测试能抓到回退 | 把谓词的 `flag` 临时改成把 null 当作关闭：谓词测试失败，写入器测试的多个子项失败。变异已撤回，文件与提交一致 |
+| 不放宽别的 | 字段检查照旧不核对 `UseStone`，27 和 `50cb199` 定的范围不变。`50cb199` 的状态 `{UseMedicine: false, UseStone: null}` 留作额外样例；测试改名，注释写明这不是界面开关能产生的状态 |
+| 改正文字 | 本文件「合并适配」第 6 项；上文表里「理智药没开就一起打开」；`maa-config.ts` 的函数注释 |
+
+### 设计默认值（Issue #82）
+
+- 产品限制只有一条，登记在规格两张表：null 的理智药开关有效。
+- 只影响测试的一条：`50cb199` 的状态保留为额外样例。它不是界面能产生的状态，但留着可以防止以后把碎石开关单独纳入字段检查。界面真正存下的状态另有新测试。
+- 依赖条目：`fight-stone-expiring-medicine` 的说明补上界面打开碎石时两个开关的存法，工单加 10（doctor 的字段检查依赖这一条）。文件和 blob 都不变。
+
+### 运行记录（Issue #82）
+
+Windows，Node 24，一次一个文件：
+
+- `npm run typecheck` 通过。
+- 单个测试文件依次运行，全部通过：`doctor-checks` 35 项、`doctor` 103 项、`check-purposes` 7 项、`consumption-grant` 35 项、`maa-config` 144 项、`config-writer-diff` 22 项、`config-value` 3 项、`doctor-scenarios` 22 项、`config-projection` 16 项（它也调用 `inspectManagedFields`）、`docs-consistency` 5 项、`maa-version-check` 13 项。
+- `node scripts/privacy.ts`：退出码 0，没有发现。
+- `node scripts/maa-version-check.ts record`（不加 `--write`）生成的核实记录与随包记录相同：源码已核仍是 v6.22.0，记录版本 2。
+- 没有运行完整离线入口 `node scripts/check.ts`（按约定由协调者在冻结的提交上跑），也没有运行 `tests/maa-process.test.ts`、真模型和真实 MAA。
+
+### 未验证（Issue #82）
+
+- 没有在真实 MAA 上勾一次碎石看存下的值；两种状态是按固定源码推断的。
+- 真模型评测没有运行，留给 26。本次没有改 skill 正文、提示和工具说明，所以没有新增评测场景；doctor 对这一状态的输出从错误变成正常，由离线测试覆盖。

@@ -956,13 +956,14 @@
     },
     {
       "id": "fight-stone-expiring-medicine",
-      "behaviour": "Fight 任务的碎石与临期药：FightTask.cs 的 UseStone、StoneCount、UseStoneAllowSave、UseExpiringMedicine、MedicineExpireDays、UseExpireMedicineForActivity，读入配置时 UseStoneAllowSave 不为 true 就把 UseStone 置为 false；界面把开关不为 false 的理智药和碎石数量、临期天数换算成 MaaCore 的 medicine、stone、medicine_expire_days；MaaCore 按游戏显示的页面用理智药或碎石，临期药确认上限 9999，碎石上限为数量；界面的临期天数范围 1–30",
+      "behaviour": "Fight 任务的碎石与临期药：FightTask.cs 的 UseStone、StoneCount、UseStoneAllowSave、UseExpiringMedicine、MedicineExpireDays、UseExpireMedicineForActivity，读入配置时 UseStoneAllowSave 不为 true 就把 UseStone 置为 false；界面打开碎石而没开允许保存时把碎石开关存为 null，理智药数量设为 999，理智药原来关着就把理智药开关存成同一个值（doctor 的字段检查因此接受 null 的理智药开关，Issue #82）；界面把开关不为 false 的理智药和碎石数量、临期天数换算成 MaaCore 的 medicine、stone、medicine_expire_days；MaaCore 按游戏显示的页面用理智药或碎石，临期药确认上限 9999，碎石上限为数量；界面的临期天数范围 1–30",
       "skills": [
         "maa-core",
         "maa-daily",
         "maa-doctor"
       ],
       "tickets": [
+        "10",
         "27"
       ],
       "evidence": [

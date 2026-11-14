@@ -887,6 +887,37 @@ test('null consumption switches count as on, and a grant accepts only exact swit
   for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { timers: sample[5] }); });
 });
 
+/**
+ * Issue #82: the exact switches the pinned MAA GUI saves when stone is turned on without "allow saving" (both null, MedicineCount
+ * 999), and the same after an MAA restart (only UseStone reset to false). doctor's field check accepts them
+ * (tests/doctor-checks.test.ts); spending stays closed: enabling, moving or timing the task needs the grants, no quantity grant
+ * opens a null switch, closing needs only a current request, and the read summary lists the null switches (documented as on).
+ */
+test('the switches the MAA GUI saves for stone without allow-save still count as on: no write runs that task without the grants', async (t) => {
+  const states = [
+    ['as the GUI saves it', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, null],
+    ['after an MAA restart', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, false],
+  ] as const;
+  const reorder = [{ path: ['Configurations', 0, 'TaskQueue'], value: [1, 0] }];
+  const timer = [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }];
+  for (const [name, state, stoneOn] of states) await t.test(name, async (t) => {
+    const close = [fightChange('UseMedicine', false), ...(state.UseStone === null ? [fightChange('UseStone', false)] : [])];
+    const cases: [...ConsumptionCase, Record<string, unknown>[]?][] = [
+      ['enabling it without a grant', [state], {}, [fightChange('IsEnable', true)], 'medicine-grant-required'],
+      ['moving it while enabled without a grant', [{ ...state, IsEnable: true }, {}], {}, reorder, 'medicine-grant-required'],
+      ['enabling a timer that runs it without a grant', [{ ...state, IsEnable: true }], {}, timer, 'medicine-grant-required', [{}]],
+      ['enabling it with medicine and stone grants', [state], { medicineCount: 999, stoneCount: 999 }, [fightChange('IsEnable', true)], 'medicine-settings-invalid'],
+      ['closing its null switches with a current request only', [state], {}, close, 'complete'],
+    ];
+    for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { timers: sample[5] }); });
+    await t.test('the read summary lists the null switches', async (t) => {
+      const f = await consumptionFixture(t, [state]);
+      const consumption = (await inspectConfiguration(f.maa)).profiles[0]!.queue[0]!.consumption;
+      assert.deepEqual([consumption?.medicine, consumption?.stone], [{ on: null, count: 999 }, { on: stoneOn, count: 0, allowSave: false }]);
+    });
+  });
+});
+
 test('a counted quantity write checks every enabled task of its profile for gacha, packs and unsafe task types', async (t) => {
   const award = { $type: 'AwardTask', TaskType: 'Award', IsEnable: true, FreeGacha: false, SpecialAccess: false };
   const startUp = { $type: 'StartUpTask', TaskType: 'StartUp', IsEnable: true };

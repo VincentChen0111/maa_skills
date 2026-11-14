@@ -119,6 +119,8 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 
 经 25 的生成器（`node scripts/maa-version-check.ts record`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2），记录文件没有改。注册表现为 21 条条目（含 08 的 `setup-release-package`）、94 个文件，待登记为空。
 
+2026-11-14 补充（Issue #82）：doctor 的字段检查改为接受 null 的理智药开关，依据是 MAA 界面打开碎石时 `FightTaskUserControlModel.cs` 的 `UseStone` setter 怎样存两个开关，以及 `FightTask.cs` 的 `OnDeserialized`。这两个文件已经在本条目里，所以只改了条目的说明，并在工单里加上 10（doctor 的字段检查）；文件、blob 和 `sourceVerified` 都不变。两个文件在 v6.21.4 上重新读取，blob 与条目一致。行号见 [daily 验证记录](daily-verification.md)「后续：界面开碎石后理智药开关的 null」。
+
 ## 30 交付时登记的条目（2026-11-14）
 
 30（配置写入器加固：投影指纹与差异核对）核实了 MAA 运行期间自己写回 `gui.new.json` 的方式和字段，登记为条目 `config-runtime-writeback`。事实和行号记在 [daily 验证记录](daily-verification.md)「30 配置写入器加固」的「固定 MAA 源码核实」表，在 v6.21.4（`52d0b2a`）上核对。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob，只在本机临时目录比对，没有写进仓库。skill 是 maa-core（投影和写入器）、maa-daily（写入）、maa-doctor（恢复比较整份配置）和 maa-setup（专用入口用投影 revision）。
