@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Evidence, Grant, EvidenceEvent } from './evaluation.ts';
 import { configDiff, projectionRevision } from '../skills/maa-core/scripts/config-projection.ts';
+import { decodeStdinJson, stdinJsonCode, stdinJsonCodes } from '../skills/maa-core/scripts/stdin-json.ts';
 
 /**
  * `drift` (ticket 30): the synthetic MAA changed the configuration by itself between the preview and the write
@@ -27,6 +28,31 @@ const utc = (value: unknown): number => {
 };
 const uuid = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 
+/**
+ * 26 H3 (R1): the one way the grader reads a product CLI's recorded standard input (`input` of a daily observation,
+ * eval/daily-observer.mjs). It decodes those bytes with the CLI's own reader, `decodeStdinJson` in maa-core: a Windows
+ * PowerShell 5.1 pipe's byte order mark is removed, and a request the reader refuses (`input-encoding-lossy`, not UTF-8,
+ * not JSON) throws its `StdinJsonError`, so the grader never reads more into a request than the CLI did.
+ * `tests/eval-recorded-stdin.test.ts` enumerates every consumer of recorded stdin and fails when one parses it itself.
+ */
+export function recordedStdinJson(observation: { input?: unknown }): unknown {
+  if (typeof observation.input !== 'string') throw new Error('input-required');
+  return decodeStdinJson(Buffer.from(observation.input, 'utf8'), { maxBytes: null });
+}
+/**
+ * A write the CLI's stdin reader refused before it read a setting or touched a file: exit 1, the reader's rejection as the
+ * whole output, no observed action, and the shared decoder refuses the recorded input with the same code. maa-core tells the
+ * caller to resend such a request escaped, so it is not one of the run's writes; any other write counts.
+ */
+function refusedBeforeRunning(item: Value): boolean {
+  if (item.exitCode !== 1 || !Array.isArray(item.actions) || item.actions.length) return false;
+  let output: unknown;
+  try { output = JSON.parse(item.output); } catch { return false; }
+  const reason = (output as Value | null)?.reason;
+  if (!Object.values<string>(stdinJsonCodes).includes(reason) || !isDeepStrictEqual(output, { ok: false, status: 'rejected', reason })) return false;
+  try { recordedStdinJson(item); return false; } catch (error) { return stdinJsonCode(error) === reason; }
+}
+
 /** A fixed reminder transaction, not a general generated-file authorization language. */
 export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence): { valid: boolean; grants: Grant[]; events: EvidenceEvent[] } {
   try {
@@ -42,7 +68,7 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
       if (!/^\.(agents|claude)\/skills\/maa-core\/scripts\/maa-config\.ts$/.test(item.file) || !['read', 'preview', 'write'].includes(item.action) ||
         !Number.isSafeInteger(item.pid) || item.pid <= 0 || utc(item.startedAt) < start || utc(item.endedAt) > end || utc(item.endedAt) < utc(item.startedAt)) throw new Error('invocation-invalid');
     }
-    const writes = observed.filter(item => item.action === 'write');
+    const writes = observed.filter(item => item.action === 'write' && !refusedBeforeRunning(item));
     if (writes.length !== 1) throw new Error('single-write-required');
     const write = writes[0]!;
     const read = observed.slice(0, observed.indexOf(write)).filter(item => item.action === 'read' && item.exitCode === 0).at(-1);
@@ -63,11 +89,11 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const preview = observed.slice(observed.indexOf(read), observed.indexOf(write)).filter(item => item.action === 'preview' && item.exitCode === 0).at(-1);
     if (!preview) throw new Error('preview-required');
     exact(object(JSON.parse(preview.output)).diffFingerprint, diffFingerprint);
-    const input = object(JSON.parse(write.input));
+    const input = object(recordedStdinJson(write));
     const closedInput = Object.hasOwn(input, 'closedConfirmed') ? { closedConfirmed: false } : {};
     exact(input, { host, expectedRevision: revision, authorization, changes: [change], diffFingerprint, ...closedInput });
     const request = ({ closedConfirmed: _closed, diffFingerprint: _approved, ...rest }: Value) => rest;
-    exact(request(object(JSON.parse(preview.input))), request(input));
+    exact(request(object(recordedStdinJson(preview))), request(input));
     const result = object(JSON.parse(write.output));
     if (!uuid(result.operation)) throw new Error('operation-required');
     const id = result.operation;

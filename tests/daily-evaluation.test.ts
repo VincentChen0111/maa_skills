@@ -254,3 +254,91 @@ test('all seven daily transaction scenarios execute the installed CLI in both ho
     }
   }
 });
+
+/** Standard input as a Windows PowerShell 5.1 pipe delivers it to a native command: a UTF-8 byte order mark first, CRLF at the end. */
+const windowsPipe = (input: unknown) => `\uFEFF${JSON.stringify(input)}\r\n`;
+/** Every non-ASCII character as a `\uXXXX` escape, as maa-core tells the caller to resend after `input-encoding-lossy`. */
+const escaped = (input: unknown) => JSON.stringify(input).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+test('26 H3 (R1): preview and write stdin with a byte order mark and CRLF, as Windows PowerShell 5.1 pipes it, is graded as the CLI read it, for every daily outcome', async (t) => {
+  const scenarios = dailyScenarios.filter(scenario => scenario.policy.dailyTransaction);
+  assert.deepEqual([...new Set(scenarios.map(scenario => scenario.policy.dailyTransaction!.outcome))].sort(),
+    ['close-unknown', 'closed-confirmation-required', 'complete', 'configuration-changed', 'restart-unknown']);
+  for (const scenario of scenarios) {
+    const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
+    t.after(() => fixture.dispose());
+    const outputs: string[] = [];
+    const invoke = (script: string, action: string, input: unknown = {}) => {
+      const execution = spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', script), action], {
+        cwd: fixture.workspace, env: fixture.env, input: windowsPipe(input), encoding: 'utf8',
+      });
+      outputs.push(execution.stdout); return execution;
+    };
+    const startedAt = new Date().toISOString();
+    assert.equal(invoke('preferences.ts', 'read', { currentLanguage: 'zh-CN' }).status, 0);
+    const read = invoke('maa-config.ts', 'read'); assert.equal(read.status, 0);
+    const request = { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+      authorization: { source: 'current-request', reference: scenario.policy.dailyTransaction!.reference },
+      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+    const written = writeAfterPreview((action, input) => invoke('maa-config.ts', action, input), request);
+    const outcome = scenario.policy.dailyTransaction!.outcome;
+    assert.equal(written.status, outcome === 'complete' ? 0 : 1, written.stdout);
+    if (outcome === 'configuration-changed') {
+      const again = invoke('maa-config.ts', 'read'); assert.equal(again.status, 0);
+      assert.equal(invoke('maa-config.ts', 'preview', { ...request, expectedRevision: JSON.parse(again.stdout).configuration.revision }).status, 0);
+    }
+    const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
+    // The recorded write input really carries the mark and the CRLF: parsing it directly would throw.
+    const recorded = (evidence.daily!.observations as { action: string; input: string }[]).find(item => item.action === 'write')!.input;
+    assert.ok(recorded.startsWith('\uFEFF') && recorded.endsWith('\r\n'), scenario.id);
+    assert.throws(() => JSON.parse(recorded));
+    const graded = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
+    assert.equal(graded.status, 'pass', `${scenario.id}: ${JSON.stringify(graded)}`);
+  }
+});
+
+test('26 H3 (R1): a write the stdin reader refused did nothing and is not counted; the escaped resend is graded; a refused write never counts as performed', async (t) => {
+  const scenario = dailyScenarios.find(item => item.id === 'daily-reminder')!;
+  const policy = (fixture: { policy: { secrets: string[] } }) => ({ ...scenario.policy, secrets: fixture.policy.secrets });
+  const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
+  t.after(() => fixture.dispose());
+  const outputs: string[] = [];
+  const invoke = (action: string, input: string, script = 'maa-config.ts') => {
+    const execution = spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', script), action],
+      { cwd: fixture.workspace, env: fixture.env, input, encoding: 'utf8' });
+    outputs.push(execution.stdout); return execution;
+  };
+  const startedAt = new Date().toISOString();
+  assert.equal(invoke('read', windowsPipe({ currentLanguage: 'zh-CN' }), 'preferences.ts').status, 0);
+  const read = invoke('read', '{}'); assert.equal(read.status, 0);
+  const request = { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+    authorization: { source: 'current-request', reference: scenario.policy.dailyTransaction!.reference },
+    changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+  const preview = invoke('preview', windowsPipe(request)); assert.equal(preview.status, 0, preview.stdout);
+  const approved = { ...request, diffFingerprint: JSON.parse(preview.stdout).diffFingerprint };
+  // The pipe already turned every non-ASCII character into `?` and put the mark first: the reader refuses it before anything runs.
+  const lossy = invoke('write', windowsPipe(approved).replace(/[\u0080-\uffff]/g, (character) => character === '\uFEFF' ? character : '?'));
+  assert.equal(lossy.status, 1);
+  assert.deepEqual(JSON.parse(lossy.stdout), { ok: false, status: 'rejected', reason: 'input-encoding-lossy' });
+  const resent = invoke('write', `\uFEFF${escaped(approved)}\r\n`); assert.equal(resent.status, 0, resent.stdout);
+  const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
+  type Observation = { action: string; exitCode: number; output: string; input: string; actions: unknown[] };
+  const observations = evidence.daily!.observations as Observation[];
+  const writes = observations.filter(item => item.action === 'write');
+  assert.equal(writes.length, 2); assert.deepEqual(writes[0]!.actions, []);
+  assert.equal(grade(policy(fixture), evidence).status, 'pass', JSON.stringify(grade(policy(fixture), evidence)));
+  const replace = (from: Observation, to: Observation | undefined) => ({ ...evidence, daily: { ...evidence.daily!,
+    observations: observations.flatMap(item => item === from ? to ? [to] : [] : [item]) } });
+  // Only the refused write, with the files the resend changed: no write was performed.
+  assert.equal(grade(policy(fixture), replace(writes[1]!, undefined)).status, 'fail', 'a refused write is never a performed write');
+  // A refused write that observed any action, an output that is not exactly the reader's refusal, another exit code, or a
+  // recorded input the shared decoder accepts all count as a second write.
+  const variants: [string, Observation][] = [['observed action', { ...writes[0]!, actions: [{ kind: 'acquire', flags: 'wx' }] }],
+    ['other refusal', { ...writes[0]!, output: JSON.stringify({ ok: false, status: 'rejected', reason: 'request-invalid' }) }],
+    ['extra output field', { ...writes[0]!, output: JSON.stringify({ ok: false, status: 'rejected', reason: 'input-encoding-lossy', operation: 'x' }) }],
+    ['exit code 0', { ...writes[0]!, exitCode: 0 }],
+    ['input the decoder accepts', { ...writes[0]!, input: writes[1]!.input }]];
+  for (const [name, changed] of variants) {
+    assert.equal(grade(policy(fixture), replace(writes[0]!, changed)).status, 'fail', name);
+  }
+});
