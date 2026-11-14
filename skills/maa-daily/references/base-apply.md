@@ -23,7 +23,7 @@
    - `complete`：列出 `changedKeys` 和备份位置 `backup`（私有目录里的相对路径），说明读回只核对了写入的值和排班副本的字节。`changedKeys` 为空、`copyInstalled` 为 true 时，MAA 的设置本来就指向这份排班，这次只是在关停 MAA 后重新装回了批准的排班副本，配置文件没有改。排班文件每个计划都带时间段，由 MAA 图形界面在每次运行时按当时时间选计划；不要说 MAA 已经按时间切换，也不要说游戏里已经换好班。
    - `unchanged`：MAA 已经指向这份排班，副本也和批准的一致，没有动 MAA。
    - `rejected`：按 `reason` 说明，什么都没写。
-   - `unknown`：保留锁、备份和记录，交给 maa-doctor 先只读核对；不删锁，不重试，不重放。maa-doctor 目前不能自动恢复基建这类附加文件的写入，只能报告证据，由用户核对后决定。
+   - `unknown`：保留锁、备份和记录，交给 maa-doctor 先核对（doctor 的检查会更新私有目录里的最近检查记录，不改 MAA 配置、锁和运行记录）；不删锁，不重试，不重放。maa-doctor 目前不能自动恢复基建这类附加文件的写入，只能报告证据，由用户核对后决定。
 7. `configuration.notes` 里有 `infrast-task-disabled`（这个基建任务没勾选，MAA 不会运行它）时告诉用户；是否改由用户在 MAA 里决定，不顺手修改。周计划里有几天不运行不是提示，而是未核实项 `maa-weekly-schedule`（见下文）。
 8. `check` 和 `apply` 的结果都带 `versions`：比较批准的报告生成时读到的 MAA 版本和核实记录版本与现在的值，`state` 为 same、changed（`changed` 列出变了的项）、unknown（某一边读不出）或 unrecorded（旧报告没有记录）；引用找不到报告时为 null。changed 时告诉用户报告生成之后 MAA 或核实记录换了版本；这只是提醒，不阻止应用，未核实的版本同样只提醒。
 

@@ -270,3 +270,22 @@ test('every scenario allowlist admits the documented command form of each script
   }
   assert.deepEqual(problems, []);
 });
+
+test('maa-daily never calls the doctor check read-only: where it hands work to doctor it says what the check writes', async () => {
+  // doctor.ts writes `doctor-latest` into the private directory on every check; stage-run `verify` runs that check and
+  // records its own result in the run record. Neither changes MAA's configuration, locks or run records.
+  const record = 'doctor 的检查会更新私有目录里的最近检查记录';
+  for (const doc of (await documents()).filter((name) => name.startsWith('maa-daily/'))) {
+    const text = await readFile(join(skills, doc), 'utf8');
+    assert.doesNotMatch(text, /只读核对/, doc);
+    if (/maa-doctor 先核对/.test(text)) assert.match(text, new RegExp(`maa-doctor 先核对（${record}，不改 MAA 配置、锁和运行记录）`), doc);
+  }
+  for (const doc of ['maa-daily/SKILL.md', 'maa-daily/references/base-apply.md']) {
+    assert.match(await readFile(join(skills, doc), 'utf8'), /maa-doctor 先核对/, doc);
+  }
+  const verify = (await readFile(join(skills, 'maa-daily/references/stage-run.md'), 'utf8')).split('\n').find((line) => line.includes('运行 `verify`'));
+  assert.ok(verify, 'stage-run.md describes verify');
+  assert.doesNotMatch(verify, /它只读/);
+  assert.match(verify, new RegExp(`${record}`));
+  assert.match(verify, /记进运行记录/);
+});
