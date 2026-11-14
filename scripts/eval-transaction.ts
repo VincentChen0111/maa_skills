@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Evidence, EvidenceEvent, Grant } from './evaluation.ts';
+import { configDiff } from '../skills/maa-core/scripts/config-projection.ts';
 
 type Path = (string | number)[];
 /**
@@ -71,7 +72,7 @@ export function assessWriterTransaction(policy: WriterTransactionPolicy, evidenc
     };
     const pending = appended('private/daily-pending.jsonl');
     const record = pending.record;
-    if (Object.keys(record).some((key) => !['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'trainingManifest', 'versions'].includes(key))) throw new Error('pending-fields');
+    if (Object.keys(record).some((key) => !['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'trainingManifest', 'versions', 'diffFingerprint'].includes(key))) throw new Error('pending-fields');
     // Ticket 25: the writer stamps the MAA and verification-record versions it read, as the reminder grader checks them
     // (scripts/eval-daily.ts). The synthetic MAA has no readable product version, so it must be null (never guessed); the
     // installed record's version is product data, so only its form is checked: a positive integer.
@@ -97,6 +98,8 @@ export function assessWriterTransaction(policy: WriterTransactionPolicy, evidenc
     const unordered = (items: unknown) => (items as unknown[]).map((item) => JSON.stringify(item)).sort();
     if (policy.changeSet) exact(unordered(record.changes), unordered(policy.changeSet));
     exact(after, applied(before, record.changes));
+    // Ticket 30: the pending record keeps the fingerprint of the diff the writer checked, the one shared definition.
+    exact(record.diffFingerprint, configDiff(before, after, (record.changes as { path: Path }[]).map((change) => change.path)).fingerprint);
     const runs = appended('private/daily-runs.jsonl');
     if (policy.changeSet) exact(unordered(runs.record.changedKeys), unordered(policy.changedKeys));
     exact(runs.record, { id, skill: policy.skill, host: record.host, pid: record.pid, startedAt: record.startedAt, phase: 'complete', status: 'complete',

@@ -13,7 +13,8 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/setup.ts` | 现场接入检查、私有目录骨架与环境记录、adb 候选测试、下载流程入口与最终复检；连接设置交统一写入器 | [接入接口](../maa-setup/references/setup.md) |
 | `scripts/setup-connection.ts` | setup 与统一 writer 共用的候选选择及复测；由 setup 入口调用 | [接入接口](../maa-setup/references/setup.md) |
 | `scripts/setup-download.ts` | 缺失程序的官方下载方案、经确认的单次下载与校验、下载状态和解压；由 setup 入口调用 | [接入接口](../maa-setup/references/setup.md) |
-| `scripts/maa-config.ts` | 读取白名单配置摘要，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
+| `scripts/maa-config.ts` | 读取白名单配置摘要，只读预览一次写入的差异，执行持锁配置事务 | 由 maa-daily 提供配置事务说明和用户授权 |
+| `scripts/config-projection.ts`、`scripts/config-edit.ts` | 批准绑定的配置投影指纹、doctor 恢复用的整份配置指纹和差异指纹；写回时只替换改动值的文本 | 由配置事务、setup 专用入口、doctor 恢复和评分规则调用，说明见 maa-daily 的配置事务接口 |
 | `scripts/maa-process.ts` | 观察选定实例、正常关停与受限重开 | 由配置事务调用，不作为独立操作入口 |
 | `scripts/consumption-grant.ts` | 唯一判定一次授权能放开哪些理智药、碎石和临期药设置，给出静态原因码 | 由配置事务、doctor 恢复和评分规则调用，说明见 maa-daily 的配置事务接口 |
 | `scripts/credentials.ts`、`scripts/credential-protection.ts` | 用户在自己终端运行的凭据输入流程、按 Windows 当前用户加密保存、setup/doctor 共用的只读凭据检查、读取器取值与记录读取结果 | [凭据接口](references/credentials.md) |

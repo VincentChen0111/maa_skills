@@ -170,7 +170,12 @@ test('connection write and multiple-candidate scenarios grade the real setup CLI
       const text = (value: unknown) => value === undefined ? '' : Buffer.from(value as string, 'base64').toString('utf8');
       const old = text(pendingChange.before);
       const written = JSON.parse(text(pendingChange.after).slice(old.length));
-      assert.equal(Object.keys(written).at(-1), 'versions'); assert.equal(written.versions.maaVersion, null);
+      // Ticket 30: after the stamp, the fingerprint of the diff the writer checked; another fingerprint fails too.
+      assert.deepEqual(Object.keys(written).slice(-2), ['versions', 'diffFingerprint']); assert.equal(written.versions.maaVersion, null);
+      {
+        const after = Buffer.from(old + JSON.stringify({ ...written, diffFingerprint: 'f'.repeat(64) }) + String.fromCharCode(10)).toString('base64');
+        assert.equal(grade(policy, { ...evidence, changes: evidence.changes.map((change) => change === pendingChange ? { ...change, after } : change) }).status, 'fail', 'another diff fingerprint');
+      }
       for (const [name, versions] of [['guessed version', { ...written.versions, maaVersion: '6.22.0' }], ['missing stamp', undefined],
         ['zero record version', { ...written.versions, recordVersion: 0 }], ['extra field', { ...written.versions, note: 'x' }]] as const) {
         const { versions: _versions, ...rest } = written;

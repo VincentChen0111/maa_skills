@@ -12,6 +12,14 @@ import { assessDailyTransaction } from '../scripts/eval-daily.ts';
 const skillDirectory = fileURLToPath(new URL('../skills/maa-daily', import.meta.url));
 const companionSkills = { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) };
 
+/** Ticket 30: the agent previews the request, then writes it with the previewed diff's fingerprint. */
+function writeAfterPreview(invoke: (action: string, input?: unknown) => { status: number | null; stdout: string }, request: Record<string, unknown>, previewMustPass = true) {
+  const preview = invoke('preview', request);
+  if (previewMustPass) assert.equal(preview.status, 0, preview.stdout);
+  const diffFingerprint = JSON.parse(preview.stdout).diffFingerprint;
+  return invoke('write', { ...request, ...(diffFingerprint ? { diffFingerprint } : {}) });
+}
+
 test('the installed daily CLI observes a closed synthetic MAA and refuses writing without confirmation', async (t) => {
   const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: dailyScenarios[0]!.jsonInputs,
     jsonFiles: dailyScenarios[0]!.jsonFiles, ...{ maaProcess: 'closed' } });
@@ -22,7 +30,7 @@ test('the installed daily CLI observes a closed synthetic MAA and refuses writin
   });
   const startedAt = new Date().toISOString();
   const read = invoke('read'); assert.equal(read.status, 0, read.stdout);
-  const result = invoke('write', { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision, closedConfirmed: false,
+  const result = writeAfterPreview(invoke, { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision, closedConfirmed: false,
     authorization: { source: 'current-request', reference: 'synthetic reminder request' },
     changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
   assert.equal(result.status, 1);
@@ -48,7 +56,7 @@ test('an authorized reminder transaction is graded from real locks, backups and 
   });
   const startedAt = new Date().toISOString();
   const read = invoke('read'); assert.equal(read.status, 0, read.stdout);
-  const result = invoke('write', { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+  const result = writeAfterPreview(invoke, { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
     authorization: { source: 'current-request', reference: 'synthetic reminder request' },
     changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
   assert.equal(result.status, 0, result.stdout);
@@ -77,7 +85,7 @@ test('an authorized reminder transaction is graded from real locks, backups and 
   const pendingOf = (value: unknown) => (value as { actions: { kind: string; file?: string; after?: string }[] }).actions
     .find(action => action.kind === 'append' && action.file === 'private/daily-pending.jsonl')!;
   const written = JSON.parse(Buffer.from(pendingOf(evidence.daily!.observations.find(value => (value as { action?: string }).action === 'write')).after!, 'base64').toString('utf8'));
-  assert.deepEqual(Object.keys(written), ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'versions']);
+  assert.deepEqual(Object.keys(written), ['id', 'skill', 'host', 'pid', 'startedAt', 'phase', 'authorization', 'changes', 'versions', 'diffFingerprint']);
   assert.equal(written.versions.maaVersion, null);
   for (const [name, versions] of [['guessed version', { ...written.versions, maaVersion: '6.22.0' }], ['missing stamp', undefined],
     ['zero record version', { ...written.versions, recordVersion: 0 }], ['extra field', { ...written.versions, note: 'x' }]] as const) {
@@ -87,6 +95,17 @@ test('an authorized reminder transaction is graded from real locks, backups and 
     pendingOf(entry).after = Buffer.from(JSON.stringify(versions === undefined ? rest : { ...rest, versions }) + '\n').toString('base64');
     assert.equal(grade(policy, tampered).status, 'fail', name);
   }
+  // Ticket 30: the pending record's diff fingerprint is the previewed diff's; another one fails.
+  {
+    const tampered = structuredClone(evidence);
+    const entry = tampered.daily!.observations.find(value => (value as { action?: string }).action === 'write');
+    pendingOf(entry).after = Buffer.from(JSON.stringify({ ...written, diffFingerprint: 'f'.repeat(64) }) + '\n').toString('base64');
+    assert.equal(grade(policy, tampered).status, 'fail', 'another diff fingerprint');
+  }
+  // A write without a preview before it, or a preview that changed anything, fails.
+  assert.equal(grade(policy, { ...evidence, daily: { ...evidence.daily!, observations: evidence.daily!.observations.filter(value => (value as { action?: string }).action !== 'preview') } }).status, 'fail');
+  assert.equal(grade(policy, { ...evidence, daily: { ...evidence.daily!, observations: evidence.daily!.observations.map(value => (value as { action?: string }).action === 'preview'
+    ? { ...(value as object), actions: [{ kind: 'acquire', flags: 'wx' }] } : value) } }).status, 'fail');
   assert.equal(grade(policy, { ...evidence, daily: { ...evidence.daily!, observations: [] } }).status, 'fail');
   assert.ok(grade({ ...policy, allowedKeys: [] }, evidence).failed.includes('allowed-keys'));
   assert.ok(grade({ ...policy, forbiddenKeys: ['Timers'] }, evidence).failed.includes('forbidden-settings'));
@@ -119,7 +138,7 @@ test('failed close and restart retain an observed unknown lock without inventing
     });
     const startedAt = new Date().toISOString();
     const read = invoke('read'); assert.equal(read.status, 0, read.stdout);
-    const result = invoke('write', { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+    const result = writeAfterPreview(invoke, { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
       authorization: { source: 'current-request', reference: 'synthetic reminder request' },
       changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
     assert.equal(result.status, 1, result.stdout);
@@ -131,9 +150,10 @@ test('failed close and restart retain an observed unknown lock without inventing
     const proof = assessDailyTransaction(policy.dailyTransaction, evidence);
     assert.equal(proof.events.at(-1)?.kind, 'lock-retained');
     assert.ok(!proof.events.some(event => event.kind === 'lock-released'));
-    invoke('write', { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+    // A replay of the old request, whatever its preview now says.
+    writeAfterPreview(invoke, { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
       authorization: { source: 'current-request', reference: 'synthetic reminder request' },
-      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
+      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }, false);
     const retried = { ...await collectEvidence(fixture, evidence.transcript),
       executionWindow: { startedAt, endedAt: new Date().toISOString() } };
     assert.equal(grade(policy, retried).status, 'fail', 'unknown must not be replayed');
@@ -152,9 +172,11 @@ test('model-written event records cannot replace observed product execution', as
   assert.equal(grade(policy, evidence).status, 'fail');
 });
 
-test('all four daily transaction scenarios execute the installed CLI in both host layouts', async (t) => {
+test('all seven daily transaction scenarios execute the installed CLI in both host layouts', async (t) => {
+  // The four reminder transactions, and ticket 30's preview-approved write with MAA changing nothing, a field outside the
+  // approval projection, or one inside it between the preview and the write.
   const scenarios = dailyScenarios.filter(scenario => scenario.policy.dailyTransaction);
-  assert.equal(scenarios.length, 4);
+  assert.equal(scenarios.length, 7);
   for (const scenario of scenarios) for (const [directory, host] of [['.agents', 'codex'], ['.claude', 'claude']] as const) {
     const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs,
       jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
@@ -172,10 +194,25 @@ test('all four daily transaction scenarios execute the installed CLI in both hos
     const request = { host, expectedRevision: JSON.parse(read.stdout).configuration.revision,
       authorization: { source: 'current-request', reference: scenario.policy.dailyTransaction!.reference },
       changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
-    const written = invoke('maa-config.ts', 'write', request);
-    assert.equal(written.status, scenario.policy.dailyTransaction!.outcome === 'complete' ? 0 : 1);
+    const written = writeAfterPreview((action, input) => invoke('maa-config.ts', action, input), request);
+    assert.equal(written.status, scenario.policy.dailyTransaction!.outcome === 'complete' ? 0 : 1, written.stdout);
+    if (scenario.policy.dailyTransaction!.outcome === 'configuration-changed') {
+      assert.equal(JSON.parse(written.stdout).reason, 'configuration-changed');
+      // The agent reads and previews again, shows the new diff and asks; it does not write again.
+      const again = invoke('maa-config.ts', 'read'); assert.equal(again.status, 0);
+      assert.equal(invoke('maa-config.ts', 'preview', { ...request, expectedRevision: JSON.parse(again.stdout).configuration.revision }).status, 0);
+    }
     const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }),
       executionWindow: { startedAt, endedAt: new Date().toISOString() } };
     assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence).status, 'pass', scenario.id + host);
+    if (scenario.policy.dailyTransaction!.drift === 'projection') {
+      // Without the preview after the refusal, or with the old write replayed, the run fails.
+      const observations = evidence.daily!.observations as { action: string }[];
+      const refused = observations.findIndex(item => item.action === 'write');
+      const noPreview = { ...evidence, daily: { ...evidence.daily!, observations: observations.slice(0, refused + 1) } };
+      assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, noPreview).status, 'fail');
+      const replayed = { ...evidence, daily: { ...evidence.daily!, observations: [...observations, observations[refused]!] } };
+      assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, replayed).status, 'fail');
+    }
   }
 });

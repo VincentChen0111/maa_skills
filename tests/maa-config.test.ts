@@ -6,13 +6,19 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
-import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
+import { executeConfigWrite as writeConfig, inspectConfiguration, checkMaintenanceWindow, previewConfigWrite, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import './fixtures/maa-version-guard.ts';
 
+/**
+ * The agent's flow: read the summary, preview the request, and write it with the previewed diff's fingerprint (ticket 30).
+ * A request the preview refuses is written without one, so the write reports the same refusal; a test that sets
+ * `diffFingerprint` (even to undefined) keeps its own.
+ */
 async function executeConfigWrite(request: Omit<WriteRequest, 'expectedRevision'> & { expectedRevision?: string }, maa: MaaProcess) {
   const expectedRevision = request.expectedRevision ?? (await inspectConfiguration(request.maaDirectory)).revision;
-  return writeConfig({ ...request, expectedRevision }, maa);
+  const diffFingerprint = Object.hasOwn(request, 'diffFingerprint') ? request.diffFingerprint : (await previewConfigWrite({ ...request, expectedRevision })).diffFingerprint ?? undefined;
+  return writeConfig({ ...request, expectedRevision, ...(diffFingerprint === undefined ? {} : { diffFingerprint }) }, maa);
 }
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
@@ -329,6 +335,13 @@ test('null equivalence does not authorize changed timer values or other omitted 
     };
     const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
       authorization: { source: 'current-request', reference: 'use the selected timer configuration' }, changes: [{ path: ['Timers', 'CustomConfig'], value: true }] }, maa);
+    if (phase === 'close' && mutation.key === 'Config') {
+      // Ticket 30: the request no longer applies to the configuration MAA left (its timer names a missing profile), so no
+      // diff can equal the approved one: refused after shutdown and before any backup or write, with MAA reopened.
+      assert.equal(result.status, 'rejected'); assert.equal(result.reason, 'approved-diff-mismatch');
+      assert.equal((await readdir(join(f.maa, 'config'))).includes('.maa-skills.lock'), false); assert.equal(running, true);
+      return;
+    }
     assert.equal(result.status, 'unknown');
     assert.equal(result.phase, phase === 'close' ? 'backup' : 'readback');
     assert.equal((await readdir(join(f.maa, 'config'))).includes('.maa-skills.lock'), true);

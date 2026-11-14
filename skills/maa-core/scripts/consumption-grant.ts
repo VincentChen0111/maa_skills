@@ -10,6 +10,8 @@
  * `UseExpiringMedicine`/`MedicineExpireDays` and `UseExpireMedicineForActivity`; the GUI passes medicine and stone only when
  * the switch is not false, so a null switch consumes.
  */
+import { sameConfigValue } from './config-projection.ts';
+
 
 /**
  * Every caller, by role. A new call site needs a new label here and a row in the conformance test. `doctor-restore` is the
@@ -36,6 +38,12 @@ export const consumptionFields: Readonly<Record<string, Kind>> = {
   UseExpiringMedicine: 'expiring', MedicineExpireDays: 'expiring',
   UseExpireMedicineForActivity: 'activity',
 };
+/**
+ * Every task field this decision reads (ticket 30): the identity it recognizes Fight and Award tasks by, the Fight fields
+ * above, and the Award settings no grant opens. tests/config-projection.test.ts traces the predicate's reads against this
+ * table and requires each field to be in the approval projection.
+ */
+export const consumptionDecisionFields = { identity: ['$type', 'TaskType'], fight: Object.keys(consumptionFields), award: ['FreeGacha', 'SpecialAccess'] } as const;
 const kinds: Kind[] = ['medicine', 'stone', 'expiring', 'activity'];
 const quantityKinds: Kind[] = ['medicine', 'stone'];
 /**
@@ -50,7 +58,6 @@ const closingValue = (field: string, value: unknown) =>
  */
 const kindChanges = ['none', 'closing', 'restoring', 'other'] as const;
 type KindChange = typeof kindChanges[number];
-const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
 export type ExpiringMedicineGrant = { days: number; forActivity: boolean };
 /** The consumption part of a request's authorization; other authorization keys are ignored here. */
@@ -185,8 +192,9 @@ export function decideConsumption(grantValue: ConsumptionGrant, targets: Consump
     const restore = context.consumer === 'doctor-restore' ? typed(target.restore, 'Fight') : null;
     const changed = new Map<Kind, KindChange>();
     if (before) for (const [field, owner] of Object.entries(consumptionFields)) {
-      if (same(before[field], task[field])) continue;
-      const change = closingValue(field, task[field]) ? 'closing' : restore && same(restore[field], task[field]) ? 'restoring' : 'other';
+      // Field values compare by the one configuration-value predicate (ticket 30, review round 1).
+      if (sameConfigValue(before[field], task[field])) continue;
+      const change = closingValue(field, task[field]) ? 'closing' : restore && sameConfigValue(restore[field], task[field]) ? 'restoring' : 'other';
       if (kindChanges.indexOf(change) > kindChanges.indexOf(changed.get(owner) ?? 'none')) changed.set(owner, change);
     }
     const evaluated = new Set<Kind>(changed.keys());
