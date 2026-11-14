@@ -11,16 +11,17 @@
 | 本包不改版本号、不打标签、不发布任何东西，版本号保持 `0.1.0-dev.0` | 发布步骤排在模型门禁和维护者的决定之后；模型门禁还没有跑，维护者也还没有决定能否只凭 Codex 发布 |
 | 更新记录放在仓库根目录 `CHANGELOG.md`，每个版本的发布说明放在 `docs/releases/v<版本>.md` | 规格只说「每次发布附更新记录」「发布说明写明实机已核的 MAA 版本」，没有写位置。插件安装以仓库根目录为插件，根目录的更新记录随插件一起到用户手里；按版本分文件的发布说明可以原样作为 GitHub Release 的正文 |
 | 预发布和正式发布由版本号本身区分：带语义化版本预发布后缀（如 `0.1.0-dev.0`）是预发布，`X.Y.Z` 是正式发布 | 不另设一个会和版本号对不上的标志文件；预发布后缀是语义化版本的标准写法 |
-| 每个 PR 的离线入口只比较各清单的版本号；更新记录和发布说明由 `release-check.ts versions` 核对；发布说明里的 MAA 版本两行只在 `--release` 和标签检查时逐字核对 | 25 的每日 Action 开的 PR 只改注册表和核实记录两个文件（规格「MAA 版本跟踪」），如果离线入口要求发布说明里的 MAA 版本与核实记录一致，这类 PR 会因为已经发布的旧说明而失败 |
+| 每个 PR 的离线入口核对各清单的版本号（`scripts/metadata.ts`），也核对更新记录和发布说明的版本与状态（`tests/release-check.test.ts` 在本仓库上按版本号自己的模式运行 `inspectVersions`，不加 `--release`）；只有发布说明里的 MAA 版本两行留给 `--release` 和标签检查逐字核对。2026-11-14 第 1 轮审查后改正：原句写成离线入口只比较清单版本号，与实际不符 | 25 的每日 Action 开的 PR 只改注册表和核实记录两个文件（规格「MAA 版本跟踪」），如果离线入口要求发布说明里的 MAA 版本与核实记录一致，这类 PR 会因为已经发布的旧说明而失败 |
 | 标签检查读打标签那个提交里的文件，不读工作区 | 没提交的改动不能改变标签所带的版本 |
 | 给 `skills/maa-account/` 补一份 `LICENSE`（与根目录相同的 MIT 全文） | skill-installer 逐个复制 skill 目录，其他五个目录都带 `LICENSE`，只有 maa-account 没带；单独安装时这份 MIT 声明会丢。打包检查第一次在本仓库载荷上运行就报了这一项。它不是 agent 读的指令文字 |
 | skills 方式只检查六个产品目录（`maa-core`、`maa-help`、`maa-setup`、`maa-account`、`maa-daily`、`maa-doctor`），宿主目录里的其他 skill 不检查；宿主自己的 `.git` 目录不检查 | 宿主的 skill 目录里本来就有别的 skill（例如 Codex 的 `.system`）；`.git` 是宿主克隆用的版本库数据，规格的禁含清单里没有它 |
 | 评测计划里「前」的载荷：ticket X 新增的场景用 X 自己合并后的载荷，X 影响到的已有场景用 X 合并前一个 main 提交；「后」一律是最终候选载荷。29 按工单原文用 29 合并前的载荷 | 工单的「前后」写法有几种（「同版本前后」「29 合并前后」「受影响…前后」），这条规则把每一种都落到一个具体提交上，并且对新增场景也有可比的「前」 |
+| 人工核实的场景指纹取被核实那份 `run.json` 的 `scenarioHash`，并要求它等于同一次 `compare` 另一侧同一宿主、同一场景那份；证据摘要是核实者读的四个落盘文件（`run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`）各自的 sha256，核实结束时重算相同；`evidenceHash` 不用来核对。第 1 轮审查后按协调者的处理意见改定 | 批次清单里没有逐场景的指纹，仓库也没有在运行之外重算 `scenarioIdentity` 的工具；`evidenceHash` 是脱敏前的摘要，落盘文件经过脱敏和重新排版，一般重算不出来。见「人工核实清单与记录格式」的演练 |
 | 两个临时宿主的原生安装从本地仓库安装，不从 GitHub | 本分支没有推送（构建规则不许推送），GitHub 上没有这个提交；本地安装用的仍是宿主自己的安装器，差别只在来源。最终验收要在发布载荷的公开提交上重做 |
 
 ## 版本一致与标签
 
-工单的验收条目「跨清单版本一致，标签等于版本」。检查只有一个所有者：`scripts/release-check.ts`。`scripts/metadata.ts`（离线入口的一部分）改为调用它的清单部分，不再自己比较版本。
+工单的验收条目「跨清单版本一致，标签等于版本」。检查只有一个所有者：`scripts/release-check.ts`。`scripts/metadata.ts`（离线入口的一部分）改为调用它的清单部分，不再自己比较版本；离线入口同时运行的 `tests/release-check.test.ts` 在本仓库上核对更新记录和发布说明的版本与状态，模式按版本号自己的预发布后缀定，所以发布提交（`0.1.0`、带日期的更新记录、「已发布」的发布说明）也能通过。
 
 | 比较的地方 | 要求 |
 | --- | --- |
@@ -52,7 +53,8 @@ node scripts/release-check.ts tag <标签> [--commit <发布提交>] [<仓库目
 | 同文件「release mode…」：正式版本要日期、「已发布」和当前的 MAA 版本两行；离线入口（不加 `--release`）不要求这两行 | 通过 |
 | 同文件「tag mode…」：临时 git 仓库，空的全局 git 配置；标签名、标签不存在、非法名字、标签不指向当前提交、`--commit` 指定旧提交、未提交的改动不影响、预发布提交上的标签 | 通过 |
 | 同文件「the CLI…」：退出码与代码一致，输出里没有被检查的路径 | 通过 |
-| 同文件「the repository is consistent…」：本仓库是预发布模式且没有错误 | 草稿写好之前失败（`changelog: missing`、`release-notes: missing`），写好后通过 |
+| 同文件「the repository is consistent…」：本仓库没有错误，模式与 `package.json` 版本号自己的预发布后缀一致（第 1 轮审查前写死为预发布模式，发布提交会在 CI 里失败） | 草稿写好之前失败（`changelog: missing`、`release-notes: missing`），写好后通过 |
+| 同文件「the release commit made from this repository…」：从本仓库自己的清单、核实记录、更新记录和发布说明复制到临时目录，按发布那一步改成发布的样子（各清单去掉预发布后缀、更新记录最上面一条写上日期、发布说明改成「已发布」并按随包核实记录重写 MAA 两行），再走与上一项同一个断言，并运行 `versions --release` | 断言仍写死预发布模式时失败（`.tmp/logs/red-26-f2-release-shaped.log`：实际 `release`，期望 `pre-release`；当时没有任何错误代码）；改成按版本号定模式后 6 项全部通过 |
 | `tests/metadata.test.ts`「the everyday gate also compares the lockfile…」 | 委托之前失败（`.tmp/logs/red-26-metadata.log`：实际 `[]`）；委托之后 3 项全部通过 |
 
 在本仓库上的实际结果：`node scripts/release-check.ts versions` 输出 `ok: true`、`mode: pre-release`、`target: 0.1.0`；`--release` 输出 `version: pre-release`，符合预期（本包不改版本号）。标签检查没有在本仓库上运行：还没有发布提交和标签。
@@ -173,22 +175,50 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 ### 流程
 
 1. 一个批次跑完、`compare` 给出结论之后，对每一份**完成且机器评分通过**的运行记录（每个场景、每个宿主各一份，重跑的每一次也各一份）做人工核实。机器评分不通过、未验证或被中断的运行不做人工核实，它们已经阻止发布。
-2. 核实者只读本机批次目录 `.tmp/evaluations/batch-*/run-*/` 里的三类证据：
-   - **宿主原始记录**：`host.jsonl`，宿主自己打印的模型回复和工具调用；
+2. 核实者只读本机批次目录 `.tmp/evaluations/batch-*/` 里的批次清单 `manifest.json`，和这份运行目录 `run-*/` 里的 `run.json` 与三类证据：
+   - **宿主原始记录**：`host.jsonl`，宿主自己打印的模型回复和工具调用；`stderr.txt`，宿主的标准错误输出；
    - **归一化证据**：`evidence.json` 的 `transcript`（归一化的回复和工具调用）、`events`（观察器记录的实际脚本调用、动作和退出码）、`daily`、`reports`、`reviews`、`approvals`、`executionWindow`；
    - **文件差异**：`evidence.json` 的 `changes`（运行前后工作区文件的差异）。
-3. 先核对 `run.json` 的 `scenarioHash` 等于批次清单里这个场景的场景指纹，再按 `evidence.json` 和 `host.jsonl` 的实际字节重算证据摘要，与 `run.json` 的 `evidenceHash` 相同才开始核实。对不上就记「无法判断」。
+3. 逐项核实之前先做下面三项核对，任何一项对不上，这份运行的每一项都记「无法判断」：
+   - **找对运行**：`manifest.json` 的 `runs[]` 里这个场景的那一条给出运行目录和 `id`。`run.json` 的 `id`、`scenario` 与这一条相同，`payloadFingerprint` 等于清单的 `fingerprint.payload`，`run.json` 和清单都没有 `double: true`（宿主替身的记录从来不算验收）。
+   - **场景指纹**：取 `run.json` 的 `scenarioHash`，照抄进记录。它必须等于同一次 `compare` 另一侧批次里同一宿主、同一场景那份 `run.json` 的 `scenarioHash`；有重跑批次时，重跑的每一份也相同。`compare` 对这个场景也不能报 `incomparable`：`compareRuns` 比较前后两份时核对的就是 `scenarioHash`，只是输出里不打印指纹，所以记录里的指纹从 `run.json` 抄。批次清单里没有逐场景的指纹。也不从检出重算 `scenarioIdentity`：它的输入有按宿主渲染的提示词和夹具在运行时生成的替身文件，仓库没有在运行之外重算它的工具。
+   - **证据文件摘要**：对要读的四个落盘文件各算 sha256，写进记录。PowerShell 用 `Get-FileHash -Algorithm SHA256 -Path run.json, evidence.json, host.jsonl, stderr.txt`，结果按小写记；Git Bash 或 Linux 用 `sha256sum run.json evidence.json host.jsonl stderr.txt`。核实写完时再算一次，四个都相同，才说明结论依据的就是记录里的这些字节；以后复查用同样的命令重算比对，不同就重新核实。
+
+   `run.json` 的 `evidenceHash` 不用来核对，也不当作记录里的证据摘要。它是运行器在落盘之前，对脱敏前的紧凑 JSON 证据、宿主原始输出和 stderr 拼在一起算的（`scripts/eval-run.ts`）。落盘的 `evidence.json` 经过脱敏（路径和秘密换成 `<workspace>` 这类占位）并重新排版，stderr 单独存成 `stderr.txt`，所以不能从磁盘上的文件重算出它。只有脱敏一处都没改、再把 `evidence.json` 压回紧凑 JSON 时才会碰巧相等，核实者事先无从知道是不是这种情况（见下面的演练）。
 4. 按下面清单逐项给结论：通过、不通过、无法判断。每一项写依据在证据里的位置（例如 `host.jsonl` 第 12 行、`evidence.json` `events[3]`、`changes[0]`）。
 5. 任何一项不通过或无法判断，都按工单现有规则阻止发布；机器评分通过不能代替这份记录。
-6. 原始日志、`host.jsonl`、`evidence.json` 都不进仓库。记录里只写运行 ID、哈希、结论和位置，不抄模型原文、路径或合成秘密。
+6. 原始日志、`manifest.json`、`run.json`、`host.jsonl`、`stderr.txt`、`evidence.json` 都不进仓库。记录里只写运行 ID、哈希、结论和位置，不抄模型原文、路径或合成秘密。
 
 ### 记录格式
 
-每个场景、每个宿主一行：
+每个场景、每个宿主一行。工单要求的「证据摘要哈希」就是「证据文件 sha256」一列，不是 `run.json` 的 `evidenceHash`：
 
-| 运行 ID | 宿主 | 场景 | 场景指纹 | 证据摘要哈希 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `run.json` 的 `id` | codex 或 claude | 场景 id | `scenarioHash` | `evidenceHash` | 按清单编号，例如「1 通过；2 不通过；3 无法判断」 | 按编号，例如「1 host.jsonl 第 8 行；2 events[1]」 | 例如维护者、协调者、独立核实子代理 | YYYY-MM-DD |
+| 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `run.json` 的 `id` | codex 或 claude | 场景 id | `run.json` 的 `scenarioHash` | `compare` 另一侧那份（和重跑的每一份）的运行 ID 与「指纹相同」，以及 `compare` 对这个场景的状态 | `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt` 各一个，核实结束时重算相同 | 按清单编号，例如「1 通过；2 不通过；3 无法判断」 | 按编号，例如「1 host.jsonl 第 8 行；2 events[1]」 | 例如维护者、协调者、独立核实子代理 | YYYY-MM-DD |
+
+### 第 3 步在宿主替身批次上的演练（2026-11-14）
+
+为了证明改写后的第 3 步用现有的批次文件做得到，在本分支上跑了三个只用宿主替身的 Codex 批次，不调用任何模型，场景都是 `core-language`。命令行的 `run` 不接受 `--auth host-double`，所以用导出函数 `runBatch`（`auth: 'host-double'`，`eval/host-double.mjs` 按 `scripts/eval-preflight.ts` 里这个场景的三步脚本执行），批次写在被 Git 忽略的 `.tmp/evaluations/`：
+
+| 批次 | 用途 | 结果 |
+| --- | --- | --- |
+| `batch-Asr2AP` | 配对的「前」 | `complete`，运行 `641ff9ea-c9ff-431b-9039-ddc330e12d06`，`completed`、`pass` |
+| `batch-al1JjS` | 被核实的「后」 | `complete`，运行 `2fb57ae8-a7d6-4cd9-bf4d-446205190bb8`，`completed`、`pass` |
+| `batch-c8oWoe` | 替身另外打印自己的工作区路径（脱敏测试用的 `noise` 选项），看脱敏改了文件时 `evidenceHash` 能不能重算 | `complete`，运行 `aaee6b90-8090-4c74-85f0-550ea61e2486`，`completed`、`pass` |
+
+按第 3 步核对「后」那份：
+
+- 找对运行：清单 `runs[0]` 的 `id` 与 `run.json` 相同，`scenario` 都是 `core-language`，`payloadFingerprint` 等于清单的 `fingerprint.payload`（`d3b24109…`）。`run.json` 和清单都带 `double: true`，所以在真实批次上这一份会直接记「无法判断」；这里只是演练。
+- 场景指纹：「前」「后」两份 `run.json` 的 `scenarioHash` 都是 `354a4d15d80034126121f00f2ae5c90b31d0b528ab24b74390b4f36e983792e7`，相同；`noise` 批次那份也相同（替身多打印的内容不属于场景）。`node scripts/eval-batch.ts compare` 对这两批报 `incomparable`：`compareRuns` 拒绝比较任何替身记录，这是有意的。所以 `compare` 那一半只能在真实批次上看到，这次演练只演示了 `run.json` 这一半。
+- 证据文件摘要：`sha256sum` 和 PowerShell `Get-FileHash` 各算一次，结果相同，就是下面记录里的四个值（`stderr.txt` 是空文件）。
+- `evidenceHash`：按旧第 3 步的意思重算（把 `evidence.json` 压回紧凑 JSON，再接上 `host.jsonl` 和 `stderr.txt`）。「后」那份文件里一处脱敏都没有，重算碰巧等于 `evidenceHash`（`2e0bd098…`）；`noise` 批次那份的三个文件里都有 `<workspace>`、`<fixture>` 占位，重算得 `217e35f7…`，`evidenceHash` 是 `bac37d87…`，对不上。真实运行的证据或宿主输出里只要出现过工作区路径、登录目录或合成秘密，旧第 3 步就会把这份运行记成「无法判断」。
+
+演练按记录格式写成一行。替身没有模型回复，清单各项都不适用；这一行不是验收记录，不写进下面的「人工核实记录」：
+
+| 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `2fb57ae8-a7d6-4cd9-bf4d-446205190bb8` | codex（宿主替身） | `core-language` | `354a4d15d80034126121f00f2ae5c90b31d0b528ab24b74390b4f36e983792e7` | 「前」`641ff9ea-c9ff-431b-9039-ddc330e12d06` 指纹相同；`compare`：`incomparable`（替身记录不比较） | `run.json` `3b0a53fcd402a3b58fde208e605b6ecece8513cf0b9c5add94d57ad24d7fce6d`；`evidence.json` `93f3ab49314074f8283f69c74b3eceb2de54363d67bef399b4b8b31f44b03a66`；`host.jsonl` `5f3b8d32e6c117909c7bb0ececda99987f6598139f600e8b0c7fef09b8e860c2`；`stderr.txt` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；重算相同 | 不适用（替身，第 3 步「找对运行」因 `double: true` 本应记「无法判断」） | 无 | 构建者（演练） | 2026-11-14 |
 
 ### 清单
 
@@ -448,9 +478,25 @@ node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <�
 | 两个临时宿主的原生安装试运行 | 见上文「结果」 |
 | 完整离线入口 | 没有跑，由协调者跑 |
 
+第 1 轮审查后的修正（2026-11-14），同样一次一个运行：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test tests/release-check.test.ts`，断言仍写死预发布模式时 | 新加的发布形状一项失败（`.tmp/logs/red-26-f2-release-shaped.log`），其余 5 项通过 |
+| `npm run typecheck` | 通过 |
+| `node --test tests/release-check.test.ts` | 6 项通过 |
+| `node --test tests/release-package.test.ts`、`metadata`、`docs-consistency`、`privacy`、`help-installation` | 7、3、5、4、6 项通过 |
+| `node scripts/release-check.ts versions` | `ok: true`，预发布模式，没有错误 |
+| `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
+| `node scripts/tracker.ts`（只检查） | `{"ready":["28","30"],"errors":[]}` |
+| `node scripts/metadata.ts` | 退出 0 |
+| 三个只用宿主替身的 Codex `core-language` 批次（`runBatch`，`auth: 'host-double'`，不调用模型） | 都是 `complete`、`completed`、`pass`，带 `double: true`；见「第 3 步在宿主替身批次上的演练」 |
+| `node scripts/eval-batch.ts compare` 前后两个替身批次 | `incomparable`（替身记录不比较，符合设计） |
+| 「后」那份四个文件的 `sha256sum` 与 PowerShell `Get-FileHash`，核实结束时再算一次 | 三次结果相同 |
+
 ## 未验证与需要维护者的事项
 
-- 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。
+- 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。
 
 - 所有真实模型验收：未验证。Codex 一侧要先解决上面「问题」里说的载荷参数；Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
