@@ -459,7 +459,7 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 
 ### 固定 MAA 源码复核（Issue #82）
 
-2026-11-14 经 `raw.githubusercontent.com` 只读取固定提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`（v6.21.4）上的两个文件，用 `git hash-object` 算 blob。结果与上文「固定 MAA 源码核实」表、依赖条目 `fight-stone-expiring-medicine` 的 blob 一致；这两个文件在 v6.22.0 上 blob 相同，见 [MAA 版本来源](maa-version-sources.md)。文件只放在本机临时目录，没有写进仓库。
+2026-11-14 经 `raw.githubusercontent.com` 只读取固定提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`（v6.21.4）上的三个文件，用 `git hash-object` 算 blob。结果与上文「固定 MAA 源码核实」表、依赖条目 `fight-stone-expiring-medicine` 的 blob 一致；这三个文件在 v6.22.0 上 blob 相同，见 [MAA 版本来源](maa-version-sources.md)。文件只放在本机临时目录，没有写进仓库。
 
 | 事实 | 文件与行 | blob |
 | --- | --- | --- |
@@ -467,8 +467,8 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 | `OnDeserialized`：`UseStoneAllowSave` 为 false 时只把 `UseStone` 置为 false，不动 `UseMedicine` | 同一文件第 154–159 行 | 同上 |
 | `UseStone` 的 setter：没开允许保存而值为 true 时改为 null；值不为 false 时先把理智药数量设为 999，`UseMedicine` 为 false 时把它设为同一个值；最后存碎石开关 | [FightTaskUserControlModel.cs 第 416–437 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L416-L437) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` |
 | 界面的碎石勾选框直接绑定 `UseStone`：左键勾上传 true，再按上一行改为 null；右键直接设为 null。理智药勾选框同样能右键设为 null | [FightTaskUserControl.xaml 第 46–60 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L46-L60) | `a42b1ce8012bff323fcd6b3c2dac47d6020678ea` |
-| `UseStoneDisplay`（`UseStone != false`）只用来在碎石开着时禁用理智药勾选框和数量框，它本身不设置 `UseStone` | FightTaskUserControlModel.cs 第 442–447 行；[FightTaskUserControl.xaml 第 45、79 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L45-L79) | 同上两个文件 |
-| `UseMedicine` 的 setter：值为 false 时一并关闭碎石 | 同一文件第 379–395 行 | 同上 |
+| `UseStoneDisplay` 读的是 `UseStone != false`，写时原样转给 `UseStone`；xaml 只在第 45、79 行以 `IsEnabled` 单向读取它，用来在碎石开着时禁用理智药勾选框和数量框，碎石勾选框不经过它；`UseMedicine` 的 setter 在值为 false 时经它关闭碎石（第 390 行） | [FightTaskUserControlModel.cs 第 442–447 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L442-L447)；[FightTaskUserControl.xaml 第 45、79 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L45-L79) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b`；`a42b1ce8012bff323fcd6b3c2dac47d6020678ea` |
+| `UseMedicine` 的 setter：值为 false 时经 `UseStoneDisplay` 一并关闭碎石 | [FightTaskUserControlModel.cs 第 379–395 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L379-L395) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` |
 
 由此可知：
 
