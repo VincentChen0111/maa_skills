@@ -10,7 +10,7 @@ import { retainedLock } from '../eval/maa-doctor/scenarios.ts';
 import { entryId, scenarioCatalog } from '../scripts/eval-scenarios.ts';
 import type { ScenarioDefinition } from '../scripts/eval-run.ts';
 import { grade } from '../scripts/evaluation.ts';
-import { assessDailyTransaction } from '../scripts/eval-daily.ts';
+import { assessDailyTransaction, recordedStdinJson } from '../scripts/eval-daily.ts';
 
 const skillDirectory = fileURLToPath(new URL('../skills/maa-daily', import.meta.url));
 const companionSkills = { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) };
@@ -259,6 +259,15 @@ test('all seven daily transaction scenarios execute the installed CLI in both ho
 const windowsPipe = (input: unknown) => `\uFEFF${JSON.stringify(input)}\r\n`;
 /** Every non-ASCII character as a `\uXXXX` escape, as maa-core tells the caller to resend after `input-encoding-lossy`. */
 const escaped = (input: unknown) => JSON.stringify(input).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+/** What a Windows PowerShell 5.1 pipe with its default us-ascii `$OutputEncoding` delivers: the mark first and every other
+ * non-ASCII character already `?`. The stdin reader refuses it as `input-encoding-lossy` before anything runs. */
+const lossyPipe = (input: unknown) => windowsPipe(input).replace(/[\u0080-\uffff]/g, (character) => character === '\ufeff' ? character : '?');
+type Recorded = { inputBase64?: string; input?: string };
+/** The exact bytes the observer recorded as one invocation's standard input (a record from before 26 H3's round-1 fix kept text). */
+const recordedBytes = (item: Recorded) => item.inputBase64 !== undefined ? Buffer.from(item.inputBase64, 'base64') : Buffer.from(item.input!, 'utf8');
+/** One invocation with its recorded standard input replaced by `bytes`, in the format its record already has. */
+const withInput = <T extends Recorded>(item: T, bytes: Buffer): T => item.inputBase64 !== undefined ? { ...item, inputBase64: bytes.toString('base64') }
+  : { ...item, input: bytes.toString('utf8') };
 
 test('26 H3 (R1): preview and write stdin with a byte order mark and CRLF, as Windows PowerShell 5.1 pipes it, is graded as the CLI read it, for every daily outcome', async (t) => {
   const scenarios = dailyScenarios.filter(scenario => scenario.policy.dailyTransaction);
@@ -289,7 +298,7 @@ test('26 H3 (R1): preview and write stdin with a byte order mark and CRLF, as Wi
     }
     const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
     // The recorded write input really carries the mark and the CRLF: parsing it directly would throw.
-    const recorded = (evidence.daily!.observations as { action: string; input: string }[]).find(item => item.action === 'write')!.input;
+    const recorded = recordedBytes((evidence.daily!.observations as ({ action: string } & Recorded)[]).find(item => item.action === 'write')!).toString('utf8');
     assert.ok(recorded.startsWith('\uFEFF') && recorded.endsWith('\r\n'), scenario.id);
     assert.throws(() => JSON.parse(recorded));
     const graded = grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence);
@@ -317,12 +326,12 @@ test('26 H3 (R1): a write the stdin reader refused did nothing and is not counte
   const preview = invoke('preview', windowsPipe(request)); assert.equal(preview.status, 0, preview.stdout);
   const approved = { ...request, diffFingerprint: JSON.parse(preview.stdout).diffFingerprint };
   // The pipe already turned every non-ASCII character into `?` and put the mark first: the reader refuses it before anything runs.
-  const lossy = invoke('write', windowsPipe(approved).replace(/[\u0080-\uffff]/g, (character) => character === '\uFEFF' ? character : '?'));
+  const lossy = invoke('write', lossyPipe(approved));
   assert.equal(lossy.status, 1);
   assert.deepEqual(JSON.parse(lossy.stdout), { ok: false, status: 'rejected', reason: 'input-encoding-lossy' });
   const resent = invoke('write', `\uFEFF${escaped(approved)}\r\n`); assert.equal(resent.status, 0, resent.stdout);
   const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
-  type Observation = { action: string; exitCode: number; output: string; input: string; actions: unknown[] };
+  type Observation = { action: string; exitCode: number; output: string; startedAt: string; endedAt: string; actions: unknown[] } & Recorded;
   const observations = evidence.daily!.observations as Observation[];
   const writes = observations.filter(item => item.action === 'write');
   assert.equal(writes.length, 2); assert.deepEqual(writes[0]!.actions, []);
@@ -333,12 +342,113 @@ test('26 H3 (R1): a write the stdin reader refused did nothing and is not counte
   assert.equal(grade(policy(fixture), replace(writes[1]!, undefined)).status, 'fail', 'a refused write is never a performed write');
   // A refused write that observed any action, an output that is not exactly the reader's refusal, another exit code, or a
   // recorded input the shared decoder accepts all count as a second write.
+  // 26 H3 round-1 fix: so does a refused write that asked for anything other than the resend (compared with every non-ASCII
+  // character as `?`: the key set, `closedConfirmed`, every ASCII value), one that cannot be compared, and one that did not
+  // finish before the resend started.
+  const lossyOf = (request: unknown) => withInput(writes[0]!, Buffer.from(lossyPipe(request)));
   const variants: [string, Observation][] = [['observed action', { ...writes[0]!, actions: [{ kind: 'acquire', flags: 'wx' }] }],
     ['other refusal', { ...writes[0]!, output: JSON.stringify({ ok: false, status: 'rejected', reason: 'request-invalid' }) }],
     ['extra output field', { ...writes[0]!, output: JSON.stringify({ ok: false, status: 'rejected', reason: 'input-encoding-lossy', operation: 'x' }) }],
     ['exit code 0', { ...writes[0]!, exitCode: 0 }],
-    ['input the decoder accepts', { ...writes[0]!, input: writes[1]!.input }]];
-  for (const [name, changed] of variants) {
-    assert.equal(grade(policy(fixture), replace(writes[0]!, changed)).status, 'fail', name);
+    ['input the decoder accepts', withInput(writes[0]!, recordedBytes(writes[1]!))],
+    ['refused request confirms a closed MAA', lossyOf({ ...approved, closedConfirmed: true })],
+    ['refused request declines closed confirmation explicitly', lossyOf({ ...approved, closedConfirmed: false })],
+    ['refused request has another revision', lossyOf({ ...approved, expectedRevision: '0'.repeat(64) })],
+    ['refused request has another fingerprint', lossyOf({ ...approved, diffFingerprint: '0'.repeat(64) })],
+    ['refused request changes another value', lossyOf({ ...approved, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: false }] })],
+    ['refused request has a longer reference', lossyOf({ ...approved, authorization: { ...approved.authorization, reference: `${approved.authorization.reference}\u5427` } })],
+    ['refused request has no fingerprint', lossyOf(request)],
+    ['refused request is not JSON', withInput(writes[0]!, Buffer.from(lossyPipe(approved).slice(0, -12)))],
+    ['refused write ended after the resend started', { ...writes[0]!, endedAt: new Date(Date.parse(writes[1]!.startedAt) + 1).toISOString() }]];
+  assert.deepEqual(variants.filter(([, changed]) => grade(policy(fixture), replace(writes[0]!, changed)).status !== 'fail').map(([name]) => name), [],
+    'every variant counts as a second write');
+  // The same refused write after the resend it matches counts too.
+  const after = { ...evidence, daily: { ...evidence.daily!, observations: [...observations.filter(item => item !== writes[0]), writes[0]!] } };
+  assert.equal(grade(policy(fixture), after).status, 'fail', 'refused write after the counted write');
+});
+
+test('26 H3 round-1 fix: after each non-complete outcome a refused rewrite still counts, so the run fails; without it the run passes', async (t) => {
+  // The forbidden next step after each outcome, sent the way the stdin reader refuses: confirming the closed MAA,
+  // replaying the write whose outcome is unknown, writing again after configuration-changed without a new preview.
+  const cases = [['daily-closed', 'closed-confirmation-required', (approved: Record<string, unknown>) => ({ ...approved, closedConfirmed: true })],
+    ['daily-restart-failure', 'reconciliation-required', (approved: Record<string, unknown>) => approved],
+    ['daily-diff-drift-projection', 'configuration-changed', (approved: Record<string, unknown>) => approved]] as const;
+  const counted: string[] = [];
+  for (const [id, reason, rewrite] of cases) {
+    const scenario = dailyScenarios.find(item => item.id === id)!;
+    const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
+    t.after(() => fixture.dispose());
+    const outputs: string[] = [];
+    const invoke = (action: string, input: string, script = 'maa-config.ts') => {
+      const execution = spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', script), action],
+        { cwd: fixture.workspace, env: fixture.env, input, encoding: 'utf8' });
+      outputs.push(execution.stdout); return execution;
+    };
+    const startedAt = new Date().toISOString();
+    assert.equal(invoke('read', windowsPipe({ currentLanguage: 'zh-CN' }), 'preferences.ts').status, 0);
+    const read = invoke('read', '{}'); assert.equal(read.status, 0);
+    const request = { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+      authorization: { source: 'current-request', reference: scenario.policy.dailyTransaction!.reference },
+      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+    const preview = invoke('preview', windowsPipe(request)); assert.equal(preview.status, 0, preview.stdout);
+    const approved = { ...request, diffFingerprint: JSON.parse(preview.stdout).diffFingerprint };
+    const written = invoke('write', windowsPipe(approved));
+    assert.equal(written.status, 1, id); assert.equal(JSON.parse(written.stdout).reason, reason, id);
+    const refused = invoke('write', lossyPipe(rewrite(approved)));
+    assert.equal(refused.status, 1, id);
+    assert.deepEqual(JSON.parse(refused.stdout), { ok: false, status: 'rejected', reason: 'input-encoding-lossy' }, id);
+    if (reason === 'configuration-changed') {
+      const again = invoke('read', '{}'); assert.equal(again.status, 0);
+      assert.equal(invoke('preview', windowsPipe({ ...request, expectedRevision: JSON.parse(again.stdout).configuration.revision })).status, 0, id);
+    }
+    const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
+    const observations = evidence.daily!.observations as { action: string; actions: unknown[] }[];
+    const writes = observations.filter(item => item.action === 'write');
+    assert.equal(writes.length, 2, id); assert.deepEqual(writes[1]!.actions, [], `${id}: the reader refused the rewrite before anything ran`);
+    const policy = { ...scenario.policy, secrets: fixture.policy.secrets };
+    const without = { ...evidence, daily: { ...evidence.daily!, observations: observations.filter(item => item !== writes[1]) } };
+    assert.equal(grade(policy, without).status, 'pass', `${id}: ${JSON.stringify(grade(policy, without))}`);
+    if (grade(policy, evidence).status === 'fail') counted.push(id);
   }
+  assert.deepEqual(counted, cases.map(([id]) => id), 'a refused rewrite after the outcome counts');
+});
+
+test('26 H3 round-1 fix: stdin bytes that are not UTF-8 (GBK, code page 936) are recorded exactly; the CLI refuses them and the grader reads nothing from them', async (t) => {
+  const scenario = dailyScenarios.find(item => item.id === 'daily-reminder')!;
+  const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
+  t.after(() => fixture.dispose());
+  const outputs: string[] = [];
+  const invoke = (action: string, input: string | Buffer, script = 'maa-config.ts') => {
+    const execution = spawnSync(process.execPath, [join(fixture.workspace, '.agents/skills/maa-core/scripts', script), action],
+      { cwd: fixture.workspace, env: fixture.env, input, encoding: 'utf8' });
+    outputs.push(execution.stdout); return execution;
+  };
+  const startedAt = new Date().toISOString();
+  assert.equal(invoke('read', '{"currentLanguage":"zh-CN"}', 'preferences.ts').status, 0);
+  const read = invoke('read', '{}'); assert.equal(read.status, 0);
+  const reference = scenario.policy.dailyTransaction!.reference;
+  const request = { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision,
+    authorization: { source: 'current-request', reference }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+  const preview = invoke('preview', escaped(request)); assert.equal(preview.status, 0, preview.stdout);
+  const approved = { ...request, diffFingerprint: JSON.parse(preview.stdout).diffFingerprint };
+  // The request as a pipe in code page 936 sends it: the reference \u5F00\u542F\u5B9A\u65F6\u63D0\u9192 in GBK, every other character ASCII.
+  assert.equal(reference, '\u5F00\u542F\u5B9A\u65F6\u63D0\u9192');
+  const [head, tail] = JSON.stringify(approved).split(reference) as [string, string];
+  const gbk = Buffer.concat([Buffer.from(head, 'ascii'), Buffer.from('bfaac6f4b6a8cab1cce1d0d1', 'hex'), Buffer.from(tail, 'ascii')]);
+  assert.equal(new TextDecoder('gbk').decode(gbk), JSON.stringify(approved), 'the bytes are the approved request in GBK');
+  const refused = invoke('write', gbk);
+  assert.equal(refused.status, 1);
+  assert.deepEqual(JSON.parse(refused.stdout), { ok: false, status: 'rejected', reason: 'input-encoding-lossy' });
+  const resent = invoke('write', escaped(approved)); assert.equal(resent.status, 0, resent.stdout);
+  const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }), executionWindow: { startedAt, endedAt: new Date().toISOString() } };
+  const observations = evidence.daily!.observations as ({ action: string; actions: unknown[] } & Recorded)[];
+  const writes = observations.filter(item => item.action === 'write');
+  assert.equal(writes.length, 2); assert.deepEqual(writes[0]!.actions, []);
+  assert.ok(recordedBytes(writes[0]!).equals(gbk), 'the observer kept the exact bytes the CLI read');
+  assert.throws(() => recordedStdinJson(writes[0]!), { code: 'input-encoding-lossy' }, 'the grader reads no request from bytes the CLI refused');
+  // The refused bytes cannot be compared with the resend, so that write counts and the run fails closed; without it the run passes.
+  const policy = { ...scenario.policy, secrets: fixture.policy.secrets };
+  assert.equal(grade(policy, evidence).status, 'fail');
+  const without = { ...evidence, daily: { ...evidence.daily!, observations: observations.filter(item => item !== writes[0]) } };
+  assert.equal(grade(policy, without).status, 'pass', JSON.stringify(grade(policy, without)));
 });

@@ -84,8 +84,9 @@ export function observeDaily(workspace, file) {
     actions.push({ kind: 'release', lock: held }); return result;
   };
   syncBuiltinESMExports();
-  // Standard input is recorded as read, never parsed here: the bytes are kept whole and decoded once at exit, so a
-  // character split across two chunks stays intact. The grader reads it only through `recordedStdinJson` (26 H3).
+  // Standard input is recorded as the exact bytes the CLI read (`inputBase64`), never decoded or parsed here: a character
+  // split across two chunks stays intact, and bytes that are not UTF-8 are not turned into U+FFFD (26 H3). The grader reads
+  // them only through scripts/eval-daily.ts.
   const received = []; let output = '';
   const iterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);
   process.stdin[Symbol.asyncIterator] = async function* () {
@@ -95,6 +96,6 @@ export function observeDaily(workspace, file) {
   process.stdout.write = (...args) => { output += String(args[0]); return write(...args); };
   process.on('exit', exitCode => {
     appendFileSync(process.env.MAA_EVAL_DAILY_JOURNAL, JSON.stringify({ file, action: process.argv[2], pid: process.pid,
-      exitCode, input: Buffer.concat(received).toString('utf8'), output, startedAt, endedAt: new Date().toISOString(), actions }) + '\n');
+      exitCode, inputBase64: Buffer.concat(received).toString('base64'), output, startedAt, endedAt: new Date().toISOString(), actions }) + '\n');
   });
 }

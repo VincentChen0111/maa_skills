@@ -409,8 +409,8 @@ test('26 H3 (R1): a Codex daily-reminder run whose preferences, preview and writ
     ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills });
   assert.equal(outcome.reason, 'completed');
   assert.equal(outcome.record.grade.status, 'pass', JSON.stringify(outcome.record.grade));
-  // The double really sent the mark: the recorded write input starts with it.
-  const evidence = JSON.parse(await readFile(join(outcome.artifactDirectory, 'evidence.json'), 'utf8')) as { daily: { observations: { action: string; input: string }[] } };
-  const written = evidence.daily.observations.find((item) => item.action === 'write')!;
-  assert.ok(written.input.startsWith('\uFEFF') && written.input.endsWith('\r\n'));
+  // The double really sent the mark: the recorded write bytes (the observer keeps them exactly, 26 H3) start with it.
+  const evidence = JSON.parse(await readFile(join(outcome.artifactDirectory, 'evidence.json'), 'utf8')) as { daily: { observations: { action: string; inputBase64: string }[] } };
+  const written = Buffer.from(evidence.daily.observations.find((item) => item.action === 'write')!.inputBase64, 'base64');
+  assert.ok(written.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) && written.subarray(-2).toString() === '\r\n');
 });
