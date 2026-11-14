@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scenarioCatalog, entryId } from '../scripts/eval-scenarios.ts';
 import type { ScenarioDefinition } from '../scripts/eval-run.ts';
+import { repositoryTools } from '../scripts/release-check.ts';
 
 const skills = fileURLToPath(new URL('../skills/', import.meta.url));
 const scripts = join(skills, 'maa-core/scripts');
@@ -212,9 +213,8 @@ test('every script command and example JSON in SKILL.md and references matches t
   const { mentions, examples } = await extract();
   const problems: string[] = [];
   const available = new Set(await readdir(scripts));
-  // Repository maintenance tools the docs name, with what they are: they live in the repository's scripts/, are not installed with
-  // the skills and take no action from the skill. Each must exist there and still be named, so the list cannot hide a later mention.
-  const repositoryTools: Record<string, string> = { 'maa-version-check.ts': 'generates the packaged MAA verification record (ticket 25)' };
+  // Repository maintenance tools the docs name (one list, owned by the release package check, which does not require them in an
+  // install). Each must exist in the repository's scripts/ and still be named, so the list cannot hide a later mention.
   const repositoryScripts = new Set(await readdir(join(skills, '..', 'scripts')));
   const unnamedTools = new Set(Object.keys(repositoryTools));
   for (const mention of mentions) {
