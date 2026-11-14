@@ -4,6 +4,7 @@ import { mkdir, open, readdir, readFile, realpath, rename, stat, unlink, writeFi
 import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { executeConfigWrite, type MaaProcess } from './maa-config.ts';
 import { runChecks, type CheckBoundaries } from './doctor.ts';
 import { blockingChecks } from './checks.ts';
@@ -500,8 +501,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'progress', 'switch', 'read'].includes(action!)) fail('action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 65536) fail('input-too-large'); }
-    const input = object(JSON.parse(raw || '{}'));
+    const input = object(await readStdinJson({ maxBytes: 65536, empty: {} }));
     const allowed: Record<string, string[]> = { start: ['operation', 'reference', 'retryOf'], observe: ['runId', 'waitSeconds', 'userReport', 'processExitCode'],
       verify: ['runId'], decide: ['runId', 'decision', 'reason'], progress: ['runId', 'reference', 'stages'], switch: ['runId', 'stageId', 'expectedRevision', 'host', 'closedConfirmed'],
       read: ['runId'] };
@@ -527,7 +527,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     }
     console.log(JSON.stringify({ ok: true, ...object(result) }));
   } catch (error) {
-    const reason = error instanceof Error && known.test(error.message) ? error.message : 'check-required';
+    const reason = stdinJsonCode(error) ?? (error instanceof Error && known.test(error.message) ? error.message : 'check-required');
     console.log(JSON.stringify({ ok: false, status: 'check-required', reason })); process.exitCode = 1;
   }
 }

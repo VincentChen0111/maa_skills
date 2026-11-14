@@ -2,6 +2,7 @@ import { mkdir, open, realpath, rename, stat, writeFile } from 'node:fs/promises
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { executeConfigRecovery, inspectConfigRecovery, inspectManagedFields, readConfiguration, type MaaProcess, type RecoveryRequest } from './maa-config.ts';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials, userCredentialRepairs } from './credentials.ts';
@@ -212,27 +213,25 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
           version: async () => (await get()).version!() };
         // The skills root as the host invoked it, so directory links are inspected rather than followed.
         const context = { maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory, home, skillsRoot: resolve(dirname(resolve(process.argv[1]!)), '..', '..') };
-        const readInput = async (empty: unknown) => {
-          let text = '';
-          for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 65536) throw new Error('input-too-large'); }
-          return text === '' && empty !== undefined ? empty : JSON.parse(text) as unknown;
-        };
+        // An oversized or unparsable request stays request-invalid; a lossy one (ticket 26) says so.
+        const readInput = async (empty: unknown) => await readStdinJson({ maxBytes: 65536, tooLargeCode: 'request-invalid', invalidCode: 'request-invalid',
+          ...(empty !== undefined ? { empty } : {}) });
         if (action === 'check') {
           const result = await runChecks(context, maa, flags.includes('--online') ? { releases: githubReleaseLookup() } : {});
           emit(result); process.exitCode = result.exitCode;
         } else if (action === 'analyze') {
-          let input: AnalyzeInput | undefined;
-          try { input = parseAnalyzeInput(await readInput({})); } catch { /* Invalid input is rejected below. */ }
-          if (!input) { emit({ status: 'rejected', reason: 'request-invalid' }); process.exitCode = 1; }
+          let input: AnalyzeInput | undefined, reason = 'request-invalid';
+          try { input = parseAnalyzeInput(await readInput({})); } catch (error) { reason = stdinJsonCode(error) ?? reason; /* Invalid input is rejected below. */ }
+          if (!input) { emit({ status: 'rejected', reason }); process.exitCode = 1; }
           else { const result = await runAnalysis(context, input, maa); emit(result); process.exitCode = result.outcome === 'completed' ? 0 : 1; }
         } else {
-          let body: Record<string, unknown> | undefined;
+          let body: Record<string, unknown> | undefined, reason = 'request-invalid';
           try {
             const value = await readInput(undefined);
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))) throw new Error('request-invalid');
             body = value as Record<string, unknown>;
-          } catch { /* Invalid input never authorizes a mutation. */ }
-          const result = body ? await executeRepairs({ ...body, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as RepairRequest, maa) : { status: 'rejected', reason: 'request-invalid' };
+          } catch (error) { reason = stdinJsonCode(error) ?? reason; /* Invalid input never authorizes a mutation. */ }
+          const result = body ? await executeRepairs({ ...body, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as RepairRequest, maa) : { status: 'rejected', reason };
           emit(result); process.exitCode = result.status === 'complete' ? 0 : 1;
         }
       }

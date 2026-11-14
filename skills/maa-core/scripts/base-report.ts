@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { checkPlanText, gateTitles, generateBasePlan, loadPlanTables, parsePlanSpec, planFreshness, readMaaNameTable, readPrivateFile, readSnapshot, snapshotFingerprint,
   specChecks, specTexts, suppliedPlanTables, tablesFingerprint, type Fill, type GenerateOptions, type GenerateResult, type OperatorFacts, type PlanCheck, type PlanInputs, type Freshness } from './base-plan.ts';
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
@@ -252,7 +253,7 @@ export function formatBaseReportBody(content: BaseContent): string[] {
     `- MAA 干员名表：${content.sources.names.status === 'available' ? freshWords.fresh : `${freshWords.unknown}（${inline(content.sources.names.reason ?? '')}）`}`,
     '- 之后快照、技能表、名表或排班文件有变化，这份检查结果就是陈旧的，不能当作当前数据的证明；应用前会重新检查。', '',
     '## 未建模', '', '- 阵营组合与全局效果的实际叠加、配方条件、心情随时间的非线性变化、宿舍氛围与等级带来的恢复差异、订单与产物的随机性。',
-    '- 心情、组合、互斥和效率数字由报告作者给出（推断），工具只做一致性检查。', '- 文本百分比不是最终收益，不作排名或加总；没有证明是最优的方案。', '',
+    '- 心情、组合、互斥和效率数字由报告作者给出（推断），工具只做一致性检查。', '- 文本百分比不是最终收益，不作排名或加总；这份排班只通过了上面的检查，没有和其他排法比较过。', '',
     '## 总体推断', '', `- 总体推断：${content.summary === null ? '（无）' : inline(content.summary)}`, '', '## 来源', '',
     content.sources.mode === 'supplied' ? '- 来源：所提供的离线表，本次未从公开镜像获取或核验。' : '- 来源：公开固定提交。',
     ...content.sources.files.map(file => `- ${inline(file.repository)}@${inline(file.commit)} ${inline(file.file)}：SHA-256 ${inline(file.sha256)}；读取时间 ${inline(file.readAt)}`),
@@ -283,8 +284,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['draft', 'read', 'brief', 'review', 'fail', 'skip', 'approve', 'freshness'].includes(action!)) throw new Error('base-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = JSON.parse(raw) as unknown;
+    const input = await readStdinJson({ maxBytes: null, invalidCode: 'base-input-invalid' });
     if (!isObject(input) || input.format !== undefined && !['json', 'markdown'].includes(String(input.format))) throw new Error('base-input-invalid');
     const { privateDirectory } = await readSettings(), markdown = input.format === 'markdown';
     const load = async () => await loadAdviceReport(privateDirectory, kind, String(input.reportHash ?? '')) as ReportState<BaseContent>;
@@ -318,7 +318,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
     }
   } catch (error) {
-    const code = error instanceof Error && /^(report|base|plan|public-data)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'base-report-failed';
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|base|plan|public-data)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'base-report-failed');
     console.log(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
   }
 }

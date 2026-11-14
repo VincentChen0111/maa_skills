@@ -1,6 +1,7 @@
 import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { randomUUID } from 'node:crypto';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
@@ -176,9 +177,9 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     const downloadActions: Record<string, string[]> = { plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
       install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'candidate'] };
     if (!['check', 'prepare', 'discover', 'test', 'apply', ...Object.keys(downloadActions)].includes(action ?? '') || args.length > 2 || args.length === 2 && args[1] !== '--json') throw new Error('request-invalid');
-    let text = ''; for await (const chunk of process.stdin) { text += String(chunk); if (Buffer.byteLength(text) > 65536) throw new Error('request-invalid'); }
+    const parsed = await readStdinJson({ maxBytes: 65536, empty: {}, tooLargeCode: 'request-invalid', invalidCode: 'request-invalid' });
     let body: Record<string, unknown>;
-    try { body = object(JSON.parse(text || '{}')); } catch { throw new Error('request-invalid'); }
+    try { body = object(parsed); } catch { throw new Error('request-invalid'); }
     const allowed = action === 'check' ? ['maaDirectory'] : action === 'prepare' ? [] : action === 'discover' ? ['adbPaths', 'addresses']
       : action === 'test' ? ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'] : Object.hasOwn(downloadActions, action!) ? downloadActions[action!]!
       : ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'];
@@ -216,7 +217,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   } catch (error) {
     const safe = new Set(['request-invalid', 'set-preferences-first', 'node-24-required', 'windows-required', 'maa-directory-unset', 'candidate-input-invalid', 'too-many-adb-candidates', 'too-many-connection-candidates', 'cn-client-required']);
     // Download reasons are fixed codes chosen by setup-download.ts; no path, address or response text.
-    const reason = error instanceof DownloadError || error instanceof Error && safe.has(error.message) ? (error as Error).message : 'setup-check-required';
+    const reason = stdinJsonCode(error) ?? (error instanceof DownloadError || error instanceof Error && safe.has(error.message) ? (error as Error).message : 'setup-check-required');
     emit({ status: reason === 'setup-check-required' ? 'unexpected-failure' : 'rejected', reason }); process.exitCode = reason === 'setup-check-required' ? 2 : 1;
   }
 }

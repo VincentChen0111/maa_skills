@@ -169,6 +169,32 @@ test('configured MAA data is read without modifying it and missing source files 
 });
 
 
+// Ticket 26 (D2): a refusal names its known static cause instead of the generic code, which evaluation runs showed models
+// treating as a state to route around; only causes that could carry a path or system text stay generic.
+test('CLI refusals name the known cause; an unreadable file stays account-check-required without its path', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-account-codes-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); await mkdir(home);
+  await writeFile(join(home, 'config.json'), JSON.stringify({ privateDirectory: home }));
+  const run = (action: string, input: string) => spawnSync(process.execPath, [fileURLToPath(new URL('../skills/maa-core/scripts/account-snapshot.ts', import.meta.url)), action],
+    { input, encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root, MAA_SKILLS_HOME: home } });
+  const missing = join(root, 'missing-synthetic-callbacks.json');
+  for (const [action, input, error] of [
+    ['import', '{"format":', 'input-json-invalid'],
+    ['import', '{}', 'maa-directory-required'],
+    ['inspect', '{"maaDirectory":"elsewhere"}', 'invalid-request'],
+    ['inspect', '{"format":"html"}', 'invalid-format'],
+    ['import', JSON.stringify({ callbackFile: missing }), 'account-check-required'],
+  ] as const) {
+    const result = run(action, input);
+    assert.equal(result.status, 1, `${action} ${input}`);
+    assert.deepEqual(JSON.parse(result.stderr), { ok: false, error }, `${action} ${input}`);
+    assert.equal(result.stdout, '');
+    assert.doesNotMatch(result.stderr, /missing-synthetic|ENOENT|[A-Z]:\\|\//);
+  }
+  assert.deepEqual(await readdir(home), ['config.json'], 'a refusal writes nothing');
+});
+
 test('Markdown reports original scan time separately from the later read time', () => {
   const snapshot = parseMaaSnapshot(JSON.stringify({ depot: { done: true, data: { '30012': 9 }, syncTime: '2026-11-10T10:30:00Z' } }), readAt);
   const markdown = formatAccountSummary(snapshot, 'en');

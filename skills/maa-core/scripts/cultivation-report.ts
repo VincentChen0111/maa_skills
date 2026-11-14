@@ -5,6 +5,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { calculateCultivationGaps, loadGapTables, type GapResult, type GapRow, type GapTables } from './cultivation-gaps.ts';
 import { readNgaThread } from './nga.ts';
 import { collectStageJobs, loadStageTables, type StageRequest } from './stage-jobs.ts';
@@ -389,8 +390,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['draft', 'read', 'brief', 'review', 'fail', 'skip', 'approve'].includes(action!)) throw new Error('cultivation-action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) raw += chunk;
-    const input = JSON.parse(raw) as unknown;
+    const input = await readStdinJson({ maxBytes: null, invalidCode: 'cultivation-input-invalid' });
     if (!isObject(input)) throw new Error('cultivation-input-invalid');
     const { privateDirectory } = await readSettings();
     const markdown = input.format === 'markdown';
@@ -421,7 +421,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
     }
   } catch (error) {
-    const code = error instanceof Error && /^(report|cultivation|gaps|cost)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'cultivation-report-failed';
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|cultivation|gaps|cost)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'cultivation-report-failed');
     console.log(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
   }
 }

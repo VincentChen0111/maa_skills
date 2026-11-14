@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { CredentialError, inspectCredentials, readCredential, recordCredentialOutcome } from './credentials.ts';
 import type { Protector } from './credential-protection.ts';
 import { readSettings } from './preferences.ts';
@@ -391,10 +392,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     try { settings = await readSettings(); } catch { throw new Error('settings-unreadable'); }
     if (action === 'status') console.log(JSON.stringify({ ok: true, status: await ngaStatus({ privateDirectory: settings.privateDirectory }) }));
     else {
-      let raw = '';
-      for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > ngaLimits.inputBytes) throw invalid(); }
+      const parsed = await readStdinJson({ maxBytes: ngaLimits.inputBytes, tooLargeCode: 'request-invalid', invalidCode: 'request-invalid' });
       let input: Record<string, unknown> | undefined;
-      try { input = object(JSON.parse(raw)); } catch { throw invalid(); }
+      try { input = object(parsed); } catch { throw invalid(); }
       if (!input) throw invalid();
       const { format, ...request } = input;
       if (format !== undefined && format !== 'json' && format !== 'markdown') throw invalid();
@@ -404,7 +404,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (result.status !== 'ok') process.exitCode = 1;
     }
   } catch (error) {
-    const code = error instanceof Error && ['request-invalid', 'settings-unreadable'].includes(error.message) ? error.message : 'research-failed';
+    const code = stdinJsonCode(error) ?? (error instanceof Error && ['request-invalid', 'settings-unreadable'].includes(error.message) ? error.message : 'research-failed');
     console.log(JSON.stringify({ ok: false, error: code }));
     process.exitCode = code === 'research-failed' ? 2 : 1;
   }

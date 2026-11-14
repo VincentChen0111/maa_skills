@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { executeConfigWrite, versionStampOf, type MaaProcess } from './maa-config.ts';
 import { compareVersionStamp, readVersionStamp } from './maa-version.ts';
 import { approvedJobList, approvedJobFile, approvedJobSourceFile, type ApprovedJobPlan } from './stage-job-plan.ts';
@@ -476,8 +477,7 @@ const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(re
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
     if (process.argv.length !== 3 || !['stages', 'query', 'prepare'].includes(process.argv[2]!)) throw new Error('action-invalid');
-    let raw = ''; for await (const chunk of process.stdin) { raw += String(chunk); if (Buffer.byteLength(raw) > 1024 * 1024) throw new Error('input-too-large'); }
-    const input = object(JSON.parse(raw)), settings = await readSettings();
+    const input = object(await readStdinJson({ maxBytes: 1024 * 1024 })), settings = await readSettings();
     if (process.argv[2] === 'stages') {
       if (Object.keys(input).some(key => !['codes', 'tablesFile'].includes(key))) throw new Error('request-invalid');
       const tables = await loadStageTables(input.tablesFile);
@@ -508,5 +508,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       console.log(JSON.stringify({ ok: result.status === 'complete', ...result })); if (result.status !== 'complete') process.exitCode = 1;
     }
-  } catch { console.log(JSON.stringify({ ok: false, status: 'check-required' })); process.exitCode = 1; }
+  } catch (error) {
+    // Ticket 26: a request refused while reading standard input reached neither MAA nor a file, so it is a plain rejection.
+    const refused = stdinJsonCode(error);
+    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : { ok: false, status: 'check-required' })); process.exitCode = 1;
+  }
 }
