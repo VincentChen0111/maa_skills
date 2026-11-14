@@ -18,8 +18,9 @@ export async function inspectMetadata(root: string): Promise<string[]> {
       } catch { errors.push(`${file}: broken-link`); }
     }
   }
-  // Version consistency has one owner (scripts/release-check.ts); the gate runs its manifest part. The changelog and release
-  // notes are checked by the release check, so a version-record PR from ticket 25's Action never fails on an old release.
+  // Version consistency has one owner (scripts/release-check.ts); this runs its manifest part. The same gate also checks the
+  // changelog and release-notes version and status (tests/release-check.test.ts, without --release); only the notes' two MAA
+  // lines wait for --release and the tag check, so a version-record PR from ticket 25's Action never fails on an old release.
   errors.push(...(await inspectManifestVersions(directoryReader(root))).errors);
   try {
     const json = async (path: string) => JSON.parse(await readFile(join(root, path), 'utf8'));

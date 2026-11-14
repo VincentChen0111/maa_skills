@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inspectVersions, inspectTag, directoryReader, changelogPath, releaseNotesPath } from '../scripts/release-check.ts';
-import { releaseNotes, type RecordFile } from '../scripts/maa-version-check.ts';
+import { recordPath, releaseNotes, type RecordFile } from '../scripts/maa-version-check.ts';
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const record: RecordFile = { schemaVersion: 2, recordVersion: 2, sourceVerified: ['6.22.0'], deviceVerified: [] };
@@ -149,8 +149,63 @@ test('the CLI prints static codes and its exit status follows them', async (t) =
   assert.equal(run('unknown').status, 2);
 });
 
-test('the repository is consistent in its own mode: drafts for the next release while the version is a pre-release', async () => {
-  const report = await inspectVersions(directoryReader(repository));
+/**
+ * What every PR's offline gate asserts about a repository (this file runs in it): no error without `--release`, in the mode the
+ * version's own pre-release suffix names (read from package.json here, not from the report), so the release commit passes too.
+ */
+async function assertGateConsistent(root: string) {
+  const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version as string;
+  const report = await inspectVersions(directoryReader(root));
   assert.deepEqual(report.errors, []);
-  assert.equal(report.mode, 'pre-release', 'this package does not bump the version (design default, 2026-11-14)');
+  assert.equal(report.mode, /^\d+\.\d+\.\d+-/.test(version) ? 'pre-release' : 'release');
+  return report;
+}
+
+test('the repository is consistent in the mode its own version names: drafts while the version carries a pre-release suffix', async () => {
+  await assertGateConsistent(repository);
+});
+
+/**
+ * The release commit, made from this repository's own files by the release edits: the version without its pre-release suffix
+ * in every manifest, a date on the changelog head, notes marked 已发布 whose two MAA lines are regenerated from the packaged
+ * record (the release step refreshes them; the everyday gate never compares them, so a record-only PR cannot fail here).
+ */
+async function releaseShaped(root: string): Promise<string> {
+  const version = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')).version as string;
+  const target = version.replace(/-.*$/, '');
+  const files = ['package.json', 'package-lock.json', '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'skills/maa-core/package.json',
+    recordPath, changelogPath, releaseNotesPath(target)];
+  for (const file of files) {
+    await mkdir(dirname(join(root, file)), { recursive: true });
+    await writeFile(join(root, file), await readFile(join(repository, file)));
+  }
+  const json = (file: string, change: (value: any) => void) => edit(root, file, (text) => {
+    const value = JSON.parse(text); change(value); return JSON.stringify(value, null, 2) + '\n';
+  });
+  await json('package.json', (value) => { value.version = target; });
+  await json('package-lock.json', (value) => { value.version = target; value.packages[''].version = target; });
+  await json('.claude-plugin/plugin.json', (value) => { value.version = target; });
+  await json('skills/maa-core/package.json', (value) => { value.version = target; });
+  await json('.claude-plugin/marketplace.json', (value) => {
+    if (value.metadata?.version !== undefined) value.metadata.version = target;
+    for (const entry of value.plugins ?? []) if (entry.version !== undefined) entry.version = target;
+  });
+  await edit(root, changelogPath, (text) => text.replace(/^(## \[?v?[0-9A-Za-z.-]+\]? - )未发布[ \t]*$/m, (_, head: string) => `${head}2026-11-20`));
+  const [source, device] = releaseNotes(JSON.parse(await readFile(join(root, recordPath), 'utf8')) as RecordFile).trimEnd().split('\n');
+  await edit(root, releaseNotesPath(target), (text) => {
+    assert.match(text, /^MAA 源码已核：/m, 'the draft notes carry the source-verified line');
+    assert.match(text, /^MAA 实机已核：/m, 'the draft notes carry the device-verified line');
+    return text.replace(/^状态：草稿[ \t]*$/m, '状态：已发布').replace(/^MAA 源码已核：.*$/m, () => source!).replace(/^MAA 实机已核：.*$/m, () => device!);
+  });
+  return target;
+}
+
+test('the release commit made from this repository passes the same gate assertion and the --release check', async (t) => {
+  const root = await temporary(t);
+  const target = await releaseShaped(root);
+  const report = await assertGateConsistent(root);
+  assert.deepEqual(report, { version: target, target, mode: 'release', errors: [] });
+  const cli = spawnSync(process.execPath, [join(repository, 'scripts/release-check.ts'), 'versions', '--release', root], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stdout);
+  assert.deepEqual(JSON.parse(cli.stdout), { ok: true, version: target, target, mode: 'release', errors: [] });
 });
