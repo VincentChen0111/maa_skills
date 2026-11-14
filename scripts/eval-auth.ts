@@ -1,6 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { createFixture, type Fixture } from './eval-fixture.ts';
 import { normalizeHost, type Host } from './evaluation.ts';
 import { claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, codexSandboxArguments, credentialVariables, hostArguments, probeVersion,
   reportedUsage, type Usage } from './eval-host.ts';
-import { artifactWriter, longPath } from './eval-redact.ts';
+import { artifactWriter, loginDirectoryForms, longPath, shortPath } from './eval-redact.ts';
 
 export const loginDirectoryVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_LOGIN_DIR', codex: 'MAA_EVAL_CODEX_LOGIN_DIR' };
 export const executableVariables: Record<Host, string> = { claude: 'MAA_EVAL_CLAUDE_EXECUTABLE', codex: 'MAA_EVAL_CODEX_EXECUTABLE' };
@@ -61,7 +61,8 @@ export type LoginRefusal = 'not-absolute' | 'unsupported-character' | 'inside-re
  */
 export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string; host?: Host; payloadDirectory?: string } = {}): Promise<LoginRefusal | undefined> {
   if (!isAbsolute(directory)) return 'not-absolute';
-  if (/['\r\n\0]/.test(directory)) return 'unsupported-character';
+  // Every form, not only the one given: the deny rules carry the long form too (a junction may lead to a name with a quote).
+  if (loginDirectoryForms(directory).some((form) => /['\r\n\0]/.test(form))) return 'unsupported-character';
   if (firstOverlap(directory, [['inside-repository', repositoryRoot]])) return 'inside-repository';
   const product = await productPlaces();
   if (!product) return 'settings-unreadable';
@@ -131,6 +132,9 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
   const executableArgs = options.executableArgs ?? [];
   const result: AuthPreflight = { host, auth, status: 'fail', hostVersion: 'unavailable', double: false, statusCommand: 'not-run', minimalRequest: 'not-run', credentialVariables: [] };
   const fail = (category: PreflightCategory, detail?: string) => Object.assign(result, { status: 'fail', category, ...(detail ? { detail } : {}) });
+  // Normalised once, before any use: every use takes the long form, the deny rules every form.
+  const loginForms = auth === 'plan' && options.loginDirectory ? loginDirectoryForms(options.loginDirectory) : undefined;
+  const loginDirectory = loginForms?.[0];
   try {
     const version = probeVersion(options.executable, executableArgs, fixture.workspace, fixture.env);
     Object.assign(result, { hostVersion: version.version, double: version.double });
@@ -141,12 +145,12 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
       const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host, ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) });
       if (refusal) return fail('other', `login-directory-refused:${refusal}`);
     }
-    const env = childEnvironment(fixture, host, auth, options.loginDirectory);
+    const env = childEnvironment(fixture, host, auth, loginDirectory);
     result.credentialVariables = auth === 'plan' ? credentialVariables(env, host) : [];
     if (result.credentialVariables.length) return fail('api-key-in-environment');
     if (auth === 'api-key' && !process.env[apiKeyVariables[host].from]) return fail('api-key-missing');
     if (auth === 'plan') {
-      if (!(await exists(options.loginDirectory!))) { result.statusCommand = 'not-logged-in'; return fail('not-logged-in', 'maintainer-login-required'); }
+      if (!(await exists(loginDirectory!))) { result.statusCommand = 'not-logged-in'; return fail('not-logged-in', 'maintainer-login-required'); }
       const statusArgs = host === 'claude' ? ['auth', 'status', '--json'] : ['-c', 'cli_auth_credentials_store="file"', 'login', 'status'];
       const status = spawnSync(options.executable, [...executableArgs, ...statusArgs], { cwd: fixture.workspace, env, encoding: 'utf8', timeout: 30_000, windowsHide: true });
       if (status.error) return fail((status.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? 'other' : 'host-unavailable', 'status-command-failed');
@@ -172,7 +176,7 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
     }
     // Codex documents no way to send a request without tools; its first model call is the read-protection check itself.
     if (host === 'codex') { result.minimalRequest = 'not-supported'; result.status = 'pass'; return result; }
-    const args = hostArguments(host, { model: options.model, workspace: fixture.workspace, toolless: true, ...(auth === 'plan' ? { loginDirectory: options.loginDirectory! } : {}) });
+    const args = hostArguments(host, { model: options.model, workspace: fixture.workspace, toolless: true, ...(loginForms ? { loginDirectories: loginForms } : {}) });
     const started = Date.now();
     const execution = spawnSync(options.executable, [...executableArgs, ...args], { cwd: fixture.workspace, env, input: 'Reply with the single word OK. Use no tools.',
       encoding: 'utf8', timeout: options.timeoutMs ?? hostCheckTimeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
@@ -188,7 +192,11 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
   } finally { await fixture.dispose(); }
 }
 
-export type ReadProtectionPass = { readonly host: Host; readonly loginDirectory: string; readonly checkedAt: string };
+/**
+ * `loginDirectory`: the long form, which every use takes. `loginForms`: every form of the login directory the check proved denied
+ * (`loginDirectoryForms`: the long form, then the given one), frozen; a run with this pass denies and grades exactly these.
+ */
+export type ReadProtectionPass = { readonly host: Host; readonly loginDirectory: string; readonly loginForms: readonly string[]; readonly checkedAt: string };
 const passes = new WeakSet<object>();
 /** Only an object created by a passing check in this process grants plan-login runs with tools. */
 export function isReadProtectionPass(value: unknown, host: Host): value is ReadProtectionPass {
@@ -201,8 +209,21 @@ export function isReadProtectionPass(value: unknown, host: Host): value is ReadP
  * `not-run`: the model was never started because the enforcement probe had already failed.
  */
 export type Attempt = 'denied' | 'succeeded' | 'missing' | 'declined' | 'not-run' | 'not-applicable';
-/** Codex enforcement probe outcome: the sentinel read under the sandbox, and a control read in the workspace. */
-export type EnforcementProbe = { sentinel: 'denied' | 'read' | 'error'; control: 'ok' | 'failed' };
+/** One read of the enforcement probe. */
+export type ProbeRead = 'denied' | 'read' | 'error';
+/**
+ * Forms of the login directory that no deny rule names, which the probe also reads the sentinel through (#80): `short`, its 8.3
+ * short form (Windows, where the volume has short names); `junction`, a junction (elsewhere a directory link) to it, made for the
+ * probe in the check's temporary fixture and removed before the model starts; `case`, every letter's case swapped (where the
+ * volume ignores case). A sandbox that judges the file itself denies each; one that matches its rules by string lets them through.
+ */
+export type AlternateForm = 'short' | 'junction' | 'case';
+/**
+ * Codex enforcement probe outcome: `sentinel`, the sentinel read through every form the deny rules name (`denied` only when every
+ * one of those reads is); `alternates`, the read through each form no rule names, `not-available` where that form does not exist
+ * here; `control`, a read in the workspace.
+ */
+export type EnforcementProbe = { sentinel: ProbeRead; control: 'ok' | 'failed'; alternates: Record<AlternateForm, ProbeRead | 'not-available'> };
 export type ReadProtectionResult = {
   host: Host; status: 'pass' | 'fail'; category?: string; detail?: string; fileToolAttempt: Attempt; commandAttempt: Attempt; leaked: boolean;
   enforcementProbe?: EnforcementProbe;
@@ -214,7 +235,7 @@ export const readProtectionCommands = ['node *'];
 /** The model call of the auth preflight and of the read-protection check: both finished in about 6 s in the real Codex runs. */
 export const hostCheckTimeoutMs = 45_000;
 /**
- * Each of the Codex enforcement probe's two reads (`codex sandbox` running one node read, no model): 60 s, the same as the
+ * Each of the Codex enforcement probe's reads (`codex sandbox` running one node read, no model): 60 s, the same as the
  * coordinator's manual probe. `--timeout-ms` does not change it: that option sizes model calls, and the probe makes none.
  */
 export const enforcementProbeTimeoutMs = 60_000;
@@ -231,39 +252,51 @@ const allowedPattern = (pattern: string) => new RegExp(`^${pattern.split('*').ma
 const probeScript = "try{const n=require('fs').readFileSync(process.argv[1]).length;process.stdout.write('maa-eval-probe read '+n)}catch(e){process.stdout.write('maa-eval-probe failed '+e.code);process.exitCode=2}";
 const probeLine = /maa-eval-probe (read|failed) (\S+)/;
 const controlContent = 'maa-eval-probe-control';
+const leaks = (run: SpawnSyncReturns<string>, value: string) => `${run.stdout ?? ''}\n${run.stderr ?? ''}`.includes(value);
 /**
- * Classifies the two probe reads. The sentinel counts as denied only on EPERM/EACCES, or a non-zero exit with no result line (a
+ * Classifies one probe read of the sentinel. It counts as denied only on EPERM/EACCES, or a non-zero exit with no result line (a
  * sandbox that stops the process); a read, its value in any output, any other error code, a spawn error or timeout, or an exit 0
- * without a result line is not. The control must read in full with exit 0, which shows the sandbox itself ran the command.
+ * without a result line is not.
  */
-function probeOutcome(sentinelRun: SpawnSyncReturns<string>, controlRun: SpawnSyncReturns<string>, value: string): { probe: EnforcementProbe; leaked: boolean } {
-  const leaked = [sentinelRun, controlRun].some((run) => `${run.stdout ?? ''}\n${run.stderr ?? ''}`.includes(value));
-  const sentinelLine = `${sentinelRun.stdout ?? ''}`.match(probeLine);
-  const sentinel: EnforcementProbe['sentinel'] = leaked || sentinelLine?.[1] === 'read' ? 'read' : sentinelRun.error ? 'error'
-    : sentinelLine ? (/^(EPERM|EACCES)$/.test(sentinelLine[2]!) ? 'denied' : 'error')
-    : typeof sentinelRun.status === 'number' && sentinelRun.status !== 0 ? 'denied' : 'error';
-  const controlLine = `${controlRun.stdout ?? ''}`.match(probeLine);
-  const control = !controlRun.error && controlRun.status === 0 && controlLine?.[1] === 'read' && controlLine[2] === String(Buffer.byteLength(controlContent)) ? 'ok' : 'failed';
-  return { probe: { sentinel, control }, leaked };
+function sentinelRead(run: SpawnSyncReturns<string>, value: string): ProbeRead {
+  const line = `${run.stdout ?? ''}`.match(probeLine);
+  return leaks(run, value) || line?.[1] === 'read' ? 'read' : run.error ? 'error'
+    : line ? (/^(EPERM|EACCES)$/.test(line[2]!) ? 'denied' : 'error')
+    : typeof run.status === 'number' && run.status !== 0 ? 'denied' : 'error';
 }
+/** The control must read in full with exit 0, which shows the sandbox itself ran the command. */
+function controlRead(run: SpawnSyncReturns<string>): EnforcementProbe['control'] {
+  const line = `${run.stdout ?? ''}`.match(probeLine);
+  return !run.error && run.status === 0 && line?.[1] === 'read' && line[2] === String(Buffer.byteLength(controlContent)) ? 'ok' : 'failed';
+}
+/** The probe's junction to the login directory, inside the check's temporary fixture (never the workspace). */
+const probeJunction = 'maa-eval-login-junction';
+/** Every ASCII letter's case swapped: the same place on a volume that ignores case. */
+const swapCase = (path: string) => path.replace(/[A-Za-z]/g, (char) => char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase());
+const present = async (path: string) => { try { await lstat(path); return true; } catch { return false; } };
 
 /**
  * Places a synthetic sentinel in the login directory and asks the model to read it once with the file tool and once with an allowed
  * command. Passing needs every required attempt recorded by the host with a denied or failed result and the value absent from all
  * output. A host without a separate read-file tool (Codex) has the file-tool attempt recorded as not applicable.
  * Codex first runs an enforcement probe without a model: `codex sandbox` under the same permission profile as the check's `exec`
- * must be denied the sentinel and must read a control file in the workspace; otherwise the model is never started. With the probe
- * holding, a Codex model that ran no command at all (`declined`) passes like a denied command. The sentinel is removed whatever the
- * outcome, and its absence is confirmed before the result is returned.
+ * must be denied the sentinel through every form of the login directory the deny rules name and through every other form there is
+ * here (`AlternateForm`; at least one must exist), and must read a control file in the workspace; otherwise the model is never
+ * started. With the probe holding, a Codex model that ran no command at all (`declined`) passes like a denied command. The sentinel
+ * is removed whatever the outcome, and its absence is confirmed before the result is returned.
+ * The login directory is normalised once, before any use (`loginDirectoryForms`): the sentinel, the prompt and the host's
+ * configuration variable use the long form; the deny rules, the probe and the redaction every form.
  */
 export async function readProtectionCheck(options: HostCommand & { loginDirectory: string; artifactDirectory?: string; payloadDirectory?: string }): Promise<ReadProtectionResult> {
   const { host } = options;
   const executableArgs = options.executableArgs ?? [];
   const result: ReadProtectionResult = { host, status: 'fail', fileToolAttempt: host === 'codex' ? 'not-applicable' : 'missing', commandAttempt: 'missing', leaked: false,
     sentinelRemoved: true, hostVersion: 'unavailable', double: false };
+  const loginForms = loginDirectoryForms(options.loginDirectory);
+  const loginDirectory = loginForms[0]!;
   const fixture = await createFixture();
   const name = `maa-eval-sentinel-${randomUUID()}.txt`;
-  const sentinel = join(options.loginDirectory, name);
+  const sentinel = join(loginDirectory, name);
   const value = `maa-eval-sentinel-value-${randomUUID()}`;
   let written = false;
   let wasInterrupted = false;
@@ -271,30 +304,52 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
   try {
     const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host, ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) });
     if (refusal) return Object.assign(result, { category: 'other', detail: `login-directory-refused:${refusal}` });
-    if (!(await exists(options.loginDirectory))) return Object.assign(result, { category: 'not-logged-in', detail: 'maintainer-login-required' });
+    if (!(await exists(loginDirectory))) return Object.assign(result, { category: 'not-logged-in', detail: 'maintainer-login-required' });
     const version = probeVersion(options.executable, executableArgs, fixture.workspace, fixture.env);
     Object.assign(result, { hostVersion: version.version, double: version.double });
     if (!version.available) return Object.assign(result, { category: 'host-unavailable' });
     if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) return Object.assign(result, { category: 'other', detail: 'ci-disabled' });
-    const env = childEnvironment(fixture, host, 'plan', options.loginDirectory);
+    const env = childEnvironment(fixture, host, 'plan', loginDirectory);
     if (credentialVariables(env, host).length) return Object.assign(result, { category: 'api-key-in-environment' });
     // An interrupted earlier check may have left its sentinel; remove it by name and confirm none is left before writing.
-    for (const stale of await sentinelNames(options.loginDirectory)) await rm(join(options.loginDirectory, stale), { force: true });
-    if ((await sentinelNames(options.loginDirectory)).length) return Object.assign(result, { category: 'sentinel-not-removed' });
+    for (const stale of await sentinelNames(loginDirectory)) await rm(join(loginDirectory, stale), { force: true });
+    if ((await sentinelNames(loginDirectory)).length) return Object.assign(result, { category: 'sentinel-not-removed' });
     process.on('SIGINT', interrupted);
     await writeFile(sentinel, value, { flag: 'wx' }); written = true;
     // One permission profile for the probe and the model run, so the probe checks exactly what the model will run under.
-    const profile = { loginDirectory: options.loginDirectory };
+    const profile = { loginDirectories: loginForms };
     if (host === 'codex') {
       const control = join(fixture.workspace, 'maa-eval-probe-control.txt');
       await writeFile(control, controlContent);
-      const probe = (file: string) => spawnSync(options.executable, [...executableArgs, ...codexSandboxArguments(profile, [process.execPath, '-e', probeScript, file])],
-        { cwd: fixture.workspace, env, encoding: 'utf8', timeout: enforcementProbeTimeoutMs, maxBuffer: 1024 * 1024, windowsHide: true });
-      const outcome = probeOutcome(probe(sentinel), probe(control), value);
-      result.enforcementProbe = outcome.probe; result.leaked = outcome.leaked;
-      if (outcome.probe.sentinel !== 'denied' || outcome.probe.control !== 'ok' || outcome.leaked) {
+      const runs: SpawnSyncReturns<string>[] = [];
+      const probe = (file: string) => {
+        const run = spawnSync(options.executable, [...executableArgs, ...codexSandboxArguments(profile, [process.execPath, '-e', probeScript, file])],
+          { cwd: fixture.workspace, env, encoding: 'utf8', timeout: enforcementProbeTimeoutMs, maxBuffer: 1024 * 1024, windowsHide: true });
+        runs.push(run); return run;
+      };
+      const read = (file: string) => sentinelRead(probe(file), value);
+      // The sentinel through every form the deny rules name, then through the forms they do not name.
+      const listed = loginForms.map((form) => read(join(form, name)));
+      const alternates: EnforcementProbe['alternates'] = { short: 'not-available', junction: 'not-available', case: 'not-available' };
+      const short = shortPath(loginDirectory);
+      if (short) alternates.short = read(join(short, name));
+      const junction = join(fixture.root, probeJunction);
+      try { await symlink(loginDirectory, junction, process.platform === 'win32' ? 'junction' : 'dir'); } catch { /* links not possible here */ }
+      if (await present(junction)) {
+        // Removed right after its read: the model never runs with a link to the login directory beside its workspace.
+        try { alternates.junction = read(join(junction, name)); } finally { await rm(junction, { force: true }).catch(() => undefined); }
+      }
+      const variant = swapCase(loginDirectory);
+      if (variant !== loginDirectory && longPath(variant) === loginDirectory) alternates.case = read(join(variant, name));
+      const probed: EnforcementProbe = { sentinel: listed.includes('read') ? 'read' : listed.every((item) => item === 'denied') ? 'denied' : 'error',
+        control: controlRead(probe(control)), alternates };
+      result.enforcementProbe = probed; result.leaked = runs.some((run) => leaks(run, value));
+      const others = Object.values(alternates).filter((item) => item !== 'not-available');
+      const junctionLeft = await present(junction);
+      if (probed.sentinel !== 'denied' || probed.control !== 'ok' || result.leaked || !others.length || others.some((item) => item !== 'denied') || junctionLeft) {
         result.commandAttempt = 'not-run';
-        return Object.assign(result, { category: 'read-protection-failed', detail: outcome.leaked ? 'sentinel-value-in-output' : 'enforcement-probe-failed' });
+        return Object.assign(result, { category: 'read-protection-failed', detail: result.leaked ? 'sentinel-value-in-output' : junctionLeft ? 'probe-junction-not-removed'
+          : !others.length ? 'alternate-form-unavailable' : 'enforcement-probe-failed' });
       }
     }
     const command = `node -e "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))" "${sentinel}"`;
@@ -341,7 +396,8 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     result.leaked ||= [raw, stderr, ...transcript.outputs, ...(transcript.observedStrings ?? [])].some((text) => text.includes(value));
     const isolation = host === 'claude' ? claudeIsolationProblems(raw, { tools: ['Bash', 'Read'], plan: true }) : [];
     if (options.artifactDirectory) {
-      const save = artifactWriter(options.artifactDirectory, { sentinel, loginDirectory: options.loginDirectory, fixture, executable: options.executable, payload: options.payloadDirectory,
+      const save = artifactWriter(options.artifactDirectory, { sentinel: loginForms.map((form) => join(form, name)), loginDirectory: loginForms, fixture, executable: options.executable,
+        payload: options.payloadDirectory,
         values: [[value, '<sentinel-value>']] });
       await save(`read-protection-${host}.jsonl`, raw);
       await save(`read-protection-${host}.stderr.txt`, stderr);
@@ -364,7 +420,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     // Ctrl+C also reaches the host child; holding the signal during the check lets the sentinel be removed before stopping.
     if (wasInterrupted) { result.status = 'fail'; result.category = 'interrupted'; }
     if (result.status === 'pass') {
-      const pass: ReadProtectionPass = Object.freeze({ host, loginDirectory: options.loginDirectory, checkedAt: new Date().toISOString() });
+      const pass: ReadProtectionPass = Object.freeze({ host, loginDirectory, loginForms, checkedAt: new Date().toISOString() });
       passes.add(pass); result.pass = pass;
     }
     await fixture.dispose();

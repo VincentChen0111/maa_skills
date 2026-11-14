@@ -2,7 +2,7 @@
 // it runs the fixed steps of its script file for real (so script calls, locks and file differences
 // are genuine) and prints records in the Claude stream-json or Codex exec --json shape.
 // Usage: node host-double.mjs <script.json> <host arguments...>
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -43,8 +43,11 @@ if (host === 'codex' && args.includes('login') && args.includes('status')) {
 
 // `codex sandbox <-c values> -- <command>` runs the command, without a model, under the permission profile in the -c values: a read
 // under a `permissions.<profile>.filesystem={'<path>'='deny'}` entry fails with EPERM (the -e script gets a patched readFileSync).
+// The default 'enforce' judges the object a path names (both sides resolved by the file system: 8.3 short names expanded, junctions
+// followed, case ignored on Windows), as an access check on the file itself does.
 // On Windows a deny entry without `windows.sandbox="mxc"` is refused, as the real CLI does. `script.sandbox` picks other behaviours:
-// 'ignore-deny' (every read succeeds), 'silent' (a denied path runs nothing and exits 0), 'deny-all' (every read fails), 'refuse'.
+// 'by-name' (a sandbox that compares path strings exactly: a short name, a junction or another case gets through), 'ignore-deny'
+// (every read succeeds), 'silent' (a denied path runs nothing and exits 0), 'deny-all' (every read fails), 'refuse'.
 if (host === 'codex' && args[0] === 'sandbox') {
   if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(), configDirectory: process.env.CODEX_HOME, args })}\n`);
   const end = args.indexOf('--');
@@ -56,10 +59,12 @@ if (host === 'codex' && args[0] === 'sandbox') {
   if (!command.length || mode === 'refuse' || (process.platform === 'win32' && denied.length && !values.includes('windows.sandbox="mxc"'))) {
     process.stderr.write('cannot enforce deny-read restrictions directly; refusing to run unsandboxed\n'); process.exit(1);
   }
-  const target = resolve(command.at(-1)).toLowerCase();
-  const underDenied = denied.some((path) => { const base = resolve(path).toLowerCase(); return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep); });
+  const byObject = (path) => { let value; try { value = realpathSync.native(path); } catch { value = resolve(path); } return process.platform === 'win32' ? value.toLowerCase() : value; };
+  const form = mode === 'by-name' ? (path) => resolve(path) : byObject;
+  const target = form(command.at(-1));
+  const underDenied = denied.some((path) => { const base = form(path); return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep); });
   if (mode === 'silent' && underDenied) process.exit(0);
-  const blocked = mode === 'deny-all' || (mode === 'enforce' && underDenied);
+  const blocked = mode === 'deny-all' || ((mode === 'enforce' || mode === 'by-name') && underDenied);
   const scriptIndex = command.indexOf('-e') + 1;
   if (blocked && !scriptIndex) { process.stderr.write('Permission denied\n'); process.exit(1); }
   const patch = "{const f=require('fs');f.readFileSync=()=>{throw Object.assign(new Error('EPERM: operation not permitted, open'),{code:'EPERM'})}};";
@@ -71,9 +76,10 @@ if (host === 'codex' && args[0] === 'sandbox') {
 
 let prompt = '';
 try { prompt = readFileSync(0, 'utf8'); } catch { /* no stdin */ }
-// Tests inspect which variables reached the host: names only, plus the configuration directory it was pointed at.
+// Tests inspect which variables reached the host: names only, plus the configuration directory it was pointed at, and what lies
+// beside the workspace (the fixture root) when the host starts.
 if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(),
-  configDirectory: host === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME, args })}\n`);
+  configDirectory: host === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME, args, fixtureEntries: readdirSync(dirname(process.cwd())).sort() })}\n`);
 const startedAt = new Date().toISOString();
 const journal = (kind) => { if (script.journal) appendFileSync(script.journal, `${JSON.stringify({ kind, host, pid: process.pid, startedAt, endedAt: new Date().toISOString() })}\n`); };
 if (script.sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, script.sleepMs);

@@ -81,6 +81,6 @@ test('a scenario run waits 180 s by default, about three times the longest real 
   const { hostCheckTimeoutMs, enforcementProbeTimeoutMs } = await import('../scripts/eval-auth.ts') as { hostCheckTimeoutMs?: number; enforcementProbeTimeoutMs?: number };
   assert.equal(defaultTimeoutMs, 180_000);
   assert.equal(hostCheckTimeoutMs, 45_000);
-  // Each of the Codex enforcement probe's two reads: 60 s, not changed by --timeout-ms (tests/eval-auth.test.ts runs the probe under 1 ms).
+  // Each of the Codex enforcement probe's reads: 60 s, not changed by --timeout-ms (tests/eval-auth.test.ts runs the probe under 1 ms).
   assert.equal(enforcementProbeTimeoutMs, 60_000);
 });
