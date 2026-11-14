@@ -2,13 +2,22 @@
 // forgot a double cannot quietly reach a real service:
 // - a TCP connection (net.Socket connect, which http, https, tls and fetch use) to a host that is not this machine's loopback;
 // - dns.lookup and dns.promises.lookup of such a host;
-// - starting Windows PowerShell or PowerShell 7 through child_process (spawn, spawnSync, execFile, execFileSync, exec,
-//   execSync, fork). That is the Windows research transport's route: research-transport.ts lets .NET in powershell.exe
-//   make the request, outside this process's sockets. A start is refused when the program's file name is powershell or
-//   pwsh (any letter case, with or without .exe and a path), or when either name appears as a word in a command line
-//   that a shell runs (exec, execSync, the shell option, or cmd/sh/bash as the program).
-// It does not cover UDP (dgram), dns.resolve* (they query DNS servers directly), other programs a test starts (only
-// PowerShell is refused), worker threads, or child Node processes unless they load this guard too.
+// - starting Windows PowerShell or PowerShell 7 through the child_process functions spawn, spawnSync, execFile,
+//   execFileSync, exec, execSync and fork, and the promisified exec and execFile. That is the Windows research
+//   transport's route: research-transport.ts lets .NET in powershell.exe make the request, outside this process's
+//   sockets. The guard reads the arguments as Node does (null or undefined arguments are skipped and the options come
+//   next) and refuses the start, before any process exists, when the file name of any of these is powershell or pwsh
+//   (any letter case, with or without .exe, bare or with a path):
+//   - the program (for fork, options.execPath);
+//   - the shell that runs the command line, as Node picks it: options.shell when it is a string; for `shell: true`, and
+//     for exec and execSync without a string shell, ComSpec (else cmd.exe) on Windows and /bin/sh elsewhere;
+//   - a word of a command line that a shell runs (exec, execSync, any shell option, or cmd, sh, bash, dash or zsh as the
+//     program), with words split at white space, quotes, backquotes and ; & | ( ) < > ^.
+// It does not cover UDP (dgram), dns.resolve* (they query DNS servers directly), any other program (only those two
+// names are refused, so a copy or link of PowerShell under another name, or a script or program that starts it, gets
+// through), a PowerShell name a shell builds at run time (variables, command substitution, an escape or quotes inside
+// the name), other ways to start a process (the ChildProcess class used directly, process.execve, a function reference
+// taken before this guard loaded), worker threads, or child Node processes unless they load this guard too.
 // It leaves fetch itself alone, so test doubles, the evaluation's trusted network fixture (eval/network-fixture.mjs)
 // and loopback servers keep working whatever order the preloads load in. Import it first in a test file; a spawned CLI
 // loads it with `--import` on its command line or first in NODE_OPTIONS. Each refusal is also recorded in
@@ -53,21 +62,39 @@ if (!globalThis.__maaOfflineNetworkGuard) {
   const commandShell = /^(cmd|sh|bash|dash|zsh)(\.exe)?$/i;
   const fileName = (text) => String(text).split(/[\\/]/).pop();
   const words = (text) => String(text).split(/[\s"'`;&|()<>^]+/).filter(Boolean).map(fileName);
-  /** The PowerShell program a start would run, if any: by the program's own name, or by a word of a line a shell runs. */
-  const shellIn = (file, args, throughShell) => {
+  const objectOr = (value) => (value && typeof value === 'object' ? value : {});
+  // The shell Node runs a command line through for a shell option (child_process normalizeSpawnArguments): a non-empty
+  // string is that shell; true is ComSpec (else cmd.exe) on Windows and /bin/sh elsewhere; anything else runs no shell.
+  const shellFor = (shell) => {
+    if (typeof shell === 'string' && shell !== '') return shell;
+    if (shell === true) return process.platform === 'win32' ? process.env.comspec || 'cmd.exe' : '/bin/sh';
+    return undefined;
+  };
+  /**
+   * The PowerShell name a start would run, if any: the shell that runs the line, the program itself, or a word of a line
+   * that a shell runs (any shell, or cmd and the like as the program).
+   */
+  const powershellIn = (file, args, shell, lineThroughShell = shell !== undefined) => {
     const name = fileName(file ?? '');
-    const candidates = throughShell || commandShell.test(name) ? [name, ...[file, ...args].flatMap(words)] : [name];
-    return candidates.find((word) => powershell.test(word));
+    const lineWords = lineThroughShell || commandShell.test(name) ? [file, ...args].flatMap(words) : [];
+    return [shell === undefined ? '' : fileName(shell), name, ...lineWords].find((word) => powershell.test(word));
   };
-  // (file, args?, options?) for spawn, spawnSync, execFile, execFileSync and fork; a callback is ignored.
+  // (file, args?, options?) as Node reads it for spawn, spawnSync, execFile, execFileSync and fork: an array is the
+  // arguments and the options follow it; null or undefined arguments are skipped and the options follow them; any other
+  // object in that place is the options. A callback is ignored.
   const argsAndOptions = (rest) => {
-    const args = Array.isArray(rest[0]) ? rest[0] : [];
-    const options = Array.isArray(rest[0]) ? rest[1] : rest[0];
-    return { args, options: options && typeof options === 'object' ? options : {} };
+    if (Array.isArray(rest[0])) return { args: rest[0], options: objectOr(rest[1]) };
+    if (rest[0] === null || rest[0] === undefined) return { args: [], options: objectOr(rest[1]) };
+    return { args: [], options: objectOr(rest[0]) };
   };
-  const program = (file, ...rest) => { const { args, options } = argsAndOptions(rest); return shellIn(file, args, Boolean(options.shell)); };
-  const line = (command) => shellIn(command, [], true);
-  const runtime = (_module, ...rest) => { const { options } = argsAndOptions(rest); return options.execPath === undefined ? undefined : shellIn(options.execPath, [], false); };
+  const program = (file, ...rest) => { const { args, options } = argsAndOptions(rest); return powershellIn(file, args, shellFor(options.shell)); };
+  // exec and execSync run the line through options.shell when it is a string, otherwise through the default shell.
+  const line = (command, options) => {
+    const { shell } = objectOr(options);
+    return powershellIn(command, [], shellFor(typeof shell === 'string' ? shell : true), true);
+  };
+  // fork never uses a shell (Node sets shell to false); its program is options.execPath.
+  const runtime = (_module, ...rest) => { const { options } = argsAndOptions(rest); return options.execPath === undefined ? undefined : powershellIn(options.execPath, [], undefined); };
   const entries = { spawn: program, spawnSync: program, execFile: program, execFileSync: program, exec: line, execSync: line, fork: runtime };
   for (const [name, check] of Object.entries(entries)) {
     const original = childProcess[name];
