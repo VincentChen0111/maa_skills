@@ -330,9 +330,12 @@ function editedText(bytes: Buffer, config: RecordValue, changes: Change[]) {
  * medicine switch is judged by MAA's own type (`bool?`). Returns field kinds only (never a profile name or value);
  * `timerProfileMissing` marks an enabled timer whose configuration no longer exists. Unknown task types and fields the writer
  * never manages are not judged. An error here blocks a stage retry (`blockingChecks`).
- * Issue #82: a null `UseMedicine` is valid. The pinned GUI saves it when stone is turned on without allow-save: both switches
- * null and MedicineCount 999; after a restart only UseStone is reset to false. The read summary and the consumption predicate
- * treat null as on, so this check accepting it opens no spending. Strings, numbers, objects and arrays stay invalid.
+ * Issue #82, corrected for Issue #89: a null `UseMedicine` is valid. When stone is turned on without allow-save, the pinned
+ * GUI holds both switches as null in memory ("this run only") with MedicineCount 999, but it saves with `WhenWritingNull`
+ * (ConfigFactory.cs): the file omits both keys and a restart reads them as false. A missing key was always valid here; an
+ * explicit null in the file can only come from a write outside MAA. Accepting it tolerates such writes: MAA reads it as a
+ * `bool?` null, and the read summary and the consumption predicate treat null (and a missing key) as on, so this opens no
+ * spending. Strings, numbers, objects and arrays stay invalid.
  * Stone and expiring medicine (27) are not judged here; the read summary shows them as the consumption predicate classifies them.
  */
 export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {

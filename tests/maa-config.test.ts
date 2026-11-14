@@ -888,15 +888,16 @@ test('null consumption switches count as on, and a grant accepts only exact swit
 });
 
 /**
- * Issue #82: the exact switches the pinned MAA GUI saves when stone is turned on without "allow saving" (both null, MedicineCount
- * 999), and the same after an MAA restart (only UseStone reset to false). doctor's field check accepts them
+ * Issue #82, corrected for Issue #89: explicit null switches, the pinned MAA GUI's in-memory state when stone is turned on without
+ * "allow saving" (both null, MedicineCount 999), and the same after an MAA restart that reads them (only UseStone reset to false).
+ * MAA itself omits null keys on save, so in a file they come only from a write outside MAA. doctor's field check accepts them
  * (tests/doctor-checks.test.ts); spending stays closed: enabling, moving or timing the task needs the grants, no quantity grant
  * opens a null switch, closing needs only a current request, and the read summary lists the null switches (documented as on).
  */
-test('the switches the MAA GUI saves for stone without allow-save still count as on: no write runs that task without the grants', async (t) => {
+test('explicit null switches (the GUI memory state for stone without allow-save) still count as on: no write runs that task without the grants', async (t) => {
   const states = [
-    ['as the GUI saves it', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, null],
-    ['after an MAA restart', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, false],
+    ['explicit nulls, as the GUI holds them in memory', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, null],
+    ['explicit nulls after an MAA restart reads them', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }, false],
   ] as const;
   const reorder = [{ path: ['Configurations', 0, 'TaskQueue'], value: [1, 0] }];
   const timer = [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }];
