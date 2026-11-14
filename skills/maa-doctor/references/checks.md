@@ -19,7 +19,7 @@
 
 `remote-control` 只报告已配置或未配置：任何一个配置的 `Gui.RemoteControl.RemoteControlGetTaskEndpointUri` 非空即为已配置（提醒），因为固定版本的 MAA 会轮询该端点，远端可以下发包括抽卡在内的任务，且不经过本项目的写入器。修法执行者是用户：在 MAA 设置里决定是否保留。写入器不管理这些字段，doctor 不提供自动修法，也不输出端点或身份标识。
 
-执行者为 skill 的修法只经 `channel` 所列的现有入口执行：`doctor.ts repair`（遗留写入的两个修法）、`setup.ts prepare`（私有目录骨架）、`preferences.ts set`（首次设置，需要用户给出的选择）、`setup.ts discover|test|apply`（maa-setup 的连接流程，`apply` 仍需它自己的批准原话和关闭确认）、`doctor.ts check --online`（只读查询发布）。doctor 没有第二套写入逻辑。
+执行者为 skill 的修法只经 `channel` 所列的现有入口执行：`doctor.ts repair`（遗留写入的两个修法）、`setup.ts prepare`（私有目录骨架）、`preferences.ts set`（首次设置，需要用户给出的选择）、`setup.ts discover|test|apply`（maa-setup 的连接流程，`apply` 仍需它自己的批准原话和关闭确认）、`doctor.ts check --online`（联网查询发布）。doctor 没有第二套写入逻辑。
 
 `checks` 末尾附带共享凭据检查 `credential-nga`、`credential-skland`、`credential-bilibili`，与 setup 及 `credentials.ts check` 是同一个函数（`inspectCredentials`）。这三项另有 `message` 一句说明，`reason` 是 `credential-<状态>` 代码；人类可读输出显示 `message`。检查只读、不解密、不联网，最近记录里也只有状态。它们的修法执行者都是用户：`repair` 的批准列表含 `enter-credential`、`verify-by-use`、`replace-credential` 或 `reenter-credential` 时整体拒绝，返回 `user-manual-repair`，不执行同一请求里的其他修法。状态和修法见 [凭据接口](../../maa-core/references/credentials.md)。
 
