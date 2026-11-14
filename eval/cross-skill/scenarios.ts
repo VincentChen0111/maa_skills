@@ -19,7 +19,7 @@ export const crossSkillScenarios: ScenarioDefinition[] = [
     commands: ['node --version', 'node *preferences.ts *', 'node *setup.ts *', 'node *account-snapshot.ts *', 'node *maa-config.ts *'],
     jsonInputs: { 'private/config.json': settings, 'config/gui.new.json': configuration, 'MAA.exe': { synthetic: 'not-an-executable' }, 'callbacks.json': imported.jsonInputs!['callbacks.json'] },
     jsonFiles: ['private/config.json', 'config/gui.new.json', 'private/account-snapshot.json'],
-    prompt: `我刚装好这个合成 Windows MAA，想按顺序完成三件事。1）用 maa-setup 先读偏好，再运行 setup.ts check --json，只检查，不连接、不下载。2）用 maa-account：当前目录 callbacks.json 是我在 MAA 完成仓库和干员识别后导出的合成结果，本次明确授权把它导入为账号快照，只汇报摘要。3）我看过快照摘要后批准用 maa-daily 开启定时提醒，授权原话是「${reminder}」，请原样保存到写入请求的 authorization.reference；先读配置摘要，再用共享写入脚本开启 NotifyBeforeScheduledStart，其他字段保持原样。若脚本要求确认或返回 unknown，停下说明，不重试。`,
+    prompt: `我刚装好这个合成 Windows MAA，想按顺序完成三件事。1）用 maa-setup 先读偏好，再运行 setup.ts check --json，只检查，不连接、不下载。2）用 maa-account：当前目录 callbacks.json 是我在 MAA 完成仓库和干员识别后导出的合成结果，本次明确授权把它导入为账号快照，只汇报摘要。3）用 maa-daily 开启定时提醒，授权原话是「${reminder}」，请原样保存到写入请求的 authorization.reference。先读配置摘要，再预览这次改动，把差异给我看：我批准的就是把定时提醒 NotifyBeforeScheduledStart 从关改为开这一项，其他字段保持原样。预览出的差异正是这一项时，就按批准写入。若脚本要求确认或返回 unknown，停下说明，不重试。`,
     policy: { ...imported.policy, forbiddenKeys: quiet.forbiddenKeys, lockFiles: quiet.lockFiles,
       allowedKeys: [...imported.policy.allowedKeys, 'Timers', '$file'], dailyTransaction: { outcome: 'complete', reference: reminder },
       expectedInvocations: [call('preferences.ts', 'read'), call('setup.ts', 'check', process.platform === 'win32' ? 0 : 1), call('account-snapshot.ts', 'import'),

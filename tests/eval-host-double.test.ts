@@ -5,8 +5,9 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runScenario } from '../scripts/eval-run.ts';
+import { runScenario, type ScenarioDefinition } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
+import { entryId, scenarioCatalog } from '../scripts/eval-scenarios.ts';
 import { childPath, claudePermissionPath, classifyHostRun, codexPermissionArguments, hostArguments, hostExecutable, sandboxPathRefusal, tomlBasicString } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
@@ -391,4 +392,25 @@ test('26 H2: childPath picks the PATH a spawned process receives (Windows: the f
   }
   assert.equal(childPath({ PATH: undefined, Path: 'synthetic-mixed' }), undefined, 'a spelling the spawner drops is not used');
   assert.equal(sandboxPathRefusal(childPath({})), 'sandbox-path-missing');
+});
+
+test('26 H3 (R1): a Codex daily-reminder run whose preferences, preview and write stdin arrive as Windows PowerShell 5.1 pipes it (byte order mark, CRLF) passes', async (t) => {
+  const { root, write } = await scratch(t);
+  const entry = scenarioCatalog().find((item) => entryId(item) === 'daily-reminder')!;
+  const scripts = '.agents/skills/maa-core/scripts';
+  const request = { host: 'codex', expectedRevision: '{{output:1:configuration.revision}}', authorization: { source: 'current-request', reference: '开启定时提醒' },
+    changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+  const script = await write('daily-pipe.json', { host: 'codex', steps: [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' }, windowsPipe: true },
+    { shell: ['node', `${scripts}/maa-config.ts`, 'read'], input: {} },
+    { shell: ['node', `${scripts}/maa-config.ts`, 'preview'], input: request, windowsPipe: true },
+    { shell: ['node', `${scripts}/maa-config.ts`, 'write'], input: { ...request, diffFingerprint: '{{output:2:diffFingerprint}}' }, windowsPipe: true }] });
+  const outcome = await runScenario({ host: 'codex', model: 'requested-model', scenario: entry.definition as ScenarioDefinition, executable: process.execPath,
+    executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records'),
+    ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills });
+  assert.equal(outcome.reason, 'completed');
+  assert.equal(outcome.record.grade.status, 'pass', JSON.stringify(outcome.record.grade));
+  // The double really sent the mark: the recorded write bytes (the observer keeps them exactly, 26 H3) start with it.
+  const evidence = JSON.parse(await readFile(join(outcome.artifactDirectory, 'evidence.json'), 'utf8')) as { daily: { observations: { action: string; inputBase64: string }[] } };
+  const written = Buffer.from(evidence.daily.observations.find((item) => item.action === 'write')!.inputBase64, 'base64');
+  assert.ok(written.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) && written.subarray(-2).toString() === '\r\n');
 });
