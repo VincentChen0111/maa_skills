@@ -173,6 +173,41 @@ test('conformance: the interface doc of every reader and each operating SKILL.md
   }
 });
 
+const specPath = fileURLToPath(new URL('../docs/spec.md', import.meta.url));
+/** The generic form the rule names; every other target of 写成 on a line about escapes is a worked example. */
+const escapePlaceholder = '\\uXXXX';
+/** Each worked escape example on a line about escapes: the quoted text before 写成 (when there is one) and the backticked form after it. */
+function escapeExamples(text: string): { source?: string; target: string }[] {
+  const examples: { source?: string; target: string }[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.includes('转义')) continue;
+    for (const [, quoted, coded, target] of line.matchAll(/(?:「([^」\n]+)」|`([^`\n]+)`)?[^`「」，。；（）\n]{0,10}?写成\s*`([^`\n]*)`/g)) {
+      if (target !== escapePlaceholder) examples.push({ source: quoted ?? coded, target: target! });
+    }
+  }
+  return examples;
+}
+
+test('conformance: every escape example in the skills and the spec is a real \\uXXXX escape of the text it shows', async () => {
+  const docs = (await readdir(skillsRoot, { recursive: true })).map(entry => String(entry).replaceAll('\\', '/')).filter(name => name.endsWith('.md'));
+  const texts = new Map<string, string>([...await Promise.all(docs.map(async doc => [doc, await readFile(join(skillsRoot, doc), 'utf8')] as const)),
+    ['docs/spec.md', await readFile(specPath, 'utf8')]]);
+  for (const [doc, text] of texts) {
+    for (const { source, target } of escapeExamples(text)) {
+      assert.match(target, /^(?:\\u[0-9a-fA-F]{4})+$/, `${doc}: \`${target}\` is not written as \\uXXXX escapes`);
+      assert.doesNotMatch(target, /[^\x00-\x7f]|\?/, `${doc}: \`${target}\` still holds the raw character`);
+      if (source !== undefined) assert.equal(JSON.parse(`"${target}"`), source, `${doc}: \`${target}\` does not spell ${source}`);
+    }
+  }
+  for (const doc of ['maa-core/SKILL.md', 'maa-core/references/preferences.md', 'docs/spec.md']) {
+    assert.ok(escapeExamples(texts.get(doc)!).length > 0, `${doc} shows a worked example`);
+  }
+  // Without a byte order mark (a code page 936 console) a lost character cannot be told from a real `?`.
+  for (const doc of ['maa-core/SKILL.md', 'maa-core/references/preferences.md']) {
+    assert.match(texts.get(doc)!, /代码页 936[^\n]*不加 BOM[^\n]*一律转义[^\n]*不要靠 `input-encoding-lossy`/, doc);
+  }
+});
+
 // ---- A real Windows PowerShell 5.1 pipe (the evaluation host's shell). Never touches the network. ---------------------
 
 /** JSON with every non-ASCII character and every `?` written as a \uXXXX escape, the form the docs ask for. */

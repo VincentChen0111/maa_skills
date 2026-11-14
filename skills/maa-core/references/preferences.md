@@ -1,6 +1,6 @@
 # 偏好接口
 
-入口为 `maa-core` 目录的 `scripts/preferences.ts`，其他 skill 经相邻目录 `../maa-core/scripts/preferences.ts` 调用，需要 Node 24。命令的输入是标准输入中的 JSON 对象；把用户文本作为数据传入，不能拼成 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「以后用英文」写成 `以后用英文`，`?` 写成 `?`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`，所以见到 BOM 和 `?` 同时出现时脚本返回 `input-encoding-lossy`，什么都没写；改成转义后重发，不要为此在当前目录写临时文件。共享代码可直接导入该文件的 `readSettings`、`updateSettings`、`appendPreference`、`startup`，没有第二份实现。
+入口为 `maa-core` 目录的 `scripts/preferences.ts`，其他 skill 经相邻目录 `../maa-core/scripts/preferences.ts` 调用，需要 Node 24。命令的输入是标准输入中的 JSON 对象；把用户文本作为数据传入，不能拼成 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「以后用英文」写成 `\u4ee5\u540e\u7528\u82f1\u6587`，`?` 写成 `\u003f`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`，所以见到 BOM 和 `?` 同时出现时脚本返回 `input-encoding-lossy`，什么都没写；改成转义后重发，不要为此在当前目录写临时文件。有些控制台（例如中文 Windows 默认的代码页 936）的管道不加 BOM，这时丢掉的字察觉不到，换成的 `?` 会原样存下；所以非 ASCII 字符一律转义，不要靠 `input-encoding-lossy` 发现丢字。共享代码可直接导入该文件的 `readSettings`、`updateSettings`、`appendPreference`、`startup`，没有第二份实现。
 
 | 命令 | 输入 | 行为 |
 | --- | --- | --- |

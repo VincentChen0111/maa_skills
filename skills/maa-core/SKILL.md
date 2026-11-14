@@ -42,7 +42,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 
 - 调用前读对应的接口说明，只通过脚本读写，不直接改它管理的文件。
 - 用户的文本作为数据经标准输入传给脚本，不拼进命令行。
-- Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「中」写成 `中`，`?` 写成 `?`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`：脚本见到 BOM 和 `?` 同时出现时返回 `input-encoding-lossy`，什么都没做，改成转义后重发。没有自己代码的脚本在标准输入不是 JSON 时返回 `input-json-invalid`，超过上限时返回 `input-too-large`。
+- Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「中」写成 `\u4e2d`，`?` 写成 `\u003f`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`：脚本见到 BOM 和 `?` 同时出现时返回 `input-encoding-lossy`，什么都没做，改成转义后重发。有些控制台（例如中文 Windows 默认的代码页 936）的管道不加 BOM，这时丢掉的字察觉不到，换成的 `?` 会原样存下；所以非 ASCII 字符一律转义，不要靠 `input-encoding-lossy` 发现丢字。没有自己代码的脚本在标准输入不是 JSON 时返回 `input-json-invalid`，超过上限时返回 `input-too-large`。
 - 不在用户的当前目录写临时输入文件或脚本。确实无法避免时放在系统临时目录，用完删除。
 - 脚本以错误码退出时，如实告诉用户错误码和它的含义。不改为导入脚本的内部函数，不改设置目录、私有目录或 home 参数（包括 `MAA_SKILLS_HOME`），不换一条写入路径重试。
 - maa-core 本身不受理写快照或改配置的请求：账号快照交 maa-account，MAA 配置交 maa-daily。
