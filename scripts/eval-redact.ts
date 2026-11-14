@@ -18,6 +18,8 @@ import { fixturePrefix } from './eval-fixture.ts';
 export type ArtifactContext = {
   /** The login directory, or every form of it the runner holds (`loginDirectoryForms`); likewise the sentinel inside it. */
   loginDirectory?: string | readonly string[]; sentinel?: string | readonly string[]; fixture?: { root: string; workspace: string }; executable?: string;
+  /** A batch's payload directory (`--payload`): it stands where the checkout stands, so it is replaced like the repository. */
+  payload?: string;
   /** Exact values (not paths) that must not reach disk either, such as the sentinel's content. */
   values?: [value: string, placeholder: string][];
 };
@@ -33,7 +35,7 @@ const each = (value: string | readonly string[] | undefined): readonly (string |
 function privatePaths(context: ArtifactContext): RedactedPath[] {
   return [...each(context.sentinel).map((path): RedactedPath => [path, '<login-dir>/<sentinel>']),
     ...each(context.loginDirectory).map((path): RedactedPath => [path, '<login-dir>']), [context.fixture?.workspace, '<workspace>'],
-    [context.fixture?.root, '<fixture>'], [join(tmpdir(), fixturePrefix), '<fixture>', '[A-Za-z0-9]{6}'], [repositoryRoot, '<repo>'],
+    [context.fixture?.root, '<fixture>'], [join(tmpdir(), fixturePrefix), '<fixture>', '[A-Za-z0-9]{6}'], [repositoryRoot, '<repo>'], [context.payload, '<payload>'],
     [context.executable && isAbsolute(context.executable) ? context.executable : undefined, '<host-executable>'], [homedir(), '<home>']];
 }
 

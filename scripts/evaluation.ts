@@ -290,11 +290,12 @@ export type RunRecord = {
   /** Model ids and token counts exactly as the host reported them; `unknown` when it reported none. */
   reportedModel?: string[] | 'unknown'; usage?: Record<string, number> | 'unknown'; durationMs?: number;
 };
-export type Comparison = { status: 'baseline' | 'pass' | 'needs-reruns' | 'regression' | 'unstable' | 'unverified' | 'incomparable'; rerun: string[] };
+/** `reasons`: static codes saying why the sets are incomparable (empty otherwise); a scenario's own reason ends in `:<scenario>`. */
+export type Comparison = { status: 'baseline' | 'pass' | 'needs-reruns' | 'regression' | 'unstable' | 'unverified' | 'incomparable'; rerun: string[]; reasons: string[] };
 
 /*
- * Comparability has one owner, this section: what identifies a scenario, and when records may be compared. Its conformance
- * test (tests/eval-comparability.test.ts) enumerates every input to scenario identity and every consumer of the verdict.
+ * Comparability has one owner, this section: what identifies a scenario, and when records and batches may be compared. Its
+ * conformance test (tests/eval-comparability.test.ts) enumerates every input to scenario identity and every consumer of the verdict.
  */
 
 /** A network fixture URL without its pinned commit: the commit is product data (recorded by the skill version), not the scenario. */
@@ -325,22 +326,28 @@ export function scenarioIdentity(input: ScenarioIdentityInput): string {
 }
 
 const identity = (run: RunRecord) => `${run.host}:${run.scenario}`;
-/** Two records are runs of the same scenario under the same conditions. Skill versions may differ: that is what is compared. */
-const sameScenario = (a: RunRecord, b: RunRecord) => identity(a) === identity(b) && a.model === b.model &&
-  a.hostVersion === b.hostVersion && a.scenarioHash === b.scenarioHash && a.grade.total === b.grade.total;
+/**
+ * Why two records are not runs of the same scenario under the same conditions (a static code), or undefined when they are.
+ * Skill versions may differ: that is what is compared.
+ */
+const scenarioDifference = (a: RunRecord, b: RunRecord) => identity(a) !== identity(b) ? 'scenario-differs' : a.model !== b.model ? 'model-differs'
+  : a.hostVersion !== b.hostVersion ? 'cli-version-differs' : a.scenarioHash !== b.scenarioHash ? 'scenario-identity-differs'
+  : a.grade.total !== b.grade.total ? 'grade-total-differs' : undefined;
 const precedence: Comparison['status'][] = ['incomparable', 'unverified', 'needs-reruns', 'regression', 'unstable', 'pass'];
 
 /** One scenario: its run before, its run after, and the reruns of the after run. */
-function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[]): Comparison['status'] {
+function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[]): { status: Comparison['status']; reason?: string } {
   // The after run and its reruns run one skill version. Different scenarios may install different skills; the payload
   // fingerprint (one per side, checked in compareRuns) keeps them one candidate.
-  if (!sameScenario(old, next) || attempts.some((run) => !sameScenario(run, next) || run.skillVersion !== next.skillVersion)) return 'incomparable';
-  if ([old, next, ...attempts].some((run) => run.grade.status === 'unverified')) return 'unverified';
+  const rerun = attempts.map((run) => scenarioDifference(run, next) ?? (run.skillVersion !== next.skillVersion ? 'skill-version-differs' : undefined)).find(Boolean);
+  const reason = scenarioDifference(old, next) ?? (rerun ? `rerun-${rerun}` : undefined);
+  if (reason) return { status: 'incomparable', reason };
+  if ([old, next, ...attempts].some((run) => run.grade.status === 'unverified')) return { status: 'unverified' };
   if (old.grade.status === 'pass' && next.grade.status === 'fail') {
-    if (attempts.length !== 3) return 'needs-reruns';
-    return attempts.some((run) => run.grade.status !== 'pass' || run.grade.score < old.grade.score) ? 'regression' : 'unstable';
+    if (attempts.length !== 3) return { status: 'needs-reruns' };
+    return { status: attempts.some((run) => run.grade.status !== 'pass' || run.grade.score < old.grade.score) ? 'regression' : 'unstable' };
   }
-  return next.grade.score < old.grade.score || next.grade.status === 'fail' ? 'regression' : 'pass';
+  return { status: next.grade.score < old.grade.score || next.grade.status === 'fail' ? 'regression' : 'pass' };
 }
 
 /**
@@ -348,27 +355,59 @@ function compareScenario(old: RunRecord, next: RunRecord, attempts: RunRecord[])
  * incomparable, then unverified, needs-reruns, regression, unstable, pass. With nothing before, the after set is a baseline
  * once every run passed and each host has at least three. Each side is one candidate: all its records carry one payload
  * fingerprint (a batch stops when its payload changes, and records of two batches mixed into one side are refused here), so a
- * side may hold several skill versions only as one per installed skill set.
+ * side may hold several skill versions only as one per installed skill set. An incomparable result names its static reasons.
  */
 export function compareRuns(before: RunRecord[], after: RunRecord[], reruns: RunRecord[] = []): Comparison {
-  const result = (status: Comparison['status'], rerun: string[] = []): Comparison => ({ status, rerun });
+  const result = (status: Comparison['status'], rerun: string[] = [], reasons: string[] = []): Comparison => ({ status, rerun, reasons });
   const all = [...before, ...after, ...reruns];
   const candidates = (runs: RunRecord[]) => new Set(runs.map((run) => run.payloadFingerprint)).size;
-  if (!after.length || all.some((run) => run.double === true) || new Set(all.map((run) => run.id)).size !== all.length ||
-    all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash || !run.payloadFingerprint) ||
-    candidates(before) > 1 || candidates(after) > 1 ||
-    new Set(before.map(identity)).size !== before.length || new Set(after.map(identity)).size !== after.length ||
-    reruns.some((run) => !after.some((next) => run.rerunOf === next.id))) return result('incomparable');
+  const refusal = !after.length ? 'no-after-records' : all.some((run) => run.double === true) ? 'host-double'
+    : new Set(all.map((run) => run.id)).size !== all.length ? 'duplicate-record'
+    : all.some((run) => !run.id || !run.model || !run.hostVersion || !run.scenarioHash || !run.skillVersion || !run.evidenceHash || !run.payloadFingerprint) ? 'record-incomplete'
+    : candidates(before) > 1 ? 'mixed-payload:before' : candidates(after) > 1 ? 'mixed-payload:after'
+    : new Set(before.map(identity)).size !== before.length || new Set(after.map(identity)).size !== after.length ? 'duplicate-scenario'
+    : reruns.some((run) => !after.some((next) => run.rerunOf === next.id)) ? 'rerun-unmatched' : undefined;
+  if (refusal) return result('incomparable', [], [refusal]);
   if (!before.length) {
     if (all.some((run) => run.grade.status === 'unverified')) return result('unverified');
     const hosts = new Set(after.map((run) => run.host));
     return result(after.every((run) => run.grade.status === 'pass') && [...hosts].every((host) => after.filter((run) => run.host === host).length >= 3) ? 'baseline' : 'unverified');
   }
-  if (before.length !== after.length || before.some((old) => !after.some((next) => identity(next) === identity(old)))) return result('incomparable');
+  if (before.length !== after.length || before.some((old) => !after.some((next) => identity(next) === identity(old)))) return result('incomparable', [], ['scenario-sets-differ']);
   const verdicts = before.map((old) => {
     const next = after.find((run) => identity(run) === identity(old))!;
-    return { next, status: compareScenario(old, next, reruns.filter((run) => run.rerunOf === next.id)) };
+    return { next, ...compareScenario(old, next, reruns.filter((run) => run.rerunOf === next.id)) };
   });
   const status = precedence.find((item) => verdicts.some((verdict) => verdict.status === item)) ?? 'pass';
-  return result(status, status === 'needs-reruns' ? verdicts.filter((verdict) => verdict.status === 'needs-reruns').map((verdict) => verdict.next.id) : []);
+  return result(status, status === 'needs-reruns' ? verdicts.filter((verdict) => verdict.status === 'needs-reruns').map((verdict) => verdict.next.id) : [],
+    verdicts.filter((verdict) => verdict.reason).map((verdict) => `${verdict.reason}:${verdict.next.scenario}`));
+}
+
+/** What a batch manifest says about the conditions of all its runs (`scripts/eval-batch.ts` writes it). */
+export type BatchConditions = { host?: Host; double?: boolean; fingerprint?: { hostVersion?: string; model?: string; auth?: string; runner?: string }; payload?: { digest?: string } };
+/**
+ * Two batches may differ only in their payload. Host, CLI version, model, authentication mode and runner (graders, fixtures,
+ * host adapters, redaction, scenario catalog: every runner source) must be equal; each side names its payload; neither side is
+ * a host double; a rerun batch runs the after batch's payload under the same conditions. Returns the static reasons, in a
+ * fixed order (empty: comparable at batch level). Scenario identity is then checked record by record in compareRuns.
+ */
+export function batchIncomparability(before: BatchConditions, after: BatchConditions, reruns: BatchConditions[] = []): string[] {
+  const reasons: string[] = [];
+  for (const [side, batch] of [['before', before], ['after', after], ...reruns.map((item) => ['rerun', item] as const)] as const) {
+    if (!batch.fingerprint) reasons.push(`fingerprint-missing:${side}`);
+    if (!batch.payload?.digest) reasons.push(`payload-unrecorded:${side}`);
+    if (batch.double) reasons.push(`host-double:${side}`);
+  }
+  const conditions = (prefix: string, a: BatchConditions, b: BatchConditions) => {
+    if (a.host !== b.host) reasons.push(`${prefix}host-differs`);
+    for (const [key, code] of [['hostVersion', 'cli-version-differs'], ['model', 'model-differs'], ['auth', 'auth-differs'], ['runner', 'runner-differs']] as const) {
+      if (a.fingerprint?.[key] !== b.fingerprint?.[key]) reasons.push(`${prefix}${code}`);
+    }
+  };
+  conditions('', before, after);
+  for (const batch of reruns) {
+    conditions('rerun-', after, batch);
+    if (batch.payload?.digest !== after.payload?.digest) reasons.push('rerun-payload-differs');
+  }
+  return [...new Set(reasons)];
 }

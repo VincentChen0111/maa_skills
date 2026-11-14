@@ -6,7 +6,7 @@ import { lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { authPreflight, childEnvironment, defaultLoginDirectory, isReadProtectionPass, loginDirectoryRefusal, readProtectionCheck } from '../scripts/eval-auth.ts';
+import { authPreflight, childEnvironment, defaultLoginDirectory, isReadProtectionPass, loginDirectoryRefusal, payloadDirectoryRefusal, readProtectionCheck } from '../scripts/eval-auth.ts';
 import { claudePermissionPath, codexPermissionArguments, credentialVariables } from '../scripts/eval-host.ts';
 import { createFixture } from '../scripts/eval-fixture.ts';
 import { runScenario } from '../scripts/eval-run.ts';
@@ -59,6 +59,13 @@ test('login directories are refused inside the repository, a temporary fixture, 
   process.env.MAA_EVAL_CODEX_LOGIN_DIR = join(root, 'eval', 'shared');
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'shared', 'claude'), { host: 'claude' }), 'overlaps-other-login-directory', 'the other host directory comes from its own variable');
   delete process.env.MAA_EVAL_CODEX_LOGIN_DIR;
+  // A batch's payload directory stands where the checkout stands, either way round (payloads: tests/eval-payload.test.ts).
+  assert.equal(await loginDirectoryRefusal(join(root, 'payload', 'login'), { payloadDirectory: join(root, 'payload') }), 'overlaps-payload-directory');
+  assert.equal(await loginDirectoryRefusal(join(root, 'outer'), { payloadDirectory: join(root, 'outer', 'payload') }), 'overlaps-payload-directory');
+  assert.equal(await payloadDirectoryRefusal(join(root, 'eval', 'claude-config', 'payload'), { loginDirectories: [join(root, 'eval', 'claude-config')] }), 'overlaps-login-directory');
+  assert.equal(await payloadDirectoryRefusal(join(privateDirectory, 'payload')), 'overlaps-private-directory');
+  assert.equal(await payloadDirectoryRefusal(join(repository, 'payload')), 'inside-repository');
+  assert.equal(await payloadDirectoryRefusal(join(root, 'payload')), undefined);
   assert.equal(await loginDirectoryRefusal('relative/login'), 'not-absolute');
   assert.equal(await loginDirectoryRefusal(join(root, "it's")), 'unsupported-character');
   assert.equal(await loginDirectoryRefusal(join(root, 'eval', 'claude-config')), undefined);

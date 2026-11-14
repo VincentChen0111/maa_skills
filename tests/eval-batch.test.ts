@@ -193,7 +193,10 @@ test('the tracked compare command reads saved records only and names each scenar
       runs.push({ scenario: record.scenario, directory: record.id, id: record.id, reason: record.reason ?? 'completed', grade: record.grade.status, ...(record.rerunOf ? { rerunOf: record.rerunOf } : {}) });
     }
     const rerunOf = Object.fromEntries(records.filter((record) => record.rerunOf).map((record) => [record.scenario, record.rerunOf!]));
-    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
+    // Every batch here runs under the same conditions and names a payload; batch-level differences are tests/eval-payload.test.ts's.
+    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, host: 'claude', double: records.some((value) => value.double === true),
+      fingerprint: { hostVersion: '2.1.321', model: 'fixed-model', auth: 'plan', runner: 'fixed-runner', payload: records[0]?.payloadFingerprint },
+      payload: { source: 'commit', commit: '0'.repeat(40), tree: '0'.repeat(40), trees: {}, digest: 'fixed-payload' }, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
     return directory;
   };
   // One payload fingerprint per batch, named by the id's letter (b…, a…, r…).

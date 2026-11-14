@@ -535,3 +535,52 @@ PR #77 的 windows-latest 有两项失败，本机和 ubuntu-latest 都通过。
 - 真实 Codex（MXC 沙箱）是否接受两条拒绝项、是否按文件本身拒绝经短名、联接和大小写变体的读取：要维护者登录后的真实读保护检查。按字符串比对时检查不通过、不启动模型，交回维护者决定。
 - Claude 一侧另一种写法是否被拒没有探测（Claude 的真模型评测暂缓）。
 - Linux：短名和大小写变体在 Linux 上记 `not-available`，联接改用目录符号链接；本地没有在 Linux 上运行，等 CI。
+
+# 26 B 部分验证记录：前后比较的载荷（2026-11-14）
+
+工单 26 的同模型「前后分数不降」要求两批只换产品。28 的入口原来只装运行检出自己的 `skills/`，旧提交又没有评测框架，所以加了载荷参数：`eval-batch.ts payload --commit <提交> --out <目录>` 只读地做出载荷目录，`run`/`resume`/`list --payload` 让宿主从这里装 skill，批次清单记载荷来源，`compare` 只允许载荷不同并可只比较一个场景子集，载荷做不了的场景在宿主调用之前拒绝。用法见[行为评测](evaluation.md)「载荷」，验收计划和不调用模型的试运行见[发布验证记录](release-verification.md)「Codex 评测计划」。没有运行任何真实模型。
+
+## 先红后绿
+
+- `tests/eval-payload.test.ts` 先写，第一次运行失败：`ERR_MODULE_NOT_FOUND`，`scripts/eval-payload.ts` 不存在（`payload` 命令、`--payload`、场景拒绝、批次条件比较都还没有）。实现后 4 项通过。
+- 为了说明每项测试管用，又在实现上逐个去掉一处行为，各跑一次这个文件，跑完恢复：去掉 `<payload>` 脱敏，第 3 项失败（产物里出现载荷目录的标记）；让场景拒绝不生效，第 2、3 项失败；让 `batchIncomparability` 总是返回空，第 4 项失败；去掉载荷目录的位置检查，第 1–3 项失败。
+- 四项分别是：做载荷（命令行，在一个临时 Git 仓库里：旧提交缺 maa-setup、缺 `base-plan.ts`、换了一个数据提交；只写两个载荷路径和记录，文件与提交逐字节相同，摘要可复算，仓库状态不变；目录非空、在仓库里、与私有/设置/日常配置/登录目录重叠、提交不存在或像选项时拒绝且不创建）；`list --payload`（从本检出运行，每个场景的拒绝代码与按场景定义独立推出的期望逐个相同，新提交的载荷全部能做）；载荷上的批次（宿主替身：做不了的场景不进宿主、记进 `refused`、不进比较；一个都做不了、载荷被改过、记录缺失、载荷与登录目录重叠、场景不从载荷装入，都在启动任何宿主进程之前拒绝；宿主读到的是载荷里的 `SKILL.md`；载荷目录不进任何产物；换载荷不能续跑）；`compare`（只差载荷时按子集判定并列出 pass→fail；宿主、CLI、模型、认证方式、运行器、载荷记录、重跑载荷、场景身份各不相同时各给一个静态原因；子集里一边拒绝过或没跑过的场景；命令行的 `--scenarios` 与退出码）。
+- 已有测试的调整：`eval-batch` 和 `eval-comparability` 里手写的批次清单补上批次条件（`compare` 现在读它们）；可比性一致性测试列出 `batchIncomparability` 的定义和唯一使用方；`eval-redact` 列出 `scripts/eval-payload.ts` 的两处直接写入（载荷文件和记录，不是评测产物）；`eval-auth` 补了载荷目录与登录目录两种方向的重叠。
+
+## 设计默认值（2026-11-14，不是维护者原话）
+
+限制性的三条同时登记在规格「默认值及其来源」里 26 开头的三行。
+
+- 输出目录「新的」指不存在，或者已存在但为空：允许先建好空的临时目录再做载荷。拒绝时什么都不创建；做到一半出错，只删本次写的内容。
+- 载荷取提交里的原始字节（`core.autocrlf=false`、`core.eol=lf`）：在哪台机器上做都一样，也与 GitHub 的归档一致。检出在 `core.autocrlf=true` 下是 CRLF，所以「前」「后」都用 `--payload`，不拿检出自己的载荷和某个提交的载荷比。
+- 记录文件是载荷目录里的 `maa-skills-payload.json`，记提交、根树、各载荷路径的树和内容摘要（每个文件的相对路径及其 SHA-256，排序后再取 SHA-256，不含记录本身）；不带 `--payload` 的批次记 `checkout` 和检出载荷的摘要，不写提交，因为检出可能有未提交的改动。
+- 场景能不能做只看场景定义和载荷里的文件，不运行产品代码：要装的 skill 和它的 `SKILL.md`；命令模式和期望调用里 `node *<文件名>` 形式的脚本，在装入的 skill 里按文件名找；网络夹具地址里的数据提交，在装入的 skill 文本里找。按这个顺序报第一条。数据提交按字面找是近似：载荷提到这个提交、却去请求别的地址时，场景照常运行，失败照实记录。
+- 有拒绝的场景时 `run` 的退出码为 1：没有失败，但这批没有跑完要求的全部场景。
+- 载荷目录的位置检查复用登录目录的同一个重叠谓词，顺序为仓库（含做载荷所用的仓库）、私有目录、设置目录、日常配置位置、两个宿主的专用登录目录和 `--login-dir` 指定的目录；登录目录反过来也不能与批次的载荷目录重叠（`overlaps-payload-directory`，报在原有各项之后）。
+- `compare` 先看批次条件，有原因就只报这些原因；`--scenarios` 里的组名和 `all` 按当前目录展开，其他名字照字面当作场景 id（拼错时报 `scenario-not-run`）。
+
+## 指纹影响
+
+`scripts/evaluation.ts`、`eval-run.ts`、`eval-auth.ts`、`eval-redact.ts` 在场景指纹的源码里，本包改了它们，所以所有场景的身份都变了；运行器指纹另加了 `scripts/eval-payload.ts`。此前的批次（包括 28 的试运行）不能续跑，也不能与之后的比较，原样保留。
+
+## 本次运行的命令
+
+按负载规则一次一个运行（Windows，Node 24）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-payload.test.ts` | 实现前失败（见上）；实现后 4 项通过；四次去掉行为的检查各自失败 |
+| `node --test tests/eval-batch.test.ts`、`eval-run`、`eval-fixture`、`eval-host-double`、`eval-comparability` | 10、5、7、12、7 项通过 |
+| `node --test tests/evaluation.test.ts`、`eval-auth`、`eval-redact`、`eval-network`、`docs-consistency` | 11、9、5、3、5 项通过 |
+| `node scripts/privacy.ts` | 无发现 |
+| `node scripts/tracker.ts`（只检查） | `{"ready":["28","30"],"errors":[]}` |
+| 12 个提交的 `payload` 和 `list --payload` | 见发布验证记录「本机试运行」 |
+| 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
+
+## 未验证
+
+- 真实模型的前后批次：没有运行（按工单 26 的计划由维护者本机运行）。
+- Linux 上的 `git archive` 和载荷测试没有在本地跑，要等 CI。
+- 提交里没有 `.claude-plugin/` 时只取 `skills/` 的分支没有测试：计划里的 12 个提交都带 `.claude-plugin/`。
+- 归档里出现链接或越界路径时整体拒绝（`payload-archive-entry`）没有用真实提交测试：计划里的提交都没有这类条目。
