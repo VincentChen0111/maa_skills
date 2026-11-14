@@ -125,7 +125,7 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
     jsonInputs: { 'private/config.json': settings, 'config/gui.new.json': configuration, 'MAA.exe': 'synthetic MAA executable placeholder',
       ...(retained ? { 'config/.maa-skills.lock': retained } : {}), ...(skland === 'expired' ? expiredSkland : {}) },
     jsonFiles: ['private/config.json', 'config/gui.new.json', 'config/.maa-skills.lock', record],
-    policy: { allowedKeys: ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'],
+    policy: { allowedKeys: ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
       grants, downloadGrants: [], expectedCalls: [], expectedChanges: grants,
       generatedUtcFields: [{ file: record, key: 'checkedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode }] } };
@@ -165,7 +165,7 @@ function unknownRunScenario(): ScenarioDefinition {
     prompt: '昨晚 MAA 刷图好像没成功，但 MAA 进程退出码是 0。请用 maa-doctor 的日志分析查明上次运行的结果和原因，先读偏好；查不清就如实说，不要重新运行、重试或改配置。',
     jsonInputs: { 'private/config.json': settings, 'config/gui.new.json': sample },
     jsonFiles: ['private/config.json', 'config/gui.new.json', analysisRecord],
-    policy: { allowedKeys: [...Object.keys(values), 'processExit', 'analyzedAt'], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'],
+    policy: { allowedKeys: [...Object.keys(values), 'processExit', 'analyzedAt'], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
       grants: [...expected, ...optional], downloadGrants: [], expectedCalls: [], expectedChanges: expected,
       generatedUtcFields: [{ file: analysisRecord, key: 'analyzedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }] } };

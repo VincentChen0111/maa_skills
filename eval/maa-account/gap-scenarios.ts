@@ -7,7 +7,7 @@ const tables = gapTables();
 const networkFixtures = Object.fromEntries(Object.entries({ ...operatorCostSources, ...craftingSources }).map(([key, source]) => [
   `https://raw.githubusercontent.com/${source.repository}/${source.commit}/${source.file}`, tables[key as keyof typeof tables],
 ]));
-const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['gacha', 'gift', 'payment', 'login'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'], expectedInvocations: [
     { file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/cultivation-gaps.ts', action: 'query' },
   ] };

@@ -5,7 +5,7 @@ const configuration = { Current: 'Synthetic profile', Configurations: { 'Synthet
   ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false },
   RuntimeSettings: { ClientType: 'Official', StartGame: false },
 } } }, Timers: { List: [] } };
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], expectedChanges: [], downloadGrants: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], expectedChanges: [], downloadGrants: [],
   expectedCalls: [], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'] };
 const commands = ['node --version', 'node *preferences.ts *', 'node *setup.ts *'];
 const calls = (exitCode: number) => [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/setup.ts', action: 'check', exitCode }];

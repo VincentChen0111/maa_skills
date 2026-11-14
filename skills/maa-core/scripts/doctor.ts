@@ -229,7 +229,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
           let body: Record<string, unknown> | undefined;
           try {
             const value = await readInput(undefined);
-            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount'].includes(key))) throw new Error('request-invalid');
+            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))) throw new Error('request-invalid');
             body = value as Record<string, unknown>;
           } catch { /* Invalid input never authorizes a mutation. */ }
           const result = body ? await executeRepairs({ ...body, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as RepairRequest, maa) : { status: 'rejected', reason: 'request-invalid' };

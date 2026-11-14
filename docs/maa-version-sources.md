@@ -45,10 +45,9 @@ v6.21.4、v6.22.0 和当时的开发分支三处列表完全相同。v6.19.0 不
 
 未交付工单的 MAA 依赖记在注册表的 `pending` 里，各自交付时改为正式条目（`tests/maa-version-check.test.ts` 在工单标为已完成而 `pending` 里还有它时失败）：
 
-- 27：`FightTask.cs` 的碎石和临期药字段及 `OnDeserialized` 对 `UseStone` 的重置、`FightTaskUserControlModel.cs` 的换算、MaaCore `FightTask.cpp` 对 `medicine_expire_days`/`stone` 的处理和 9999 上限、`MedicineCounterTaskPlugin.cpp`、`FightTaskUserControl.xaml` 的天数范围、集成文档。
 - 之后生成计划的工单（22 的排班、23 的应用）用 `maa-version.ts` 的 `readVersionStamp`/`compareVersionStamp` 写入和比较版本，与配置写入、作业准备、专精排程相同。22、23 交付后的实际情况见[验证记录](maa-version-verification.md)「合并 22、23」；22 的报告写版本、23 应用时报告差异在 2026-11-14 补上，见同一记录「补上基建报告的版本标记」。
 
-16 原来也在这里（回调协议里 `StageDrops` 和 `UseMedicine` 的字段、`zh-cn.xaml` 的文案键和 `gui.log` 写法、`asst.bak.log` 轮换、自动战斗的用药开关），2026-11-14 合并 10 最终版时 16 已交付，改为下一节的条目。22 原来也在这里（排班协议的 `period` 和计划重叠时的选择、干员名表 `resource/battle_data.json`），2026-11-14 合并 22、23 时 22 已交付，改为「合并 22、23 时登记的条目」一节的条目。现在待登记只剩 27。
+16 原来也在这里（回调协议里 `StageDrops` 和 `UseMedicine` 的字段、`zh-cn.xaml` 的文案键和 `gui.log` 写法、`asst.bak.log` 轮换、自动战斗的用药开关），2026-11-14 合并 10 最终版时 16 已交付，改为下一节的条目。22 原来也在这里（排班协议的 `period` 和计划重叠时的选择、干员名表 `resource/battle_data.json`），2026-11-14 合并 22、23 时 22 已交付，改为「合并 22、23 时登记的条目」一节的条目。27 原来也在这里（`FightTask.cs` 的碎石和临期药字段及 `OnDeserialized` 对 `UseStone` 的重置、`FightTaskUserControlModel.cs` 的换算、MaaCore `FightTask.cpp` 对 `medicine_expire_days`/`stone` 的处理和 9999 上限、`MedicineCounterTaskPlugin.cpp`、`FightTaskUserControl.xaml` 的天数范围、集成文档），2026-11-14 合并 28 最终版时 27 已交付，改为「27 交付时登记的条目」一节的条目。现在待登记为空。
 
 ## 合并 10 最终版时登记的条目（2026-11-14）
 
@@ -104,6 +103,21 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 覆盖测试另有一处误报：[setup 验证记录](setup-verification.md)列出 08 的解压必须拒绝的合成条目名，其中 Windows 设备名一项写作「resource/NUL.txt」，形式上像 MAA 资源路径，实际是测试里的条目名，不是 MAA 文件；测试的例外表加了这一项并写明原因。
 
 重新生成的随包核实记录内容不变（仍是源码已核 v6.22.0，记录版本 2）。注册表现为 20 条条目、90 个文件。
+
+## 27 交付时登记的条目（2026-11-14）
+
+27（批准后的碎石与临期药）在合并 28 最终版之后交付，它在待登记里的位置改为条目 `fight-stone-expiring-medicine`。事实记在 [daily 验证记录](daily-verification.md)「27 批准后的碎石与临期药」的「固定 MAA 源码核实」表和规格「默认值及其来源」的临期药一行，都在 v6.21.4（`52d0b2a`）上核对。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob（用 `scripts/maa-version-check.ts` 自己的读取器和 `gitBlobSha`）；v6.21.4 的 blob 与 27 验证记录表里的逐一一致。
+
+条目有 8 个文件：待登记里的 6 个（`FightTask.cs`、`FightTaskUserControlModel.cs`、`FightTaskUserControl.xaml`、`FightTask.cpp`、`MedicineCounterTaskPlugin.cpp`、集成文档 `integration.md`），加上 27 验证记录引用、待登记里没有列的 `src/MaaWpfGui/Models/AsstTasks/AsstFightTask.cs`（参数的 JSON 名）和 `resource/tasks/tasks.json`（开始行动之后按页面识别理智药和源石）。skill 是 maa-core（谓词和写入器）、maa-daily（写入）和 maa-doctor（恢复）。
+
+8 个文件里 6 个在两个版本上 blob 相同；2 个变了，逐段对比了变化位置，27 依赖的部分没有变，所以条目的 `sourceVerified` 是 v6.21.4 和 v6.22.0，指纹取 v6.22.0 的 blob。
+
+| 文件 | 变化位置 | 条目依赖的部分 |
+| --- | --- | --- |
+| `tasks.json` | 解析两个版本：任务从 1113 个变为 1114 个，有变化的是 `ClickedCorrectStage`、`StageResource`、`FightMissionFailedAndStop`、`GoTerminalStopflag`、`BattleDeployWhenPause`、`EndOfActionThenStop`、`ClickCornerAfterFailure` 七个 | 27 引用的 `StartButton1`（第 1310–1329 行）、`UseMedicine`（第 1496–1502 行）、`UseStone`、`StoneConfirm`、`StoneConfirmWait`（第 1579–1604 行）、`NoStone`、`CloseStonePage`、`CloseStonePageExceeded`（第 1605–1621 行）在两个版本里逐字段相同 |
+| `integration.md` | 第 1750 行一处（GPU OCR 的说明），见上文 | 27 引用的第 169–173 行（`medicine_expire_days`）不在变化范围里 |
+
+经 25 的生成器（`node scripts/maa-version-check.ts record`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2），记录文件没有改。注册表现为 21 条条目（含 08 的 `setup-release-package`）、94 个文件，待登记为空。
 
 ## 发布与 Action 相关的外部事实
 

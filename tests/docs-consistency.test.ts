@@ -23,7 +23,7 @@ const contract: Record<string, Record<string, string[]>> = {
   'preferences.ts': { read: ['currentLanguage'], set: ['language', 'languageAsked', 'privateDirectory', 'maaDirectory', 'server'], append: ['date', 'source', 'text'] },
   'maa-config.ts': { read: [], write: ['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'] },
   'doctor.ts': { check: [], analyze: ['run', 'interfaceUnobscured', 'conclusion', 'processExitCode'],
-    repair: ['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount'] },
+    repair: ['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'] },
   'setup.ts': { check: ['maaDirectory'], prepare: [], discover: ['adbPaths', 'addresses'], test: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'],
     apply: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate', 'host', 'reference', 'closedConfirmed'],
     // Ticket 08's download and recheck actions, transcribed from the same validation (`downloadActions` in setup.ts).
@@ -36,7 +36,7 @@ const contract: Record<string, Record<string, string[]>> = {
   'cultivation-gaps.ts': { query: ['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'] },
   'training-time.ts': { query: ['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'tablesFile', 'snapshotFile', 'format'] },
   'training-plan.ts': { prepare: ['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining'], read: ['id'], refresh: ['id', 'query'],
-    apply: ['id', 'host', 'closedConfirmed'], reconcile: ['id', 'logFile', 'host', 'closedConfirmed'] },
+    apply: ['id', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'], reconcile: ['id', 'logFile', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'] },
   'base-query.ts': { query: ['operators', 'room', 'tablesFile', 'snapshotFile', 'format', 'currentLanguage'] },
   // `check [--json]` and `input <service> [--stdin]` take no JSON on standard input (input reads terminal answers).
   'credentials.ts': { check: [], input: [] },

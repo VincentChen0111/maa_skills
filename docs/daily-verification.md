@@ -111,3 +111,186 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 本批 runner 在最后一次调用已持久化完整证据后，因 finally 清理临时目录遇到 EBUSY 而退出 1，原汇总仅 13 条，不能写成 runner 全程成功。保留该汇总和错误，核对第十四次原始记录、证据 hash、实际窗口及调用目录后另存恢复的 14 条汇总，没有模型重试。恢复汇总 SHA-256 为 `fbab7efcc716fae286321d2c2de324dffd6ecebb6f6c5a83ed8e2877548d958a`；清理单独完成，临时夹具和本次宿主进程均已退出。所有模型 grade 保持真实结果。
 
 这是作者修复及执行证据；8d 的狭义整合审查不覆盖本次进程修改。产品 R4 未通过、追加产品复核未授权的状态不变，仍不合并 05 或解锁其下游。真实 MAA/设备、跨版本升级和真实模型行为仍未验证。
+
+## 27 批准后的碎石与临期药
+
+2026-11-14，工单 27 的作者验证，未经独立审查。分支 `claude/27-stone-expiring-medicine`，叠在 28 的 `d2b0edf` 上。
+
+### 实现
+
+一次授权能放开什么，只由 `skills/maa-core/scripts/consumption-grant.ts` 导出的 `decideConsumption` 决定：输入是请求的授权和目标任务的最终设置（被改动的任务另带改动前的设置，标明是否被启用、是否计入数量、单次定时次数和是否挂在每日重复的定时上），输出是允许或拒绝、静态原因码，以及每个目标的理智药、碎石、临期药状态分类。调用点各带一个登记的消费者名：
+
+| 消费者 | 位置 | 做什么 |
+| --- | --- | --- |
+| `writer-whitelist` | `maa-config.ts` 的 `prepare` | 校验授权取值与组合；对改动了消耗字段的 Fight 任务，核对被改动的那几类 |
+| `indirect-consumption` | 同上 | 启用任务、重排或改定时会运行到的任务：核对全部开着的消耗，Award 的免费抽卡和特殊礼包在任何授权下都拒绝；带专精计划时给出两个专用原因码 |
+| `quantity-budget` | 同上 | 理智药和碎石的总量：每个任务的数量乘以所属配置的单次定时次数（明确分配至少计一次），跨配置求和；有限数量不能挂在每日重复的定时上 |
+| `pending-record` | `maa-config.ts` 的 `transactionPending` | 待执行记录的授权字段严格校验 |
+| `doctor-recovery` | `maa-config.ts` 的 `executeConfigRecovery` | 修复请求自己带的授权；恢复会重新打开消耗时由写入器按这份授权核对，原事务授权不复用 |
+| `read-summary` | `maa-config.ts` 的 `inspectConfiguration` | 类型已核的 Fight 任务的消耗状态 |
+| `eval-grader` | `scripts/evaluation.ts` 的禁止设置规则 | MAA 配置差异按场景声明的 `consumptionGrant` 判定 |
+
+`tests/consumption-grant.test.ts` 按 grep 找出 `skills/`、`scripts/`、`eval/` 里每一处调用，要求每处在同一行写明消费者名，名单与登记表、样例表三者一致；每个消费者经自己的接缝（写入 CLI 导出函数、doctor 修复、恢复核对、读取摘要、评分函数）各跑一个放行和一个拒绝样例，并与谓词直接给出的结论对照。新增调用而不登记，或登记而没有样例，测试都会失败。
+
+### 先红后绿
+
+先提交谓词和一致性测试（`5159fdf`），写入器等消费者尚未接入。把这个提交用 `git archive` 导出到临时目录后运行 `node --test tests/consumption-grant.test.ts`：16 项中 14 项失败、2 项通过（两项通过的是评分规则的放行样例和待执行记录的拒绝样例：旧评分规则本来就不看 MAA 配置里的碎石，旧待执行记录本来就拒绝未知授权字段）。失败项包括登记表为空、写入器把批准的碎石拒绝为 `request-invalid`、摘要没有消耗状态、评分规则放过了没有授权的碎石。接入后的提交 `aca8f6e` 上同一测试 16 项全部通过。
+
+### 固定 MAA 源码核实
+
+固定提交 `52d0b2acaca116585b02e1e6a9da303460f81a24`（v6.21.4）。标「25」的行是本票依赖的 MAA 源码位置，交给工单 25 登记到它的依赖清单（25 在另一分支，本分支不改它的文件）。
+
+| 采用的事实 | 文件与行 | blob | 登记 |
+| --- | --- | --- | --- |
+| `UseMedicine`、`UseStone` 是 `bool?`，`MedicineCount`、`StoneCount` 是 `int` | [FightTask.cs 第 35–50 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs#L35-L50) | `c0a047df055c553410ef417ccf16a614f73337e0` | 25 |
+| `UseExpiringMedicine`（bool）、`MedicineExpireDays`（int，默认 2）、`UseExpireMedicineForActivity`（bool） | 同一文件第 100–104 行 | 同上 | 25 |
+| `UseStoneAllowSave`（bool，「允许保存碎石状态」） | 同一文件第 134 行 | 同上 | 25 |
+| 读入配置后的 `OnDeserialized`：`UseStoneAllowSave` 为 false 时把 `UseStone` 置为 false | 同一文件第 154–159 行 | 同上 | 25 |
+| 界面设置到 MaaCore 参数的换算：`medicine` 在 `UseMedicine` 不为 false 时取 `MedicineCount`，否则为 0；`stone` 同理取 `StoneCount`；`medicine_expire_days` 取「`UseExpiringMedicine` 时的 `MedicineExpireDays`」与「当前活动两天内结束且 `UseExpireMedicineForActivity` 时到鹰历周末的天数」两者的较大值 | [FightTaskUserControlModel.cs 第 1337–1361 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L1337-L1361) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` | 25 |
+| 界面打开碎石：保存开关没开时改存 null（不保存）；打开时把理智药数量设为 999，理智药没开就一起打开；关闭理智药时一起关闭碎石 | 同一文件第 379–437 行 | 同上 | 25 |
+| 打开「允许使用源石保存状态」时弹出警告，图标用危险色，默认按钮是取消 | 同一文件第 1060–1083 行 | 同上 | 25 |
+| 参数的 JSON 名是 `medicine`、`medicine_expire_days`、`stone` | [AsstFightTask.cs 第 37–50 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Models/AsstTasks/AsstFightTask.cs#L37-L50) | `883cc83738acd64bd8fd7c2b97e2c6b4380b0f00` | 25 |
+| MaaCore 读入 `medicine`、`medicine_expire_days`（负数拒绝；旧参数 `expiring_medicine` 换算为 2 天）和 `stone` | [FightTask.cpp 第 70–89 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/Interface/FightTask.cpp#L70-L89) | `7dfbdf4cfbfd9073407068b6b42d8a5f9da8b65e` | 25 |
+| 次数上限：`MedicineConfirm` 为理智药数量，`ExpiringMedicineConfirm` 在天数大于 0 时为 9999，`StoneConfirm` 为碎石数量 | 同一文件第 171–177 行 | 同上 | 25 |
+| 理智药插件只在识别到理智药页面（`UseMedicine`）时运行；理智药数量用完且临期天数为 0 时不用药直接返回；数量用完而临期天数大于 0 时去掉超过天数的药，只用临期的 | [MedicineCounterTaskPlugin.cpp 第 18–99 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/Fight/MedicineCounterTaskPlugin.cpp#L18-L99) | `40bb203cd98acc4b53f31443ca4685e45eec5ff2` | 25 |
+| 用药之后上报 `what` 为 `UseMedicine` 的消息，`details.count` 是这次用掉的瓶数（剩余数量一条的候选读取来源，尚未采用） | 同一文件第 177–200 行 | 同上 | 25 |
+| 界面的临期天数范围 1–30；碎石数量 0–999；碎石开着时理智药开关和数量控件不可用 | [FightTaskUserControl.xaml 第 40–92 行、第 505–507 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L505-L507) | `a42b1ce8012bff323fcd6b3c2dac47d6020678ea` | 25 |
+| 点开始行动之后按页面识别：`UseMedicine`（理智药页面）、`UseStone`（源石页面）、`NoStone` 等 | [tasks.json 第 1310–1329 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/resource/tasks/tasks.json#L1310-L1329) | `9d4989f6994b1e3c66afb826835501fa5d499877` | 25 |
+| `UseMedicine` 之后只接开始行动、离线确认和关闭恢复页面；整个任务链里没有把理智药页面切到源石页面的任务 | 同一文件第 1496–1502 行 | 同上 | 25 |
+| `UseStone` 之后是 `StoneConfirm`，次数用完转到关闭恢复页面 | 同一文件第 1579–1604 行 | 同上 | 25 |
+| `NoStone`、`CloseStonePage`、`CloseStonePageExceeded`：关闭恢复页面，最多两次，第三次结束作战 | 同一文件第 1605–1621 行 | 同上 | 25 |
+
+核实第 10 条（MaaCore 在理智药数量用完之前是否会碎石）的结论：不会。MaaCore 不在理智药和源石之间选择，它按游戏当时显示的页面走：显示理智药页面时只走理智药插件，数量用完（且没有临期药天数）就不用药，关闭页面，重试两次后结束这次作战，不会转去源石页面；只有游戏显示源石页面时才执行 `StoneConfirm`，次数上限是碎石数量。游戏在背包里还有理智药时先显示理智药页面，这一点不在 MAA 源码里，是根据 MAA 界面打开碎石时把理智药数量设为 999 并锁住理智药控件推断的，未在实机核对。据此采用的规则（规格「默认值及其来源」2026-11-14）：写入器不要求碎石授权同时带理智药授权，两者各自是独立的上限；skill 在批准前告诉用户，背包里还有理智药时只批准碎石通常不会碎石。
+
+### 设计默认值
+
+产品限制都登记在规格两张来源表（2026-11-14）。只影响实现或评测、不构成产品限制的选择记在这里：
+
+- 读取摘要的消耗状态格式：`medicine`（`on`、`count`）、`stone`（`on`、`count`、`allowSave`）、`expiring`（`on`、`days`、`activity`）；开关不是布尔值时 `on` 为 null，按开启处理（MAA 自己也把 null 当开启）。理由：用户要看到谓词实际怎样判断，才能知情批准。
+- 写入器把已有的 `medicine-quantity-invalid` 换成谓词的 `consumption-grant-invalid`，授权取值校验只在谓词里做一次。理由：一个归属。
+- 评测的写入器事务核对新增 `changeSet`（改动和变更键按集合比较）和 `consumption`（待执行记录必须恰好带这些消耗授权）。理由：碎石和临期药的字段由模型逐个写，顺序由模型决定；其他场景沿用按顺序的 `changes`。
+- 评测运行器的指纹清单（`scripts/eval-batch.ts` 的 `runnerSources`）加入谓词文件，因为评分规则现在导入它；它是产品文件，计入 skill 版本，不进入场景指纹。
+- 专精入口 `training-plan.ts apply`／`reconcile` 接受 `expiringMedicine` 和 `reference`（用户这次批准的原话）；附带时写入请求的来源记为当次请求，计划自己的授权仍在计划记录里。理由：写入请求只有一个来源字段，临期药授权必须来自当次请求，而计划可能来自已批准的报告；不这样做，「把临期药和这份计划一起批准」这条路走不通。
+- 原有待执行记录里来源为已批准报告、又带理智药数量的记录，按新规则校验不通过，doctor 把这类遗留事务当作证据未知交用户核对。理由：这种组合在 27 之前也不能真正打开理智药（理智药字段要求当次请求），只会出现在未用到数量的旧记录里，按未知处理不会误删锁或误恢复。
+
+### 实际运行
+
+2026-11-14 在本分支工作区逐个运行（按机器负载约定没有运行完整离线入口 `node scripts/check.ts`，也没有运行 `tests/maa-process.test.ts`，本票没有改它覆盖的文件）：
+
+- `npm run typecheck`：通过。
+- 单个测试文件，全部通过：`consumption-grant` 16 项、`maa-config` 90 项、`doctor` 85 项、`setup-integration` 5 项、`training-integration` 13 项、`training-plan` 8 项、`training-config` 3 项、`evaluation` 9 项、`eval-run` 3 项、`eval-fixture` 7 项、`eval-comparability` 7 项、`eval-batch` 10 项、`daily-evaluation` 5 项、`cross-skill-scenarios` 7 项、`doctor-scenarios` 9 项、`docs-consistency` 3 项、`stage-jobs` 6 项、`stage-jobs-regressions` 11 项、`setup` 28 项、`privacy` 4 项、`metadata` 1 项、`tracker` 1 项。
+- `node scripts/eval-selftest.ts`：`{"ok":true,"rules":7,"samples":25}`。`node scripts/eval-preflight.ts`：退出 0，两个宿主替身的预检运行都是 pass（替身记录，不算模型基线）。`node scripts/privacy.ts`：无发现。`node scripts/tracker.ts`：无错误。`node scripts/training-smoke.ts skills/maa-core`：通过。
+- 专精写入附带临期药批准（`60abad1`）同样先红：新用例在上一提交上失败（缺少附带原话时没有拒绝），本提交通过。
+
+脚本测试两个方向的覆盖：放行在 `tests/maa-config.test.ts` 的「approved stone is written together with its save switch…」「a stone quantity counts every single timer run…」（6 颗的预算通过）「approved expiring medicine stays on a daily-repeating timer…」「medicine, stone and expiring medicine can be approved together…」「closing stone or expiring medicine needs only an ordinary current request…」，以及 `tests/training-integration.test.ts` 的专精与作业计划用例；拒绝在同一文件的「stone and expiring medicine are refused before process access, a lock or a write…」（13 种，每种都断言进程未被访问、没有锁和待执行记录、配置字节不变）、「invalid grants and forbidden fields…」（带齐三种授权时抽卡、特殊礼包、登录仍拒绝）、「enabling a timer cannot activate existing forbidden or unapproved consumption settings」（借已有值启用）。
+
+### 未验证
+
+- 真模型行为评测：改写诱饵的四个场景（`daily-forbidden`、`account-boundary`、`core-boundary`、`help-boundary`）和新增的五个场景（`daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing`、`daily-quantity-rerun`）都没有运行，两个宿主的新基线和其余场景分数不降都留给工单 26。评分器文件改了，所有场景的指纹都会变，旧指纹的记录保留为历史。
+- 真实 MAA 上的碎石和临期药没有执行；写入后 MAA 重开读入、实际碎石和用临期药的行为只按固定源码核对。
+- 「游戏在背包里还有理智药时先显示理智药页面」是推断，未在实机核对。
+- 日常队列运行用掉了多少理智药和碎石，目前没有工具读取，skill 按未知处理；`UseMedicine` 消息的 `details.count` 只登记为候选来源。
+
+### 第一轮修复
+
+2026-11-14，针对第一轮独立审查里协调者接受的四项，作者修复，未经独立审查。修复提交 `0ac4c2b`（谓词和测试），文档另一提交。
+
+改动只在谓词 `decideConsumption`：
+
+- 一类消耗在请求之后仍关着时，先看这次请求怎样改它：只写了关闭值（开关改为 false、数量改为 0）就只要当次请求，理智药也一样，不再要求理智药数量，也不比较配置里剩下的 `MedicineCount`；写了别的值（`UseStoneAllowSave` 改为 true、非零的 `StoneCount` 或 `MedicineCount`、任何 `MedicineExpireDays`）就要这一类的当次授权，数量不超过授权，临期天数等于批准的天数。之后再打开，照旧按打开的规则核对。规格两张表各登记一行（2026-11-14）。
+- 关着的一类写了非关闭值、而数量不是 0–2147483647 的整数时，原因码是 `medicine-settings-invalid` 或 `stone-settings-invalid`。写入器的类型检查会先拒绝这种值，只有评分规则读到的配置会走到这里。设计默认值，2026-11-14，理由：有授权也不放过无法核对的数量。
+- 评分规则把差异里新增的 Fight 任务当作从空设置改来，它的 `MedicineExpireDays` 因此算一次非关闭的改动：场景没有声明天数相同的临期药授权时判为违规（直接调用谓词核对过）。写入器不能新增任务，这只影响模型绕过写入器直接改文件的情况，失败方向是判违规。
+
+先红后绿：新用例写好、谓词未改时运行 `node --test tests/maa-config.test.ts`，128 项中 12 项失败（关闭理智药的 3 个子项、没有授权时写非关闭值的 7 个子项，以及它们的两个父项）；其余新用例（null 开关、授权要求的精确设置、计入数量时同配置的抽卡、礼包和非普通任务）测的是已有的防线，改之前就通过，靠下面的变异确认它们真能抓到。`tests/consumption-grant.test.ts` 的恢复用例同理，改之前 19 项全过。改谓词之后两份都全过。
+
+新增用例：`tests/maa-config.test.ts` 的「closing medicine needs only a current request and leaves the remaining count…」（8 个子项）、「without a class grant a request may only set that class switches to false and its quantities to 0」（14 个子项）、「null consumption switches count as on, and a grant accepts only exact switches with a positive count」（8 个子项）、「a counted quantity write checks every enabled task of its profile for gacha, packs and unsafe task types」（4 个子项）；每个拒绝都断言进程未被访问、没有锁和待执行记录、配置字节不变。`tests/consumption-grant.test.ts` 的「doctor recovery never reuses the interrupted transaction grant…」（碎石、临期药两个子项，见 [doctor 验证记录](doctor-verification.md)）。
+
+变异：用 `git archive` 把 `0ac4c2b` 导出到临时目录，未变异时四个测试文件全过；每次只改一处，按 `maa-config`、`consumption-grant`、`training-integration`、`doctor` 的顺序一个文件一个文件地跑，第一个失败的文件记为抓到；跑完删除临时目录。
+
+| 编号 | 变异 | 结果 |
+| --- | --- | --- |
+| G20 | null 开关当作关闭 | `maa-config` 抓到 |
+| G16b | 计入数量的 Award 任务不查抽卡和礼包 | `maa-config` 抓到 |
+| C13 | 计入数量的任务不查任务类型 | `maa-config` 抓到 |
+| G9 | 不查理智药开关和数量 | `maa-config` 抓到 |
+| G12b | `UseStone` 为 null 也放行 | `maa-config` 抓到 |
+| G7 | 原形式（关闭理智药不要授权）：这段代码已被修复删掉，变异无处可改；它对应的行为改由 G7a、G7b 检验 | 不适用 |
+| G7a | 关闭理智药重新要求理智药授权 | `maa-config` 抓到 |
+| G7b | 重新打开剩下的理智药数量不要授权 | `maa-config` 抓到 |
+| G27a | 所有改动都算关闭值 | `maa-config` 抓到 |
+| G27b | 任何整数数量都算关闭值 | `maa-config` 抓到 |
+| G27c | 临期天数算关闭值 | `maa-config` 抓到 |
+| G27d | 关着的碎石写非关闭值不要碎石授权 | `maa-config` 抓到 |
+| G27e | 关着的碎石数量不和授权比较 | `maa-config` 抓到 |
+| G27f | 关着的理智药数量不和授权比较 | `maa-config` 抓到 |
+| G27g | 关着的临期药天数不和授权比较 | `maa-config` 抓到 |
+| G27h | 关闭不要求当次请求 | `maa-config` 抓到 |
+| C9 | 恢复时把原事务授权并进修复请求 | `consumption-grant` 抓到 |
+
+实际运行（2026-11-14，工作区逐个运行，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过；单个测试文件全部通过：`consumption-grant` 19 项、`maa-config` 128 项、`doctor` 85 项、`setup-integration` 5 项、`training-integration` 13 项、`training-plan` 8 项、`evaluation` 9 项、`eval-fixture` 7 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`doctor-scenarios` 9 项、`docs-consistency` 3 项。审查者的三份离线探针在修复后的工作区重跑：关闭理智药的三种请求都完成；只改保存开关、只改碎石数量、只改临期天数都以对应的缺授权原因拒绝；`UseMedicine` 为 null 的任务没有授权时不能启用；不带授权的恢复以 `stone-grant-required` 拒绝。
+
+仍未验证：真模型评测和真实 MAA 同上一节。
+
+### 第二轮修复
+
+2026-11-14，针对第二轮独立审查里协调者接受的一项（P3，第一轮修复带来的回退），作者修复，未经独立审查。代码和测试在提交 `f34f508`，文档另有一个提交。问题和用例的细节见 [doctor 验证记录](doctor-verification.md) 的「第二轮修复」。
+
+规则：没有某一类的授权时只能写关闭值，这条规则有一个例外，只在 doctor 的 `restore-config` 里成立。三个条件都要满足：恢复后这一类仍关着；每个改动的值都等于中断事务备份里同一任务的值；请求是当次请求。满足时不需要这一类的授权。恢复后重新打开这一类，仍要修复请求自己的当次授权。普通写入不适用。规格两张表和「MAA 配置写入」「检查与修法」正文都已登记（设计默认值，2026-11-14）。
+
+归属：例外仍由谓词 `decideConsumption` 判断。是不是恢复，由一个显式输入决定：消费方 `doctor-restore`，加上目标里的 `restore`（备份里的同一任务）。写入器只在 `restore-config` 传入备份时才用这个消费方。目标带 `restore` 而消费方不是 `doctor-restore` 时，谓词整体拒绝。一致性测试的消费方表登记了 `doctor-restore`，有允许和拒绝两个样例，都走真实的 doctor 恢复路径。
+
+先红后绿：新用例写好、代码未改时运行 `node --test tests/consumption-grant.test.ts`，33 项中 10 项失败：H1、H2、理智药、一次恢复里关回和重新打开并存这 4 个子项及其父项，被中断恢复的再核对，谓词直接用例，调用点登记，`doctor-restore` 的允许和拒绝样例。备份让这一类重新打开的 2 个子项和普通写入写旧值的用例改之前就通过：它们测的是原来就有的防线，下面的 R1a、R3 确认它们能抓到放宽。改代码之后 33 项全过。
+
+变异：用 `git archive` 把 `f34f508` 导出到临时目录，未变异时 `consumption-grant` 33 项全过。每次只改一处，按 `consumption-grant`、`maa-config`、`doctor` 的顺序一次跑一个文件，第一个失败的文件记为抓到。每次跑完还原被改的文件，全部跑完后删除临时目录。
+
+| 编号 | 变异 | 结果 |
+| --- | --- | --- |
+| R1a | 普通写入也拿到放行（写入器对每次写入都把自己的值当作备份值） | `consumption-grant` 抓到（普通写入写旧值的用例） |
+| R1b | 谓词不看消费方，任何消费方的目标带 `restore` 都放行 | `consumption-grant` 抓到 |
+| R2 | 放行不比较备份值（谓词） | `consumption-grant` 抓到 |
+| R3 | 恢复后这一类开着也放行 | `consumption-grant` 抓到（真实恢复路径的重新打开用例） |
+| R4 | 重放 doctor 自己的待执行记录时不放行 | `consumption-grant` 抓到（被中断恢复的再核对） |
+| R5 | `restore-config` 不传备份（第一轮的行为） | `consumption-grant` 抓到 |
+| R6 | 放行不要求当次请求 | `consumption-grant` 抓到 |
+| R7 | 写入器在 `restore-config` 里把请求自己的值当作备份值 | 三个文件都没抓到。这是等价变异：`restore-config` 的每个改动值本来就是从同一份备份里取的，两种写法结果相同。谓词层面的比较由 R2 检验 |
+
+实际运行（2026-11-14，在工作区一次跑一个文件，没有运行完整离线入口和 `tests/maa-process.test.ts`）：`npm run typecheck` 通过。单个测试文件全部通过：`consumption-grant` 33 项、`maa-config` 128 项、`doctor` 85 项、`doctor-scenarios` 9 项、`setup-integration` 5 项、`training-integration` 13 项、`evaluation` 9 项、`eval-comparability` 7 项、`daily-evaluation` 5 项、`docs-consistency` 3 项。审查者的探针 `probe5.ts` 在修复后的工作区重跑，H1、H2、H3 不带授权都恢复完成，锁已释放。
+
+仍未验证：doctor 的 skill 正文改了，真模型的 doctor 行为评测（改动前后对比）没有运行，留给工单 26；其余同上一节。
+
+### 合并 28 最终版和 main 之后的适配（2026-11-14）
+
+27 原来叠在 28 的旧提交 `d2b0edf` 上。这次先合入 28 的最终版 `1b39e9f`（它已经合入 main 的 10、12、16、17、19、20、22、23、25），再合 `origin/main`（`bd3b3e6` 已经在 `1b39e9f` 里，合并没有新内容）。冲突按两边都保留解决，下面每一项是合并之后单独提交的语义适配。作者验证，未经独立审查。
+
+1. 写入器授权（23 的 `basePlan`、17 的 `jobPlan.continuation`、27 的消耗授权）：
+   - 授权字段白名单正好是两边的并集：`source`、`reference`、`medicineCount`、`stoneCount`、`expiringMedicine`、`jobPlan`、`trainingPlan`、`basePlan`。17 的「CLI 拒绝带 `continuation` 的作业计划」和 23 的「CLI 拒绝 `basePlan`，只能经 `base-apply.ts`」都在命令行入口，原样保留。
+   - 设计默认值（已登记在规格两张表和「MAA 配置写入」正文）：基建排班是和作业计划、专精计划互斥的第三种计划；它不碰消耗字段，所以理智药、碎石和临期药授权都不能和它同请求。拒绝由谓词负责：`ConsumptionContext.plan` 加 `'base'`，带任何消耗授权都返回 `conflicting-authorizations`；写入器的基建范围检查放行这三个授权键，让它们走到谓词。
+   - 先红后绿：`tests/base-apply.test.ts` 的「a base plan carries no consumption grant: medicine, stone or expiring medicine alongside it is refused by the consumption predicate」。改之前三种授权都被基建范围检查以 `request-invalid` 拒绝（测试要求谓词的原因码，失败）；改之后三种都以 `conflicting-authorizations` 在访问进程之前拒绝，不写任何文件，同一份基建授权不带消耗授权时照常完成。
+
+2. 待执行记录（25 的 `versions`、23 的 `baseManifest`）：
+   - 严格字段表合并后接受的新字段正好是 25 可选的 `versions` 和 27 的三种消耗授权；校验仍是两边各自的：消耗授权交谓词（`pending-record`），版本标记交 `isVersionStamp`。恢复保留 27 的规则（不复用原事务授权；改回备份值的放行只给 `doctor-restore`）和 25 的规则（版本差异只报告，不拒绝）。
+   - 23 的 `baseManifest` 和 `basePlan` 不加进表：main 上带它们的记录就不能自动恢复（25 的审查记录第五轮「带 `baseManifest` 的待执行记录照旧不能自动恢复」，规格 23 一节「结果未知时 maa-doctor 只能报告证据，不能自动恢复排班副本」），合并后照旧。
+   - `tests/doctor.test.ts` 的「the pending-record table accepts the version stamp with all three consumption grants, and nothing else new」，5 个子项：带版本标记和三种授权的记录可以核对和恢复，版本报告为 same，清锁完成；带 `baseManifest`、带 `basePlan`、授权来源为已批准报告、授权里有未知字段的记录都不能核对或恢复。这些是合并后的现状，测试一写就通过；用两个变异确认它能抓到：把 `baseManifest` 加进可选字段、从授权表里去掉 `stoneCount`，各有 2 个子项失败，变异已撤回。
+
+3. 新的写入器调用方（23 的 `base-apply.ts`、17 的 `stage-run.ts switch`）：
+   - 写入器的 `prepare` 和 `transactionPending` 不导出，只在 `maa-config.ts` 里调用；对外入口是 `executeConfigWrite`、`executeSetupConfigWrite`、`executeConfigRecovery`。两个新调用方都经 `executeConfigWrite`，所以每次写入都经过谓词的 `writer-whitelist`、`indirect-consumption` 和 `quantity-budget`，没有自己的判断。
+   - 谓词的消费方登记表按 `decideConsumption` 的调用点登记，一个标签一个调用点；新调用方不直接调用谓词，所以另加一张写入器调用方登记表：`tests/consumption-grant.test.ts` 的「every caller of the unified writer is registered with its plan and with tests through its own route」扫描 `skills/`、`scripts/`、`eval/` 里调用这三个入口的文件，要求正好是登记表里的 7 个（`maa-config.ts` 的命令行、`stage-jobs.ts`、`stage-run.ts`、`training-plan.ts`、`base-apply.ts`、`setup.ts`、`doctor.ts`），每个登记它的授权带的计划和经它自己路径的测试，并核对这些测试存在。以后新增调用方不登记就失败。
+   - 新增的两个样例：`tests/base-apply.test.ts` 的「a base apply never activates a consuming task: an enabled Fight task with medicine, stone and expiring medicine on is left alone」（真实 `applyBasePlan`，同一配置里启用的 Fight 任务开着理智药、碎石和临期药，应用完成，Fight 任务逐字节不变；谓词对这次写入没有被激活的任务，同一任务被激活时拒绝）；`tests/stage-run-alternates.test.ts` 的「an alternate switch never activates a consuming task, and no quantity grant can ride along its job plan」（按 `switchStageRun` 的写法经写入器写续接作业表：带理智药或碎石数量时谓词以 `conflicting-authorizations` 拒绝，不带时完成，开着三种消耗的 Fight 任务不变）。拒绝样例另见第 1 项的基建测试。
+   - 基建应用和换备选都不改任务启停、队列顺序或定时，所以不会让任何任务开始运行；写入器对它们照样跑与启用、重排、定时相同的间接消耗检查（被激活的任务为空）。
+
+4. 评测（28 的规则，已在 main）：
+   - 27 的五个新场景都在场景目录里（`eval/maa-daily/scenarios.ts` 的 `dailyScenarios`），世界数据是本文件里的固定字面值（`consumptionConfig` 只把字面值拼起来，不导入产品代码；导入闭包测试通过）。按 28 的批准声明规则补上 `approvals: []`：消耗批准不是建议报告的批准，这些运行不许新建或改动报告批准记录；不声明在评分上等价，写明是为了让场景定义自己说清楚。说明同步写进 [daily 评测](daily-evaluation.md)。
+   - main 新带来的 9 个场景文件（10 的 doctor 日志分析场景，12、18、19、20、22 的 account 场景，16、17 的关卡运行和换备选场景，23 的基建应用场景）的禁止键清单里还有 `stone`、`UseStone` 或 `UseMedicine`，27 的一致性测试「scenario forbidden-key lists name only settings no grant can open」因此失败。按 27 对其他场景的同一改法：去掉这些键，daily 和 doctor 的清单补上同样任何授权都不能打开的 `SpecialAccess`；这些场景都没有声明 `consumptionGrant`，所以 MAA 配置里理智药、碎石或临期药的任何改动仍由谓词判为违规，约束没有放松。这 9 个场景的场景摘要随之改变。
+   - `scripts/eval-transaction.ts` 同时保留 28 的 `versions`（待执行记录必须带写入器读到的版本标记）和 27 的 `consumption`（待执行记录的授权正好是场景声明的消耗授权）；评分器的禁止设置一项同时有 27 的谓词判定和 28 的 `approvals` 对照。谓词文件在运行器指纹里，作为产品文件不进场景摘要（28 的规则，`eval-batch` 的导入闭包测试通过）。
+   - 运行：`consumption-grant` 34 项、`evaluation` 11 项、`eval-comparability` 7 项、`daily-evaluation` 5 项，以及 9 个改动场景所属的场景测试文件，全部通过。
+
+5. 25 的依赖注册表：27 是最后一张带待登记位置的工单，交付后改为条目 `fight-stone-expiring-medicine`，按 25 的规则：
+   - 经 `raw.githubusercontent.com` 只读取 8 个文件在 v6.21.4（`52d0b2a`）和 v6.22.0（`901e01c`）上的内容，用 `scripts/maa-version-check.ts` 自己的读取器和 `gitBlobSha` 算 blob。v6.21.4 的 blob 与上面「固定 MAA 源码核实」表逐一一致。6 个文件两个版本相同；`tasks.json` 和 `integration.md` 变了，逐段对比后 27 依赖的任务和行都没变，所以 `sourceVerified` 为两个版本，指纹取 v6.22.0。结论和对比表写在 [MAA 版本来源](maa-version-sources.md)「27 交付时登记的条目」。
+   - 条目的文件是待登记的 6 个，加上本页表格引用、待登记里没有列的 `AsstFightTask.cs` 和 `tasks.json`；`pending` 现在为空。随包核实记录重新生成后不变（源码已核 v6.22.0，记录版本 2）。
+   - `tests/maa-version-check.test.ts` 13 项通过：改之前「the repository registry covers the delivered MAA dependencies」失败，因为本页引用的 `AsstFightTask.cs` 既没有登记也不在待登记里；登记之后覆盖扫描、「已完成的工单不能留在待登记」和记录生成三项检查都通过。
+
+6. doctor（10）：
+   - 并存：`doctor.ts` 的命令行同时有 10 的 `analyze`（`run`、`interfaceUnobscured`、`conclusion`、`processExitCode`）和 27 的 `repair` 输入白名单（加 `stoneCount`、`expiringMedicine`）；文档一致性测试的接口表两项都列。27 的恢复规则在 `executeConfigRecovery` 里，10 的检查行和 `blockingChecks` 不经过恢复，互不改动。maa-doctor 的 skill 正文按 10 的新结构合并，27 的恢复说明落在第 9 步。
+   - 一个判断（记在这里，不是产品限制）：10 的字段检查 `inspectManagedFields` 只核对任务、理智药和定时字段，不扩到碎石和临期药。理由：MAA 自己会存 null 的碎石开关（界面打开碎石而没有允许保存时），这一行出错会挡住关卡运行（`blockingChecks`），扩进来就会把 MAA 的正常状态当作阻塞错误；这些字段的状态已经由读取摘要按谓词列出。函数注释写明了这一点。
+   - `tests/doctor-checks.test.ts` 的「stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing」：null 的碎石开关、开着的碎石和临期药，字段检查为 `normal`，退出码 0。这是合并后的现状，测试一写就通过，用来防止以后扩检查时把这些状态变成阻塞错误。
+   - 运行：`doctor` 97 项、`doctor-checks` 28 项、`doctor-scenarios` 22 项、`check-purposes` 5 项，全部通过。
