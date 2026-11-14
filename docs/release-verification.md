@@ -766,7 +766,7 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node scripts/tracker.ts`（只检查） | `{"ready":["28"],"errors":[]}` |
 | 完整离线入口、`tests/maa-process.test.ts` | 没有跑，由协调者跑 |
 
-评分器和运行器指纹用的是检出自己的共享模块，不是载荷的（B 部分第 1 轮修正时按协调者的要求确认）：`runnerFingerprint` 按 `runnerSources` 从检出根目录读文件（`scripts/eval-batch.ts` 的 `repositoryRoot` 是检出），其中的 `skills/maa-core/scripts/preferences.ts`、`consumption-grant.ts`、`config-projection.ts` 是检出里的；评分器按相对路径从 `scripts/` 导入它们（`scripts/evaluation.ts` 导入 `consumption-grant.ts`，`scripts/eval-daily.ts` 和 `scripts/eval-transaction.ts` 导入 `config-projection.ts`，`scripts/eval-auth.ts` 导入 `preferences.ts`），也落在检出里。运行时的证据：`6f95f27` 和更早的载荷里没有 `config-projection.ts`，`ddd0ca8` 里也没有 `consumption-grant.ts`，评分照常进行；`ddd0ca8` 载荷上的批次运行器指纹与 `24deeb4` 载荷上的相同。
+评分器和运行器指纹用的是检出自己的共享模块，不是载荷的（B 部分第 1 轮修正时按协调者的要求确认）：`runnerFingerprint` 按 `runnerSources` 从检出根目录读文件（`scripts/eval-batch.ts` 的 `repositoryRoot` 是检出），其中的 `skills/maa-core/scripts/preferences.ts`、`stdin-json.ts`、`consumption-grant.ts`、`config-projection.ts` 是检出里的；评分器按相对路径从 `scripts/` 导入它们（`scripts/evaluation.ts` 导入 `consumption-grant.ts`，`scripts/eval-daily.ts` 和 `scripts/eval-transaction.ts` 导入 `config-projection.ts`，`scripts/eval-auth.ts` 导入 `preferences.ts`，`preferences.ts` 再导入 26 P 新增的 `stdin-json.ts`），也落在检出里。运行时的证据：`6f95f27` 和更早的载荷里没有 `config-projection.ts`，`ddd0ca8` 里也没有 `consumption-grant.ts`，评分照常进行；`ddd0ca8` 载荷上的批次运行器指纹与 `24deeb4` 载荷上的相同。
 
 ### 26 H 运行的命令（2026-11-14）
 
