@@ -294,3 +294,93 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
    - 一个判断（记在这里，不是产品限制）：10 的字段检查 `inspectManagedFields` 只核对任务、理智药和定时字段，不扩到碎石和临期药。理由：MAA 自己会存 null 的碎石开关（界面打开碎石而没有允许保存时），这一行出错会挡住关卡运行（`blockingChecks`），扩进来就会把 MAA 的正常状态当作阻塞错误；这些字段的状态已经由读取摘要按谓词列出。函数注释写明了这一点。
    - `tests/doctor-checks.test.ts` 的「stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing」：null 的碎石开关、开着的碎石和临期药，字段检查为 `normal`，退出码 0。这是合并后的现状，测试一写就通过，用来防止以后扩检查时把这些状态变成阻塞错误。
    - 运行：`doctor` 97 项、`doctor-checks` 28 项、`doctor-scenarios` 22 项、`check-purposes` 5 项，全部通过。
+
+## 30 配置写入器加固：投影指纹与差异核对
+
+工单 [30](issues/30-config-writer-projection-diff.md)，2026-11-14，分支 `claude/30-config-writer-projection`，叠在 27 的同步头 `06d3744` 上。下面分开写实际运行过的和没有验证的。
+
+### 验收 1：MAA 运行期间会自己写回 `gui.new.json`
+
+结论：会。固定的 MAA v6.21.4（`52d0b2a`）只在启动时读一次配置，之后任何模型属性变化都在 200 毫秒防抖后从内存整份重写文件，退出时无条件再整份保存一次。由此得出的后果：MAA 运行时落进 `gui.new.json` 的改动，会在 MAA 下一次保存时被内存里的旧值覆盖，最晚在它退出时。所以写入器「写之前必须先关掉 MAA」这条规则不变，也不能因为有了投影指纹而放宽；投影只解决批准会不会被 MAA 自己的无关写入弄得过期。
+
+核对方法：经 `raw.githubusercontent.com` 只读取下表文件在 v6.21.4 和 v6.22.0 两个提交上的内容，放在本机临时目录，算 Git blob，逐段读引用的行；没有运行 MAA，文件没有写进仓库。研究阶段先在固定提交上检索了 GUI 全部写配置的位置，本票对下表依赖的每一段重新读过。表里的 blob 是 v6.21.4 的；条目 `config-runtime-writeback` 在 v6.22.0 上的核对见 [MAA 版本跟踪的来源](maa-version-sources.md)「30 交付时登记的条目」。
+
+| 采用的事实 | 文件与行 | blob | 登记 |
+| --- | --- | --- | --- |
+| 配置文件用 System.Text.Json 读写（不是 Newtonsoft）；序列化选项 `WriteIndented`、`Encoder = JavaScriptEncoder.Create(UnicodeRanges.All)`、`WhenWritingNull` | [ConfigFactory.cs 第 22–24 行、第 64 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs#L22-L24) | `7f9a85ca85a2faadfa051655c30c8620bf26f3d9` | `config-runtime-writeback` |
+| 整份配置是一个惰性加载的 `Root`，只读一次文件（`File.ReadAllText` 后反序列化） | 同一文件第 69–84 行 | 同上 | 同上 |
+| 加载后先把整理过的内容写进 `gui.new.json.bak` | 同一文件第 155–165 行 | 同上 | 同上 |
+| 任何属性变化都重新开始 200 毫秒的防抖计时；计时到点后整份序列化 `Root` 并用 `File.WriteAllTextAsync` 直接覆盖文件 | 同一文件第 52–56 行、第 306–347 行、第 374–399 行 | 同上 | 同上 |
+| `Release` 无条件调用 `Save`，整份写回 | 同一文件第 349–372 行、第 401–417 行 | 同上 | 同上 |
+| 退出时 `OnExit` 调用 `ConfigFactory.Release()` | [Bootstrapper.cs 第 1238 行、第 1360–1361 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Main/Bootstrapper.cs#L1360-L1361) | `22c986344a70a0d42a0d53e5dd614bf6de1515e8` | 同上 |
+| 根上的键：`Configurations`、`Timers`、`ConfigVersion`、`Current`、`Update`、`AnnouncementInfo`、`Gui` | [Root.cs 第 40–57 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Root.cs#L40-L57) | `247118236d6a3350ea8c495c76c03759efbf83b8` | 同上 |
+| 根 `Gui` 的 `WindowPlacement`、`HotKeys` | [Global/Gui.cs 第 57 行、第 100 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/Gui.cs#L57) | `772b7d38af5a60df09262326d68a75abac276b00` | 同上 |
+| 主窗口关闭时把窗口位置写进 `Root.Gui.WindowPlacement` | [WindowManager.cs 第 74–92 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Helper/WindowManager.cs#L74-L92) | `437c287431e5fa1e942baf57e7d0ffbde05f49d0` | 同上 |
+| 每次启动重新注册热键，注册时把热键表整个换成新实例写回 `Root.Gui.HotKeys` | [MaaHotKeyManager.cs 第 30–75 行、第 151–166 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Services/HotKeys/MaaHotKeyManager.cs#L151-L166) | `6f35b81dc18501942925ed427481d75744e02284` | 同上 |
+| `Update` 的 `Name`、`UpdatePackage`、`IsFirstBoot` | [Global/Update.cs 第 26–30 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/Update.cs#L26-L30) | `83a3bea8de9ad61b3d31d0c59ce3794bf6929da9` | 同上 |
+| 检查和下载更新时写 `Update.Name`、`Update.UpdatePackage`；首次启动显示更新说明后把 `IsFirstBoot` 改为 false | [VersionUpdateDialogViewModel.cs 第 352–358、406–430、563–565、787、843、945 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/Dialogs/VersionUpdateDialogViewModel.cs#L352-L358) | `f21e9e32f4e8760c06e726677d448132512d22b6` | 同上 |
+| `AnnouncementInfo.DoNotShowAgain`；启动时取到新公告就把它改为 false | [AnnouncementInfo.cs 第 23 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Global/AnnouncementInfo.cs#L23)；[AnnouncementDialogViewModel.cs 第 194–201、221、241–256 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/Dialogs/AnnouncementDialogViewModel.cs#L241-L256) | `f5aa2a2b9a0c2efd70b75473c24132f7b83442dc`；`1275b30227d86c586a5b9ca53d54455177f4e050` | 同上 |
+| 每个配置的 `TaskSelectedIndex`；读它时把越界值改为 -1，启动时选中第一个 Fight 任务也会写它，点选任务时同样写 | [SpecificConfig.cs 第 46 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/SpecificConfig.cs#L46)；[TaskSettingVisibilityInfo.cs 第 69–84 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Models/TaskSettingVisibilityInfo.cs#L69-L84)；[TaskQueueViewModel.cs 第 1361–1369 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs#L1361-L1369) | `f0764db882ea6fdfec200cadb62decbd7721cee4`；`afd46e4fab7d5185a780e146532210d9f8223606`；`1de00775603e0c41b75379583578a8f01e4ddb88` | 同上 |
+| Mall 任务的 `CreditFightLastTime`、`VisitFriendsLastTime`；信用作战和访问好友子任务完成时写成当天的游戏日 | [MallTask.cs 第 48、68 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/MallTask.cs#L48)；[AsstProxy.cs 第 2243–2266 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Main/AsstProxy.cs#L2243-L2266) | `eb45335fd3380881474ddacf3be8c1c8e07fc261`；`d81d25ef2611c23f2cbcf05b891dbf2b943990a7` | 同上 |
+| 写入器也读的字段同样会被 MAA 自己改：基建任务链完成后自定义模式的 `PlanSelect` 加一并循环 | AsstProxy.cs 第 1505–1515 行；[InfrastTaskUserControlModel.cs 第 651–670 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/InfrastTaskUserControlModel.cs#L651-L670) | `d81d25ef2611c23f2cbcf05b891dbf2b943990a7`；`f8aa23bbb86ec3aa7379e327c33589a6bb1820ed` | 同上 |
+| 同上：一次性定时触发后 `IsEnabled` 从 null 变为 false；定时切换配置时改当前配置；全部任务完成或退出时把 null 的任务启用状态改为 `MainTasksInvertNullFunction`（默认 false） | [TaskQueueViewModel.cs 第 1186–1201 行、第 2267–2276 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs#L2267-L2276) | `1de00775603e0c41b75379583578a8f01e4ddb88` | 同上 |
+
+研究阶段还列出了其他运行时写回（更新凭据的到期时间、`Gui.SettingOrders`、背景取色缓存、彩蛋的 `LastBuyWineTime`/`Hangover`、企鹅物流 ID、关卡列表刷新、连接地址回写等）。这些字段本票没有排除，留在投影里：要么写入器读它们（连接字段、关卡列表按「拿不准就算在内」），要么很少发生、核对成本不值得。
+
+### 投影
+
+`skills/maa-core/scripts/config-projection.ts` 是唯一定义：投影是整份配置去掉 `projectionExclusions` 的 9 个字段，就是上表里 MAA 运行时自己写、并且本项目没有代码读或写的那些：根上的 `Gui.WindowPlacement`、`Gui.HotKeys`、`Update.Name`、`Update.UpdatePackage`、`Update.IsFirstBoot`、`AnnouncementInfo.DoNotShowAgain`，每个配置的 `TaskSelectedIndex`，任务里的 `CreditFightLastTime`、`VisitFriendsLastTime`。其他字段原样保留，键顺序和「省略与 null 不同」都不变。
+
+- `projectionRevision`：读取摘要的 `revision`、写入器的版本核对、setup 专用入口的 `expectedRevision` 和候选 `discoveryRevision`、doctor 恢复写入时传给写入器的 `expectedRevision`。基建应用、换备选、作业准备和专精计划经读取摘要的 `revision` 得到它。
+- `wholeConfigFingerprint`：只给 doctor 判断「当前配置等于备份」或「等于预期结果」用，整份精确比较，规则不变。
+- 写入器白名单变成导出表 `writerFields`（含 27 的消耗字段、23 的基建字段、24 的专精字段和 setup 的四个连接字段），`prepare` 拒绝表外任何改动，不论从哪条路线来；关停时绑定的对象也要在 `writerDependencies` 表里。
+
+### 差异指纹
+
+- `maa-config.ts preview`：输入和 `write` 相同（不带指纹），跑写入前的全部检查，不访问进程、不加锁、不写文件（连私有目录都不创建）。输出 `revision`、`diffFingerprint` 和 `changes`（键、配置序号、白名单前后摘要）。
+- `configDiff`（`config-projection.ts`）是差异和指纹的唯一定义：解析后的改动路径加上投影后的前后值，只算值确实变了的改动。写入器、预览、待执行记录和两个评分规则都用它。
+- 当次请求的普通写入必须带指纹（`approved-diff-missing`），不一致拒绝（`approved-diff-mismatch`），都在进程访问、加锁和写入之前；消耗谓词的原因码排在它们前面，代理仍能知道缺哪项批准。计划写入、setup、doctor 恢复和已批准报告来源不要求，带了就核对；`jobPlan: null` 这种空占位不算计划。
+- 关停后在 MAA 留下的配置上重算：不一致时不备份、不写，原来在运行的 MAA 重新打开，锁释放，运行记录追加一条 `rejected`。
+- 待执行记录多一个 `diffFingerprint`；doctor 的记录格式接受它，恢复不复用它，也不复用原来的批准。
+
+### 没碰的键：整份重写有损，改为只替换改动值
+
+先让旧的写法（`JSON.stringify(config, null, 2)`）跑合成配置的逐字节测试，结果失败（「先红后绿」第 2 条）：字节顺序标记没了，CRLF 变 LF，缩进从 4 个空格变 2 个，`1.0` 变 `1`，`1e3` 变 `1000`，`"caf\u00e9 \/ x"` 变 `"café / x"`，像整数的配置名 `"10"` 被挪到最前，`12345678901234567890` 变 `12345678901234567000`，`9007199254740993` 变 `9007199254740992`。
+
+MAA 用 System.Text.Json 读这个文件（上表第一行；工单说明里写的 Newtonsoft 不对）。按这个库的行为推断（库的行为，不是 MAA 源码）：MAA 能察觉的是超出 2^53 的整数（`long` 字段读到的值变了）和字典里像整数的键被挪到最前（例如名为「1」的配置在 MAA 的配置列表里换了位置）；字节顺序标记（`File.ReadAllText` 自己识别）、换行和缩进、浮点数的写法（同一个 double）、转义写法（同一个字符串）察觉不到。多态任务的 `$type` 两种写法都留在最前，不受影响。
+
+所以改为最小修改（`skills/maa-core/scripts/config-edit.ts`，没有新依赖）：
+
+- 方法：只定位每个值在原文里的起止位置（值本身仍由 `JSON.parse` 解码），只替换改动路径上的值；队列重排时复用每个任务原来的字节；MAA 省略的一次性定时 `IsEnabled` 加在该定时对象最后一个字段之后，沿用文件自己的分隔写法；新值按文件的缩进和换行写出。
+- 核对：改写后的文本解析结果必须等于写入器准备好的配置，否则抛错、什么都不写。写入前在检查阶段先试一次，文件不是合法 UTF-8 或定位失败时在关停 MAA 之前以 `request-invalid` 拒绝。
+- 取舍：被改动的值用 JavaScript 的写法写出（例如重写整个房间列表时，其中的数字写法可能和 MAA 不同），没改动的键一个字节都不变；重复键时改最后一个（和 `JSON.parse`、MAA 的读法一致），前面的重复键原样留着。doctor 的恢复写入现在会把原来的字节原样放回。
+
+### 先红后绿
+
+1. 行为测试 `tests/config-writer-diff.test.ts` 先写，实现前整份失败（`maa-config.ts` 没有 `previewConfigWrite` 导出）。
+2. 逐字节测试「the writer replaces only the changed values: every other byte of the file stays as MAA wrote it」在旧的整份重写下失败（差异见上一节），换成最小修改后通过。
+3. 一致性测试 `tests/config-projection.test.ts`：把 `['Configurations', '*', 'TaskQueue', '#', 'UseStone']` 加进排除表后跑，「every field the writer writes or its decisions read is in the approval projection」「the projection function keeps every enumerated field and drops exactly the excluded ones」「changing a field outside the projection changes no decision ...」的 `UseStone` 子项、「no maa-skills code names a field outside the projection」四项失败，报出 `writer whitelist (maa-config.ts writerFields): Configurations.*.TaskQueue.#.UseStone` 和谓词表的同一字段；去掉后全部通过。测试里还保留了对每一个枚举字段的同样检查（「dropping any enumerated field from the projection makes the conformance check fail」）。
+4. 「a current request without the approved diff fingerprint ...」里 `jobPlan: null` 的子项，在把「是否带计划」写成「有这个键」时失败（空占位免掉了指纹要求），改成「键里有计划」后通过。
+
+一致性测试的内容：从导出表（`writerFields`、`taskDecisionFields`、`consumptionDecisionFields`、`timerDecisionFields`、`writerDependencies`、`connectionDecisionFields`）枚举字段并要求都在投影里；用代理对象追踪 `decideConsumption` 实际读的任务字段，必须正好是它的表；逐个改动排除字段，读取摘要、六种预览（提醒、重排、启用、定时、带批准的理智药、没批准的碎石）、字段检查、维护窗口和 setup 发现的结果都不变；检索 `skills/` 里每个计算或比较配置 revision 的位置，都经 `projectionRevision` 或读取摘要，只有 doctor 的比较用 `wholeConfigFingerprint`。
+
+### 评测场景
+
+maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（预览、批准、带指纹写入）、`daily-diff-drift-projection`（预览和写入之间 MAA 把一个「仅本次」任务的 null 启用状态改为 false，写入以 `configuration-changed` 拒绝，代理要重新预览、不能再写）、`daily-diff-drift-noise`（同一时刻 MAA 只移动了窗口位置，批准的写入照常完成）。合成 MAA 新增 `drift-noise`、`drift-projection` 两种模式，在第一次写入读配置之前改文件，并把这次改动记为写入的第一个动作；提醒事务评分规则核对它正是声明的那一种。原来的四个提醒场景也要求写入之前有一次只读预览、写入带的指纹等于预览给出的。离线跑过：`tests/daily-evaluation.test.ts` 用替身按两种宿主布局驱动七个提醒类场景并评分通过，还核对了漂移场景里少了重新预览或重放写入都判失败。
+
+### 设计默认值
+
+都登记在规格「默认值及其来源」（2026-11-14 各行），这里只列出处：投影范围（9 个排除字段，其余全部在内）、一个定义一个所有者和一致性测试的形状、两个指纹函数、只读预览和摘要的写法、指纹必带的范围和两个原因码、计划写入入口这一轮不接收指纹参数、关停后不一致时重开 MAA 并释放锁、写回只替换改动值。另有两条只影响实现、不是产品限制，记在这里：结果里 `phase` 对关停后的拒绝写 `backup`（判断发生时锁记录的阶段）；文件无法最小修改时沿用 `request-invalid`，不另设原因码（MAA 写出的文件不会出现这种情况）。
+
+### 实际运行
+
+- `npm ci --ignore-scripts` 一次；`npm run typecheck` 多次，最后一次通过。
+- 逐个运行（单个文件、依次）：`config-writer-diff` 21 项、`config-projection` 16 项、`maa-config` 129 项、`consumption-grant` 34 项、`doctor` 102 项、`doctor-scenarios` 22 项、`check-purposes` 7 项、`base-apply` 19 项、`base-apply-scenarios` 1 项、`stage-run-alternates` 12 项、`stage-alternate-scenarios` 1 项、`stage-jobs` 8 项、`training-config` 3 项、`training-integration` 13 项、`training-plan` 9 项、`setup` 29 项、`setup-integration` 5 项、`setup-scenarios` 27 项、`cross-skill-scenarios` 7 项、`daily-evaluation` 5 项、`evaluation` 11 项、`eval-comparability` 7 项、`eval-fixture` 7 项、`eval-host-double` 12 项、`eval-batch` 10 项、`docs-consistency` 5 项，全部通过。最终数字见交付报告里同一提交上的重跑。
+- `node scripts/maa-version-check.ts record` 重新生成随包核实记录，内容不变。
+
+### 未验证
+
+- 没有在真实 MAA 上运行：MAA 实际多久写回一次、退出保存时哪些字段真的变了，只按源码推断；最小修改写出的文件没有让真实 MAA 读过。
+- System.Text.Json 对大整数、键顺序、字节顺序标记的处理是库的行为推断，没有在 MAA 里实测。
+- 真模型评测（三个新场景和 maa-daily 改动前后的同模型对比）没有运行，延到工单 26：缺两个专用登录目录里的维护者登录和真模型批次。
+- `tests/maa-process.test.ts` 的命令行写入改为先预览再写，按约定本票没有运行它（它启动合成 Windows GUI）；完整离线入口 `node scripts/check.ts` 也没有运行，由协调者在冻结的提交上跑。

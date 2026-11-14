@@ -20,7 +20,8 @@ const reportActions = { read: ['reportHash', 'format'], brief: ['reportHash'], r
   fail: ['reportHash', 'format', 'reviewer', 'reason', 'detail'], skip: ['reportHash', 'format', 'userWords'], approve: ['reportHash', 'format', 'items', 'userWords'] };
 const contract: Record<string, Record<string, string[]>> = {
   'preferences.ts': { read: ['currentLanguage'], set: ['language', 'languageAsked', 'privateDirectory', 'maaDirectory', 'server'], append: ['date', 'source', 'text'] },
-  'maa-config.ts': { read: [], write: ['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'] },
+  'maa-config.ts': { read: [], preview: ['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes'],
+    write: ['host', 'expectedRevision', 'closedConfirmed', 'authorization', 'changes', 'diffFingerprint'] },
   'doctor.ts': { check: [], analyze: ['run', 'interfaceUnobscured', 'conclusion', 'processExitCode'],
     repair: ['host', 'approved', 'reference', 'evidenceRevision', 'closedConfirmed', 'medicineCount', 'stoneCount', 'expiringMedicine'] },
   'setup.ts': { check: ['maaDirectory'], prepare: [], discover: ['adbPaths', 'addresses'], test: ['adbPaths', 'addresses', 'discoveryRevision', 'candidate'],
