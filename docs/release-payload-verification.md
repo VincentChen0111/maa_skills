@@ -62,3 +62,37 @@
 - 没有运行完整离线入口 `node scripts/check.ts`、`tests/maa-process.test.ts`，没有调用模型，没有联网，没有碰真实 MAA。
 
 评测影响：本轮又改了载荷（`skills/` 下四个文件），规则同上，「后」批次在最终候选载荷上整批重跑。上面「未验证」各条不变；代码页 936 的文字说明只改了文档，真实 936 机器上 agent 是否照做仍未验证。
+
+## 第二轮审查修复（2026-11-14）
+
+审查发现（P3，与第一轮 R8b 同一类缺陷，第二次出现）：`maa-doctor/references/triage.md` 的小节标题「本机只读能核对的」和表头「本机只读核对」把 `doctor.ts check`（写 `doctor-latest.json`）和 `analyze`（写 `doctor-analysis-latest.json`）说成只读；`maa-doctor/SKILL.md` 第 4 步让 agent 先读这张表再运行 `analyze`，没说它会存记录。按维护者的复发规则不再逐处修补，改成一张表、一个所有者，加一个覆盖全部 skill 文档的一致性检查。
+
+| 项 | 修改 | 证据（离线） |
+| --- | --- | --- |
+| 一张表 | `tests/docs-consistency.test.ts` 的 `writingCommands` 是唯一的写命令表：列出共享脚本里所有会写文件的命令和各自写了什么，21 个命令行脚本的 72 个动作里有 45 个。例如 doctor 的 `check`、`analyze`、`repair`，stage-run 除 `read` 外的六个动作，`base-apply.ts apply`，偏好的 `set`、`append`，`account-snapshot.ts import`，两个报告工具的 `draft`、`brief`、`review`、`fail`、`skip`、`approve`，setup 的 `prepare`、`recheck`、`apply`、`download`、`install`，`credentials.ts input`。代码里推出的还有：社区读取（`nga.ts search`、`read`，`skland-community.ts read`，`bilibili.ts read`）写调研缓存，用了已保存凭据时记下读取结果；`skland-account.ts inspect` 也记下凭据结果；`stage-jobs.ts query` 只在带 `saveReport` 时写候选报告 | 「the writing-command table lists exactly the shared-script actions whose code writes a file」 |
+| 从代码推出、断言完整 | `commandCalls` 记每个动作调用的函数。测试把 `skills/maa-core/scripts/*.ts` 的注释和字符串内容去掉，切成顶层语句，按名字连成引用图（含具名导入和动态导入），再从每个动作调用的函数出发，找能到达的写文件调用（`writeFile`、`appendFile`、`rename`、`mkdir`、`rm`、`unlink`、带写标志的 `open` 等）。命令行块里直接写文件的，归到它前面最近一次比较的动作。断言：有命令行的脚本恰好是 contract 里的脚本；每个命令行接受的动作（从比较动作参数的字面量推出）和 contract 一致；命令行调用的、能写文件的函数都归在某个动作下；能写文件的动作恰好是表里的动作；表里说写的文件，要在这个动作能到达的代码里有对应的字符串字面量；`onlyWith` 的键是该动作的输入键，写入只在检查这个键的 `if` 里 | 同上。变异（在临时文件上做，跑完删除或还原）：删掉表里的 `analyze`、给 `stage-run.ts read` 加表项、让只读动作调用写函数、写错文件名、给 contract 加一个命令行不接受的动作、`onlyWith` 换成别的输入键，都被抓到；在 `inspectMaaSnapshot` 里加一处对 `saveAccountSnapshot` 的引用，推导测试报出 `account-snapshot.ts inspect writes … but is not in writingCommands`。脚本已按原字节还原 |
+| 全仓扫描 | 「no skill document calls a writing command read-only, unless it limits the claim to MAA」扫描 `skills/` 下全部 29 个 Markdown 文件（含 `skills/README.md`）。点名了表里命令的句子、表格单元格或标题，不能说它「只读」、read-only 或单独的「不写」，限定到 MAA 的除外（「对 MAA 只读」「只读 MAA 目录下…」、「不改 MAA」本来就不算）。规则细节见下面的设计默认值 | 先红：用最终扫描器扫 HEAD `6ff6bbd` 的 skill 文档，报 15 处：triage.md 第 22 行标题，第 26–37 行该列下 10 个单元格；maa-doctor/SKILL.md 第 12 行两处；checks.md 第 22 行；setup.md 第 18 行；maa-account/SKILL.md 第 20、24 行。后绿：改文字后 0 处 |
+| 回退必红 | 「the read-only scan finds the shapes it was built for, and passes claims limited to MAA」把下面六处现在的文字各自换回旧文字：triage 标题、triage 表头、doctor 第 1 步、`maa-daily/SKILL.md` 和 `base-apply.md` 的转交 maa-doctor、`stage-run.md` 第 9 步，扫描都报错；现在的文字不报。另有 16 个合成用例覆盖承接主语、只往前一句、列标题、小节标题、散文名、脚本名、限定到 MAA、「不写」带宾语、`saveReport` | 同名测试 |
+| 取代第一轮的 R8b 测试 | 删掉只查 maa-daily 的「maa-daily never calls the doctor check read-only…」。它的两半都由新测试接管：不许说只读，由全仓扫描负责；要写明检查会存记录，由回退测试负责，它要求那三处现在的文字仍在 | 同上 |
+| 文字修改 | `triage.md`：标题改为「逐类：本机能核对的（不改 MAA），和只能转介的」，表头改为「本机核对（不改 MAA）」。`maa-doctor/SKILL.md`：第 1 步「检查只读，仅更新…」改为「检查不改 MAA，只更新私有目录里的最近检查记录」，`--online` 的括注改为「联网查询 GitHub 公开接口」；第 4 步加一句：`analyze` 把结果存为私有目录里的最近分析记录，不改 MAA 配置、锁和运行记录。`checks.md` 第 22 行 `check --online` 的括注改为「联网查询发布」。`maa-setup/references/setup.md` 的 `recheck` 一行「只读查看」MAA 进程改为「只查看」。`maa-account/SKILL.md`：「实验性入口只读视频」改为「只支持视频」，「用户只要查看时保持只读」改为「只用 `inspect`」 | 扫描通过 |
+
+设计默认值（2026-11-14，本轮选定，不是维护者原话）。它们是文档一致性检查的规则，不是产品限制，所以只记在这里，不进规格的两张来源表：
+
+- 只读说法：「只读」、read-only，以及单独出现的「不写」「不写入」（后面是标点或句末）、「不写任何文件」「不写文件」。「不写」后面跟具体对象时（「不写 MAA 配置」「不写快照」「不写设置」），说的是不写哪一个文件，不算只读说法；「不写「最优」」「不写 `runs`」说的是 agent 写的文字，也不算。理由：只按任务书禁「不写」两个字，会把大量准确的「不写某文件」说法误报。
+- 例外只认限定到 MAA 的说法（「对 MAA…只读」「只读 MAA…」「MAA 只读…」、"read-only to MAA"），依据是协调者任务书。社区读取的「只读：不登录、不发帖」，只要同一句或上一句没有点名命令就不报。扫描碰上的三处（`--online` 两处，setup 一处）和 maa-account 两处直接改了文字，没有放宽例外。
+- 怎样算点名：代码形式（`doctor.ts check`，或上下文脚本下的 `check`）；表里的散文名，目前只有 doctor 的三个命令有（「maa-doctor」「doctor 检查」「doctor 的检查」，链接路径里的不算）；所有动作都写文件的脚本，只写脚本名也算。只写脚本名、而脚本也有只读动作时，不算点名其中哪一个命令。
+- 主语承接：以分句（逗号、分号）为单位。没有点名命令、或以「它」开头的分句，承接同一句里前面最先点名的命令；一句的第一个分句承接上一句（只往前一句）。表格单元格以本行第一格为主语；表头的说法管该列各格，小节标题的说法管整节。理由：中文常省略主语，旧 stage-run 文字「它只读」、doctor 第 1 步「检查只读」都靠承接才抓得到；只往前一句是因为在 maa-account 第 19、20 行试过，再往前会把很远处的 `credentials.ts input` 当成主语。
+- 条件写入：`stage-jobs.ts query` 只在带 `saveReport` 时写；同一句写明「不加 `saveReport`」时可以说它只读（maa-account 第 21 行就是这样）。
+
+本轮实际运行的命令（2026-11-14，本机 Windows，Node 24）：
+
+- `npm run typecheck`：通过。
+- 逐个单独运行（一次一个文件）：`docs-consistency` 8 项、`stdin-json` 13、`doctor` 103、`stage-run` 15、`base-apply` 19、`daily-evaluation` 5、`help-installation` 6，全部通过。
+- `node scripts/privacy.ts`：没有发现。
+- 没有运行完整离线入口 `node scripts/check.ts`、`tests/maa-process.test.ts`，没有调用模型，没有联网，没有碰真实 MAA。
+
+已知局限，未验证：
+
+- 推导按名字连引用图，只会多连、不会漏连：同名的局部变量也会连上。命令行哪个分支调哪个函数，是 `commandCalls` 手工读出来的；测试只核对这些函数确实被命令行调用，并且能写文件的函数都有归属。同一个函数服务两个动作时（`skland-account.ts` 的 `inspect` 和 `import`），按整个函数算。
+- 扫描按文字规则判断，不理解语义：没有点名命令、或主语隔了一句以上的说法查不到。`docs/` 下的规格、验证记录和工单正文不在扫描范围，本轮没有改。例如规格「默认值及其来源」10 那一行仍写 `check --online`「只读访问 GitHub 公开接口」，工单 10 和 doctor 验证记录仍有「本机只读核对」的说法。
+- 评测影响：本轮又改了载荷（`skills/` 下五个文件），规则同上，「后」批次在最终候选载荷上整批重跑。改过的 doctor 和 maa-account 文字在真模型上的行为没有验证。
