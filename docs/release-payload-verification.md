@@ -42,3 +42,23 @@
 - 控制台代码页为 936 的中文 Windows 上，PowerShell 5.1 管道不加 BOM、中文照样变成 `?`：本机把控制台输入编码强制设为 936 复现了这一点，这种情况脚本无法与合法的 `?` 区分，只能靠文档要求转义；真实的 936 机器没有试过。
 - PowerShell 7 的管道行为没有试过。
 - 下载确认的结构性加固（CLI 层）留给后续工单。
+
+## 第一轮审查修复（2026-11-14）
+
+第一轮独立审查的发现经协调者复核，接受 1 个 P2 和 3 个 P3，本节逐项记录修改和证据。
+
+| 审查发现 | 修改 | 证据（离线） |
+| --- | --- | --- |
+| P2：转义例子写坏了 | `maa-core/SKILL.md`、`maa-core/references/preferences.md` 和规格「默认值及其来源」的 26 载荷修复一行，例子里「写成」后面原来是字符本身（写入时转义被还原成了字符）。改为真正的转义：「中」、「以后用英文」和 `?` 各自的 `\uXXXX` 序列。用 Node 脚本按字节写入，再用 `od -c` 核对每个例子都是反斜杠、`u` 和四位十六进制。`skills/` 和 `docs/` 里其他提到「写成」「转义」的地方只写通用的 `\uXXXX`，没有别的例子 | `tests/stdin-json.test.ts` 的「every escape example in the skills and the spec is a real \uXXXX escape of the text it shows」：`skills/` 下全部 Markdown 和规格里，提到转义的行上每个「写成」后面不是 `\uXXXX` 的例子，都必须只由真正的 `\uXXXX` 序列组成（不含非 ASCII 字符和裸 `?`），还原后等于前面引用的文字；三个文件各至少有一个例子。改前红（`maa-core/SKILL.md` 的第一个例子） |
+| P3：没写代码页 936 的局限 | `maa-core/SKILL.md` 的调用方约定和 `preferences.md` 各加一句：有些控制台（例如中文 Windows 默认的代码页 936）的管道不加 BOM，这时丢掉的字察觉不到，换成的 `?` 会原样存下；所以非 ASCII 字符一律转义，不要靠 `input-encoding-lossy` 发现丢字。规格正文 R1 的调用方约定同步加了这一句（原来这个原因只写在「默认值及其来源」里） | 同一测试断言两处都有这句 |
+| P3：R8b 没改完 | `maa-daily/references/base-apply.md` 的 `unknown` 一步改用 SKILL.md 第 4 步的说法：先核对（doctor 的检查会更新私有目录里的最近检查记录，不改 MAA 配置、锁和运行记录）。按要求搜了其他 skill 的同类说法：`maa-daily/references/stage-run.md` 第 9 步说 `verify`「只读」，但它运行共享 doctor 检查、把核对结果记进运行记录，同样改正。`maa-doctor/references/triage.md` 的「本机只读核对」一列指的是不改 MAA 的核对，`maa-doctor/SKILL.md` 已写明检查会更新最近检查记录，没有改 | `tests/docs-consistency.test.ts` 的「maa-daily never calls the doctor check read-only…」：`skills/maa-daily` 下不再出现「只读核对」；交给 doctor 的两处带记录说明；`verify` 一步不写「它只读」，写明两种记录。改前红（`base-apply.md`） |
+| P3：一致性检查有漏洞 | `tests/stdin-json.test.ts` 的 `directRead` 正则换成 `readsStdinDirectly`。除原有写法外，下列写法也算直接读标准输入：从 `node:process` 或 `process` 具名导入 `stdin`（含 `as` 别名、多行）；默认或命名空间导入后取 `.stdin`、`['stdin']` 或解构；`require('process').stdin` 和解构 `require` 的结果；`(await import('node:process')).stdin`；全局 `process` 的别名；`readSync(0, …)`、`readFile(0, …)`。子进程的 `stdin`、`node:process` 的其他成员、`readSync(fd, …)` 不算 | 同一文件的「conformance check fails when …」：22 种写法逐个断言报「reads standard input directly」，5 种不算的写法断言没有违规。旧正则漏掉其中 17 种（改前红：第一个漏掉的是 `readSync(0, buffer)`）。`skills/` 现有代码仍只有共享读取器和凭据终端输入两个直接读取方 |
+
+本轮实际运行的命令（2026-11-14，本机 Windows，Node 24）：
+
+- `npm run typecheck`：通过。
+- 逐个单独运行（一次一个文件）：`stdin-json` 13 项（含真实 `powershell.exe` 管道测试，没有跳过）、`preferences` 8、`docs-consistency` 6、`base-apply` 19、`daily-evaluation` 5、`help-installation` 6，全部通过。
+- `node scripts/privacy.ts`：没有发现。
+- 没有运行完整离线入口 `node scripts/check.ts`、`tests/maa-process.test.ts`，没有调用模型，没有联网，没有碰真实 MAA。
+
+评测影响：本轮又改了载荷（`skills/` 下四个文件），规则同上，「后」批次在最终候选载荷上整批重跑。上面「未验证」各条不变；代码页 936 的文字说明只改了文档，真实 936 机器上 agent 是否照做仍未验证。
