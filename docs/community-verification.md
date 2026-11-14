@@ -186,8 +186,8 @@
 
 ### 修复内容
 
-- 网络防护（`tests/fixtures/offline-network.mjs`）：B 站读取器在 Windows 上默认用 `research-transport.ts` 的 Windows 传输，它启动 `powershell.exe`，由 .NET 发请求，不经本进程的套接字。第一轮的事故（约 20 次匿名 GET）走的就是这条路。防护现在也在进程内拒绝经 `child_process` 启动 Windows PowerShell 或 PowerShell 7，报 `offline-test-real-network`。覆盖 `spawn`、`spawnSync`、`execFile`、`execFileSync`、`exec`、`execSync`、`fork`，`exec` 和 `execFile` 的 promisify 形式也覆盖。判定规则：程序文件名是 powershell 或 pwsh（不分大小写，可带 `.exe` 和路径）就拒绝；经 shell 运行的命令行（`exec`、`execSync`、`shell` 选项，或程序本身是 cmd、sh、bash 等）里出现这两个词也拒绝；`fork` 看 `execPath`。每次拒绝记进 `globalThis.__maaOfflineNetworkGuard.refused`，内容是接口名加主机名或程序名。这样，读取器把传输错误改写成代码后，测试仍能证明是防护挡下的。
-- 防护的确切覆盖范围，夹具注释与本记录一致。覆盖：非本机回环的 TCP 连接（`net.Socket` 的 connect，http、https、tls、fetch 都经过它）；这类主机的 `dns.lookup` 和 `dns.promises.lookup`；上面说的 PowerShell 启动。不覆盖：UDP（`dgram`）、`dns.resolve*`（直接查询 DNS 服务器）、PowerShell 以外的程序、worker 线程，以及没有加载防护的子 Node 进程。第一轮修复内容里写的「拒绝任何……DNS 查询」不准确，实际只管 `dns.lookup`，这里更正。
+- 网络防护（`tests/fixtures/offline-network.mjs`）：B 站读取器在 Windows 上默认用 `research-transport.ts` 的 Windows 传输，它启动 `powershell.exe`，由 .NET 发请求，不经本进程的套接字。第一轮的事故（约 20 次匿名 GET）走的就是这条路。防护现在也在进程内拒绝经 `child_process` 启动 Windows PowerShell 或 PowerShell 7，报 `offline-test-real-network`。覆盖 `spawn`、`spawnSync`、`execFile`、`execFileSync`、`exec`、`execSync`、`fork`，`exec` 和 `execFile` 的 promisify 形式也覆盖。判定规则（按 Issue #76 补全后的说法，见下文「后续：防护读取 `shell` 选项」）：参数按 Node 自己的方式读取，参数表是 `null` 或省略时，下一个参数就是选项；以下任何一个的文件名是 powershell 或 pwsh（不分大小写，可带 `.exe`，裸名或完整路径）就在任何进程创建之前拒绝：程序本身（`fork` 看 `execPath`）；运行命令行的 shell，按 Node 的选法确定，`shell` 选项是字符串时就是它，`shell: true` 以及 `exec`、`execSync` 没给字符串 shell 时，Windows 上是 `ComSpec`（没有就是 cmd.exe），其他平台是 `/bin/sh`；经 shell 运行的命令行（`exec`、`execSync`、任何 `shell` 选项，或程序本身是 cmd、sh、bash、dash、zsh）里的词，按空白、引号、反引号和 `; & | ( ) < > ^` 切分。第二轮的原判定不看 `shell` 选项的值，`exec`、`execSync` 不读选项，参数表为 `null` 时忽略第三个参数，因此原先「覆盖 7 个入口」的说法大于实际。每次拒绝记进 `globalThis.__maaOfflineNetworkGuard.refused`，内容是接口名加主机名或程序名。这样，读取器把传输错误改写成代码后，测试仍能证明是防护挡下的。
+- 防护的确切覆盖范围，夹具注释与本记录一致。覆盖：非本机回环的 TCP 连接（`net.Socket` 的 connect，http、https、tls、fetch 都经过它）；这类主机的 `dns.lookup` 和 `dns.promises.lookup`；上面说的 PowerShell 启动。不覆盖：UDP（`dgram`）、`dns.resolve*`（直接查询 DNS 服务器）、PowerShell 以外的程序（只认这两个名字，所以改名或链接过的 PowerShell 副本、会再启动 PowerShell 的脚本或程序都能通过）、shell 在运行时才拼出的 PowerShell 名字（变量、命令替换、名字中间的转义符或引号）、上述 7 个函数以外的进程启动方式（直接用 `ChildProcess` 类、`process.execve`、防护加载前就取走的函数引用）、worker 线程，以及没有加载防护的子 Node 进程（Issue #76 后补全的说法）。第一轮修复内容里写的「拒绝任何……DNS 查询」不准确，实际只管 `dns.lookup`，这里更正。
 - 防护直接全局拒绝 PowerShell，没有用 `module.registerHooks` 只替换调研传输，因为加载防护的测试都不需要 PowerShell。`skland-community`、`bilibili`、`community-content` 在进程内用保护替身；`community-cli` 的子进程用 `credential-boundary.mjs`，B 站的子进程另用 `community-boundary.mjs`；`community-scenarios` 的评测子进程用评测网络夹具替换 Windows 保护。下面的逐文件运行证实了这一点。真正用 PowerShell 的测试（`help-installation`、`setup-scenarios`、`maa-process`）不加载防护，不受影响。
 - 新增 `tests/fixtures/guard-backstop.mjs`，只在防护自身的测试里用，加载顺序在防护之前。凡是越过防护的连接、`dns.lookup` 和子进程启动，它都记下来并让其失败，所以防护失效时也不会有请求离开本机、不会有程序运行。新增 `tests/offline-network.test.ts` 的两个用例。
 - 技能文字（`skills/maa-account/SKILL.md` 森空岛社区与 B 站两步，`skills/maa-core/references/research.md` 两条）：森空岛社区按结果的 `repair` 分支。`enter-credential`、`reenter-credential` 给输入命令；`retry-later` 说稍后再试（凭据无法读取时说明是 Windows 加密这次没有完成，不要重新输入；风控时说明暂停到何时）；`use-windows` 说在保存凭据的 Windows 用户下使用；`check-system-time` 说检查系统时间；`report-issue` 说报告问题。B 站按字幕页的结论和原因分支：`credential-required`、`credential-rejected`，以及不带原因的 `credential-unreadable` 给输入命令；`protection-failed` 说稍后再试；`windows-required` 说在保存凭据的 Windows 用户下使用；`login-not-recognized` 说用户可以自己重新输入。其他技能和接口文件里的凭据说法也核对过：账号快照（`references/skland.md`）把 `windows-required`、`protection-failed` 作为单独的错误；`credentials.md` 的 `unreadable` 是记录损坏这一检查状态；setup 和 doctor 只讲检查状态。这些都与修法一致，没有改动。规格正文「共享工具」的森空岛社区一条、「默认值及其来源」19 行和「规则来源」19 行同步补上这条规则。
@@ -215,6 +215,36 @@
 
 修复后逐个运行一次，都是单个文件，没有运行完整门禁：`npm run typecheck` 通过。各文件全部通过，项数如下：`offline-network` 2 项（新）、`skland-community` 23 项、`skland-account` 18 项、`research` 7 项、`research-transport` 3 项（另有 1 项只在非 Windows 运行，本机跳过）、`bilibili` 16 项、`nga` 13 项、`credentials` 6 项、`community-cli` 3 项、`community-content` 14 项、`community-scenarios` 4 项、`research-scenarios` 1 项、`evaluation` 8 项、`eval-network` 3 项、`help-installation` 6 项、`metadata` 2 项。`node scripts/privacy.ts .` 第一次在新测试的两处盘符路径字面量上报了 `private-path`；改为由 `SystemRoot`、`ProgramFiles` 拼出路径后，结果无发现，`offline-network` 重跑仍是 2 项通过。`node scripts/tracker.ts` 无错误。没有运行 `tests/maa-process.test.ts`，也没有任何真实网络请求。
 
+## 2026-11-14 后续：防护读取 `shell` 选项（Issue #76）
+
+来源：第三轮独立审查接受的一条 P3，按三轮上限转为 [Issue #76](https://github.com/VincentChen0111/maa_skills/issues/76)。产品代码和现有测试都没有用到下面这些写法，没有正在发生的联网；问题是防护的覆盖说法大于实际。本次没有改产品代码。
+
+### 修复内容
+
+- `tests/fixtures/offline-network.mjs`：`shell` 选项是非空字符串时，按它的文件名比对 powershell、pwsh；`shell: true`，以及 `exec`、`execSync` 没给字符串 shell 时，按 Node 的选法取默认 shell（Windows 上是 `ComSpec`，没有就是 cmd.exe；其他平台是 `/bin/sh`）再比对。`exec`、`execSync` 现在读选项。`spawn`、`spawnSync`、`execFile`、`execFileSync`、`fork` 的参数表是 `null` 或省略时，取下一个参数作为选项，与 Node 一致。原有的两条判定（程序文件名、shell 命令行里的词）不变。
+- 夹具注释和上文第二轮修复内容里的判定规则与覆盖范围按实际改写，「不覆盖」清单补上：改名或链接过的 PowerShell 副本和会再启动它的脚本、shell 运行时拼出的名字、7 个函数以外的启动方式。
+
+### 验收对照（Issue #76）
+
+| 项 | 证据 | 状态 |
+| --- | --- | --- |
+| Issue 的 5 个复现都被拒绝，且在任何进程创建之前 | `tests/offline-network.test.ts`「the test guard refuses PowerShell named by the shell option, the default Windows shell, or options that follow null arguments」：`spawn('Invoke-WebRequest …', { shell: 'powershell.exe' })`、`exec('irm …', { shell: 'powershell.exe' }, cb)`、`execSync('irm …', { shell: <完整路径> })`、`execFileSync('irm', [url], { shell: 'pwsh' })`、`spawn('echo ok && pwsh', null, { shell: true })` 都报 `offline-test-real-network`；下层记录为空，`child_process` 诊断通道没有看到子进程 | 通过 |
+| 其他入口的同类缺口 | 同一用例：`spawnSync` 参数表省略、`execFile` 和 `fork` 参数表为 `null`、promisify 的 `exec` 带 `shell`，以及 Windows 上 `ComSpec` 指向 PowerShell 时的 `spawn(…, { shell: true })` 和 `execSync`；拒绝记录覆盖全部 7 个入口，目标都是 powershell 或 pwsh | 通过（`ComSpec` 两项只在 Windows 运行） |
+| 不过度拒绝 | 同一用例：`exec('echo ok', { shell: cmd.exe 或 /bin/sh })` 和 `ComSpec` 为 cmd.exe 时的 `spawn('echo ok', null, { shell: true })` 越过防护，到达下层 | 通过 |
+| 用到防护的测试照常通过 | 逐个运行，见运行记录 | 通过 |
+
+### 设计默认值（Issue #76）
+
+- 只影响测试，不是产品限制，所以不进规格的来源表。标为「设计默认值，2026-11-14」。
+- 修防护，而不是只改说法（Issue 允许二选一）：协调者要求修；改后防护与说法一致，用到防护的测试也都不受影响。
+- `shell: true` 也按 `ComSpec` 判定，超出 Issue 列的写法：Node 在 Windows 上就是用 `ComSpec` 运行 `shell: true` 的命令行，这是同一条 `shell` 选项的路径；默认的 cmd.exe 不受影响。
+- shell 运行时拼出的名字不去解析，只写进「不覆盖」：要做到准确得模拟各个 shell 的展开规则，目前也没有测试这样写。
+- `exec`、`execSync` 的 `shell` 是空字符串时（Node 这时不用 shell，直接把整行当程序运行），仍按命令行的词判定，与原先一样宁可多拒。
+
+### 运行记录（Issue #76）
+
+先失败的证据，改防护前：新用例失败，11 种写法（本机 Windows，含两项 `ComSpec`）的结果都是 `guard-backstop-reached`，即越过了防护、在下层被挡下；另两个用例照常通过。下层 `tests/fixtures/guard-backstop.mjs` 在防护之前加载，把 7 个函数都换成直接抛错的替身，所以这次红灯没有启动 PowerShell，也没有联网。改防护后逐个运行一次，没有运行完整门禁：`npm run typecheck` 通过；`offline-network` 3 项、`bilibili` 16 项、`community-cli` 3 项、`community-content` 14 项、`community-scenarios` 4 项、`skland-community` 23 项全部通过。没有运行 `tests/maa-process.test.ts`。
+
 ## 未验证
 
 - 森空岛社区（2026-11-14 起）：**没有发过任何带凭据的真实森空岛请求**。帖子接口是否接受账号快照会话（`/api` 一侧）的签名、真实返回字段、真实风控信号、读取时会不会触发其他校验，都要维护者在本机用自己的 token 核对；读帖的真实可用性因此未验证。上面运行记录里那次误发的匿名请求不算核对。
@@ -223,3 +253,4 @@
 - Windows 传输经系统代理和证书存储访问这两个站点：与 18 相同，只对本机替身实测。
 - 真模型行为评测：所有场景（含 2026-11-14 新增的两个森空岛场景）只做了离线评分链路自检。maa-account、maa-core、maa-help 的 SKILL 有改动，按开发约定需要同模型、同场景的前后评测；缺工单 28 的运行入口和维护者的评测登录，留给工单 26。第二轮修复又改了 `skills/maa-account/SKILL.md` 和 `skills/maa-core/references/research.md` 的凭据说法（按修法分支），只有文字层面的测试；agent 在 `retry-later`、`use-windows` 时确实不让用户重新输入，这一点未验证，同样留给工单 26。目前也没有覆盖这种情况的评测场景。
 - 防护测试的非 Windows 分支（不传 `transport` 的 B 站读取走 fetch，在连接处被拒）只会在 CI 的 Linux 上运行，本机没有跑过。
+- Issue #76 的新用例在非 Windows 上的分支（默认 shell 是 `/bin/sh`，`ComSpec` 两项跳过）只会在 CI 的 Linux 上运行，本机没有跑过。
