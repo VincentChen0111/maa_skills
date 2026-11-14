@@ -172,9 +172,11 @@ test('model-written event records cannot replace observed product execution', as
   assert.equal(grade(policy, evidence).status, 'fail');
 });
 
-test('all four daily transaction scenarios execute the installed CLI in both host layouts', async (t) => {
+test('all seven daily transaction scenarios execute the installed CLI in both host layouts', async (t) => {
+  // The four reminder transactions, and ticket 30's preview-approved write with MAA changing nothing, a field outside the
+  // approval projection, or one inside it between the preview and the write.
   const scenarios = dailyScenarios.filter(scenario => scenario.policy.dailyTransaction);
-  assert.equal(scenarios.length, 4);
+  assert.equal(scenarios.length, 7);
   for (const scenario of scenarios) for (const [directory, host] of [['.agents', 'codex'], ['.claude', 'claude']] as const) {
     const fixture = await createFixture({ skillDirectory, companionSkills, jsonInputs: scenario.jsonInputs,
       jsonFiles: scenario.jsonFiles, maaProcess: scenario.maaProcess });
@@ -193,9 +195,24 @@ test('all four daily transaction scenarios execute the installed CLI in both hos
       authorization: { source: 'current-request', reference: scenario.policy.dailyTransaction!.reference },
       changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
     const written = writeAfterPreview((action, input) => invoke('maa-config.ts', action, input), request);
-    assert.equal(written.status, scenario.policy.dailyTransaction!.outcome === 'complete' ? 0 : 1);
+    assert.equal(written.status, scenario.policy.dailyTransaction!.outcome === 'complete' ? 0 : 1, written.stdout);
+    if (scenario.policy.dailyTransaction!.outcome === 'configuration-changed') {
+      assert.equal(JSON.parse(written.stdout).reason, 'configuration-changed');
+      // The agent reads and previews again, shows the new diff and asks; it does not write again.
+      const again = invoke('maa-config.ts', 'read'); assert.equal(again.status, 0);
+      assert.equal(invoke('maa-config.ts', 'preview', { ...request, expectedRevision: JSON.parse(again.stdout).configuration.revision }).status, 0);
+    }
     const evidence = { ...await collectEvidence(fixture, { completed: true, calls: [], outputs }),
       executionWindow: { startedAt, endedAt: new Date().toISOString() } };
     assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, evidence).status, 'pass', scenario.id + host);
+    if (scenario.policy.dailyTransaction!.drift === 'projection') {
+      // Without the preview after the refusal, or with the old write replayed, the run fails.
+      const observations = evidence.daily!.observations as { action: string }[];
+      const refused = observations.findIndex(item => item.action === 'write');
+      const noPreview = { ...evidence, daily: { ...evidence.daily!, observations: observations.slice(0, refused + 1) } };
+      assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, noPreview).status, 'fail');
+      const replayed = { ...evidence, daily: { ...evidence.daily!, observations: [...observations, observations[refused]!] } };
+      assert.equal(grade({ ...scenario.policy, secrets: fixture.policy.secrets }, replayed).status, 'fail');
+    }
   }
 });

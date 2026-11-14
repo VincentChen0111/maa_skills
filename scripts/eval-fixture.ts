@@ -8,7 +8,12 @@ import { readFileSync, realpathSync } from 'node:fs';
 import type { Policy, Evidence, Transcript, EvidenceEvent } from './evaluation.ts';
 
 export type Fixture = { root: string; workspace: string; env: NodeJS.ProcessEnv; policy: Policy; original: Map<string, Buffer>; jsonFiles: string[]; dispose(): Promise<void> };
-export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure';
+/**
+ * The synthetic MAA's behaviour. The two drift modes are `ready` plus one change MAA makes by itself right before the write
+ * reads the configuration (ticket 30): `drift-noise` moves the saved window placement (outside the approval projection),
+ * `drift-projection` resets every task's null enable state to false as MAA does when a run completes (inside it).
+ */
+export type MaaProcessMode = 'closed' | 'ready' | 'close-failure' | 'restart-failure' | 'drift-noise' | 'drift-projection';
 export type FixtureOptions = { skillDirectory?: string; companionSkills?: Record<string, string>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; maaProcess?: MaaProcessMode;
   networkFixtures?: Record<string, unknown>; setupBoundary?: boolean };
 /** Bookkeeping files of the trusted boundaries; they are not product effects and never enter the file differences. */
@@ -71,7 +76,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       env.NODE_OPTIONS = `--import=${pathToFileURL(observer).href}`;
     }
     if (options.maaProcess) {
-      if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(options.maaProcess) || !(sources.subject || sources['maa-daily']) || !sources['maa-core']) throw new Error('daily-process-fixture');
+      if (!['closed', 'ready', 'close-failure', 'restart-failure', 'drift-noise', 'drift-projection'].includes(options.maaProcess) || !(sources.subject || sources['maa-daily']) || !sources['maa-core']) throw new Error('daily-process-fixture');
       for (const [source, target] of [['daily-observer.mjs', '.eval-daily-observer.mjs'], ['maa-process.mjs', '.eval-maa-process.mjs']]) {
         await writeFile(join(workspace, target!), await readFile(new URL('../eval/' + source, import.meta.url)));
       }

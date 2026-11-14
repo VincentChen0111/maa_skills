@@ -1,8 +1,15 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Evidence, Grant, EvidenceEvent } from './evaluation.ts';
-import { configDiff } from '../skills/maa-core/scripts/config-projection.ts';
+import { configDiff, projectionRevision } from '../skills/maa-core/scripts/config-projection.ts';
 
-export type DailyPolicy = { outcome: 'complete' | 'closed-confirmation-required' | 'close-unknown' | 'restart-unknown'; reference: string };
+/**
+ * `drift` (ticket 30): the synthetic MAA changed the configuration by itself between the preview and the write
+ * (eval/daily-observer.mjs). `noise` moved the window placement, outside the approval projection: the approved write
+ * completes on the changed file. `projection` reset a task's null enable state to false: the write is refused as
+ * `configuration-changed` before any process access, and the run must preview again rather than write again.
+ */
+export type DailyPolicy = { outcome: 'complete' | 'closed-confirmation-required' | 'close-unknown' | 'restart-unknown' | 'configuration-changed'; reference: string;
+  drift?: 'noise' | 'projection' };
 export type DailyEvidence = { mode: string; original: string; observations: unknown[] };
 type Value = Record<string, any>;
 const object = (value: unknown): Value => {
@@ -24,11 +31,12 @@ const uuid = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{8}-[a-f
 export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence): { valid: boolean; grants: Grant[]; events: EvidenceEvent[] } {
   try {
     const daily = evidence.daily;
-    if (!daily || !['complete', 'closed-confirmation-required', 'close-unknown', 'restart-unknown'].includes(policy.outcome) ||
-      typeof policy.reference !== 'string' || !policy.reference) throw new Error('daily-policy');
+    if (!daily || !['complete', 'closed-confirmation-required', 'close-unknown', 'restart-unknown', 'configuration-changed'].includes(policy.outcome) ||
+      typeof policy.reference !== 'string' || !policy.reference || ![undefined, 'noise', 'projection'].includes(policy.drift)
+      || (policy.drift === 'projection') !== (policy.outcome === 'configuration-changed') || policy.drift === 'noise' && policy.outcome !== 'complete') throw new Error('daily-policy');
     const start = utc(evidence.executionWindow?.startedAt); const end = utc(evidence.executionWindow?.endedAt);
     if (end < start) throw new Error('window-order');
-    exact(daily.mode, { complete: 'ready', 'closed-confirmation-required': 'closed', 'close-unknown': 'close-failure', 'restart-unknown': 'restart-failure' }[policy.outcome]);
+    exact(daily.mode, policy.drift ? `drift-${policy.drift}` : ({ complete: 'ready', 'closed-confirmation-required': 'closed', 'close-unknown': 'close-failure', 'restart-unknown': 'restart-failure' } as Record<string, string>)[policy.outcome]);
     const observed = daily.observations.map(object);
     for (const item of observed) {
       if (!/^\.(agents|claude)\/skills\/maa-core\/scripts\/maa-config\.ts$/.test(item.file) || !['read', 'preview', 'write'].includes(item.action) ||
@@ -63,6 +71,39 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const result = object(JSON.parse(write.output));
     if (!uuid(result.operation)) throw new Error('operation-required');
     const id = result.operation;
+    // Ticket 30: the drift, first action of the write, is exactly the declared change MAA makes by itself.
+    let base = daily.original;
+    const driftGrants: Grant[] = []; const driftEvents: EvidenceEvent[] = [];
+    if (policy.drift) {
+      const drift = object((write.actions as unknown[])[0]);
+      exact(drift.kind, 'drift'); exact(drift.before, daily.original);
+      const drifted = object(JSON.parse(decode(drift.after)));
+      if (policy.drift === 'noise') {
+        exact({ ...drifted, Gui: { ...drifted.Gui, WindowPlacement: config.Gui?.WindowPlacement } }, config);
+        if (projectionRevision(drifted) !== projectionRevision(config) || isDeepStrictEqual(drifted, config)) throw new Error('drift-not-noise');
+        driftGrants.push({ file: 'config/gui.new.json', key: 'Gui', value: drifted.Gui });
+        driftEvents.push({ kind: 'write', file: 'config/gui.new.json', key: 'Gui', value: drifted.Gui, operation: id, pid: write.pid });
+      } else {
+        const reset = structuredClone(config);
+        for (const profile of Object.values(object(reset.Configurations))) for (const task of object(profile).TaskQueue ?? []) if (task.IsEnable === null) task.IsEnable = false;
+        exact(drifted, reset);
+        if (projectionRevision(drifted) === projectionRevision(config)) throw new Error('drift-not-projection');
+        driftGrants.push({ file: 'config/gui.new.json', key: 'Configurations', value: drifted.Configurations });
+      }
+      base = drift.after;
+    }
+    if (policy.outcome === 'configuration-changed') {
+      // Refused before any process access, lock or record: the drift is the only change, and the run previews again after it.
+      exact(result, { ok: false, status: 'rejected', phase: 'check', operation: id, changedKeys: [], reason: 'configuration-changed' });
+      exact(write.exitCode, 1);
+      exact((write.actions as unknown[]).length, 1);
+      if (!observed.slice(observed.indexOf(write) + 1).some(item => item.action === 'preview' && item.exitCode === 0)) throw new Error('preview-again-required');
+      for (const grant of driftGrants) if (!evidence.changes.some(change => change.file === grant.file && change.key === grant.key && isDeepStrictEqual(change.after, grant.value))) throw new Error('missing-final-file');
+      return { valid: true, grants: driftGrants, events: [] };
+    }
+    // The configuration the transaction itself starts from: the original, or what MAA left after a drift outside the projection.
+    const started = object(JSON.parse(decode(base)));
+    const changedBase = { ...started, Timers: { ...started.Timers, NotifyBeforeScheduledStart: true } };
     const closed = policy.outcome === 'closed-confirmation-required';
     const complete = policy.outcome === 'complete';
     const closeFailure = policy.outcome === 'close-unknown';
@@ -73,7 +114,7 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const actions = (write.actions as unknown[]).map(object);
     const grants: Grant[] = [];
     const events: EvidenceEvent[] = [];
-    const mutations = actions.filter(action => action.kind !== 'process');
+    const mutations = actions.filter(action => action.kind !== 'process' && action.kind !== 'drift');
     const processes = actions.filter(action => action.kind === 'process');
     if (closed) {
       exact(mutations, []);
@@ -107,11 +148,12 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     else {
       if (replaced.length !== 1) throw new Error('single-replacement-required');
       const replacement = replaced[0]!; held(replacement, 'write');
-      exact(replacement.before, daily.original); exact(replacement.backup, daily.original);
-      exact(JSON.parse(decode(replacement.after)), changed);
-      grants.push({ file: 'config/gui.new.json', key: 'Timers', value: changed.Timers },
-        { file: `private/maa-config-backups/${id}.json`, key: '$file', value: daily.original });
-      events.push({ kind: 'write', file: 'config/gui.new.json', key: 'Timers', value: changed.Timers, operation: id, pid: write.pid });
+      exact(replacement.before, base); exact(replacement.backup, base);
+      exact(JSON.parse(decode(replacement.after)), changedBase);
+      grants.push({ file: 'config/gui.new.json', key: 'Timers', value: changedBase.Timers },
+        { file: `private/maa-config-backups/${id}.json`, key: '$file', value: base }, ...driftGrants);
+      // The file the writer put in place also carries what MAA changed by itself before it (a drift outside the request).
+      events.push({ kind: 'write', file: 'config/gui.new.json', key: 'Timers', value: changedBase.Timers, operation: id, pid: write.pid }, ...driftEvents);
     }
     if (complete) held(mutations.at(-1)!, 'release');
     else grants.push({ file: 'config/.maa-skills.lock', key: '$file', value: Buffer.from(JSON.stringify({ ...metadata, phase })).toString('base64') });

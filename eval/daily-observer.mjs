@@ -1,4 +1,4 @@
-import { appendFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import promises from 'node:fs/promises';
 import { registerHooks, syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -17,8 +17,30 @@ export function redirectMaaProcess(workspace) {
   } });
 }
 
+/**
+ * Ticket 30's drift modes: MAA changes the configuration by itself between the agent's preview and its write. Applied once,
+ * when the first write starts and before it reads the file, and recorded as the write's first action.
+ */
+function applyDrift(workspace) {
+  const mode = process.env.MAA_EVAL_MAA_PROCESS;
+  if (process.argv[2] !== 'write' || !['drift-noise', 'drift-projection'].includes(mode)) return;
+  // Only the first write: the journal already holds every earlier invocation.
+  const journal = process.env.MAA_EVAL_DAILY_JOURNAL;
+  if (existsSync(journal) && readFileSync(journal, 'utf8').split('\n').some(line => line && JSON.parse(line).action === 'write')) return;
+  const file = join(workspace, 'config/gui.new.json');
+  const before = readFileSync(file);
+  const config = JSON.parse(before.toString('utf8'));
+  // Noise: the window placement MAA saves when its window closes. Projection: a "this run only" task enable state that MAA
+  // resets to false when all tasks complete.
+  if (mode === 'drift-noise') config.Gui = { ...config.Gui, WindowPlacement: { Left: 640, Top: 360, Width: 1280, Height: 720 } };
+  else for (const profile of Object.values(config.Configurations)) for (const task of profile.TaskQueue ?? []) if (task.IsEnable === null) task.IsEnable = false;
+  writeFileSync(file, JSON.stringify(config));
+  actions.push({ kind: 'drift', before: before.toString('base64'), after: readFileSync(file).toString('base64') });
+}
+
 export function observeDaily(workspace, file) {
   const startedAt = new Date().toISOString();
+  applyDrift(workspace);
   redirectMaaProcess(workspace);
   // Observe completed real filesystem operations. No filesystem operation is replaced by a fake.
   const { readFile, open, rename, appendFile, unlink } = promises;
