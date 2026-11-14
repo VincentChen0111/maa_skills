@@ -631,7 +631,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 结论：
 
-- 12 个载荷都做出来了，每个都带 `.claude-plugin/`；`list` 没有拒绝任何一行原来计划的场景。但 `list` 只看 skill、脚本和数据提交在不在，不看评分契约：「能做」不等于「能通过」。当前评分器下不能通过的 32 对见「当前评分器下「前」载荷能不能通过」，已经从计划里去掉，记「未验证」。
+- 12 个载荷都做出来了，每个都带 `.claude-plugin/`；`list` 没有拒绝任何一行原来计划的场景。但 `list` 只看 skill、脚本和数据提交在不在，不看评分契约：「能做」不等于「能通过」。当前评分器下不能通过的 32 对见「当前评分器下「前」载荷能不能通过」，已经从计划里去掉，记「未验证」。这是 26 H 之前的框架（`24deeb4`）上的结果；26 H 让 `daily-unknown` 要 maa-doctor 同伴之后，`ddd0ca8` 那一行的 `daily-unknown` 由入口以 `payload-skill-missing` 拒绝，是第 33 对未验证（见「26 H 改过的场景重新核对」）。
 - 计划里的成本、缺口场景（`370ed68`、`6c582e7`、`ac03ba8` 及之后）没有一个报 `payload-data-commit-missing`：这些载荷固定的公开数据提交与当前框架的网络夹具相同，与 A 部分人工核对的结论一致，由入口自动检查。
 - `f1ec4ed`（27 合并前）也能做 27 的五个场景：它们要的脚本都在，只是功能还没有，所以它不适合当 27 新增场景的「前」；表里 27 那一行的「前」是 `6f95f27`。
 - 最终候选还没有（要等版本号），表里 `HEAD` 一行只是暂代；`HEAD` 与 `6f95f27` 的 `skills/` 树不同，差别是 A 部分补上的 `skills/maa-account/LICENSE` 和 30 对 maa-core、maa-daily 的改动。
@@ -667,6 +667,10 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 - **D4：框架检出等于最终候选提交。**第 1 步的 `<最终检出>` 就是最终候选那个提交本身，不允许框架停在某个更早的提交、只用 `--payload` 换载荷。后果：载荷包 P 对 `skills/maa-core/scripts/preferences.ts`（也在 `runnerSources` 里）的改动同时改变运行器指纹，所以三类批次都要等 H 和 P 都合并、版本号改好、最终候选冻结之后才开始，「前」也不例外；H 冻结之后不能先跑「前」。
 - **D5：评分器只比对退出码的弱点（G1）不在这一轮修。**期望某个调用以非 0 退出的场景，解析失败造成的 exit 1 也会被当作预期的拒绝；分诊抽查的 4 个通过运行没有发现假通过，其余没有逐一核对。修它要改 `scripts/evaluation.ts` 和 `eval/observe-node.mjs`，另开后续工单。人工核实时，这类场景（期望 `exitCode` 非 0 的调用）要看 `host.jsonl` 里那次调用的输出是不是预期的拒绝原因，不是解析失败。
+
+载荷包 P 的验证记录是 `docs/release-payload-verification.md`，随包 P 合入（本分支上还没有这个文件，所以这里写路径、不写成链接，免得 P 合并之前离线入口的相对链接检查报 `broken-link`）。
+
+**两个默认审查场景依赖包 P（维护者要知道，26 H 第 1 轮审查后记，2026-11-14）。**`account-report-default-review`、`base-report-default-review` 要模型把审查说明经标准输入交给 `codex exec`。评测宿主上模型的 shell 是 Windows PowerShell 5.1：直接用 PowerShell 管道（`Get-Content -Raw <说明文件> | codex exec … -`）时，PowerShell 把文字重新编码，中文变成 `?`（控制台代码页 65001 时还加 BOM），说明的字节变了；审查员替身按设计只认本次运行的说明，就拒绝它（退出 1），审查落到「审查未完成」。让 skill 改用不改字节的写法（例如 `cmd /d /c "codex exec --sandbox read-only --ephemeral --skip-git-repo-check - < <说明文件>"`）是包 P 的修复。包 P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷；P 合入之后再失败才要查。框架一侧由 `tests/eval-fixture.test.ts`「26 H: from Windows PowerShell a Chinese brief redirected by cmd…」覆盖：Windows 上用真实 `powershell.exe -NoProfile`，在控制台代码页 65001 和 936 下，cmd 重定向的中文说明经 `.eval-bin/codex.cmd` 垫片得到 `findings: []`；`Get-Content -Raw`（带不带 `-Encoding UTF8` 都一样）管道过去的被拒绝。其他平台跳过。
 
 ## 许可与第三方检查
 
@@ -748,7 +752,7 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | --- | --- |
 | `node scripts/eval-batch.ts payload --commit <提交>`，`ddd0ca8`、`1d7fec0`、`370ed68`、`6c582e7`、`ac03ba8`、`788ac13`、`3ff4555`、`fc633d6`、`ac89050`、`6f95f27`、`f1ec4ed`、`HEAD`，另有核对 doctor 记录用的 `4092277`、`9ac370c`、`bd3b3e6`、`26c6681`，输出到仓库外的系统临时目录 | 全部做出来；前 12 个的提交、树和内容摘要见「本机试运行」；用完已删除 |
 | `node scripts/eval-batch.ts list --payload <载荷>`，上面 12 个 | 见「本机试运行」：每一行原来计划的场景都不被拒，`HEAD` 117 / 117 |
-| 离线核对「前」载荷能不能通过：按场景测试的驱动调用载荷自己的 CLI，用本检出的 `grade` 评分（不启动宿主） | `HEAD` 上 48 个全部 `pass`；各「前」的结果和 32 对不能通过的见「当前评分器下「前」载荷能不能通过」 |
+| 离线核对「前」载荷能不能通过：按场景测试的驱动调用载荷自己的 CLI，用本检出的 `grade` 评分（不启动宿主） | `HEAD` 上 48 个全部 `pass`；各「前」的结果和 32 对不能通过的见「当前评分器下「前」载荷能不能通过」（26 H 之后加上 `daily-unknown` 在 `ddd0ca8` 上入口拒绝的一对，共 33 对） |
 | `f1ec4ed` 载荷上原样运行 11 个场景测试文件（临时复制的框架只把 `createFixture` 复制 skill 的来源换成载荷） | 10 个文件全部通过；`setup-scenarios` 24 项通过、3 项失败，失败的只有 `setup-connection-write` 的两个宿主（评分挂 `authorization`、`write-lock`、`expected-behavior`，写入事务判无效；30 改过这条写入路径和它的评分。它只建基线，不在这一行），49 个回归场景都通过。对照：同样的复制在缺 `stage-run.ts` 的 `ac89050` 载荷上跑 `stage-run-scenarios`，因找不到 `stage-run.ts` 失败，说明装的确实是载荷 |
 | 三个只用宿主替身的 Codex 载荷批次（`runBatch`，`auth: 'host-double'`，载荷 `24deeb4`）：「后」`core-language` 一批，基线 `daily-diff-approved` 两批 | 都是 `complete`、`completed`、`pass`，带 `double: true`；运行器指纹相同，两次基线的 `scenarioHash` 相同；见「第 3 步「无「前」（只建基线）」在宿主替身批次上的演练」 |
 | 基线那份四个文件的 `sha256sum` 与 PowerShell `Get-FileHash` | 结果相同 |
@@ -796,13 +800,26 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | 「26 H 改过的场景重新核对」：`payload --commit` 做 `f1ec4ed`、`ddd0ca8`、`788ac13`、`3ff4555`、`fc633d6`、`6f95f27` 和 H 的 `HEAD` 七个载荷（仓库外临时目录，跑完已删），宿主替身按场景测试的驱动经 `runScenario` 跑，本检出评分 | 见那一节的表；对照 `HEAD` 十个驱动全 `pass` |
 | 第 3 步第三项核对的演练（两批宿主替身基线，一批来自只改了一句场景提示词的框架副本） | 本检出那批 `match`，副本那批 `differs`，两批运行器指纹相同 |
 
+26 H 第 1 轮审查修正（2026-11-14）：33 对的计数和文末清单改齐，记入包 P 的依赖，加 Windows PowerShell 传审查说明的测试。新测试第一次运行就通过：替身本来就按内容比对，这项测试补的是覆盖（分诊 T1 在框架一侧的盲点），没有改实现。下面的命令逐个单独运行，没有启动真实宿主，没有调用模型，没有联网。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 退出 0 |
+| `node --test tests/eval-fixture.test.ts` | 9 项通过，没有跳过（含新加的「26 H: from Windows PowerShell a Chinese brief redirected by cmd…」，真实 `powershell.exe -NoProfile`，代码页 65001 和 936） |
+| `node --test tests/eval-host-double.test.ts` | 14 项通过 |
+| `node --test tests/report-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/base-report-scenarios.test.ts` | 2 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 5 项通过（文档改完后跑） |
+| `node scripts/privacy.ts` | `ok: true`，无发现 |
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
 
 - 所有真实模型验收：未验证。
 - 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否对 `sandbox` 和 `exec` 都按 `shell_environment_policy.exclude` 排除变量、是否还会自己再注入 `CODEX_HOME` 未验证（读保护检查的环境探针不通过时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
-- **用这个办法清不掉的发布门禁（需要维护者）**：当前评分器下「前」载荷不能通过的 32 对比较（每个宿主），记「未验证：当前评分器要求 <契约>，「前」载荷早于它」，明细和复现见「当前评分器下「前」载荷能不能通过」。涉及 05 七个 daily 场景里四个写入场景的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
+- 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（P 的验证记录 `docs/release-payload-verification.md`，随包 P 合入）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
+- **用这个办法清不掉的发布门禁（需要维护者）**：33 对比较（每个宿主）。其中 32 对是当前评分器下「前」载荷不能通过的，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」；第 33 对是 05 的 daily-unknown（ddd0ca8，payload-skill-missing）：26 H 让它要 maa-doctor 同伴，`ddd0ca8` 早于 06，入口拒绝。明细和复现见「当前评分器下「前」载荷能不能通过」和「26 H 改过的场景重新核对」。另有三对是有条件的未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」那次运行交给 doctor 核对（`doctor.ts check`）时，只因这些载荷的 doctor 写的是旧格式记录而挂 `authorization`，那一对记「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，同样交维护者，不当作「分数不降」的依据（这三对是 15、24、07 受影响的 `daily-unknown`，看 `compare` 时按「26 H 改过的场景重新核对」末段的办法判断）。33 对涉及 05 七个 daily 场景里四个写入场景和 `daily-unknown` 的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。
 - 真实 MAA、模拟器和游戏上的验证：未验证；发布说明照实写「无」。
