@@ -307,7 +307,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 
 ### 场景与目录对照
 
-用 `node scripts/eval-batch.ts list`（等于 `scenarioCatalog()`）在本分支核对，目录现有 109 个场景：
+用 `node scripts/eval-batch.ts list`（等于 `scenarioCatalog()`）在 26 B 部分的分支（已合并含 27 的 main）核对，目录现有 114 个场景，工单点名的 64 个都在：
 
 | 工单要求 | 场景 | 在目录里 |
 | --- | --- | --- |
@@ -318,7 +318,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 04 | `help-routing`、`help-preference`、`help-boundary`；`core-language`、`core-append`、`core-boundary` | 都在（`maa-help`、`maa-core` 组） |
 | 11 | `account-inspect`、`account-user-start`、`account-boundary`、`account-import` | 都在 |
 | 05 | `daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure` | 都在 |
-| 27 | `daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing` | **本分支的目录里没有**：它们随 27（PR #81）进入 main，合并 main 之后再核对 |
+| 27 | `daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing` | 都在（27 随 PR #81 进入 main，本分支已合并；`list` 实际列出了这四个 id） |
 | 06 | `doctor-inspect`、`doctor-corrupt`、`doctor-unknown-lock`、`doctor-named-unproven`、`doctor-broad-refusal`；正向 `doctor-reconcile-approved` | 都在 |
 | 21 | 11 的四个加 `base-unknown-training`、`base-room-query`、`base-cross-check` | 都在 |
 | 07 | `setup-inspect-existing`、`setup-missing-program`、`setup-declined-language`、`setup-first-preferences`、`setup-closed-no-consent`；正向 `setup-connection-write`、`setup-multiple-candidates` | 都在 |
@@ -326,11 +326,11 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 14 | 上面十一个加 `account-gaps-voucher-craft`、`account-gaps-no-craft`、`account-gaps-unknown-progress`、`account-gaps-shared-stock` | 都在 |
 | 跨 skill | `cross-skill-setup-account-daily`、`cross-skill-help-referral`、`cross-skill-doctor-referral` | 都在（`cross-skill` 组） |
 
-工单点名的场景共 64 个，本分支目录里有 60 个，缺的 4 个就是 27 的新增场景。目录里另有 49 个场景工单没有逐个点名（setup 的凭据与下载 8 个、doctor 4 个、account 的调研与报告 17 个、daily 的运行跟踪、备选切换与基建排班 20 个），属于验收条目「已有回归场景」。
+工单点名的场景共 64 个。目录里另有 50 个工单没有逐个点名：27 另加的 `daily-quantity-rerun`（照原批准再跑一次时用量读不到，见 [daily 评测说明](daily-evaluation.md)），归入下表 27 那一行；其余 49 个（setup 的凭据与下载 8 个、doctor 4 个、account 的调研与报告 17 个、daily 的运行跟踪、备选切换与基建排班 20 个）属于验收条目「已有回归场景」。
 
 ### 前后载荷
 
-「后」都是**最终候选载荷**：30 合并之后、版本号已经改成 `0.1.0` 的那个提交（`<最终候选>`）。30 会改 maa-daily 的文字，所以最终载荷一定在 30 之后；版本号改动会改 `skills/maa-core/package.json`，它在载荷指纹里，所以改版本号必须在最终批次之前，打标签的提交的 `skills/` 必须与最终批次的载荷指纹相同。
+「后」都是**最终候选载荷**：30 合并之后、版本号已经改成 `0.1.0` 的那个提交（`<最终候选>`）。30 会改 maa-daily 的文字，所以最终载荷一定在 30 之后；版本号改动会改 `skills/maa-core/package.json`，它在载荷里，所以改版本号必须在最终批次之前，打标签的提交的 `skills/` 和 `.claude-plugin/` 必须与最终批次清单里记的载荷（提交、树和内容摘要）相同。
 
 | 比较 | 「前」的载荷（main 上的提交） | 场景 | 每批运行数 |
 | --- | --- | --- | --- |
@@ -343,55 +343,120 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 24 受影响 | `3ff4555`（24 合并前） | daily 七、core 三 | 10 |
 | 07 受影响 | `fc633d6`（07 合并前） | help 三、core 三、daily 七、doctor 五、stage 六、training 四 | 28 |
 | 29 | `ac89050`（29 合并前） | stage 六 | 6 |
-| 27 新增 | `<27 合并后>` | 27 的四个 | 4 |
-| 已有回归场景 | `<27 合并前的 main>` | 上面说的 49 个 | 49 |
+| 27 新增 | `6f95f27`（27 合并后） | 27 的四个和 `daily-quantity-rerun` | 5 |
+| 已有回归场景 | `f1ec4ed`（27 合并前的 main） | 上面说的 49 个 | 49 |
 
 只建基线、没有「前」的（只在最终候选上跑）：`doctor-reconcile-approved`、setup 七个、`daily-stage-prepare-approved`、29 的五个新增、跨 skill 三个，共 17 个。27 改写过诱饵的 `help-boundary`、`core-boundary`、`account-boundary`、`daily-forbidden` 按工单原文以改写后的场景指纹建立基线；它们同时出现在上表的比较里。
 
-### 用 28 的入口跑一个载荷
+### 做载荷，在载荷上运行
 
-28 的入口（`scripts/eval-batch.ts`）装进临时宿主的，是**运行入口所在检出**的 `skills/`：`scripts/eval-scenarios.ts` 的 `skillDirectory(name)` 固定指向检出里的 `skills/<name>`，命令行没有指定别的载荷的参数。载荷指纹由场景定义和装入的每个 skill 文件算出，记在批次清单里。
+**问题**（A 部分记录，B 部分已解决）：28 的入口原来只装运行检出自己的 `skills/`。A 部分 2026-11-14 实测（不调用模型）把 `f1ec4ed` 的框架配上旧提交的 `skills/`：`ac03ba8`、`ddd0ca8`、`788ac13`、`3ff4555`、`fc633d6`、`ac89050` 因为场景目录导入的 `skills/maa-core/scripts/base-plan.ts` 不存在而载入失败，`1d7fec0` 缺 `operator-cost.ts`，`370ed68`、`6c582e7` 缺 `cultivation-gaps.ts`：场景目录本身要从检出的 `skills/` 导入几份公开数据来源描述。所以不能替换检出的 `skills/`，要让入口另指一个载荷。
 
-所以跑「后」：在最终候选提交的一个干净检出里运行。
+26 B 部分给 28 的入口加了载荷参数（用法见[行为评测](evaluation.md)「载荷」）：`payload` 只读地把一个提交的 `skills/` 和 `.claude-plugin/` 做成仓库外的一个新目录，记下提交、树和内容摘要；`run`/`resume`/`list` 的 `--payload` 让宿主从这个目录装 skill，场景、评分器、夹具、宿主适配、脱敏和预检仍是运行检出自己的；批次清单记下载荷来源；`compare` 只允许载荷不同，`--scenarios` 只比较一个子集。所以「前」「后」都在**同一个检出**里跑，只换载荷：
 
-```text
-git worktree add --detach <最终检出> <最终候选>
-cd <最终检出>
-node scripts/eval-batch.ts run codex <固定模型 id> <场景或组>... --executable <codex.exe>
-```
+1. 冻结框架：在最终候选的一个干净检出里运行下面所有命令，整个验收期间不换。
 
-跑「前」：评测框架必须与「后」完全相同（同一份 `scripts/`、`eval/`、`tests/fixtures/`），只换 `skills/`，这样两边的场景指纹相同、记录可比。做法是在最终候选的一个检出里，把 `skills/` 换成「前」那个提交的内容：
+   ```text
+   git worktree add --detach <最终检出> <最终候选>
+   cd <最终检出>
+   ```
 
-```text
-git worktree add --detach <前的检出> <最终候选>
-cd <前的检出>
-（删除 skills 目录）
-git archive <前的提交> skills | tar -x
-node scripts/eval-batch.ts run codex <固定模型 id> <同一组场景>... --executable <codex.exe>
-```
+2. 做载荷：最终候选和上表每个「前」各一个，放在仓库外的新空目录里（不能与私有目录、设置目录、宿主日常配置或专用登录目录重叠），再用 `list` 确认每个载荷能做它那一行的全部场景（输出里那些场景没有 `refused`）。
 
-然后比较，按需要重跑：
+   ```text
+   node scripts/eval-batch.ts payload --commit <最终候选> --out <载荷-最终>
+   node scripts/eval-batch.ts payload --commit <前的提交> --out <载荷-前的提交>
+   node scripts/eval-batch.ts list --payload <载荷-前的提交>
+   ```
 
-```text
-node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录>
-node scripts/eval-batch.ts run codex <固定模型 id> <由过变挂的场景> --executable <codex.exe> --rerun-of <后的批次目录>
-node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <重跑批次目录>
-```
+3. 「后」只跑一批，包含全部 114 个场景（17 个只建基线的也在其中）：
 
-**问题（阻塞 B 部分，需要协调者决定）**：这种换 `skills/` 的做法对大多数「前」的载荷跑不起来。2026-11-14 本机实测（不调用模型，只运行 `node scripts/eval-batch.ts list`）：以本分支基点 `f1ec4ed` 的框架配上各个旧提交的 `skills/`，`49e64c3`（22 合并后）、`e39d463`、`f1ec4ed` 能载入全部 109 个场景；`ac03ba8`、`ddd0ca8`、`788ac13`、`3ff4555`、`fc633d6`、`ac89050` 都因为 `tests/fixtures/base-plan-data.ts` 导入的 `skills/maa-core/scripts/base-plan.ts` 不存在而失败，`1d7fec0` 缺 `operator-cost.ts`，`370ed68`、`6c582e7` 缺 `cultivation-gaps.ts`。原因是场景目录本身要从检出的 `skills/` 导入几份公开数据来源描述（`planTableSources`、`operatorCostSources`、`craftingSources`），22 之前的载荷没有这些文件。上表里除了 27 和「已有回归场景」两行，其余「前」都在 22 之前。
+   ```text
+   node scripts/eval-batch.ts run codex <固定模型 id> all --payload <载荷-最终> --executable <codex.exe>
+   ```
 
-需要给入口加一个指定载荷目录的参数，例如 `run ... --payload <目录>`：场景目录照常从框架自己的 `skills/` 导入来源描述，装进临时宿主的 skill 改从 `<目录>/skills/<名称>` 复制，载荷指纹按这个目录计算。改动只涉及 `scripts/eval-scenarios.ts` 和 `scripts/eval-batch.ts`，这两个文件在运行器指纹里，但不在场景指纹（`scenarioHashSources`）里，所以不影响前后可比；运行器指纹变了，只是改动之前的批次不能续跑。另外，`compare` 若能只比较两批共有的一部分场景（例如加 `--scenarios`），各比较就可以共用一个「后」的批次，见下面的估算。这两项都改 28 的评测框架，应当作为单独的改动包审查，并在第一个计入验收的批次之前合入；本包没有做。
+4. 每个「前」各跑一批，只跑那一行的场景；再用 `--scenarios` 把「后」限定到同一组场景来比较。逐行的命令（场景 id 照抄，不用组名，因为组里还有别的场景）：
 
-装入旧载荷时还要核对一点：成本、缺口、培养报告和基建场景的网络夹具地址取自框架自己的来源描述里固定的数据提交。如果旧载荷固定的是别的数据提交，它的请求会被夹具拒绝，「前」的结果就说明不了什么。本机核对：`370ed68`、`6c582e7`、`ac03ba8` 和 `f1ec4ed` 的 `operator-cost.ts` 固定的是同两个数据提交（`6f63c14e…`、`a07b4255…`）。
+   ```text
+   # ddd0ca8（13 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary core-language core-append core-boundary daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure --payload <载荷-ddd0ca8> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-ddd0ca8 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,core-language,core-append,core-boundary,daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure
+   # 1d7fec0（4 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> account-inspect account-user-start account-boundary account-import --payload <载荷-1d7fec0> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-1d7fec0 的批次目录> <后的批次目录> --scenarios account-inspect,account-user-start,account-boundary,account-import
+   # 370ed68（4 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> account-cost-raw account-cost-unknown account-cost-no-craft account-cost-ambiguous --payload <载荷-370ed68> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-370ed68 的批次目录> <后的批次目录> --scenarios account-cost-raw,account-cost-unknown,account-cost-no-craft,account-cost-ambiguous
+   # 6c582e7（14 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary account-inspect account-user-start account-boundary account-import account-cost-raw account-cost-unknown account-cost-no-craft account-cost-ambiguous base-unknown-training base-room-query base-cross-check --payload <载荷-6c582e7> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-6c582e7 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,account-inspect,account-user-start,account-boundary,account-import,account-cost-raw,account-cost-unknown,account-cost-no-craft,account-cost-ambiguous,base-unknown-training,base-room-query,base-cross-check
+   # ac03ba8（4 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> account-gaps-voucher-craft account-gaps-no-craft account-gaps-unknown-progress account-gaps-shared-stock --payload <载荷-ac03ba8> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-ac03ba8 的批次目录> <后的批次目录> --scenarios account-gaps-voucher-craft,account-gaps-no-craft,account-gaps-unknown-progress,account-gaps-shared-stock
+   # 788ac13（10 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure core-language core-append core-boundary --payload <载荷-788ac13> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-788ac13 的批次目录> <后的批次目录> --scenarios daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,core-language,core-append,core-boundary
+   # 3ff4555（10 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure core-language core-append core-boundary --payload <载荷-3ff4555> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-3ff4555 的批次目录> <后的批次目录> --scenarios daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,core-language,core-append,core-boundary
+   # fc633d6（28 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary core-language core-append core-boundary daily-inspect daily-forbidden daily-unknown daily-reminder daily-closed daily-close-failure daily-restart-failure doctor-inspect doctor-corrupt doctor-unknown-lock doctor-named-unproven doctor-broad-refusal daily-stage-exact-scope daily-stage-unknown-elite daily-stage-alternative-requirements daily-stage-prerequisite daily-stage-data-not-authority daily-stage-loop-handoff training-active training-unknown training-material-shortage training-contradiction --payload <载荷-fc633d6> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-fc633d6 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,core-language,core-append,core-boundary,daily-inspect,daily-forbidden,daily-unknown,daily-reminder,daily-closed,daily-close-failure,daily-restart-failure,doctor-inspect,doctor-corrupt,doctor-unknown-lock,doctor-named-unproven,doctor-broad-refusal,daily-stage-exact-scope,daily-stage-unknown-elite,daily-stage-alternative-requirements,daily-stage-prerequisite,daily-stage-data-not-authority,daily-stage-loop-handoff,training-active,training-unknown,training-material-shortage,training-contradiction
+   # ac89050（6 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> daily-stage-exact-scope daily-stage-unknown-elite daily-stage-alternative-requirements daily-stage-prerequisite daily-stage-data-not-authority daily-stage-loop-handoff --payload <载荷-ac89050> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-ac89050 的批次目录> <后的批次目录> --scenarios daily-stage-exact-scope,daily-stage-unknown-elite,daily-stage-alternative-requirements,daily-stage-prerequisite,daily-stage-data-not-authority,daily-stage-loop-handoff
+   # 6f95f27（5 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> daily-stone-approved daily-expiring-approved daily-consumable-unapproved daily-consumable-existing daily-quantity-rerun --payload <载荷-6f95f27> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-6f95f27 的批次目录> <后的批次目录> --scenarios daily-stone-approved,daily-expiring-approved,daily-consumable-unapproved,daily-consumable-existing,daily-quantity-rerun
+   # f1ec4ed（49 个）
+   node scripts/eval-batch.ts run codex <固定模型 id> setup-credential-entry setup-credential-pasted setup-download-install-request-is-not-consent setup-download-declined setup-download-old-approval setup-download-interrupted-resume setup-download-incomplete-not-reported setup-download-emulator-refused doctor-credential-expired doctor-remote-control doctor-unknown-run doctor-maa-upgrade-request account-nga-credential-required account-nga-cached-citation account-nga-risk-stopped account-skland-unset account-skland-pasted account-skland-write-refused account-bilibili-cached-experimental account-skland-community-read account-skland-community-unset account-skland-community-stopped account-report-skip-review account-report-default-review account-report-approve-one account-report-casual base-report-default-review base-report-skip-approve base-plan-casual-candidates daily-run-not-three-star daily-run-disconnect daily-run-evidence-gap daily-run-unapproved-medicine daily-run-native-takeover daily-run-ask-progress daily-alternate-medicine-used daily-alternate-medicine-unknown daily-alternate-exhausted daily-alternate-prepared daily-base-apply-unapproved daily-base-apply-changed-report daily-base-apply-invalid-plan daily-base-apply-unknown daily-base-apply-snapshot-changed daily-base-apply-failing-gate daily-base-apply-path-outside daily-base-apply-copy-edited daily-base-apply-weekly-schedule daily-base-apply-unverified-accepted --payload <载荷-f1ec4ed> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-f1ec4ed 的批次目录> <后的批次目录> --scenarios setup-credential-entry,setup-credential-pasted,setup-download-install-request-is-not-consent,setup-download-declined,setup-download-old-approval,setup-download-interrupted-resume,setup-download-incomplete-not-reported,setup-download-emulator-refused,doctor-credential-expired,doctor-remote-control,doctor-unknown-run,doctor-maa-upgrade-request,account-nga-credential-required,account-nga-cached-citation,account-nga-risk-stopped,account-skland-unset,account-skland-pasted,account-skland-write-refused,account-bilibili-cached-experimental,account-skland-community-read,account-skland-community-unset,account-skland-community-stopped,account-report-skip-review,account-report-default-review,account-report-approve-one,account-report-casual,base-report-default-review,base-report-skip-approve,base-plan-casual-candidates,daily-run-not-three-star,daily-run-disconnect,daily-run-evidence-gap,daily-run-unapproved-medicine,daily-run-native-takeover,daily-run-ask-progress,daily-alternate-medicine-used,daily-alternate-medicine-unknown,daily-alternate-exhausted,daily-alternate-prepared,daily-base-apply-unapproved,daily-base-apply-changed-report,daily-base-apply-invalid-plan,daily-base-apply-unknown,daily-base-apply-snapshot-changed,daily-base-apply-failing-gate,daily-base-apply-path-outside,daily-base-apply-copy-edited,daily-base-apply-weekly-schedule,daily-base-apply-unverified-accepted
+   ```
+
+5. 由过变挂的场景（`compare` 输出的 `rerunScenarios`；`passToFail` 列出所有由过变挂的场景）用最终载荷单独重跑三次，再带上重跑批次比较：
+
+   ```text
+   node scripts/eval-batch.ts run codex <固定模型 id> <由过变挂的场景> --payload <载荷-最终> --rerun-of <后的批次目录> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <重跑批次目录> --scenarios <那一行的场景>
+   ```
+
+6. 只建基线的 17 个场景看「后」批次里各自的记录：入口没有单独判定基线的命令，`compareRuns` 的基线规则是全部通过且每个宿主至少三份。
+7. 用量用完时批次停在 `quota-exhausted`，用 `resume <批次目录> --payload <同一个载荷目录>` 续跑；载荷来源或指纹不同就拒绝续跑。全部比较完以后删掉载荷目录。
+
+### 本机试运行（不调用模型，2026-11-14）
+
+在本分支（框架为提交 `7674421`，载荷参数的第一个提交）上为上表每个「前」和暂代最终候选的本分支 `HEAD` 各做一个载荷，再各运行一次 `list --payload`；没有启动宿主，没有调用模型。临时载荷目录放在仓库外的系统临时目录里，跑完已删除。
+
+| 载荷 | 提交 | `skills/` 树 | 内容摘要 | 能做 / 114 | 计划场景被拒 | 被拒的场景（代码：缺的项 × 场景数） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 05 合并后 | `ddd0ca80a336` | `03ee118745a8` | `87b05fe6a901` | 33 | 0 / 13 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-jobs.ts` × 12；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 13 合并前 | `1d7fec01ed51` | `2ef082cec8bc` | `9df48fcc845f` | 13 | 0 / 4 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`operator-cost.ts` × 4；缺脚本：`cultivation-gaps.ts` × 4；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
+| 13 合并后 | `370ed68809ca` | `cf723b9e6c66` | `8b251258533b` | 17 | 0 / 4 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`cultivation-gaps.ts` × 4；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
+| 14 合并前 | `6c582e78e461` | `6a6d192b57e8` | `483efa10c77a` | 17 | 0 / 14 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`cultivation-gaps.ts` × 4；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
+| 14 合并后 | `ac03ba8a9afb` | `0ed7dc8673bd` | `c0efeaa35b26` | 21 | 0 / 4 | 缺 skill：`maa-setup` × 17；缺 skill：`maa-doctor` × 11；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺 skill：`maa-daily` × 48 |
+| 15 合并前 | `788ac13febf3` | `11c70cc3d43f` | `51c439fd35d8` | 43 | 0 / 10 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-jobs.ts` × 12；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 24 合并前 | `3ff455595c4a` | `0a1f6a1e72ba` | `2b50ee8fd04e` | 55 | 0 / 10 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`training-time.ts` × 4；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 07 合并前 | `fc633d680f82` | `9b246dcf39cb` | `660136c97bdc` | 59 | 0 / 28 | 缺 skill：`maa-setup` × 18；缺脚本：`credentials.ts` × 7；缺脚本：`skland-account.ts` × 3；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 29 合并前 | `ac890505ee6d` | `72d1b2f2a9eb` | `ba47b6dcd8ab` | 77 | 0 / 6 | 缺脚本：`nga.ts` × 3；缺脚本：`skland-account.ts` × 3；缺脚本：`bilibili.ts` × 4；缺脚本：`cultivation-report.ts` × 4；缺脚本：`base-report.ts` × 3；缺脚本：`stage-run.ts` × 10；缺脚本：`base-apply.ts` × 10 |
+| 27 合并后 | `6f95f27c91af` | `d9008a1ac271` | `f829718f917a` | 114 | 0 / 5 | 无 |
+| 27 合并前的 main | `f1ec4eda6344` | `ac0a2bad47b5` | `23f142dd7db6` | 114 | 0 / 49 | 无 |
+| 本分支 HEAD，暂代最终候选 | `76744213d1c9` | `e572e7ddaa5f` | `4b4e3d0917d4` | 114 | 0 / 114 | 无 |
+
+结论：
+
+- 12 个载荷都做出来了，每个都带 `.claude-plugin/`；表里 11 个「前」各自那一行计划的场景全部能做，没有一个被拒。被拒的都是那一行用不到的场景（例如 05 合并后还没有 maa-setup 和 maa-doctor）。
+- 计划里的成本、缺口场景（`370ed68`、`6c582e7`、`ac03ba8` 及之后）没有一个报 `payload-data-commit-missing`：这些载荷固定的公开数据提交与当前框架的网络夹具相同，与 A 部分人工核对的结论一致，现在由入口自动检查。
+- `f1ec4ed`（27 合并前）也能做 27 的五个场景：它们要的脚本都在，只是功能还没有，所以它不适合当 27 新增场景的「前」；表里 27 那一行的「前」是 `6f95f27`。
+- 最终候选还没有（要等 30 和版本号），表里 `HEAD` 一行只是暂代；`HEAD` 与 `6f95f27` 的 `skills/` 树不同，差别是 A 部分补上的 `skills/maa-account/LICENSE`。
 
 ### 可比性
 
-可比性只有一个所有者，`scripts/evaluation.ts`：`scenarioIdentity` 决定场景指纹（评分器与运行器源码、评测装入的观察器与替身、未渲染的场景定义），产品文件不进场景指纹；`compareRuns` 要求同一场景的宿主、模型、CLI 版本、场景指纹和总分都相同。
+可比性只有一个所有者，`scripts/evaluation.ts`：`scenarioIdentity` 决定场景指纹（评分器与运行器源码、评测装入的观察器与替身、未渲染的场景定义），产品文件不进场景指纹；`compareRuns` 要求同一场景的宿主、模型、CLI 版本、场景指纹和总分都相同；`batchIncomparability` 要求两批的宿主、CLI 版本、模型、认证方式和运行器指纹相同、都记了载荷来源，只有载荷可以不同。不满足时 `compare` 给出静态原因。
 
-- 08 改了 doctor 场景写出的检查行，27 改写了四个场景的拒绝诱饵，28 改了运行器：这些都改变了场景指纹，所以之前的全部记录（包括 28 的两次试运行，它们本来也只用来定超时和估用量）与新记录不可比，原样保留，不改写。
-- 按上面的做法，「前」「后」都用最终候选的同一份框架运行，场景指纹两边相同，比较的只是载荷。整个验收期间框架必须冻结在一个提交上；`scenarioHashSources` 里的任何文件一改，之前的批次就都不能再比。
-- 「前」的载荷做不了的场景（例如 setup 在 07 之前不存在）不放进那一批；载荷里有这个 skill 但功能还没有的，「前」会失败，「后」通过不算回归。
-- pass→fail 的场景用候选载荷单独重跑三次（`--rerun-of`），三次全过也只记不稳定；更换模型或 CLI 版本要重建基线。
+- 08 改了 doctor 场景写出的检查行，27 改写了四个场景的拒绝诱饵，28 改了运行器，26 B 部分又改了评分器和运行器源码：这些都改变了场景指纹，所以之前的全部记录（包括 28 的两次试运行，它们本来也只用来定超时和估用量）与新记录不可比，原样保留，不改写。
+- 按上面的做法，「前」「后」都用最终候选的同一份框架运行，场景指纹和运行器指纹两边相同，比较的只是载荷。整个验收期间框架必须冻结在一个提交上；`scenarioHashSources` 或运行器指纹里的任何文件一改，之前的批次就都不能再比。
+- 「前」的载荷做不了的场景（例如 setup 在 07 之前不存在）由入口在任何宿主调用之前拒绝，不运行、不计通过或失败；比较时用 `--scenarios` 只取那一行的场景，子集里有一边拒绝过或没跑过的场景，整对记为无法比较并给出原因。载荷里有这个脚本但功能还没有的，「前」会失败，「后」通过不算回归。
+- pass→fail 的场景用最终载荷单独重跑三次（`--rerun-of`），三次全过也只记不稳定；更换模型或 CLI 版本要重建基线。
 
 ### 运行数与时间估算
 
@@ -399,13 +464,12 @@ node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <�
 
 | 项 | 运行数 |
 | --- | --- |
-| 「前」的批次（上表合计） | 146 |
-| 与之配对的「后」的批次（同样的场景集合） | 146 |
-| 只建基线的批次 | 17 |
+| 「前」的批次（上表合计，11 批） | 147 |
+| 「后」的批次（一批，全部 114 个场景，含只建基线的 17 个） | 114 |
 | pass→fail 重跑（按一成估，每个三次） | 约 30 |
-| 合计 | 约 340 |
+| 合计 | 约 291 |
 
-约 340 次运行，按一个登录目录同一时间只跑一批，串行约 5.7 小时；输入约 5,500–8,300 万 token（大部分是缓存），输出约 20–50 万 token。若 `compare` 能比较子集、各比较共用一个包含全部 113 个场景的「后」批次，合计约 285 次、约 4.8 小时。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
+约 291 次运行，按一个登录目录同一时间只跑一批，串行约 4.9 小时；输入约 4,700–7,300 万 token（大部分是缓存），输出约 17–44 万 token；另有约 13 批的读保护检查（每批一次，约 6 秒、1.6 万 token）。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
 
 ## 许可与第三方检查
 

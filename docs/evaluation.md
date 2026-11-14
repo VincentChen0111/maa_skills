@@ -9,21 +9,53 @@
 需要 Node 24 和待测宿主 CLI。产品场景是 `eval/` 下的 `.ts` 导出，由 `scripts/eval-scenarios.ts` 汇总：每个场景按组装入待测 skill 和它需要的 companion（至少 `maa-core`），跨 skill 场景按 `skills` 字段一次装入多个操作类 skill。
 
 ```text
-node scripts/eval-batch.ts list
-node scripts/eval-batch.ts run <claude|codex> <固定模型 id> <场景名或组名>... [--auth plan|api-key] [--executable <CLI 可执行文件>] [--login-dir <专用登录目录>] [--timeout-ms <毫秒>]
-node scripts/eval-batch.ts resume <批次目录>
-node scripts/eval-batch.ts compare <之前的批次目录> <之后的批次目录> [<重跑批次目录>...]
-node scripts/eval-batch.ts run <host> <model> <场景名> --rerun-of <之后的批次目录>
+node scripts/eval-batch.ts list [--payload <载荷目录>]
+node scripts/eval-batch.ts payload --commit <提交> --out <新的空目录>
+node scripts/eval-batch.ts run <claude|codex> <固定模型 id> <场景名或组名>... [--payload <载荷目录>] [--auth plan|api-key] [--executable <CLI 可执行文件>] [--login-dir <专用登录目录>] [--timeout-ms <毫秒>]
+node scripts/eval-batch.ts resume <批次目录> [--payload <载荷目录>]
+node scripts/eval-batch.ts compare <之前的批次目录> <之后的批次目录> [<重跑批次目录>...] [--scenarios <场景名或组名>,...]
+node scripts/eval-batch.ts run <host> <model> <场景名> --rerun-of <之后的批次目录> [--payload <载荷目录>]
 node scripts/eval-batch.ts preflight
 ```
+
+`--payload` 和 `--scenarios` 见下面「载荷」一节。
 
 组名是 `maa-core`、`maa-help`、`maa-setup`、`maa-doctor`、`maa-account`、`maa-daily`、`cross-skill` 和 `all`。一批只用一个宿主和一个固定模型，场景一个接一个地跑，同一时刻只有一个进程在用该宿主的登录目录；入口没有并行选项。一台机器上同一个登录目录同时只能跑一批：套餐登录的批次在认证预检之前，在登录目录旁边（不在目录里）独占创建 `<登录目录>.lock`，批次结束、出错或被 Ctrl+C 停下时删掉；这个文件已经存在时，新批次记为 `login-directory-busy` 并停下，不碰别人的锁。进程被强行结束（任务管理器、直接关掉终端窗口）会留下这个文件：确认没有别的批次在跑之后，手动删掉它。按一次 Ctrl+C，宿主子进程同时收到，当前这次宿主运行返回后整批停下（`interrupted`），这次运行在清单里标为 `interrupted`，续跑时重新跑它；再按一次立即删锁退出。每批的记录在当前检出的 `.tmp/evaluations/batch-*`（默认被 Git 忽略）：`manifest.json` 是批次清单（宿主、模型、认证方式类别、指纹、每次尝试的预检结果、每次运行的原因与评分），`run-*` 是各次运行的 `run.json`、归一化证据、原始输出、调用参数和场景。`compare` 只读已保存的 `run.json`，只取计入完成的记录：被用量、登录或网络问题中止的运行和被 Ctrl+C 打断的运行留在磁盘上，但不参与比较；普通批次每个场景取最后一条完成的记录，重跑批次取全部完成的重跑。它对整批和每个场景调用 `compareRuns`，输出每个场景的结论和需要单独重跑三次的场景；`--rerun-of` 让所选场景各重跑三次，记录用 `rerunOf` 指向首次失败的运行。汇总和比较都不改写旧记录。
 
 宿主 CLI 的位置用 `--executable`，或环境变量 `MAA_EVAL_CLAUDE_EXECUTABLE`、`MAA_EVAL_CODEX_EXECUTABLE` 指定；都没有时用 PATH 里的 `claude`、`codex`。文档和记录里只写占位符，不写维护者机器上的实际路径。
 
-评测写到磁盘的每一份产物——每次运行的 `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`、`invocation.json`、`scenario.json`，读保护检查的两个文件，批次清单——都只经 `scripts/eval-redact.ts` 的 `artifactWriter` 写出。哪些路径不能落盘也只由这个模块决定：登录目录和哨兵、本次的工作区和临时目录、任何评测临时目录（按生成名）、仓库、宿主可执行文件、用户主目录，各换成固定占位符（`<login-dir>`、`<workspace>`、`<fixture>`、`<repo>`、`<host-executable>`、`<home>`）。路径按片段匹配，不分大小写；片段之间可以是任意多的斜杠、反斜杠（多层 JSON 转义）、JSON 的 `\u` 转义或百分号编码；盘符也认 `/c/…`、`//c/…` 写法，`\\?\` 前缀和 `file:` URL 照样替换；字母和数字以外的每个字符都认它的百分号编码（各编码器编码的字符不同，Node 的 `pathToFileURL` 把 `~` 编成 `%7E`），非 ASCII 字符还认 `\u` 转义；每个路径按给出的写法、解析后的写法和长形式（短文件名展开、联接跟随，尚不存在的部分接在最深的已存在目录之后）各匹配一次。路径后面紧跟什么都替换（中文、句号、连字符、数字、引号）；名字更长的同级目录只剩后缀，不暴露任何路径。一致性测试 `tests/eval-redact.test.ts` 让宿主替身在版本、回复和标准错误里用这些写法说出各个路径，逐一列出一批写出的全部产物并搜索唯一标记；新增产物必须加进这份清单并经同一个出口写出。
+评测写到磁盘的每一份产物——每次运行的 `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`、`invocation.json`、`scenario.json`，读保护检查的两个文件，批次清单——都只经 `scripts/eval-redact.ts` 的 `artifactWriter` 写出。哪些路径不能落盘也只由这个模块决定：登录目录和哨兵、本次的工作区和临时目录、任何评测临时目录（按生成名）、仓库、批次的载荷目录（`--payload`）、宿主可执行文件、用户主目录，各换成固定占位符（`<login-dir>`、`<workspace>`、`<fixture>`、`<repo>`、`<payload>`、`<host-executable>`、`<home>`）。路径按片段匹配，不分大小写；片段之间可以是任意多的斜杠、反斜杠（多层 JSON 转义）、JSON 的 `\u` 转义或百分号编码；盘符也认 `/c/…`、`//c/…` 写法，`\\?\` 前缀和 `file:` URL 照样替换；字母和数字以外的每个字符都认它的百分号编码（各编码器编码的字符不同，Node 的 `pathToFileURL` 把 `~` 编成 `%7E`），非 ASCII 字符还认 `\u` 转义；每个路径按给出的写法、解析后的写法和长形式（短文件名展开、联接跟随，尚不存在的部分接在最深的已存在目录之后）各匹配一次。路径后面紧跟什么都替换（中文、句号、连字符、数字、引号）；名字更长的同级目录只剩后缀，不暴露任何路径。一致性测试 `tests/eval-redact.test.ts` 让宿主替身在版本、回复和标准错误里用这些写法说出各个路径，逐一列出一批写出的全部产物并搜索唯一标记；新增产物必须加进这份清单并经同一个出口写出。
 
 原来的单次入口用法不变：`node scripts/eval-run.ts <host> <model> <approved-write|unapproved-write|forbidden-setting|自定义.json> [<CLI 可执行文件>] [<待测 skill 目录>]`。内置三个演示场景只验证驱动，不是产品 skill 的发布基线。现在每次单次运行都是只含一个场景的批次，同样先过认证预检和读保护检查；要用 API key 时加 `--auth api-key`。
+
+## 载荷
+
+前后比较要求场景、评分器、夹具、宿主 CLI 和模型都相同，只换被测的产品。产品就是**载荷**：仓库里的 `skills/` 和 `.claude-plugin/`。默认装进宿主的是运行入口所在检出的载荷；`--payload <载荷目录>` 让宿主改从 `<载荷目录>/skills/<名称>` 装入，场景目录、评分器、夹具、宿主适配、脱敏和两道预检仍然用检出自己的。旧提交没有这套评测框架（28 之前没有），所以「前」不能在旧提交的检出里跑，只能把旧提交的载荷交给当前的框架。
+
+```text
+node scripts/eval-batch.ts payload --commit <提交> --out <新的空目录>
+node scripts/eval-batch.ts list --payload <载荷目录>
+node scripts/eval-batch.ts run codex <固定模型 id> <场景或组>... --payload <载荷目录>
+node scripts/eval-batch.ts compare <之前的批次目录> <之后的批次目录> --scenarios <场景或组>,...
+```
+
+**做载荷**（`payload`）只读仓库：在运行入口所在的 Git 仓库里解析提交，用 `git archive` 只取 `skills/` 和 `.claude-plugin/`（提交里没有 `.claude-plugin/` 时只取 `skills/`，没有 `skills/` 时拒绝），并关掉换行转换，所以每个文件和提交里的内容逐字节相同：哪台机器做出来都一样，也和 GitHub 下载的归档一样（检出在 `core.autocrlf=true` 下是 CRLF，所以检出自己的载荷指纹和同一提交做出的载荷不同，前后两边都用 `--payload`）。归档里只接受这两个路径下的普通文件和目录，链接或越界路径整个拒绝（`payload-archive-entry`），已写的内容删掉。目录里另写 `maa-skills-payload.json`，记提交、根树、两个载荷路径各自的树和内容摘要（每个文件的相对路径及其 SHA-256，排序后再取 SHA-256；不含这份记录）；命令输出的也只有这几项，不写目录路径。
+
+输出目录必须是新的（不存在，或者已存在但是空的），在仓库之外，并且不与私有目录、设置目录、两个宿主日常的配置位置、两个专用登录目录（按变量或默认位置，以及 `--login-dir` 指定的那个）重叠。判断用的是登录目录的同一个重叠谓词（`scripts/eval-auth.ts`：两边都取长形式，Windows 下不分大小写，短文件名展开、联接跟随），只比较路径。拒绝时报 `payload-directory-refused:<原因>`（原因同登录目录：`inside-repository`、`overlaps-private-directory`、`overlaps-settings-directory`、`daily-host-directory`、`overlaps-login-directory`、`settings-unreadable`）或 `payload-directory-not-empty`，什么都不创建；提交解析不出来（包括以 `-` 开头、会被当成选项的写法）报 `payload-commit-unknown`。
+
+**用载荷**（`list`、`run`、`resume` 的 `--payload`）在任何宿主调用之前打开载荷：同样的位置检查；记录必须在（`payload-record-missing`）、格式正确（`payload-record-invalid`）；内容摘要必须与记录相同（`payload-digest-mismatch`：做好之后被改过）。载荷目录与检出同等对待：登录目录不能与它重叠（`overlaps-payload-directory`，认证预检、读保护检查和每次运行都按这条查），它的路径在所有产物里换成 `<payload>`。所选场景必须从这个载荷装入（`payload-entry-outside`）。批次清单的 `payload` 记来源：载荷目录记提交、树、各载荷路径的树和内容摘要；不带 `--payload` 时记 `checkout` 和检出载荷的内容摘要（检出可能有未提交的改动，所以不写提交）。续跑要用同一个载荷，来源或载荷指纹不同就是 `fingerprint-mismatch`。
+
+**载荷做不了的场景**：批次在任何宿主调用之前，按场景自己的定义逐个检查载荷，做不了的场景以静态代码拒绝，记进清单的 `refused`（场景、代码、缺的是什么），不运行、不算通过也不算失败，只跑其余场景；一个都做不了时批次不开始（`no-servable-scenario`）。`list --payload` 不运行任何东西，只列出每个场景能不能做。三条检查，按顺序报第一条：
+
+| 代码 | 含义 |
+| --- | --- |
+| `payload-skill-missing` | 场景要装的某个 skill（主 skill、companion、跨 skill 场景的 `skills`）在载荷里没有，或没有 `SKILL.md`；附 skill 名 |
+| `payload-script-missing` | 场景命令模式或期望调用里写的 `node *<脚本>.ts …`，在装入的 skill 里找不到这个文件名；附脚本文件名 |
+| `payload-data-commit-missing` | 网络夹具地址里固定的公开数据提交，在装入的 skill 文本里找不到（产品会去请求别的提交，夹具只回答固定的那个，结果说明不了什么）；附提交号 |
+
+载荷里有这个脚本、但功能还没做的场景照常运行；「前」失败、「后」通过不算回归。`run` 的退出码只有在批次完成、全部通过并且没有拒绝的场景时为 0。
+
+**比较两个载荷**：`compare` 先比两份批次清单，只允许载荷不同。宿主、宿主 CLI 版本、模型、认证方式和运行器指纹（评分器、夹具、宿主适配、脱敏、场景目录等运行器源码）必须相同，两边都要记了载荷来源，任何一边是宿主替身也不行；不相同就是无法比较，并列出静态原因（`host-differs`、`cli-version-differs`、`model-differs`、`auth-differs`、`runner-differs`、`payload-unrecorded:<边>`、`fingerprint-missing:<边>`、`host-double:<边>`）。重跑批次与之后的批次比，条件同上，载荷摘要也必须相同（`rerun-payload-differs`，前缀 `rerun-` 的其他原因同理）。然后逐条记录比较场景身份（见下文「固定版本与回归判断」），场景身份不同的场景记 `scenario-identity-differs:<场景>`。`--scenarios` 把两边（和重跑）都限定在一个子集上（场景 id、组名或 `all`，逗号分隔），这样几次比较可以共用一个包含全部场景的「后」批次；子集里的场景两边都要有完成的记录，某一边拒绝过的记 `scenario-refused:<边>:<场景>`，没跑过的记 `scenario-not-run:<边>:<场景>`。没有子集时两边场景集合不同记 `scenario-sets-differ`。输出另有每个场景前后的评分状态、`passToFail`（之前通过、之后失败的场景，各需单独重跑三次）和两边的载荷来源；重跑和 pass→fail 的规则不变。
 
 ## 两道预检
 
@@ -182,9 +214,9 @@ daily 的正向提醒、关闭确认和失败保留锁使用[提醒事务评测]
 
 每次保留宿主/CLI 版本、固定模型、场景与评分器摘要、skill 内容版本、所在批次的载荷指纹、证据摘要、宿主报告的模型 id 和 token 用量（没有报告时为 `unknown`）。可比性只有一个所有者，`scripts/evaluation.ts`：`scenarioIdentity` 决定场景摘要，`compareRuns` 决定何时可以比较。场景摘要包括评分器和运行器源码（`scripts/eval-run.ts` 的 `scenarioHashSources`）、评测装入的观察器与替身文件（`scenarioHarnessFiles`）、未渲染的场景定义（提示词、评分策略、评测夹具、网络夹具、命令、装入哪些 skill），确保采集语义或场景本身变化时指纹也变。产品文件（`skills/` 下的任何文件，包括运行器借用的设置读取脚本）不进场景摘要。场景的世界数据（评测夹具、网络夹具）也不运行产品代码，写成固定的字面值：例如 `daily-stage-*` 七个场景保存的账号快照（以前由产品的快照解析函数在加载时生成，解析一改，七个场景的身份就全变了）。世界数据也不读产品文件：doctor 场景要核对的已装版本写成占位 `{{maa-core-version}}`，评分前才渲染（见上），一致性测试另列出闭包模块里指向 `skills/` 的相对路径，只允许场景目录的 skill 目录。唯一的例外在允许名单上：成本、缺口、培养报告和基建报告场景的网络夹具地址取自产品的公开数据来源描述（`operatorCostSources`、`craftingSources`、`planTableSources`），`scenarioIdentity` 去掉其中固定的数据提交并按来源排序；仓库和文件路径仍算场景的一部分（哪个地址提供哪张表），由一致性测试逐一写死，产品改了它们会先在离线检查里失败。产品文件和固定提交属于装入的 skill，由 skill 内容版本和载荷指纹记录，所以只改产品的发布（包括挪动固定的数据提交、改快照解析）仍按同一场景比较。运行器指纹（续跑核对用）另外列出运行器借用的产品脚本。
 
-`compareRuns(before, after, reruns)` 比较保存的 `run.json` 数组，按场景（宿主加场景 id）逐个判定再汇总：同一场景的宿主、模型、CLI 版本、场景摘要或总分不同，这个场景就无法比较；任何一个场景无法比较，总体就无法比较，其次依次是未验证、需要重跑、回归、不稳定、通过。前后场景集合不同、含替身记录也拒绝。skill 内容版本只要求同一场景的之后那次运行和它的重跑一致；每个场景组装入的 skill 不同，一批记录里本来就有多个 skill 内容版本。一批始终是同一个候选：批次中途载荷变了就停批（见「用量上限与续跑」），续跑时载荷指纹不同也拒绝；每条记录带所在批次的载荷指纹，一边的记录缺载荷指纹或带两个不同的载荷指纹（不管这些记录是怎么凑到一起的），整体就无法比较。之前为空时，所有运行都通过并且每个宿主至少三份就是基线。`compare` 的逐场景结论、总体结论和退出码都来自这一个判定。缺失和失败记录不得当作通过。一致性测试 `tests/eval-comparability.test.ts` 从场景目录 `scripts/eval-scenarios.ts` 和 `eval/` 下全部模块出发，沿运行时导入（不算 `import type`，含动态导入）走完闭包，包括 `tests/fixtures` 和它们引用的辅助文件：闭包里的文件逐一列出，进入 `skills/` 的导入只能是允许名单上的三条（两个场景模块取公开数据来源描述）；场景摘要的唯一产出方（`runScenario` 调用 `scenarioIdentity`）和它的四项输入，以及场景摘要、比较结论和载荷指纹的全部使用方也逐一列出，新增任何一个都会让测试失败。
+`compareRuns(before, after, reruns)` 比较保存的 `run.json` 数组，按场景（宿主加场景 id）逐个判定再汇总：同一场景的宿主、模型、CLI 版本、场景摘要或总分不同，这个场景就无法比较；任何一个场景无法比较，总体就无法比较，其次依次是未验证、需要重跑、回归、不稳定、通过。前后场景集合不同、含替身记录也拒绝。skill 内容版本只要求同一场景的之后那次运行和它的重跑一致；每个场景组装入的 skill 不同，一批记录里本来就有多个 skill 内容版本。一批始终是同一个候选：批次中途载荷变了就停批（见「用量上限与续跑」），续跑时载荷指纹不同也拒绝；每条记录带所在批次的载荷指纹，一边的记录缺载荷指纹或带两个不同的载荷指纹（不管这些记录是怎么凑到一起的），整体就无法比较。之前为空时，所有运行都通过并且每个宿主至少三份就是基线。`compare` 的逐场景结论、总体结论和退出码都来自这一个判定；批次层面只允许载荷不同，由同一模块的 `batchIncomparability` 判定（见「载荷」）。无法比较的结论带静态原因 `reasons`（例如 `scenario-sets-differ`、`mixed-payload:after`，单个场景的原因以 `:<场景>` 结尾）。缺失和失败记录不得当作通过。一致性测试 `tests/eval-comparability.test.ts` 从场景目录 `scripts/eval-scenarios.ts` 和 `eval/` 下全部模块出发，沿运行时导入（不算 `import type`，含动态导入）走完闭包，包括 `tests/fixtures` 和它们引用的辅助文件：闭包里的文件逐一列出，进入 `skills/` 的导入只能是允许名单上的三条（两个场景模块取公开数据来源描述）；场景摘要的唯一产出方（`runScenario` 调用 `scenarioIdentity`）和它的四项输入，以及场景摘要、比较结论和载荷指纹的全部使用方也逐一列出，新增任何一个都会让测试失败。
 
-运行器源码计入场景指纹，所以工单 28 交付后的记录和旧记录不可比；Claude 一侧带 `--bare` 的旧记录和不带 `--bare` 的新记录同样不可比，这个差别只出现在新旧运行器之间。旧记录原样保留，不改写，不当作新规则下的结果。2026-11-11 增加 `$exists` 与生成时间规则后的记录与更早的语义也不可比。
+运行器源码计入场景指纹，所以工单 28 交付后的记录和旧记录不可比；26 加入载荷参数时又改了评分器和运行器源码（`scripts/evaluation.ts`、`eval-run.ts`、`eval-auth.ts`、`eval-redact.ts`），此前的记录（包括 28 的试运行）与之后的也不可比；Claude 一侧带 `--bare` 的旧记录和不带 `--bare` 的新记录同样不可比，这个差别只出现在新旧运行器之间。旧记录原样保留，不改写，不当作新规则下的结果。2026-11-11 增加 `$exists` 与生成时间规则后的记录与更早的语义也不可比。
 
 新 skill 每个宿主至少三份完成且通过的不同场景才建立该宿主基线；两宿主分别记录。修改 skill 时保留原版本与候选版本相同场景的运行。每个 pass→fail 场景必须用候选版本单独重跑三次，记录不同 `id` 并以 `rerunOf` 指向首次失败；少于三次不能定论。三次全过也只记 `unstable`，需要调查，不能把首次失败抹掉。分数下降或复现失败记回归。
 
