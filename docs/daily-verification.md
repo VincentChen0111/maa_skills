@@ -466,7 +466,8 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 | `UseMedicine`、`UseStone` 是 `bool?`，默认 false | [FightTask.cs 第 35–45 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Configuration/Single/MaaTask/FightTask.cs#L35-L45) | `c0a047df055c553410ef417ccf16a614f73337e0` |
 | `OnDeserialized`：`UseStoneAllowSave` 为 false 时只把 `UseStone` 置为 false，不动 `UseMedicine` | 同一文件第 154–159 行 | 同上 |
 | `UseStone` 的 setter：没开允许保存而值为 true 时改为 null；值不为 false 时先把理智药数量设为 999，`UseMedicine` 为 false 时把它设为同一个值；最后存碎石开关 | [FightTaskUserControlModel.cs 第 416–437 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/UserControl/TaskQueue/FightTaskUserControlModel.cs#L416-L437) | `426020545ea9de392c0bf3f0f80a3ca0f149f54b` |
-| 界面的碎石勾选框经 `UseStoneDisplay` 设置 `UseStone`（勾上传 true，再按上一行改为 null），显示的是 `UseStone != false` | 同一文件第 442–447 行 | 同上 |
+| 界面的碎石勾选框直接绑定 `UseStone`：左键勾上传 true，再按上一行改为 null；右键直接设为 null。理智药勾选框同样能右键设为 null | [FightTaskUserControl.xaml 第 46–60 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L46-L60) | `a42b1ce8012bff323fcd6b3c2dac47d6020678ea` |
+| `UseStoneDisplay`（`UseStone != false`）只用来在碎石开着时禁用理智药勾选框和数量框，它本身不设置 `UseStone` | FightTaskUserControlModel.cs 第 442–447 行；[FightTaskUserControl.xaml 第 45、79 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/Views/UserControl/TaskQueue/FightTaskUserControl.xaml#L45-L79) | 同上两个文件 |
 | `UseMedicine` 的 setter：值为 false 时一并关闭碎石 | 同一文件第 379–395 行 | 同上 |
 
 由此可知：
