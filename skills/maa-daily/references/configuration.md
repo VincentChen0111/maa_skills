@@ -8,9 +8,17 @@
 
 已批准的基建排班只经 [基建排班应用](base-apply.md) 的 `base-apply.ts apply` 写入：它先重新核对批准、排班字节、数据新鲜度和全部验收门，再由唯一写入器按 basePlan 授权推导出所选基建任务的四个字段、在关停 MAA 后安装排班副本并读回。本页的 `write` 拒绝带 basePlan 的请求，也不接受这几个字段的普通修改。
 
-`read` 输出配置序号、任务类型/启用状态、定时槽、提醒字段与 revision 指纹。任务的 `$type` 和 `TaskType` 必须符合已核对应关系；缺失、未知或不一致均显示 `OtherTask`，不能凭任务名称或标签授权启用。类型已核的 Fight 任务另有 `consumption`：`medicine`（`on`、`count`）、`stone`（`on`、`count`、`allowSave`）、`expiring`（`on`、`days`、`activity`）；`on` 为 null 表示开关不是布尔值，MAA 和写入器都按开启处理，`count`/`days` 为 null 表示不是合法整数。类型不明的任务不输出这些。不输出配置名称、任务名称、关卡、连接地址、账号或完整配置。`write.expectedRevision` 必须使用此次摘要的 `configuration.revision`，不能临时读取新值来绕过变更提示。开始时版本不符返回 configuration-changed；关停后任务/定时槽对象或决定实际执行目标的当前配置、定时模式、目标队列变化则保留 unknown，不按旧下标写入。重新核对目标与当次授权后才可重新准备请求。
+`read` 输出配置序号、任务类型/启用状态、定时槽、提醒字段与 revision 指纹。revision 是配置「投影」的指纹：整份配置去掉 MAA 运行时自己写、本项目不读也不写的几个字段（窗口位置、热键表、更新记录、公告不再提示、当前选中的任务、信用作战和访问好友的日期），其余字段都在内，包括 MAA 运行时也会改的任务启用、基建计划序号、关卡列表、当前配置和定时开关，所以跑过一次任务后批准往往需要重新读取。任务的 `$type` 和 `TaskType` 必须符合已核对应关系；缺失、未知或不一致均显示 `OtherTask`，不能凭任务名称或标签授权启用。类型已核的 Fight 任务另有 `consumption`：`medicine`（`on`、`count`）、`stone`（`on`、`count`、`allowSave`）、`expiring`（`on`、`days`、`activity`）；`on` 为 null 表示开关不是布尔值，MAA 和写入器都按开启处理，`count`/`days` 为 null 表示不是合法整数。类型不明的任务不输出这些。不输出配置名称、任务名称、关卡、连接地址、账号或完整配置。`write.expectedRevision` 必须使用此次摘要的 `configuration.revision`，不能临时读取新值来绕过变更提示。开始时版本不符返回 configuration-changed；关停后任务/定时槽对象或决定实际执行目标的当前配置、定时模式、目标队列变化则保留 unknown，不按旧下标写入。重新核对目标与当次授权后才可重新准备请求。
 
-`write` 输入示例：
+## 预览与差异指纹
+
+写入之前先用 `preview` 预览：输入与 `write` 相同（不带 `diffFingerprint`），只读，不检查或关闭 MAA、不加锁、不写任何文件。它跑写入前的全部检查（版本、配置序号、白名单、碎石与临期药等批准），拒绝时给出与 `write` 相同的静态原因码；通过时返回 `revision`、`diffFingerprint` 和 `changes`：每个实际改动一项，`key` 是改动的键（配置名写作 `<profile>`），配置下的改动另有 `profile`（配置序号），`before`、`after` 是白名单摘要：布尔值、null 和数字原样，队列重排给出排列前后的任务类型，定时目标配置给出配置序号，文字、列表和对象只给出种类和长度，不输出配置名、任务名、连接地址或完整配置。值本来就等于目标的改动不列出。
+
+把 `changes` 讲给用户，用户批准的就是这份差异；然后把同一个请求加上 `diffFingerprint`（预览返回的值）交给 `write`。当次请求（`current-request`）的普通写入必须带它，缺少时以 `approved-diff-missing` 拒绝；带了但和写入器在当前配置上算出的差异不一致时以 `approved-diff-mismatch` 拒绝，两者都发生在访问进程、加锁和写入之前。写入器关停 MAA 之后，会在 MAA 留下的配置上再算一次差异：MAA 退出时会从内存整份重写配置，如果它改动了要写的字段，差异就和批准的不同，这时同样以 `approved-diff-mismatch` 拒绝：不备份、不写入，配置保持 MAA 留下的样子，原来在运行的 MAA 被重新打开，锁释放，结果记入私有运行记录。
+
+遇到 `configuration-changed` 或 `approved-diff-mismatch`：重新 `read`、重新 `preview`，把新的差异给用户看，等用户再次批准，不重放原来的请求。作业计划、专精计划、基建排班和 setup 的连接写入各有「改动必须等于批准内容」的核对，不要求差异指纹；它们带了指纹时同样核对。
+
+`preview` 输入示例：
 
 ```json
 {
@@ -21,6 +29,21 @@
     "reference": "用户本次要求开启定时提醒"
   },
   "changes": [{"path":["Timers","NotifyBeforeScheduledStart"],"value":true}]
+}
+```
+
+用户批准预览出的差异之后，`write` 输入示例：
+
+```json
+{
+  "host": "codex",
+  "expectedRevision": "<read 返回的 configuration.revision>",
+  "authorization": {
+    "source": "current-request",
+    "reference": "用户本次要求开启定时提醒"
+  },
+  "changes": [{"path":["Timers","NotifyBeforeScheduledStart"],"value":true}],
+  "diffFingerprint": "<preview 返回的 diffFingerprint>"
 }
 ```
 
@@ -51,7 +74,7 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 授权字段（与 `source`、`reference` 并列，三种可以同一次请求）：`medicineCount`、`stoneCount` 是整数数量，`expiringMedicine` 是一个对象，只含 `days`（批准的临期天数，1–30）和 `forActivity`（用户是否点名批准活动临期药，布尔值）两个字段。来源必须是 `current-request`：偏好原话和已批准的报告条目不能授权。`medicineCount`、`stoneCount` 不能和 `jobPlan`、`trainingPlan` 同一次请求；`expiringMedicine` 可以随计划一起批准。
 
-`write` 碎石示例（用户当次批准第一个配置里位置 0 的 Fight 任务碎石，最多 2 颗）：
+`write` 碎石示例（用户当次批准第一个配置里位置 0 的 Fight 任务碎石，最多 2 颗；先用同样的请求预览，用户批准差异后带上指纹）：
 
 ```json
 {
@@ -66,7 +89,8 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
     {"path": ["Configurations", 0, "TaskQueue", 0, "UseStone"], "value": true},
     {"path": ["Configurations", 0, "TaskQueue", 0, "UseStoneAllowSave"], "value": true},
     {"path": ["Configurations", 0, "TaskQueue", 0, "StoneCount"], "value": 2}
-  ]
+  ],
+  "diffFingerprint": "<preview 返回的 diffFingerprint>"
 }
 ```
 
@@ -74,7 +98,7 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 关闭理智药、碎石或临期药是普通的当次请求，不需要数量或天数：把 `UseMedicine`、`UseStone`（可同时把 `UseStoneAllowSave`）、`UseExpiringMedicine` 或 `UseExpireMedicineForActivity` 改为 false，也可以同时把 `MedicineCount`、`StoneCount` 改为 0。配置里剩下的数量不用改、也不和授权比较，但之后再打开要重新批准。只把 `UseStoneAllowSave` 改为 false 而 `UseStone` 留在 true 不算关闭，仍需碎石授权。没有某一类的当次批准时，对这一类只能做上面这些关闭改动；把 `UseStoneAllowSave` 改为 true、写非零的 `StoneCount` 或 `MedicineCount`、改 `MedicineExpireDays`，即使开关仍关着，也要这一类的当次批准：数量不超过批准，天数等于批准的天数。
 
-拒绝时脚本给出静态原因码，据此告诉用户缺哪一项批准：`stone-grant-required`、`expiring-grant-required`、`medicine-grant-required`（缺对应授权）；`current-request-required`（来源不是当次请求）；`stone-quantity-exceeded`、`medicine-quantity-exceeded`（超出数量）；`expiring-days-mismatch`、`expiring-activity-not-approved`（天数或活动项与批准不符）；`stone-settings-invalid`、`medicine-settings-invalid`（开关或数量没有一起写对）；`recurring-quantity-not-authorized`（有限数量不能挂在每日重复的定时上）；`training-expiring-grant-required`（专精定时会运行到开着临期药的 Fight 任务：请用户把临期药和这份计划一起批准，或者先把临期药关掉）；`training-stone-enabled`（专精定时会运行到开着碎石的 Fight 任务：先经当次请求把碎石关掉）；`conflicting-authorizations`、`consumption-grant-invalid`（授权组合或取值不对）；`forbidden-setting`（抽卡、礼包，任何批准都不能打开）。
+拒绝时脚本给出静态原因码，据此告诉用户缺哪一项批准（`approved-diff-missing`、`approved-diff-mismatch` 见上文「预览与差异指纹」）：`stone-grant-required`、`expiring-grant-required`、`medicine-grant-required`（缺对应授权）；`current-request-required`（来源不是当次请求）；`stone-quantity-exceeded`、`medicine-quantity-exceeded`（超出数量）；`expiring-days-mismatch`、`expiring-activity-not-approved`（天数或活动项与批准不符）；`stone-settings-invalid`、`medicine-settings-invalid`（开关或数量没有一起写对）；`recurring-quantity-not-authorized`（有限数量不能挂在每日重复的定时上）；`training-expiring-grant-required`（专精定时会运行到开着临期药的 Fight 任务：请用户把临期药和这份计划一起批准，或者先把临期药关掉）；`training-stone-enabled`（专精定时会运行到开着碎石的 Fight 任务：先经当次请求把碎石关掉）；`conflicting-authorizations`、`consumption-grant-invalid`（授权组合或取值不对）；`forbidden-setting`（抽卡、礼包，任何批准都不能打开）。
 
 剩余数量：写进配置的理智药和碎石数量会留在那里，之后每次运行都按这个数量重新生效，「本次总上限」只对写入时核对过的那几次运行成立。带理智药或碎石数量的运行（日常队列和它的定时）结束、失败或被中断之后，再运行只能用剩下的数量，或者由用户重新批准。目前没有工具读取这类运行实际用掉了多少，所以用量一律按未知处理：停下告诉用户，请用户重新批准，不重试，也不写一个猜出来的剩余数。以后有工具可靠读到用量时，写剩余数量是一次普通的当次写入，在 `reference` 里引用原来的批准原话，数量等于剩余数；原来的批准不在当前对话里（例如宿主重启之后）就是历史授权，要重新批准。剩余数为 0 时这次批准已经用完：经普通当次请求把理智药或碎石的开关关掉、不带它再运行，或者停下告诉用户。
 
@@ -84,7 +108,9 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 本次停机预算 120 秒，包括正常关停最多 30 秒、重开最多 60 秒和文件操作余量；每个阶段重新核对。整个区间避开所有每日/单次定时前 2 分钟至触发分钟结束，使用 MAA 所在电脑本地时区；修改后的新定时也检查。超预算或未能证明窗口安全时报告实际阶段，不声明完成。
 
+MAA 只在启动时读一次 `gui.new.json`，之后任何设置变化都会在约 200 毫秒后从内存整份重写这个文件，退出时还会无条件整份保存一次（依据见 daily 验证记录「30 配置写入器加固」）。所以 MAA 运行时写进去的改动会在它下一次保存时被覆盖，「先关 MAA 再写」不能省。写入器写回时只替换改动的那几个值，文件其余字节（字节顺序标记、换行、缩进、键顺序、数字和转义的写法、超出 2^53 的整数）保持原样。
+
 必须确认目标路径的 MAA 及已见子进程树退出后才备份、改盘；写入前再查。只正常关闭窗口，拒绝退出不强杀。托盘状态没有可关闭主窗口时，请用户恢复主窗口或自行关闭并确认。重开带 MAA 原生 `--skip-startup-auto-run`，保持原自动启动设置；当前会话 GUI started/Init 日志和目标进程共同证明就绪，历史日志不算。实际游戏任务仍由用户或已批准定时启动。
 
-私有目录的 `maa-config-backups/<操作编号>.json` 保存关停后的原始字节；`daily-pending.jsonl` 追加授权与请求，以及当时读到的 MAA 版本和核实记录版本（`versions`，读不出为 null；doctor 恢复时报告与当前的差异，不因此拒绝）；`daily-runs.jsonl` 追加结果。按操作编号取最后记录：释放锁失败可在一次已读回记录之后追加 unknown。完整配置备份仅留本机，不粘贴到对话。CLI 成功退出 0，其余退出 1；只报告 status、phase、操作编号、允许的变更键和静态原因。部分修改不自动恢复或重开重试。
+私有目录的 `maa-config-backups/<操作编号>.json` 保存关停后的原始字节；`daily-pending.jsonl` 追加授权与请求，以及当时读到的 MAA 版本和核实记录版本（`versions`，读不出为 null；doctor 恢复时报告与当前的差异，不因此拒绝）和写入器核对过的差异指纹（`diffFingerprint`；恢复不复用它，也不复用原来的批准）；`daily-runs.jsonl` 追加结果。按操作编号取最后记录：释放锁失败可在一次已读回记录之后追加 unknown。完整配置备份仅留本机，不粘贴到对话。CLI 成功退出 0，其余退出 1；只报告 status、phase、操作编号、允许的变更键和静态原因。部分修改不自动恢复或重开重试。
 

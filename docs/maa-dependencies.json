@@ -1022,6 +1022,94 @@
       ],
       "sourceVerified": ["6.21.4", "6.22.0"],
       "deviceVerified": []
+    },
+    {
+      "id": "config-runtime-writeback",
+      "behaviour": "GUI 只在启动时读一次 gui.new.json（System.Text.Json），之后任何模型属性变化都在 200 毫秒防抖后从内存整份重写这个文件，退出时无条件再整份保存一次；运行期间不经用户操作会写回的字段，包括窗口位置、热键表、更新记录（Name、UpdatePackage、IsFirstBoot）、公告不再提示、当前选中任务、信用作战和访问好友日期，以及写入器也读的任务启用（null 重置为 false）、基建 PlanSelect 轮换、一次性定时 IsEnabled 和定时切换 Current",
+      "skills": [
+        "maa-core",
+        "maa-daily",
+        "maa-doctor",
+        "maa-setup"
+      ],
+      "tickets": [
+        "30"
+      ],
+      "evidence": [
+        "docs/daily-verification.md",
+        "docs/maa-version-sources.md"
+      ],
+      "sources": [
+        {
+          "path": "src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs",
+          "blob": "2a33dd8d4c690f7180435c6ea0be8258eb1af724"
+        },
+        {
+          "path": "src/MaaWpfGui/Main/Bootstrapper.cs",
+          "blob": "aa206a4dcb0625e83a73b992b7ab14424633894b"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Root.cs",
+          "blob": "247118236d6a3350ea8c495c76c03759efbf83b8"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Global/Gui.cs",
+          "blob": "46b81433156aa60120b8d45c12274e550e308c89"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Global/Update.cs",
+          "blob": "83a3bea8de9ad61b3d31d0c59ce3794bf6929da9"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Global/AnnouncementInfo.cs",
+          "blob": "f5aa2a2b9a0c2efd70b75473c24132f7b83442dc"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Single/SpecificConfig.cs",
+          "blob": "f0764db882ea6fdfec200cadb62decbd7721cee4"
+        },
+        {
+          "path": "src/MaaWpfGui/Configuration/Single/MaaTask/MallTask.cs",
+          "blob": "eb45335fd3380881474ddacf3be8c1c8e07fc261"
+        },
+        {
+          "path": "src/MaaWpfGui/Helper/WindowManager.cs",
+          "blob": "437c287431e5fa1e942baf57e7d0ffbde05f49d0"
+        },
+        {
+          "path": "src/MaaWpfGui/Services/HotKeys/MaaHotKeyManager.cs",
+          "blob": "6f35b81dc18501942925ed427481d75744e02284"
+        },
+        {
+          "path": "src/MaaWpfGui/ViewModels/Dialogs/VersionUpdateDialogViewModel.cs",
+          "blob": "f21e9e32f4e8760c06e726677d448132512d22b6"
+        },
+        {
+          "path": "src/MaaWpfGui/ViewModels/Dialogs/AnnouncementDialogViewModel.cs",
+          "blob": "1275b30227d86c586a5b9ca53d54455177f4e050"
+        },
+        {
+          "path": "src/MaaWpfGui/Main/AsstProxy.cs",
+          "blob": "801b556dbcfeb75282cfcd92fa6edcc6f8437ff2"
+        },
+        {
+          "path": "src/MaaWpfGui/Models/TaskSettingVisibilityInfo.cs",
+          "blob": "afd46e4fab7d5185a780e146532210d9f8223606"
+        },
+        {
+          "path": "src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs",
+          "blob": "4dc59356811cef060fa88a246b4bd7e51fd4eddb"
+        },
+        {
+          "path": "src/MaaWpfGui/ViewModels/UserControl/TaskQueue/InfrastTaskUserControlModel.cs",
+          "blob": "f8aa23bbb86ec3aa7379e327c33589a6bb1820ed"
+        }
+      ],
+      "sourceVerified": [
+        "6.21.4",
+        "6.22.0"
+      ],
+      "deviceVerified": []
     }
   ],
   "pending": []

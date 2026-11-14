@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { parseMaaSnapshot } from '../skills/maa-core/scripts/account-snapshot.ts';
 import { matchStageJobs, collectStageJobs, formatStageJobs, prepareStageJobs } from '../skills/maa-core/scripts/stage-jobs.ts';
 import { inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
-import { approvedJobFile } from '../skills/maa-core/scripts/stage-job-plan.ts';
+import { approvedJobFile, approvedJobList } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
+import { inMaaOrder, resaveInMaaOrder } from './fixtures/maa-key-order.ts';
 import './fixtures/maa-version-guard.ts';
 
 const snapshot = (elite: number | null = 2) => parseMaaSnapshot(JSON.stringify({ operBox: { done: true, own_opers: [
@@ -92,6 +94,34 @@ test('approved batch prepares only primaries through the unified writer, expands
   assert.equal(pending.authorization.reference, approval.reference);
   assert.deepEqual(JSON.parse(await readFile(readback.Configurations.Synthetic.Copilot.TaskList[0].FilePath, 'utf8')), job(1).content);
   assert.equal(prepared.versions.state, 'unrecorded', 'a report saved before version stamps existed is still prepared');
+});
+
+// Ticket 30, review round 1: MAA saves the job list in its own key order. Key order is not a configuration value, so a list
+// MAA saved, re-saved on exit or re-saved after the restart never refuses a batch or leaves it unknown.
+test('a batch prepares over a same-length list in MAA key order, and when MAA re-saves the list on exit or after the restart', async t => {
+  for (const mode of ['existing-maa-order', 'exit-save', 'restart-save'] as const) await t.test(mode, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'maa-stage-order-')); t.after(() => rm(root, { recursive: true, force: true }));
+    const maaDirectory = join(root, 'maa'), privateDirectory = join(root, 'private');
+    await mkdir(join(maaDirectory, 'config'), { recursive: true });
+    const configFile = join(maaDirectory, 'config/gui.new.json');
+    // An earlier batch of three runs, in the order maa-skills writes it; MAA's own save puts it in MAA's order.
+    const earlier = [0, 1, 2].map(index => ({ Name: 'SYN-0', FilePath: join(privateDirectory, 'stage-jobs', 'earlier.json'), CopilotId: 9, IsRaid: false, IsChecked: false, IsNavNameOverride: false, Index: index }));
+    const list = mode === 'existing-maa-order' ? earlier.map(inMaaOrder) : mode === 'exit-save' ? earlier : [];
+    await writeFile(configFile, JSON.stringify({ Current: 'Synthetic', Configurations: { Synthetic: { TaskQueue: [], Copilot: { TaskList: list, LoopTimes: 1, EnableUserAdditional: false } } }, Timers: { List: [] } }));
+    const account = snapshot(), report = matchStageJobs(account, tables, request, [job(1), job(2)]);
+    let running = mode === 'exit-save';
+    const maa: MaaProcess = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }),
+      close: async () => { if (mode === 'exit-save') await resaveInMaaOrder(configFile); running = false; },
+      start: async () => { running = true; if (mode === 'restart-save') await resaveInMaaOrder(configFile); } };
+    const approval = { reportHash: report.hash, reference: '批准 SYN-1 普通主作业 1 三次，仅准备', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [], loops: 3 }] };
+    const prepared = await prepareStageJobs({ report, approval, snapshot: account, maaDirectory, privateDirectory, profile: 0, host: 'codex', closedConfirmed: true,
+      expectedRevision: (await inspectConfiguration(maaDirectory)).revision }, maa);
+    assert.equal(prepared.status, 'complete', JSON.stringify(prepared));
+    const written = JSON.parse(await readFile(configFile, 'utf8')).Configurations.Synthetic.Copilot.TaskList;
+    const plan = JSON.parse((await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim()).authorization.jobPlan;
+    assert.deepEqual(written, approvedJobList(plan, privateDirectory), 'the list holds exactly the approved values');
+    assert.equal(existsSync(join(maaDirectory, 'config', '.maa-skills.lock')), false);
+  });
 });
 
 test('preparation reports a MAA or record version that differs from the one read when the report was saved, and still prepares', async t => {

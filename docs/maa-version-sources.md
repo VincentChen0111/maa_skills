@@ -119,6 +119,22 @@ main 带来了已交付的 22（基建建议与排班生成）和 23（执行已
 
 经 25 的生成器（`node scripts/maa-version-check.ts record`）重新生成随包核实记录，内容不变（仍是源码已核 v6.22.0，记录版本 2），记录文件没有改。注册表现为 21 条条目（含 08 的 `setup-release-package`）、94 个文件，待登记为空。
 
+## 30 交付时登记的条目（2026-11-14）
+
+30（配置写入器加固：投影指纹与差异核对）核实了 MAA 运行期间自己写回 `gui.new.json` 的方式和字段，登记为条目 `config-runtime-writeback`。事实和行号记在 [daily 验证记录](daily-verification.md)「30 配置写入器加固」的「固定 MAA 源码核实」表，在 v6.21.4（`52d0b2a`）上核对。核对方法与上文相同：经 `raw.githubusercontent.com` 只读取文件在 v6.21.4 和 v6.22.0 两个提交上的内容，算 Git blob，只在本机临时目录比对，没有写进仓库。skill 是 maa-core（投影和写入器）、maa-daily（写入）、maa-doctor（恢复比较整份配置）和 maa-setup（专用入口用投影 revision）。
+
+条目有 16 个文件，其中 7 个已经在别的条目里（`ConfigFactory.cs`、`Bootstrapper.cs`、`Root.cs`、`SpecificConfig.cs`、`AsstProxy.cs`、`TaskQueueViewModel.cs`、`InfrastTaskUserControlModel.cs`），blob 与它们一致。16 个里 11 个在两个版本上 blob 相同；5 个变了，逐段核对了 30 引用的行，全部在 v6.22.0 上逐行相同，只是位置移动，所以条目的 `sourceVerified` 是 v6.21.4 和 v6.22.0，指纹取 v6.22.0 的 blob。
+
+| 文件 | 30 引用的行（v6.21.4） | v6.22.0 上的同一段 |
+| --- | --- | --- |
+| `src/MaaWpfGui/Configuration/Factory/ConfigFactory.cs` | 第 22–24、52–56、69–84、155–165、306–347、349–399、401–417 行；第 64 行的序列化选项 | 各段行号不变、逐行相同；第 64 行少了两个转换器（上文已记），`WriteIndented`、`Encoder = JavaScriptEncoder.Create(UnicodeRanges.All)`、`WhenWritingNull` 三项仍在 |
+| `src/MaaWpfGui/Main/Bootstrapper.cs` | 第 1238 行（`OnExit`）、第 1360–1361 行（退出时 `Release`） | 第 1243 行、第 1365–1366 行 |
+| `src/MaaWpfGui/Configuration/Global/Gui.cs` | 第 57–61 行（`WindowPlacement`）、第 100 行（`HotKeys`） | 第 57–61 行、第 102 行 |
+| `src/MaaWpfGui/Main/AsstProxy.cs` | 第 2243–2266 行（信用作战和访问好友日期）、第 1505–1515 行（基建计划轮换的调用） | 第 2262–2285 行、第 1514–1524 行 |
+| `src/MaaWpfGui/ViewModels/UI/TaskQueueViewModel.cs` | 第 1361–1369 行（启动时选中任务）、第 1186–1201 行（一次性定时和定时切换配置）、第 2267–2276 行（null 启用状态重置） | 第 1360–1368 行、第 1185–1200 行、第 2285–2294 行 |
+
+随包核实记录用 `node scripts/maa-version-check.ts record` 重新生成，内容不变（源码已核仍是 v6.22.0），记录文件没有改。注册表现为 22 条条目、103 个文件，待登记为空。
+
 ## 发布与 Action 相关的外部事实
 
 - GitHub 发布接口的 `prerelease` 字段区分 beta；`commits/<标签>` 配合 `Accept: application/vnd.github.sha` 只返回提交号。

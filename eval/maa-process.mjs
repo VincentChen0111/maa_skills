@@ -7,7 +7,7 @@ export function createMaaProcess(directory) {
   const workspace = fileURLToPath(new URL('.', import.meta.url));
   if (resolve(directory) !== resolve(workspace)) throw new Error('synthetic-maa-directory');
   const mode = process.env.MAA_EVAL_MAA_PROCESS;
-  if (!['closed', 'ready', 'close-failure', 'restart-failure'].includes(mode)) throw new Error('synthetic-maa-mode');
+  if (!['closed', 'ready', 'close-failure', 'restart-failure', 'drift-noise', 'drift-projection'].includes(mode)) throw new Error('synthetic-maa-mode');
   let running = mode !== 'closed';
   return {
     inspect: async () => {

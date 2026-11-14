@@ -8,7 +8,7 @@
 
 <!-- tracker:start -->
 
-当前已完成：01、02、03、04、05、06、07、08、09、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、27、29。当前可开始：28、30。
+当前已完成：01、02、03、04、05、06、07、08、09、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、27、29、30。当前可开始：28。
 
 | 本地票 | 标题 | GitHub Issue | 阻塞项 | 实施进度 |
 | --- | --- | --- | --- | --- |
@@ -41,7 +41,7 @@
 | 27 | [批准后的碎石与临期药](27-approved-stone-expiring-medicine.md) | [#44](https://github.com/VincentChen0111/maa_skills/issues/44) | 03、05、06 | 已完成 |
 | 28 | [行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md) | [#45](https://github.com/VincentChen0111/maa_skills/issues/45) | 03 | 进行中 |
 | 29 | [指定关卡作业匹配改进](29-stage-job-matching-improvements.md) | [#46](https://github.com/VincentChen0111/maa_skills/issues/46) | 15 | 已完成 |
-| 30 | [配置写入器加固：投影指纹与差异核对](30-config-writer-projection-diff.md) | [#47](https://github.com/VincentChen0111/maa_skills/issues/47) | 05 | 未开始 |
+| 30 | [配置写入器加固：投影指纹与差异核对](30-config-writer-projection-diff.md) | [#47](https://github.com/VincentChen0111/maa_skills/issues/47) | 05 | 已完成 |
 
 <!-- tracker:end -->
 

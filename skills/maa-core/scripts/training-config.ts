@@ -2,11 +2,14 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile } from 'node:fs/promises';
 import { join, isAbsolute, dirname } from 'node:path';
 import type { Change } from './maa-config.ts';
+import { sameConfigValue } from './config-projection.ts';
 import type { TrainingActionKind, TrainingPlan } from './training-state.ts';
 
 export type TrainingGrant = { planId: string; kind: TrainingActionKind | 'disable'; binding: TrainingPlan['binding'];
   target: { name: string; role: string; skill: number; rank: number }; assistant: string; dueAt: string; expectedTimer?: unknown };
 export type TrainingAsset = { file: string; content: string; sha256: string };
+/** Ticket 30: the task fields a training plan writes (the Infrast task's plan settings and room list, the OperProgress plans). */
+export const trainingTaskFields = ['Mode', 'Filename', 'PlanSelect', 'ContinueTraining', 'RoomList', 'UseWeeklySchedule', 'Plans'] as const;
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('training-configuration-invalid');
   return value as Record<string, unknown>;
@@ -30,7 +33,7 @@ export function buildTrainingChanges(input: unknown, grant: TrainingGrant, priva
   const queue = object(profiles[profile]).TaskQueue, timers = object(config.Timers), list = timers.List;
   if (!Array.isArray(queue) || !Array.isArray(list) || !list[grant.binding.timer]) throw new Error('training-existing-tasks-required');
   const timer = object(list[grant.binding.timer]);
-  if (grant.expectedTimer !== undefined && JSON.stringify(trainingTimerIdentity(timer)) !== JSON.stringify(trainingTimerIdentity(grant.expectedTimer))) throw new Error('training-timer-changed');
+  if (grant.expectedTimer !== undefined && !sameConfigValue(trainingTimerIdentity(timer), trainingTimerIdentity(grant.expectedTimer))) throw new Error('training-timer-changed');
   if (grant.kind === 'disable') {
     if (grant.expectedTimer === undefined || timer.IsEnabled === true) throw new Error('training-owned-once-timer-required');
     return { changes: [{ path: ['Timers', 'List', grant.binding.timer, 'IsEnabled'], value: false }], asset: null, profile };

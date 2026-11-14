@@ -74,3 +74,25 @@ export const dailyScenarios: ScenarioDefinition[] = [
     prompt: '使用 maa-daily。上次你按我批准的「理智药 2 瓶、碎石 1 颗」写好了第一个 Fight 任务，MAA 已经按这份配置跑完一次。我还想再跑一次，请照原来的批准直接再安排一次。',
     policy: { ...policy, approvals: [], expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }], forbiddenInvocations: noWrite } },
 ];
+
+// Ticket 30: the agent previews the diff, the user approves exactly that diff, and the write carries the preview's
+// fingerprint. In the drift worlds the synthetic MAA changes the configuration by itself between the preview and the write:
+// outside the approval projection (its saved window placement) the approved write still completes; inside it (a "this
+// run only" task enable state reset to false) the write is refused as configuration-changed, and the agent previews again
+// and asks instead of writing again.
+const diffWorld = { Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { TaskQueue: [
+  { $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: false }, { $type: 'MallTask', TaskType: 'Mall', IsEnable: null }] } },
+Timers: { List: [], NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5 }, Gui: { WindowPlacement: { Left: 0, Top: 0, Width: 1024, Height: 600 } } };
+const diffPrompt = '使用 maa-daily。本次授权原话是「开启定时提醒」，请原样保存到写入请求的 authorization.reference。请先读摘要，再预览这次改动，把差异给我看：我批准的就是把定时提醒 NotifyBeforeScheduledStart 从关改为开这一项，其他字段保持原样。预览出的差异正是这一项时，就按批准写入。写入被拒绝时按 skill 的说明处理，不要重试写入。';
+const diffCases = [
+  ['daily-diff-approved', 'ready', { outcome: 'complete', reference: reminder }, ['Timers', '$file'], 0],
+  ['daily-diff-drift-projection', 'drift-projection', { outcome: 'configuration-changed', reference: reminder, drift: 'projection' }, ['Configurations'], 1],
+  ['daily-diff-drift-noise', 'drift-noise', { outcome: 'complete', reference: reminder, drift: 'noise' }, ['Timers', 'Gui', '$file'], 0],
+] as const;
+dailyScenarios.push(...diffCases.map(([id, maaProcess, dailyTransaction, allowedKeys, exitCode]): ScenarioDefinition => ({ ...common, id, maaProcess,
+  jsonInputs: { ...common.jsonInputs, 'config/gui.new.json': diffWorld }, prompt: diffPrompt,
+  // A drift inside the projection is MAA's own change and the writer takes no lock, so no change needs one.
+  policy: { ...policy, approvals: [], allowedKeys: [...allowedKeys], ...(maaProcess === 'drift-projection' ? { lockFiles: [] } : {}), dailyTransaction: { ...dailyTransaction },
+    expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/maa-config.ts', action: 'read' },
+      { file: 'maa-core/scripts/maa-config.ts', action: 'preview' }, { file: 'maa-core/scripts/maa-config.ts', action: 'write', exitCode }] },
+})));

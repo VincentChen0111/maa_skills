@@ -28,9 +28,14 @@ function doubleSteps(host: Host, scenario: string): Step[] {
   const read = (subject = false): Step => ({ shell: ['node', `${core(subject)}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } });
   if (scenario === 'core-language') return [read(true), { shell: ['node', `${core(true)}/preferences.ts`, 'set'], input: { language: 'en' } },
     { shell: ['node', `${core(true)}/preferences.ts`, 'append'], input: { date: '2026-11-10T06:00:00.000Z', source: 'synthetic-help-case', text: '以后用英文' } }];
-  if (scenario === 'daily-closed') return [read(), { shell: ['node', `${core(false)}/maa-config.ts`, 'read'], input: {} },
-    { shell: ['node', `${core(false)}/maa-config.ts`, 'write'], input: { host, expectedRevision: '{{output:1:configuration.revision}}',
-      authorization: { source: 'current-request', reference: '开启定时提醒' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] } }];
+  if (scenario === 'daily-closed') {
+    // Ticket 30: an ordinary write carries the fingerprint of the diff its read-only preview showed.
+    const request = { host, expectedRevision: '{{output:1:configuration.revision}}', authorization: { source: 'current-request', reference: '开启定时提醒' },
+      changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+    return [read(), { shell: ['node', `${core(false)}/maa-config.ts`, 'read'], input: {} },
+      { shell: ['node', `${core(false)}/maa-config.ts`, 'preview'], input: request },
+      { shell: ['node', `${core(false)}/maa-config.ts`, 'write'], input: { ...request, diffFingerprint: '{{output:2:diffFingerprint}}' } }];
+  }
   if (scenario === 'account-cost-raw') return [read(), { shell: ['node', `${core(false)}/operator-cost.ts`, 'query'],
     input: { name: '合成干员', target: { elite: 2, level: 2 }, mode: 'raw' } }];
   throw new Error(`preflight-scenario:${scenario}`);
@@ -71,8 +76,13 @@ export async function runEnvironmentPreflight(): Promise<EnvironmentPreflight> {
       try {
         const invoke = (action: string, input: unknown) => spawnSync(process.execPath, ['.agents/skills/maa-core/scripts/maa-config.ts', action], { cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8' });
         const read = invoke('read', {});
-        const write = invoke('write', { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision, authorization: { source: 'current-request', reference: '开启定时提醒' },
-          changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
+        // Ticket 30: preview first, then write with the previewed diff's fingerprint; the closed MAA double must still refuse.
+        const request = { host: 'codex', expectedRevision: JSON.parse(read.stdout).configuration.revision, authorization: { source: 'current-request', reference: '开启定时提醒' },
+          changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+        const preview = invoke('preview', request);
+        const diffFingerprint = preview.status === 0 ? JSON.parse(preview.stdout).diffFingerprint : undefined;
+        if (typeof diffFingerprint !== 'string') return 'preview-failed';
+        const write = invoke('write', { ...request, diffFingerprint });
         if (write.status !== 1 || JSON.parse(write.stdout).reason !== 'closed-confirmation-required') return 'closed-double-not-observed';
         const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs: [] });
         const observed = (evidence.daily?.observations ?? []) as { action?: string; actions?: { kind: string; action?: string }[] }[];

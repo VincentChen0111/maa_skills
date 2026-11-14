@@ -4,7 +4,7 @@
 
 ## 场景与观察
 
-场景的 `maaProcess` 固定为 `ready`、`closed`、`close-failure`、`restart-failure` 之一。运行器把待测 daily 和相邻 maa-core 安装到临时目录，通过 Node preload 仅替换精确 `maa-process.ts` 模块边界；产品配置脚本保持原字节。替身记录实际发生的 inspect、close、start 调用和相应合成状态，不启动真实 MAA 或设备。
+场景的 `maaProcess` 固定为 `ready`、`closed`、`close-failure`、`restart-failure`、`drift-noise`、`drift-projection` 之一。后两种（工单 30）在 `ready` 之外，让合成 MAA 在第一次写入读取配置之前自己改一次配置：`drift-noise` 移动窗口位置（在批准投影之外，批准的写入照常完成），`drift-projection` 把「仅本次」任务的 null 启用状态重置为 false（在投影之内，写入以 `configuration-changed` 拒绝，之后要重新预览、不能再写）；这次改动记为写入的第一个动作，评分规则逐项核对它就是声明的那一种。运行器把待测 daily 和相邻 maa-core 安装到临时目录，通过 Node preload 仅替换精确 `maa-process.ts` 模块边界；产品配置脚本保持原字节。替身记录实际发生的 inspect、close、start 调用和相应合成状态，不启动真实 MAA 或设备。
 
 CLI 的 stdin、stdout、退出码和 PID 由预加载观察器记录。open、append、rename、unlink 委托原生文件系统，观察器只记录成功操作及当时的锁、配置与备份字节。场景正常执行产品 CLI，锁、配置、备份、JSONL 都落在真实临时目录；不会让模型生成一份成功记录代替调用。
 

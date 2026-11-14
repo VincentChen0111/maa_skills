@@ -9,6 +9,7 @@ import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from 
 import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
 import { compareVersionStamp, readMaaVersion, readVersionStamp, type MaaVersionReader } from './maa-version.ts';
 import type { ExpiringMedicineGrant } from './consumption-grant.ts';
+import { sameConfigValue } from './config-projection.ts';
 
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
@@ -34,7 +35,7 @@ function matchesBinding(plan: TrainingPlan, actual: NonNullable<TrainingPlan['co
     if (plan.action?.kind === 'start' && (plan.confirmationAt || plan.action.completedAt) && Array.isArray(nativePlan) && nativePlan.length === 0)
       object(expected.queue[plan.binding.progressTask]).Plans = [];
   }
-  return JSON.stringify(expected) === JSON.stringify(actual);
+  return sameConfigValue(expected, actual);
 }
 async function location(id: unknown, options: Options) {
   if (!identifier(id)) throw new Error('training-plan-id-invalid');
@@ -189,7 +190,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
       const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
       const current = trainingTimerIdentity(config.Timers?.List?.[plan.binding.timer]);
       const expected = trainingTimerIdentity(action.timerIdentity);
-      if (JSON.stringify({ ...current, IsEnabled: null }) !== JSON.stringify({ ...expected, IsEnabled: null }) || current.IsEnabled === true) {
+      if (!sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null }) || current.IsEnabled === true) {
         cleanup = { status: 'check-required', reason: 'training-timer-ownership-changed' };
       } else if (current.IsEnabled === false) cleanup = { status: 'complete', reason: 'training-timer-already-disabled' };
       else {
