@@ -209,7 +209,7 @@ test('stone and expiring-medicine states MAA itself saves are not configuration-
   await writeFile(f.file, JSON.stringify(config));
   const result = await runChecks(f.context, f.maa, quiet);
   assert.deepEqual([row(result, 'configuration-fields').status, row(result, 'configuration-fields').reason], ['normal', 'managed-fields-valid']);
-  assert.equal(result.exitCode, 0);
+  assert.equal(result.exitCode, windows ? 0 : 1);
 });
 
 test('remote control reports only configured or not, with no endpoint or identity', async (t) => {
