@@ -345,7 +345,7 @@ test('26 H2: a Codex scenario run pins the sandboxed shell to the PATH the run g
   assert.equal(sets.length, 1);
   assert.equal(setPath(sets[0]), seen.path, 'the set parses back to exactly the PATH the host was given');
   assert.deepEqual(seen.args.slice(seen.args.indexOf('features.view_image=false') + 1, -1), codexPermissionArguments({ shellPath: seen.path }), 'from codexPermissionArguments');
-  // The saved invocation names the shims by placeholder only.
+  // The saved invocation names the workspace (and so the shims) by placeholder only; the pinned PATH value is recorded as <shell-path>.
   const invocation = await readFile(join(result.artifactDirectory, 'invocation.json'), 'utf8');
   assert.ok(invocation.includes('shell_environment_policy.set={PATH=') && invocation.includes('<workspace>') && !invocation.includes('maa-evaluation-'));
 });

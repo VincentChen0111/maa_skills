@@ -102,7 +102,8 @@ export function codexPermissionArguments(options: { readOnly?: boolean; loginDir
 /**
  * The arguments as a record keeps them: the pinned PATH value becomes `<shell-path>`. The PATH can name places the path redaction
  * does not know (npm adds `node_modules/.bin` of every directory above the repository, and a user's PATH has its own entries), so its
- * value never reaches disk; the arguments given to the host are unchanged. It is the same child-environment PATH the run used.
+ * value is not written into the recorded arguments (output the model prints still goes through the one redaction); the arguments given
+ * to the host are unchanged. It is the same child-environment PATH the run used.
  */
 export const recordedShellPath = '<shell-path>';
 export function recordedArguments(args: readonly string[]): string[] {
