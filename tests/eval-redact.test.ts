@@ -137,4 +137,9 @@ test('no evaluation module writes an artifact except through artifactWriter', as
     const direct = [...text.matchAll(/\b(?:writeFile|appendFile|writeFileSync|appendFileSync|createWriteStream|copyFile|cp)\(\s*([\w.]+)/g)].map((match) => match[1]);
     assert.deepEqual(direct, targets, `${file} writes only through artifactWriter`);
   }
+  // Payload materialization (scripts/eval-payload.ts) writes no artifact: only the committed payload files and its record of
+  // commit, tree and digest, into the new payload directory.
+  const payload = await readFile(join(repository, 'scripts/eval-payload.ts'), 'utf8');
+  assert.doesNotMatch(payload, /\bartifactWriter\b/);
+  assert.deepEqual([...payload.matchAll(/\b(?:writeFile|appendFile|writeFileSync|appendFileSync|createWriteStream|copyFile|cp)\(\s*([\w.]+)/g)].map((match) => match[1]), ['file', 'record']);
 });

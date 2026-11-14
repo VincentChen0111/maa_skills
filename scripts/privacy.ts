@@ -26,13 +26,17 @@ function hasAssignedCredential(line: string): boolean {
 
 export async function inspectPrivacy(root: string): Promise<PrivacyFinding[]> {
   const findings: PrivacyFinding[] = [];
-  for (const file of await repositoryFiles(root)) {
-    const text = await readFile(join(root, file), 'utf8');
-    for (const [index, line] of text.split(/\r?\n/).entries()) {
-      if (hasAssignedCredential(line)) findings.push({ file, line: index + 1, rule: 'credential' });
-      for (const [rule, pattern] of rules) {
-        if (pattern.test(line)) findings.push({ file, line: index + 1, rule });
-      }
+  for (const file of await repositoryFiles(root)) findings.push(...inspectText(file, await readFile(join(root, file), 'utf8')));
+  return findings;
+}
+
+/** The same line rules for one file's text; the release package check applies them to an installed directory. */
+export function inspectText(file: string, text: string): PrivacyFinding[] {
+  const findings: PrivacyFinding[] = [];
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (hasAssignedCredential(line)) findings.push({ file, line: index + 1, rule: 'credential' });
+    for (const [rule, pattern] of rules) {
+      if (pattern.test(line)) findings.push({ file, line: index + 1, rule });
     }
   }
   return findings;

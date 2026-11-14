@@ -1,6 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { repositoryFiles } from './files.ts';
+import { directoryReader, inspectManifestVersions } from './release-check.ts';
 
 export async function inspectMetadata(root: string): Promise<string[]> {
   const errors: string[] = [];
@@ -17,16 +18,14 @@ export async function inspectMetadata(root: string): Promise<string[]> {
       } catch { errors.push(`${file}: broken-link`); }
     }
   }
+  // Version consistency has one owner (scripts/release-check.ts); this runs its manifest part. The same gate also checks the
+  // changelog and release-notes version and status (tests/release-check.test.ts, without --release); only the notes' two MAA
+  // lines wait for --release and the tag check, so a version-record PR from ticket 25's Action never fails on an old release.
+  errors.push(...(await inspectManifestVersions(directoryReader(root))).errors);
   try {
     const json = async (path: string) => JSON.parse(await readFile(join(root, path), 'utf8'));
-    const pkg = await json('package.json');
     const plugin = await json('.claude-plugin/plugin.json');
     const market = await json('.claude-plugin/marketplace.json');
-    if (plugin.version !== pkg.version) errors.push('plugin: version-mismatch');
-    // Installed skill directories carry no plugin manifest; maa-core's package version is what doctor reports.
-    let core: { version?: unknown } = {};
-    try { core = await json('skills/maa-core/package.json'); } catch { /* Reported as a mismatch below. */ }
-    if (core.version !== pkg.version) errors.push('maa-core: version-mismatch');
     if (typeof plugin.name !== 'string' || !/^[a-z][a-z0-9-]*$/.test(plugin.name)) errors.push('plugin: invalid-name');
     if (!market.name || !market.owner?.name || !Array.isArray(market.plugins)
       || market.plugins.length !== 1 || market.plugins[0].name !== plugin.name || market.plugins[0].source !== './') errors.push('marketplace: invalid-entry');
