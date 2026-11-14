@@ -14,6 +14,8 @@ import { fixturePrefix } from './eval-fixture.ts';
  */
 export type ArtifactContext = {
   loginDirectory?: string; sentinel?: string; fixture?: { root: string; workspace: string }; executable?: string;
+  /** A batch's payload directory (`--payload`): it stands where the checkout stands, so it is replaced like the repository. */
+  payload?: string;
   /** Exact values (not paths) that must not reach disk either, such as the sentinel's content. */
   values?: [value: string, placeholder: string][];
 };
@@ -27,7 +29,7 @@ const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
  */
 function privatePaths(context: ArtifactContext): RedactedPath[] {
   return [[context.sentinel, '<login-dir>/<sentinel>'], [context.loginDirectory, '<login-dir>'], [context.fixture?.workspace, '<workspace>'],
-    [context.fixture?.root, '<fixture>'], [join(tmpdir(), fixturePrefix), '<fixture>', '[A-Za-z0-9]{6}'], [repositoryRoot, '<repo>'],
+    [context.fixture?.root, '<fixture>'], [join(tmpdir(), fixturePrefix), '<fixture>', '[A-Za-z0-9]{6}'], [repositoryRoot, '<repo>'], [context.payload, '<payload>'],
     [context.executable && isAbsolute(context.executable) ? context.executable : undefined, '<host-executable>'], [homedir(), '<home>']];
 }
 
