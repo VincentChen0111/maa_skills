@@ -96,3 +96,39 @@
 - 推导按名字连引用图，只会多连、不会漏连：同名的局部变量也会连上。命令行哪个分支调哪个函数，是 `commandCalls` 手工读出来的；测试只核对这些函数确实被命令行调用，并且能写文件的函数都有归属。同一个函数服务两个动作时（`skland-account.ts` 的 `inspect` 和 `import`），按整个函数算。
 - 扫描按文字规则判断，不理解语义：没有点名命令、或主语隔了一句以上的说法查不到。`docs/` 下的规格、验证记录和工单正文不在扫描范围，本轮没有改。例如规格「默认值及其来源」10 那一行仍写 `check --online`「只读访问 GitHub 公开接口」，工单 10 和 doctor 验证记录仍有「本机只读核对」的说法。
 - 评测影响：本轮又改了载荷（`skills/` 下五个文件），规则同上，「后」批次在最终候选载荷上整批重跑。改过的 doctor 和 maa-account 文字在真模型上的行为没有验证。
+
+## Issue 91：Codex 审查说明不经 PowerShell 管道（2026-11-14）
+
+来源：包 H 第一轮独立审查的发现，协调者接受并开了 Issue 91。`advice-report.md` 第 3 步和 `maa-help/references/hosts.md` 让 Codex 把中文审查说明经标准输入交给 `codex exec -`；一次真实的 Windows Codex 运行用 PowerShell 5.1 管道传过去，中文变成 `?`，审查员读到乱码仍可能回「没有意见」，报告会被记成已审查。
+
+| 项 | 修改 | 证据（离线） |
+| --- | --- | --- |
+| 命令 | `maa-core/references/advice-report.md` 第 3 步的 Codex 一条改成文件重定向，各一条：Windows PowerShell `$env:MAA_REVIEW_BRIEF = '<file>'; cmd /d /c 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check - < "%MAA_REVIEW_BRIEF%"'`（路径里的单引号写成两个）；POSIX shell `codex exec --sandbox read-only --ephemeral --skip-git-repo-check - < "<file>"`。同一处写明不要用 `Get-Content` 接管道或任何 PowerShell 管道，附一句原因：PowerShell 5.1 会重新编码管道文字，加 BOM，非 ASCII 变成 `?` | `tests/review-brief-handoff.test.ts`「conformance: every codex exec command in the skills hands the brief over by file redirection, never by a pipe」 |
+| 读不到说明算没有结论 | 第 4 步的「没有结论」加上：回复看得出审查员没读到说明（引用的文字是乱码、满是 `?`），运行 `fail` | 同上，按第 4 步那一行断言 |
+| 两处一致 | `hosts.md` 不再自己写命令，改为链接 `advice-report.md` 第 3 步，并写明不用 PowerShell 管道 | 同上：`skills/` 下全部 Markdown 中，凡是带参数运行 `codex exec` 的代码片段必须与 `advice-report.md` 里的两条之一逐字相同；任何代码片段、代码块或正文里出现「`\|` 接 codex」都算违规；提到 `codex exec` 的其他文档必须链接 `advice-report.md`。命令从文档里读出，测试不另存一份 |
+| 检查本身会红 | 把 Windows 命令换回旧的 `codex exec … -`、在 `hosts.md` 加管道（行内、代码块、正文三种）、改写一条不同参数的命令、去掉链接，各自报对应的违规；原样照抄文档里的命令不报 | 「conformance check fails on the old stdin form, a pipe, a restated variant and a mention without the link」 |
+| Windows 实测 | 临时目录里放一个假的 `codex.cmd`（用 node 记下参数和标准输入的 SHA-256），排在 PATH 最前；`CODEX_HOME` 指向空目录。先核对 PowerShell 的 `Get-Command codex` 和 cmd 的 `where codex` 都解析到这个假程序。说明文件含中文、`?`、表情符号和 CRLF，放在带空格、中文、单引号和 `%PATH%` 的目录里。从 `advice-report.md` 读出 Windows 命令、代入路径，经 `powershell.exe -NoProfile -Command` 运行：默认控制台、输入编码 65001、936 三种情况下，假程序收到的参数等于文档里的参数，字节的 SHA-256 等于说明文件 | 「Windows: the documented command hands a Chinese brief at a path with a space, Chinese, a quote and % to codex exec byte for byte」（本机 Windows 运行，没有跳过） |
+| 为什么禁止管道 | 同一个测试把同一份说明用 `Get-Content -Raw -Encoding UTF8 … \| codex …` 管道传：65001 下开头加了 BOM、中文没了；936 下没有 BOM、中文没了。字节都变了。测试规定：哪台机器上管道没有改变字节，只记一条诊断，不判失败 | 同上，测试输出的两条诊断 |
+| 规格 | 「默认值及其来源」加「26 载荷修复（Issue 91）」一行；「规则来源」的 26 载荷修复一行补一句；「独立审查的做法」正文补一句 | `docs-consistency`、`stdin-json` 通过（转义例子检查也扫规格） |
+
+设计默认值（2026-11-14，本轮选定，不是维护者原话；命令的形式本身是协调者的决定，已登记在规格）：
+
+- 环境变量名用 `MAA_REVIEW_BRIEF`。理由：带本项目前缀，不会与宿主自己的变量相撞；不用 `MAA_SKILLS_` 开头，避开调用方约定里「`MAA_SKILLS_HOME` 不设置不覆盖」那一类变量。
+- 路径经环境变量交给 cmd，而不是直接写进 cmd 命令行。本机一次性探针（不入库）从 PowerShell 5.1 试了四种写法：照协调者原文把路径直接写进 `cmd /d /c "… < "<file>""`，PowerShell 先把内层引号当成字符串结束，cmd 报找不到文件；外层用单引号、路径直接写在里面，或用 `""` 转义，这次都能原样送到；环境变量写法也能。选环境变量，因为路径只出现在 PowerShell 单引号字符串里，只有一条规则（单引号写成两个），路径里的 `%` 也不会被 cmd 再展开一次（测试的目录名里有 `%PATH%`）。
+- 用 `cmd /d /c`，不加 `/s`：命令行里有四个引号，cmd 按旧规则去掉第一个和最后一个引号，结果与 `/s` 相同，保持协调者给出的写法。`/d` 不运行 cmd 的 AutoRun。
+
+本轮实际运行的命令（2026-11-14，本机 Windows，Node 24）：
+
+- 先红：新测试文件在改文档前失败（第一项报 `advice-report.md` 没有 Windows 和 POSIX 重定向命令、旧命令和 `hosts.md` 的命令不是文档里的写法、`hosts.md` 没有链接；Windows 实测读不出命令）。
+- `npm run typecheck`：通过。
+- 逐个单独运行（一次一个文件）：`review-brief-handoff` 3 项（含 Windows 实测，没有跳过）、`advice-report` 5、`cultivation-report` 9、`report-scenarios` 1、`base-report-scenarios` 2、`docs-consistency` 8、`help-installation` 6、`metadata` 3、`stdin-json` 13，全部通过。
+- `node scripts/privacy.ts`：没有发现。`node scripts/tracker.ts`：没有错误。
+- 没有运行完整离线入口 `node scripts/check.ts`、`tests/maa-process.test.ts`，没有调用模型，没有运行真实的 `codex` 或 `claude`，没有联网，没有碰真实 MAA。
+
+未验证：
+
+- 真实 Codex 能否在自己的沙箱里嵌套运行 `codex exec`（工单 26 的评测里沙箱中找不到 `codex`）。找不到或不能运行时按第 4 步记 `fail`，报告标「审查未完成」。
+- PowerShell 7：没有试过。按其文档，7.3 起 Windows 上调用 `cmd` 仍用旧的参数传递方式，与 5.1 应当相同，但没有实测。
+- POSIX 那一条只由文档一致性检查覆盖，没有在 bash 或 zsh 上实测。
+- 真实 `codex` 读入的内容：测试用的是假程序，只证明 cmd 交出的字节没变；真实 `codex exec -` 怎样解码标准输入没有验证。
+- 评测影响：本轮又改了载荷（`skills/` 下两个文件），规则同上，「后」批次在最终候选载荷上整批重跑。模型是否照新命令发起审查、读到乱码时是否记 `fail`，只有真模型评测能证明。评测场景的命令白名单 `codex exec *` 只用于 Claude 的 Bash 白名单（Claude 用子代理审查，不受影响）；如果包 H 在 Codex 沙箱里放审查员替身，它要能被 cmd 按 PATH 找到（`.cmd` 或 `.exe`），这归包 H。
