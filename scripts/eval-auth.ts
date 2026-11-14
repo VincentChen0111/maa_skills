@@ -37,31 +37,57 @@ function canonical(path: string): string {
 }
 const overlaps = (a: string, b: string) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep) || b.startsWith(a.endsWith(sep) ? a : a + sep);
 
+/** The first protected place the directory overlaps, in the order given; both sides in long form. */
+function firstOverlap<T extends string>(directory: string, places: [code: T, path: string | undefined][]): T | undefined {
+  const target = canonical(directory);
+  return places.find(([, path]) => path !== undefined && overlaps(target, canonical(path)))?.[0];
+}
+/** The private directory (by the product's own rule) and the settings directory, or undefined when the settings file cannot be read. */
+async function productPlaces(): Promise<[['overlaps-private-directory', string], ['overlaps-settings-directory', string]] | undefined> {
+  const home = settingsHome();
+  try { return [['overlaps-private-directory', (await readSettings(home)).privateDirectory], ['overlaps-settings-directory', home]]; } catch { return undefined; }
+}
+const dailyHostDirectories = () => ['.claude', '.codex', '.claude.json'].map((name) => join(homedir(), name));
+
 export type LoginRefusal = 'not-absolute' | 'unsupported-character' | 'inside-repository' | 'settings-unreadable' | 'overlaps-private-directory'
-  | 'overlaps-settings-directory' | 'overlaps-temporary-fixture' | 'daily-host-directory' | 'overlaps-other-login-directory';
+  | 'overlaps-settings-directory' | 'overlaps-temporary-fixture' | 'daily-host-directory' | 'overlaps-other-login-directory' | 'overlaps-payload-directory';
 /**
  * Locates the maintainer's real private directory with the product's own rule (settingsHome/readSettings) and compares paths only.
  * Nothing else in the private directory or any login directory is read; the paths are never written to a record.
  * The first match in this order is reported: repository, private directory, settings directory, temporary fixture, daily
- * host directories, the other host's login directory (so a parent of both the private and the settings directory is reported
- * as overlapping the private one).
+ * host directories, the other host's login directory, the batch's payload directory (so a parent of both the private and the
+ * settings directory is reported as overlapping the private one). A payload directory stands where the checkout stands: the
+ * login directory may not overlap it either.
  */
-export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string; host?: Host } = {}): Promise<LoginRefusal | undefined> {
+export async function loginDirectoryRefusal(directory: string, context: { fixtureRoot?: string; otherLoginDirectory?: string; host?: Host; payloadDirectory?: string } = {}): Promise<LoginRefusal | undefined> {
   if (!isAbsolute(directory)) return 'not-absolute';
   if (/['\r\n\0]/.test(directory)) return 'unsupported-character';
-  const login = canonical(directory);
-  if (overlaps(login, canonical(repositoryRoot))) return 'inside-repository';
-  const home = settingsHome();
-  let privateDirectory: string;
-  try { privateDirectory = (await readSettings(home)).privateDirectory; } catch { return 'settings-unreadable'; }
-  if (overlaps(login, canonical(privateDirectory))) return 'overlaps-private-directory';
-  if (overlaps(login, canonical(home))) return 'overlaps-settings-directory';
-  if (context.fixtureRoot && overlaps(login, canonical(context.fixtureRoot))) return 'overlaps-temporary-fixture';
-  for (const daily of ['.claude', '.codex', '.claude.json']) if (overlaps(login, canonical(join(homedir(), daily)))) return 'daily-host-directory';
+  if (firstOverlap(directory, [['inside-repository', repositoryRoot]])) return 'inside-repository';
+  const product = await productPlaces();
+  if (!product) return 'settings-unreadable';
   // The other host's directory comes from the caller or, for a named host, from the same variable/default resolution.
   const other = context.otherLoginDirectory ?? (context.host ? resolveLoginDirectory(context.host === 'claude' ? 'codex' : 'claude') : undefined);
-  if (other && overlaps(login, canonical(other))) return 'overlaps-other-login-directory';
-  return undefined;
+  return firstOverlap<LoginRefusal>(directory, [...product, ['overlaps-temporary-fixture', context.fixtureRoot],
+    ...dailyHostDirectories().map((path) => ['daily-host-directory', path] as [LoginRefusal, string]), ['overlaps-other-login-directory', other],
+    ['overlaps-payload-directory', context.payloadDirectory]]);
+}
+
+export type PayloadRefusal = 'not-absolute' | 'inside-repository' | 'settings-unreadable' | 'overlaps-private-directory' | 'overlaps-settings-directory'
+  | 'daily-host-directory' | 'overlaps-login-directory';
+/**
+ * Where a payload directory (the product of another commit that a batch installs instead of the checkout's) may not be: the
+ * same overlap predicate and the same protected places as a login directory, in the same order, plus both hosts' login
+ * directories (by the same variable/default resolution) and any login directory the caller names. `repository` names a
+ * repository the payload is made from, refused like this checkout. Paths are compared only.
+ */
+export async function payloadDirectoryRefusal(directory: string, context: { loginDirectories?: (string | undefined)[]; repository?: string } = {}): Promise<PayloadRefusal | undefined> {
+  if (!isAbsolute(directory)) return 'not-absolute';
+  if (firstOverlap(directory, [['inside-repository', repositoryRoot], ['inside-repository', context.repository]])) return 'inside-repository';
+  const product = await productPlaces();
+  if (!product) return 'settings-unreadable';
+  const logins = [resolveLoginDirectory('claude'), resolveLoginDirectory('codex'), ...context.loginDirectories ?? []];
+  return firstOverlap<PayloadRefusal>(directory, [...product, ...dailyHostDirectories().map((path) => ['daily-host-directory', path] as [PayloadRefusal, string]),
+    ...logins.map((path) => ['overlaps-login-directory', path] as [PayloadRefusal, string | undefined])]);
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -99,7 +125,7 @@ function categoryFor(reason: string, detail?: string, auth: 'plan' | 'api-key' =
  * directory holds a plan login. Hosts that can send a tool-less request then send one minimal request. Status output is kept in
  * memory only: it can carry account identifiers and the login directory, so only a category leaves this function.
  */
-export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api-key'; loginDirectory?: string }): Promise<AuthPreflight> {
+export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api-key'; loginDirectory?: string; payloadDirectory?: string }): Promise<AuthPreflight> {
   const { host, auth } = options;
   const fixture = await createFixture();
   const executableArgs = options.executableArgs ?? [];
@@ -112,7 +138,7 @@ export async function authPreflight(options: HostCommand & { auth: 'plan' | 'api
     if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) return fail('other', 'ci-disabled');
     if (auth === 'plan') {
       if (!options.loginDirectory) return fail('other', 'login-directory-missing');
-      const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host });
+      const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host, ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) });
       if (refusal) return fail('other', `login-directory-refused:${refusal}`);
     }
     const env = childEnvironment(fixture, host, auth, options.loginDirectory);
@@ -230,7 +256,7 @@ function probeOutcome(sentinelRun: SpawnSyncReturns<string>, controlRun: SpawnSy
  * holding, a Codex model that ran no command at all (`declined`) passes like a denied command. The sentinel is removed whatever the
  * outcome, and its absence is confirmed before the result is returned.
  */
-export async function readProtectionCheck(options: HostCommand & { loginDirectory: string; artifactDirectory?: string }): Promise<ReadProtectionResult> {
+export async function readProtectionCheck(options: HostCommand & { loginDirectory: string; artifactDirectory?: string; payloadDirectory?: string }): Promise<ReadProtectionResult> {
   const { host } = options;
   const executableArgs = options.executableArgs ?? [];
   const result: ReadProtectionResult = { host, status: 'fail', fileToolAttempt: host === 'codex' ? 'not-applicable' : 'missing', commandAttempt: 'missing', leaked: false,
@@ -243,7 +269,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
   let wasInterrupted = false;
   const interrupted = () => { wasInterrupted = true; };
   try {
-    const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host });
+    const refusal = await loginDirectoryRefusal(options.loginDirectory, { fixtureRoot: fixture.root, host, ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) });
     if (refusal) return Object.assign(result, { category: 'other', detail: `login-directory-refused:${refusal}` });
     if (!(await exists(options.loginDirectory))) return Object.assign(result, { category: 'not-logged-in', detail: 'maintainer-login-required' });
     const version = probeVersion(options.executable, executableArgs, fixture.workspace, fixture.env);
@@ -315,7 +341,7 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     result.leaked ||= [raw, stderr, ...transcript.outputs, ...(transcript.observedStrings ?? [])].some((text) => text.includes(value));
     const isolation = host === 'claude' ? claudeIsolationProblems(raw, { tools: ['Bash', 'Read'], plan: true }) : [];
     if (options.artifactDirectory) {
-      const save = artifactWriter(options.artifactDirectory, { sentinel, loginDirectory: options.loginDirectory, fixture, executable: options.executable,
+      const save = artifactWriter(options.artifactDirectory, { sentinel, loginDirectory: options.loginDirectory, fixture, executable: options.executable, payload: options.payloadDirectory,
         values: [[value, '<sentinel-value>']] });
       await save(`read-protection-${host}.jsonl`, raw);
       await save(`read-protection-${host}.stderr.txt`, stderr);

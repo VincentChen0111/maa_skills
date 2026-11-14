@@ -1,15 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runScenario, type RunAuth, type ScenarioDefinition, type ScenarioName } from './eval-run.ts';
 import { authPreflight, executableVariables, readProtectionCheck, resolveLoginDirectory, sentinelNames, type AuthPreflight, type ReadProtectionResult } from './eval-auth.ts';
-import { compareRuns, type Comparison, type Host, type RunRecord } from './evaluation.ts';
+import { batchIncomparability, compareRuns, type Comparison, type Grade, type Host, type RunRecord } from './evaluation.ts';
 import { probeVersion } from './eval-host.ts';
-import { entryId, scenarioCatalog, scenarioGroups, selectScenarios, type ScenarioEntry } from './eval-scenarios.ts';
+import { entryId, payloadRefusals, scenarioCatalog, scenarioGroups, scenarioIds, scenarioRequirements, selectScenarios, type ScenarioEntry, type ScenarioRefusal } from './eval-scenarios.ts';
 import { createFixture } from './eval-fixture.ts';
 import { artifactWriter, redactor } from './eval-redact.ts';
+import { materializePayload, openPayload, type PayloadSource } from './eval-payload.ts';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -20,13 +21,18 @@ export type BatchRun = { scenario: string; directory: string; id: string; reason
 export type BatchManifest = {
   kind: 'maa-skills-evaluation-batch'; version: 1; id: string; createdAt: string; host: Host; model: string; auth: BatchAuth; double: boolean;
   fingerprint: { hostVersion: string; model: string; auth: BatchAuth; payload: string; runner: string };
-  scenarios: string[]; rerunOf?: Record<string, string>;
+  /** Where the installed skills came from: a payload directory's commit, tree and content digest, or the checkout's digest. */
+  payload?: PayloadSource;
+  /** `scenarios` are the scenarios the batch runs; `refused` the ones its payload cannot serve, refused before any host call. */
+  scenarios: string[]; refused?: ({ scenario: string } & ScenarioRefusal)[]; rerunOf?: Record<string, string>;
   attempts: { at: string; authPreflight?: Omit<AuthPreflight, 'host'>; readProtection?: Omit<ReadProtectionResult, 'host' | 'pass'> }[];
   runs: BatchRun[]; status: 'running' | 'complete' | 'aborted'; abort?: { reason: string; scenario?: string; stage: 'login-lock' | 'auth-preflight' | 'read-protection' | 'scenario' };
 };
 export type BatchOptions = {
   host: Host; model: string; entries: ScenarioEntry[]; auth?: BatchAuth; executable?: string; executableArgs?: string[]; loginDirectory?: string;
   timeoutMs?: number; batchParent?: string; resume?: string; rerunOf?: Record<string, string>; repeat?: number;
+  /** A payload directory (`materializePayload`); the entries must install from it (`selectScenarios(names, payload)`). */
+  payload?: string;
   /** Stops the batch like Ctrl+C does: after the current host run, with the lock released. */
   signal?: AbortSignal;
 };
@@ -42,7 +48,7 @@ async function tree(directory: string, base = directory): Promise<string[]> {
 }
 /** Runner fingerprint sources: every file that decides how a run is launched, observed, recorded or graded (repository-relative). */
 export const runnerSources = ['scripts/eval-run.ts', 'scripts/eval-host.ts', 'scripts/eval-auth.ts', 'scripts/eval-fixture.ts', 'scripts/evaluation.ts', 'scripts/eval-daily.ts',
-  'scripts/eval-transaction.ts', 'scripts/eval-redact.ts', 'skills/maa-core/scripts/preferences.ts', 'skills/maa-core/scripts/consumption-grant.ts', 'skills/maa-core/scripts/config-projection.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
+  'scripts/eval-transaction.ts', 'scripts/eval-redact.ts', 'skills/maa-core/scripts/preferences.ts', 'skills/maa-core/scripts/consumption-grant.ts', 'skills/maa-core/scripts/config-projection.ts', 'scripts/eval-batch.ts', 'scripts/eval-scenarios.ts', 'scripts/eval-payload.ts', 'eval/observe-node.mjs', 'eval/daily-observer.mjs',
   'eval/maa-process.mjs', 'eval/network-fixture.mjs', 'eval/setup-boundary.mjs', 'eval/report-observer.ts', 'eval/base-plan-observer.ts'];
 export async function runnerFingerprint(): Promise<string> {
   return digest((await Promise.all(runnerSources.map(async (file) => `${file}:${digest(await readFile(join(repositoryRoot, file)))}`))).join('\n'));
@@ -72,32 +78,48 @@ export const completedScenarios = (manifest: BatchManifest) => new Set(manifest.
  * directory (a lock file beside it refuses a second batch, in any process), and there is no parallel option. Plan login runs the auth preflight and the read-protection check first and stops
  * the batch on any failure; a quota, auth or network failure during the batch aborts it, and `resume` runs only the rest.
  * A payload that changes during the batch stops it (`fingerprint-mismatch`); the batch is never marked complete on two candidates.
+ * Before any host call: the payload (the checkout's own, or `options.payload` checked like the checkout) is opened, and each
+ * scenario it cannot serve is refused with a static code (`refused` in the manifest); such a scenario never runs and never
+ * counts as passed or failed. With nothing left to run the batch is not started (`no-servable-scenario`).
  */
 export async function runBatch(options: BatchOptions): Promise<{ directory: string; manifest: BatchManifest }> {
   const auth = options.auth ?? 'plan';
   const executable = options.executable ?? process.env[executableVariables[options.host]] ?? options.host;
   const executableArgs = options.executableArgs ?? [];
   const loginDirectory = auth === 'plan' ? resolveLoginDirectory(options.host, options.loginDirectory) : undefined;
+  const payload = await openPayload(options.payload, { loginDirectories: [loginDirectory] });
+  const payloadDirectory = options.payload === undefined ? undefined : payload.root;
+  if (payloadDirectory) {
+    const skills = join(payloadDirectory, 'skills');
+    const outside = (path: string) => { const from = relative(skills, resolve(path)); return !from || from.startsWith('..') || isAbsolute(from); };
+    if (options.entries.some((entry) => scenarioRequirements(entry).directories.some(outside))) throw new Error('payload-entry-outside');
+  }
+  const refusals = await payloadRefusals(options.entries);
+  const entries = options.entries.filter((entry) => !refusals.has(entryId(entry)));
+  const refused = options.entries.filter((entry) => refusals.has(entryId(entry))).map((entry) => ({ scenario: entryId(entry), ...refusals.get(entryId(entry))! }));
+  if (!entries.length) throw new Error('no-servable-scenario');
   const probeFixture = await createFixture();
   let version;
   try { version = probeVersion(executable, executableArgs, probeFixture.workspace, probeFixture.env); } finally { await probeFixture.dispose(); }
-  const fingerprint = { hostVersion: version.version, model: options.model, auth, payload: await payloadFingerprint(options.entries), runner: await runnerFingerprint() };
+  const fingerprint = { hostVersion: version.version, model: options.model, auth, payload: await payloadFingerprint(entries), runner: await runnerFingerprint() };
   // The manifest is an artifact like any other: saved only through the one redaction (so it is compared in redacted form too).
-  const artifactContext = { ...(loginDirectory ? { loginDirectory } : {}), executable };
+  const artifactContext = { ...(loginDirectory ? { loginDirectory } : {}), executable, ...(payloadDirectory ? { payload: payloadDirectory } : {}) };
+  const payloadOption = payloadDirectory ? { payloadDirectory } : {};
   let directory: string; let manifest: BatchManifest;
   if (options.resume) {
     directory = resolve(options.resume);
     manifest = await readManifest(directory);
     // Same CLI, model, payload and runner, or no resume: a changed batch is a different batch.
     if (manifest.host !== options.host || JSON.stringify(manifest.fingerprint) !== redactor(artifactContext)(JSON.stringify(fingerprint)) ||
-      JSON.stringify(manifest.scenarios) !== JSON.stringify(options.entries.map(entryId))) throw new Error('fingerprint-mismatch');
+      JSON.stringify(manifest.payload) !== JSON.stringify(payload.source) || JSON.stringify(manifest.scenarios) !== JSON.stringify(entries.map(entryId))) throw new Error('fingerprint-mismatch');
     manifest.status = 'running'; delete manifest.abort;
   } else {
     const parent = resolve(options.batchParent ?? '.tmp/evaluations');
     await mkdir(parent, { recursive: true });
     directory = await mkdtemp(join(parent, 'batch-'));
     manifest = { kind: 'maa-skills-evaluation-batch', version: 1, id: randomUUID(), createdAt: new Date().toISOString(), host: options.host, model: options.model,
-      auth, double: version.double, fingerprint, scenarios: options.entries.map(entryId), ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}), attempts: [], runs: [], status: 'running' };
+      auth, double: version.double, fingerprint, payload: payload.source, scenarios: entries.map(entryId), refused, ...(options.rerunOf ? { rerunOf: options.rerunOf } : {}),
+      attempts: [], runs: [], status: 'running' };
   }
   const write = artifactWriter(directory, artifactContext);
   const save = () => write('manifest.json', JSON.stringify(manifest, null, 2));
@@ -130,13 +152,13 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
     if (interrupted()) return await abort('interrupted', 'auth-preflight');
     let runAuth: RunAuth = auth === 'host-double' ? { mode: 'host-double' } : { mode: 'api-key' };
     if (auth !== 'host-double') {
-      const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(loginDirectory ? { loginDirectory } : {}),
+      const preflight = await authPreflight({ host: options.host, model: options.model, auth, executable, executableArgs, ...(loginDirectory ? { loginDirectory } : {}), ...payloadOption,
         ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
       const { host: _host, ...recorded } = preflight; attempt.authPreflight = recorded;
       if (preflight.status !== 'pass') return await abort(preflight.category ?? 'other', 'auth-preflight');
       if (auth === 'plan') {
         // The check comes after the auth preflight and before the first scenario with tools; failure stops this host's batch.
-        const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: loginDirectory!, artifactDirectory: directory,
+        const check = await readProtectionCheck({ host: options.host, model: options.model, executable, executableArgs, loginDirectory: loginDirectory!, artifactDirectory: directory, ...payloadOption,
           ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
         const { host: _checked, pass, ...result } = check; attempt.readProtection = result;
         if (check.status !== 'pass' || !pass) return await abort(check.category ?? 'read-protection-failed', 'read-protection');
@@ -148,10 +170,10 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
     await save();
     // A batch is one candidate: the payload (scenario definitions and every installed skill file) is checked again before each
     // scenario starts, after each run and before the batch is marked complete; any change stops the batch (fail closed).
-    const samePayload = async () => await payloadFingerprint(options.entries) === fingerprint.payload;
+    const samePayload = async () => await payloadFingerprint(entries) === fingerprint.payload;
     const done = completedScenarios(manifest);
     const repeat = options.repeat ?? 1;
-    for (const entry of options.entries) {
+    for (const entry of entries) {
       const scenario = entryId(entry);
       const finished = manifest.runs.filter((run) => run.scenario === scenario && counts(run)).length;
       if (done.has(scenario) && finished >= repeat) continue;
@@ -161,7 +183,7 @@ export async function runBatch(options: BatchOptions): Promise<{ directory: stri
         const outcome = await runScenario({ host: options.host, model: options.model, scenario: entry.definition as ScenarioName | ScenarioDefinition, executable, executableArgs,
           auth: runAuth, artifactParent: directory, ...(entry.skillDirectory ? { skillDirectory: entry.skillDirectory } : {}), companionSkills: entry.companionSkills,
           ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(manifest.rerunOf?.[scenario] ? { rerunOf: manifest.rerunOf[scenario] } : {}),
-          payloadFingerprint: fingerprint.payload });
+          payloadFingerprint: fingerprint.payload, ...payloadOption });
         // A run the user interrupted, or one the payload changed under, is kept as saved, but the manifest marks it so that
         // it does not count and resume runs the scenario again.
         const stopped = interrupted();
@@ -195,17 +217,45 @@ export async function batchRecords(directory: string): Promise<RunRecord[]> {
   const counted =finished.filter((run, index) => manifest.rerunOf?.[run.scenario] || !finished.slice(index + 1).some((later) => later.scenario === run.scenario));
   return Promise.all(counted.map(async (run) => JSON.parse(await readFile(join(directory, run.directory, 'run.json'), 'utf8')) as RunRecord));
 }
-export type BatchComparison = { overall: Comparison; scenarios: { host: Host; scenario: string; status: Comparison['status']; rerun: string[] }[]; rerunScenarios: string[] };
-export async function compareBatches(before: string, after: string, reruns: string[] = []): Promise<BatchComparison> {
-  const [old, next, repeated] = await Promise.all([batchRecords(before), batchRecords(after), Promise.all(reruns.map(batchRecords)).then((items) => items.flat())]);
+export type BatchComparison = {
+  overall: Comparison;
+  /** Each scenario with its own verdict, the grade before and after, and the reasons when it is incomparable. */
+  scenarios: { host: Host; scenario: string; status: Comparison['status']; rerun: string[]; before?: Grade['status']; after?: Grade['status']; reasons: string[] }[];
+  rerunScenarios: string[];
+  /** Scenarios that passed before and failed after (each needs three reruns before it is judged). */
+  passToFail: string[];
+  /** The payload each side names (source commit and digest). */
+  payload: { before?: PayloadSource; after?: PayloadSource };
+};
+/**
+ * Compares two batches whose only allowed difference is the payload (`batchIncomparability`: same host, CLI, model, auth and
+ * runner; scenario identity per record in `compareRuns`). `scenarios` restricts both sides (and the reruns) to a subset (ids,
+ * group names or `all`), so several comparisons can share one after batch; each subset scenario must have been run on both
+ * sides, and one a side refused or never ran makes the pair incomparable with its reason.
+ */
+export async function compareBatches(before: string, after: string, reruns: string[] = [], options: { scenarios?: string[] } = {}): Promise<BatchComparison> {
+  const [oldManifest, nextManifest, ...rerunManifests] = await Promise.all([before, after, ...reruns].map(readManifest));
+  const subset = options.scenarios ? new Set(scenarioIds(options.scenarios)) : undefined;
+  const keep = (runs: RunRecord[]) => subset ? runs.filter((run) => subset.has(run.scenario)) : runs;
+  const [old, next, repeated] = (await Promise.all([batchRecords(before), batchRecords(after), Promise.all(reruns.map(batchRecords)).then((items) => items.flat())])).map(keep) as [RunRecord[], RunRecord[], RunRecord[]];
+  const reasons = batchIncomparability(oldManifest!, nextManifest!, rerunManifests);
+  if (!reasons.length && subset) {
+    for (const id of subset) for (const [side, manifest, records] of [['before', oldManifest!, old], ['after', nextManifest!, next]] as const) {
+      if (!records.some((run) => run.scenario === id)) reasons.push(`${manifest.refused?.some((item) => item.scenario === id) ? 'scenario-refused' : 'scenario-not-run'}:${side}:${id}`);
+    }
+  }
   const scenarios = [...new Set([...old, ...next].map((run) => `${run.host}:${run.scenario}`))].sort().map((key) => {
     const [host, scenario] = key.split(/:(.*)/) as [Host, string];
     const pick = (runs: RunRecord[]) => runs.filter((run) => run.host === host && run.scenario === scenario);
-    const after = pick(next);
-    const result = compareRuns(pick(old), after, repeated.filter((run) => after.some((item) => item.id === run.rerunOf)));
-    return { host, scenario, status: result.status, rerun: result.rerun };
+    const [first, last] = [pick(old), pick(next)];
+    const result = compareRuns(first, last, repeated.filter((run) => last.some((item) => item.id === run.rerunOf)));
+    return { host, scenario, status: result.status, rerun: result.rerun, ...(first[0] ? { before: first[0].grade.status } : {}), ...(last[0] ? { after: last[0].grade.status } : {}),
+      reasons: result.reasons };
   });
-  return { overall: compareRuns(old, next, repeated), scenarios, rerunScenarios: scenarios.filter((item) => item.status === 'needs-reruns').map((item) => item.scenario) };
+  return { overall: reasons.length ? { status: 'incomparable', rerun: [], reasons } : compareRuns(old, next, repeated), scenarios,
+    rerunScenarios: scenarios.filter((item) => item.status === 'needs-reruns').map((item) => item.scenario),
+    passToFail: scenarios.filter((item) => item.before === 'pass' && item.after === 'fail').map((item) => item.scenario),
+    payload: { ...(oldManifest!.payload ? { before: oldManifest!.payload } : {}), ...(nextManifest!.payload ? { after: nextManifest!.payload } : {}) } };
 }
 
 /** `eval-run.ts` keeps its positional form; each run is a batch of one with the same preflight and read-protection gate. */
@@ -226,17 +276,30 @@ function option(args: string[], name: string): string | undefined {
   return value;
 }
 const usage = `Usage:
-  node scripts/eval-batch.ts list
-  node scripts/eval-batch.ts run <claude|codex> <fixed-model-id> <scenario-or-group>... [--auth plan|api-key] [--executable <path>] [--login-dir <path>] [--timeout-ms <ms>] [--rerun-of <batch-dir>]
-  node scripts/eval-batch.ts resume <batch-dir> [--executable <path>] [--login-dir <path>] [--timeout-ms <ms>]
-  node scripts/eval-batch.ts compare <before-batch-dir> <after-batch-dir> [<rerun-batch-dir>...]
+  node scripts/eval-batch.ts list [--payload <payload-dir>]
+  node scripts/eval-batch.ts payload --commit <rev> --out <new-empty-dir>
+  node scripts/eval-batch.ts run <claude|codex> <fixed-model-id> <scenario-or-group>... [--payload <payload-dir>] [--auth plan|api-key] [--executable <path>] [--login-dir <path>] [--timeout-ms <ms>] [--rerun-of <batch-dir>]
+  node scripts/eval-batch.ts resume <batch-dir> [--payload <payload-dir>] [--executable <path>] [--login-dir <path>] [--timeout-ms <ms>]
+  node scripts/eval-batch.ts compare <before-batch-dir> <after-batch-dir> [<rerun-batch-dir>...] [--scenarios <id-or-group>,...]
   node scripts/eval-batch.ts preflight`;
 
 export async function main(argv: string[]): Promise<number> {
   const args = [...argv];
   const command = args.shift();
   if (command === 'list') {
-    console.log(JSON.stringify({ groups: scenarioGroups(), scenarios: scenarioCatalog().map((entry) => ({ id: entryId(entry), group: entry.group })) }, null, 2));
+    const directory = option(args, '--payload');
+    const payload = await openPayload(directory);
+    const catalog = scenarioCatalog(directory === undefined ? undefined : payload.root);
+    const refusals = await payloadRefusals(catalog);
+    console.log(JSON.stringify({ groups: scenarioGroups(), payload: payload.source,
+      scenarios: catalog.map((entry) => ({ id: entryId(entry), group: entry.group, ...(refusals.has(entryId(entry)) ? { refused: refusals.get(entryId(entry)) } : {}) })) }, null, 2));
+    return 0;
+  }
+  if (command === 'payload') {
+    const commit = option(args, '--commit');
+    const out = option(args, '--out');
+    if (!commit || !out || args.length) { console.error(usage); return 2; }
+    console.log(JSON.stringify(await materializePayload({ commit, out }), null, 2));
     return 0;
   }
   if (command === 'preflight') {
@@ -246,9 +309,10 @@ export async function main(argv: string[]): Promise<number> {
     return result.status === 'pass' ? 0 : 1;
   }
   if (command === 'compare') {
+    const subset = option(args, '--scenarios');
     const [before, after, ...reruns] = args;
     if (!before || !after) { console.error(usage); return 2; }
-    const result = await compareBatches(before, after, reruns);
+    const result = await compareBatches(before, after, reruns, subset === undefined ? {} : { scenarios: subset.split(',').map((name) => name.trim()).filter(Boolean) });
     console.log(JSON.stringify(result, null, 2));
     return ['pass', 'baseline'].includes(result.overall.status) ? 0 : 1;
   }
@@ -258,20 +322,22 @@ export async function main(argv: string[]): Promise<number> {
     const loginDirectory = option(args, '--login-dir');
     const timeout = option(args, '--timeout-ms');
     const rerunBatch = option(args, '--rerun-of');
+    const payloadOption = option(args, '--payload');
+    const payload = payloadOption === undefined ? undefined : resolve(payloadOption);
     if (auth && !['plan', 'api-key'].includes(auth)) { console.error(usage); return 2; }
-    const common = { ...(executable ? { executable } : {}), ...(loginDirectory ? { loginDirectory } : {}), ...(timeout ? { timeoutMs: Number(timeout) } : {}) };
+    const common = { ...(executable ? { executable } : {}), ...(loginDirectory ? { loginDirectory } : {}), ...(timeout ? { timeoutMs: Number(timeout) } : {}), ...(payload ? { payload } : {}) };
     let result;
     if (command === 'resume') {
       const [batch] = args;
       if (!batch) { console.error(usage); return 2; }
       const saved = await readManifest(batch);
       if (saved.auth === 'host-double') throw new Error('host-double-batch');
-      result = await runBatch({ host: saved.host, model: saved.model, auth: saved.auth, entries: selectScenarios(saved.scenarios), resume: batch, ...common,
+      result = await runBatch({ host: saved.host, model: saved.model, auth: saved.auth, entries: selectScenarios(saved.scenarios, payload), resume: batch, ...common,
         ...(saved.rerunOf ? { rerunOf: saved.rerunOf, repeat: 3 } : {}) });
     } else {
       const [host, model, ...names] = args;
       if (!host || !['claude', 'codex'].includes(host) || !model || !names.length) { console.error(usage); return 2; }
-      const entries = selectScenarios(names);
+      const entries = selectScenarios(names, payload);
       let rerunOf: Record<string, string> | undefined;
       if (rerunBatch) {
         // Each pass→fail scenario is rerun three times on its own, each record pointing at the first failing run.
@@ -285,9 +351,10 @@ export async function main(argv: string[]): Promise<number> {
       result = await runBatch({ host: host as Host, model, entries, ...(auth ? { auth } : {}), ...common, ...(rerunOf ? { rerunOf, repeat: 3 } : {}) });
     }
     const { manifest } = result;
-    console.log(JSON.stringify({ batch: relative(process.cwd(), result.directory).replaceAll('\\', '/'), status: manifest.status, abort: manifest.abort,
-      runs: manifest.runs.map(({ scenario, reason, grade }) => ({ scenario, reason, grade })) }, null, 2));
-    return manifest.status === 'complete' && manifest.runs.every((run) => run.grade === 'pass') ? 0 : 1;
+    console.log(JSON.stringify({ batch: relative(process.cwd(), result.directory).replaceAll('\\', '/'), status: manifest.status, abort: manifest.abort, payload: manifest.payload,
+      refused: manifest.refused ?? [], runs: manifest.runs.map(({ scenario, reason, grade }) => ({ scenario, reason, grade })) }, null, 2));
+    // A refused scenario is neither passed nor failed, but the batch did not run everything it was asked to.
+    return manifest.status === 'complete' && manifest.runs.every((run) => run.grade === 'pass') && !manifest.refused?.length ? 0 : 1;
   }
   console.error(usage);
   return 2;

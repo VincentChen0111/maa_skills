@@ -15,7 +15,8 @@ import { compareRuns, type RunRecord } from '../scripts/evaluation.ts';
 // sets or batches may be compared. Producers of identity inputs: the one scenarioIdentity call in runScenario, with runner
 // sources, harness files, the prompt and every scenario definition (whose whole runtime import closure, eval fixtures and
 // network fixtures included, reaches product code only through the allow-list). Consumers: compareRuns (per scenario and
-// overall), its baseline branch, compareBatches, the compare command's exit code, rerun batches, resume and the payload
+// overall), its baseline branch, compareBatches with the batch conditions (batchIncomparability: only the payload may differ)
+// and its scenario subset, the compare command's exit code, rerun batches, resume and the payload
 // fingerprint checked during a batch and per side.
 const repository = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 const double = join(repository, 'eval/host-double.mjs');
@@ -224,6 +225,8 @@ test('every producer of a scenario identity input and every consumer of the scen
   assert.deepEqual(await uses(/\bscenarioHash\b/g), { 'scripts/eval-run.ts': 1, 'scripts/evaluation.ts': 4 });
   assert.deepEqual(await uses(/\bcompareRuns\(/g), { 'scripts/eval-batch.ts': 2, 'scripts/evaluation.ts': 1 });
   assert.deepEqual(await uses(/\bcompareBatches\(/g), { 'scripts/eval-batch.ts': 2 });
+  // The batch conditions (everything but the payload must be equal): defined in the owner, read only by compareBatches.
+  assert.deepEqual(await uses(/\bbatchIncomparability\(/g), { 'scripts/eval-batch.ts': 1, 'scripts/evaluation.ts': 1 });
   // The payload fingerprint: computed in the batch (definition, batch start, the check before and after each run, handed to
   // the run), written into the record by the runner (option and record field), read only by the owner (RunRecord field,
   // one per side, required).
@@ -275,7 +278,10 @@ test('every consumer compares per scenario: multi-group batches, baseline, batch
       runs.push({ scenario: item.scenario, directory: item.id, id: item.id, reason: 'completed', grade: item.grade.status, ...(item.rerunOf ? { rerunOf: item.rerunOf } : {}) });
     }
     const rerunOf = Object.fromEntries(records.filter((item) => item.rerunOf).map((item) => [item.scenario, item.rerunOf!]));
-    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
+    // Every batch here runs under the same conditions and names a payload; batch-level differences are tests/eval-payload.test.ts's.
+    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ kind: 'maa-skills-evaluation-batch', version: 1, host: 'claude', double: records.some((value) => value.double === true),
+      fingerprint: { hostVersion: '2.1.321', model: 'fixed-model', auth: 'plan', runner: 'fixed-runner', payload: records[0]?.payloadFingerprint },
+      payload: { source: 'commit', commit: '0'.repeat(40), tree: '0'.repeat(40), trees: {}, digest: 'fixed-payload' }, runs, ...(Object.keys(rerunOf).length ? { rerunOf } : {}) }));
     return directory;
   };
   const exitCode = (...args: string[]) => spawnSync(process.execPath, ['scripts/eval-batch.ts', 'compare', ...args], { cwd: repository, encoding: 'utf8', windowsHide: true }).status;

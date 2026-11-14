@@ -43,7 +43,9 @@ export type RunAuth = { mode: 'plan'; readProtection?: ReadProtectionPass } | { 
 export type RunOptions = { host: Host; model: string; scenario: ScenarioName | ScenarioDefinition; executable?: string; executableArgs?: string[]; timeoutMs?: number;
   reviewBrief?: string; skillDirectory?: string; companionSkills?: Record<string, string>; auth?: RunAuth; artifactParent?: string; rerunOf?: string;
   /** The batch's payload fingerprint, recorded in the run so that a side of a comparison holds one candidate. */
-  payloadFingerprint?: string };
+  payloadFingerprint?: string;
+  /** The batch's payload directory (`--payload`), protected and redacted like the checkout; its skills come in through the directories above. */
+  payloadDirectory?: string };
 export type RunOutcome = { record: RunRecord; reason: RunReason; artifactDirectory: string; fixtureDirectory: string };
 /**
  * How long one scenario run may take: 180 s, about three times the longest real run that completed (55.4 s, Codex on
@@ -91,7 +93,8 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       if (auth.mode === 'host-double' && !version.double) reason = 'host-double-required';
       else if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) reason = 'ci-disabled';
       else if (auth.mode === 'plan' && !isReadProtectionPass(auth.readProtection, options.host)) reason = 'read-protection-required';
-      else if (auth.mode === 'plan' && await loginDirectoryRefusal(loginDirectory!, { fixtureRoot: fixture.root, host: options.host })) reason = 'login-directory-refused';
+      else if (auth.mode === 'plan' && await loginDirectoryRefusal(loginDirectory!, { fixtureRoot: fixture.root, host: options.host,
+        ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) })) reason = 'login-directory-refused';
       else if (auth.mode === 'plan' && credentialVariables(env, options.host).length) reason = 'api-key-in-environment';
       else {
         // Never copy the caller's auth files: plan login is used in place in its dedicated directory, API keys only from MAA_EVAL_*.
@@ -134,7 +137,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       ...(executionWindow ? { durationMs: Date.parse(executionWindow.endedAt) - Date.parse(executionWindow.startedAt) } : {}),
     };
     // Paths are replaced by fixed placeholders before anything reaches disk.
-    const save = artifactWriter(artifactDirectory, { ...(loginDirectory ? { loginDirectory } : {}), fixture, executable });
+    const save = artifactWriter(artifactDirectory, { ...(loginDirectory ? { loginDirectory } : {}), fixture, executable, ...(options.payloadDirectory ? { payload: options.payloadDirectory } : {}) });
     await save('run.json', JSON.stringify(record, null, 2));
     await save('evidence.json', JSON.stringify(evidence, null, 2));
     await save('host.jsonl', raw);
