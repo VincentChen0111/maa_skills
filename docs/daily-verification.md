@@ -332,13 +332,13 @@ core 集成后完整离线入口 75 项：74 通过、1 项平台条件跳过；
 `skills/maa-core/scripts/config-projection.ts` 是唯一定义：投影是整份配置去掉 `projectionExclusions` 的 9 个字段，就是上表里 MAA 运行时自己写、并且随 skill 发布的代码不读也不写的那些（评测的合成 MAA 为模拟 MAA 自己的写入会改窗口位置）：根上的 `Gui.WindowPlacement`、`Gui.HotKeys`、`Update.Name`、`Update.UpdatePackage`、`Update.IsFirstBoot`、`AnnouncementInfo.DoNotShowAgain`，每个配置的 `TaskSelectedIndex`，任务里的 `CreditFightLastTime`、`VisitFriendsLastTime`。其他字段原样保留，键顺序和「省略与 null 不同」都不变。
 
 - `projectionRevision`：读取摘要的 `revision`、写入器的版本核对、setup 专用入口的 `expectedRevision` 和候选 `discoveryRevision`、doctor 恢复写入时传给写入器的 `expectedRevision`。基建应用、换备选、作业准备和专精计划经读取摘要的 `revision` 得到它。
-- `wholeConfigFingerprint`：只给 doctor 判断「当前配置等于备份」或「等于预期结果」用，整份精确比较，规则不变。
+- `wholeConfigFingerprint`：只给 doctor 判断「当前配置等于备份」或「等于预期结果」用，整份精确比较，规则不变。第一轮审查后两个指纹仍按原始 JSON 计算（对象键顺序也算），理由见「第一轮审查修复」。
 - 写入器白名单变成导出表 `writerFields`（含 27 的消耗字段、23 的基建字段、24 的专精字段和 setup 的四个连接字段），`prepare` 拒绝表外任何改动，不论从哪条路线来；关停时绑定的对象也要在 `writerDependencies` 表里。
 
 ### 差异指纹
 
 - `maa-config.ts preview`：输入和 `write` 相同（不带指纹），跑写入前的全部检查，不访问进程、不加锁、不写文件（连私有目录都不创建）。输出 `revision`、`diffFingerprint` 和 `changes`（键、配置序号、白名单前后摘要）。
-- `configDiff`（`config-projection.ts`）是差异和指纹的唯一定义：解析后的改动路径加上投影后的前后值，只算值确实变了的改动。写入器、预览、待执行记录和两个评分规则都用它。
+- `configDiff`（`config-projection.ts`）是差异和指纹的唯一定义：解析后的改动路径加上投影后的前后值，只算值确实变了的改动。写入器、预览、待执行记录和两个评分规则都用它。第一轮审查后「变了」和指纹都按同一配置值判断（对象键顺序不算），见「第一轮审查修复」。
 - 当次请求的普通写入必须带指纹（`approved-diff-missing`），不一致拒绝（`approved-diff-mismatch`），都在进程访问、加锁和写入之前；消耗谓词的原因码排在它们前面，代理仍能知道缺哪项批准。计划写入、setup、doctor 恢复和已批准报告来源不要求，带了就核对；`jobPlan: null` 这种空占位不算计划。
 - 关停后在 MAA 留下的配置上重算：不一致时不备份、不写，原来在运行的 MAA 重新打开，锁释放，运行记录追加一条 `rejected`。
 - 待执行记录多一个 `diffFingerprint`；doctor 的记录格式接受它，恢复不复用它，也不复用原来的批准。
@@ -352,7 +352,7 @@ MAA 用 System.Text.Json 读这个文件（上表第一行；工单说明里写�
 所以改为最小修改（`skills/maa-core/scripts/config-edit.ts`，没有新依赖）：
 
 - 方法：只定位每个值在原文里的起止位置（值本身仍由 `JSON.parse` 解码），只替换改动路径上的值；队列重排时复用每个任务原来的字节；MAA 省略的一次性定时 `IsEnabled` 加在该定时对象最后一个字段之后，沿用文件自己的分隔写法；新值按文件的缩进和换行写出。
-- 核对：改写后的文本解析结果必须等于写入器准备好的配置，否则抛错、什么都不写。写入前在检查阶段先试一次，文件不是合法 UTF-8 或定位失败时在关停 MAA 之前以 `request-invalid` 拒绝。
+- 核对：改写后的文本解析结果必须等于写入器准备好的配置，否则抛错、什么都不写。写入前在检查阶段先试一次，文件不是合法 UTF-8 或定位失败时在关停 MAA 之前以 `request-invalid` 拒绝。第一轮审查后「等于」按同一配置值判断（对象键顺序不算，数组顺序和每个值都算），被改的对象如果文件里的键顺序和准备的不同，整个对象按准备的顺序写出，见「第一轮审查修复」。
 - 取舍：被改动的值用 JavaScript 的写法写出（例如重写整个房间列表时，其中的数字写法可能和 MAA 不同），没改动的键一个字节都不变；重复键时改最后一个（和 `JSON.parse`、MAA 的读法一致），前面的重复键原样留着。doctor 的恢复写入现在会把原来的字节原样放回。
 
 ### 先红后绿
@@ -370,7 +370,7 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 
 ### 设计默认值
 
-都登记在规格「默认值及其来源」（2026-11-14 各行），这里只列出处：投影范围（9 个排除字段，其余全部在内）、一个定义一个所有者和一致性测试的形状、两个指纹函数、只读预览和摘要的写法、指纹必带的范围和两个原因码、计划写入入口这一轮不接收指纹参数、关停后不一致时重开 MAA 并释放锁、写回只替换改动值。另有两条只影响实现、不是产品限制，记在这里：结果里 `phase` 对关停后的拒绝写 `backup`（判断发生时锁记录的阶段）；文件无法最小修改时沿用 `request-invalid`，不另设原因码（MAA 写出的文件不会出现这种情况）。
+都登记在规格「默认值及其来源」（2026-11-14 各行），这里只列出处：投影范围（9 个排除字段，其余全部在内）、一个定义一个所有者和一致性测试的形状、两个指纹函数、只读预览和摘要的写法、指纹必带的范围和两个原因码、计划写入入口这一轮不接收指纹参数、关停后不一致时重开 MAA 并释放锁、写回只替换改动值。另有两条只影响实现、不是产品限制，记在这里：结果里 `phase` 对关停后的拒绝写 `backup`（判断发生时锁记录的阶段）；文件无法最小修改时沿用 `request-invalid`，不另设原因码。（更正：原来这里写「MAA 写出的文件不会出现这种情况」，不对。第一轮审查发现，MAA 按自己的键顺序保存的同长度作业列表正好会走到这里，修法见「第一轮审查修复」。修复后会走到这里的只剩：文件不是合法 UTF-8、定位失败，或者改写结果和准备的配置不是同一配置值。）
 
 ### 实际运行
 
@@ -384,3 +384,63 @@ maa-daily 组新增三个场景，两种宿主都跑：`daily-diff-approved`（�
 - System.Text.Json 对大整数、键顺序、字节顺序标记的处理是库的行为推断，没有在 MAA 里实测。
 - 真模型评测（三个新场景和 maa-daily 改动前后的同模型对比）没有运行，延到工单 26：缺两个专用登录目录里的维护者登录和真模型批次。
 - `tests/maa-process.test.ts` 的命令行写入改为先预览再写，按约定本票没有运行它（它启动合成 Windows GUI）；完整离线入口 `node scripts/check.ts` 也没有运行，由协调者在冻结的提交上跑。
+
+### 第一轮审查修复
+
+第一轮独立审查（草稿 PR #83）后协调者接受了三项。F1 和 F2 属于同一类缺陷（按键顺序比较 MAA 保存的对象），按维护者的复发规则合成一个谓词、一个所有者，再加一个枚举全部比较位置的一致性测试。
+
+**F1（P2）：同长度的作业列表因为键顺序不同被拒**
+
+- 原因：固定 MAA 用 System.Text.Json 按列表项视图模型的属性顺序（Name、IsNavNameOverride、FilePath、CopilotId、Index、IsRaid、IsChecked，[CopilotItemViewModel.cs 第 51–104 行](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaWpfGui/ViewModels/Items/CopilotItemViewModel.cs#L51-L104)，审查员读源码核对）保存 `Copilot.TaskList` 的每一项，`stage-job-plan.ts` 生成的顺序不同。最小修改遇到同长度的列表时逐项就地修改，保留文件里的键顺序，最后的核对用 `JSON.stringify` 比较（键顺序也算），于是失败：预览和写入以 `request-invalid` 拒绝；预览之后 MAA 退出保存把列表改成它的顺序时，关停后的目标核对失败，结果为 `unknown`（阶段 `backup`），MAA 不重开，锁留着。会走到的真实路径：换备选时续作列表和原列表一样长；同样条数的新一批作业。审查员列的第三条（doctor 恢复作业事务）走不到写入器，见下文。
+- 修法：渲染判断和最终核对改用同一配置值谓词。值相同的对象（不论键顺序）保留原字节；被改的对象如果文件里的键顺序和准备好的不同，整个对象按准备的顺序写出（协调者给的修法）；最终核对仍要求解析结果和准备的配置是同一配置值，数组顺序和每个值都要一致，否则什么都不写。
+
+**F2（同类）：关停前后的目标核对和读回也按键顺序比较**
+
+- 原因：`maa-config.ts` 的 `comparableAt` 用 `JSON.stringify`。MAA 重开后会按自己的顺序整份重存（本记录「验收 1」：启动时热键表重新赋值会触发一次保存，此外有防抖保存和退出保存），一次正确的作业写入会以 `readback-mismatch` 结束为 `unknown`。
+- 修法：`config-projection.ts` 新增 `sameConfigValue` 和它的比较形式 `configValueKey`，这是「同一配置值」的唯一定义：对象的键顺序不算差别；数组顺序、键在不在（省略和 null 不同）和每个值都算，按 `JSON.stringify` 的写法比较。`comparableAt` 改为返回这个形式。
+
+**比较位置的分类**（`tests/config-value.test.ts` 检索 `skills/` 里每一处 JSON 文本相等、对 JSON 文本求哈希、深比较和谓词调用，逐条归类，表必须完整、每条都还存在）
+
+- 配置值，全部用谓词：最小修改的三处（值相同保留字节、重排复用每项字节、最终核对）；`configDiff` 判断「变了」和差异指纹；`comparableAt` 的七处调用（关停前记下目标、关停前后的目标核对、读回的改动值和目标、doctor 每个改动的状态）；专精和基建计划的改动集合等于批准、作业列表等于批准的列表、运行记录的改动键；消耗谓词的字段比较（含 doctor 恢复取回备份值）；专精计划的绑定核对和清理时的定时归属核对。
+- 字节一致，不变：最小修改要求文件按 UTF-8 解码再编码不变；备份写原字节；写入的临时文件就是编辑后的文本；doctor 的证据只在锁和配置的原始文本不变时才稳定，证据 revision 覆盖原始文本。
+- 指纹，各自是否算键顺序：
+  - `projectionRevision`：算（不变）。请求按配置在 `Configurations` 里的位置指定配置，这个位置就是键顺序；revision 如果不算键顺序，配置列表换了顺序后旧批准仍然有效，序号 0 却指向另一个配置，是放宽。只差键顺序时的后果是写入在访问进程之前以 `configuration-changed` 拒绝（失败即关闭），重新读取即可。修复后，文件里和 MAA 顺序不同的只有写入器整项写出的作业列表项，MAA 重开后的第一次保存就改回它的顺序。
+  - 差异指纹（`configDiff`）：不算（本轮改）。指纹覆盖解析后的路径和前后值，用户批准的是值；和判断「变了」用同一个谓词。
+  - `wholeConfigFingerprint`：算（不变，恢复比较没有放宽）。规格要求恢复只在精确一致时提供修法。当前配置和备份或预期结果只差键顺序，只会出现在作业事务（doctor 不恢复，见下），或者写入器写下作业列表之后、MAA 第一次保存之前就开始并中断的另一次事务；写入器每次写完都重开 MAA，MAA 启动时就整份保存，所以这个时间窗口实际不会出现。doctor 每个改动的状态（`changes`）经 `comparableAt` 按谓词判断，只作说明；给不给修法仍看整份比较。
+- 不是配置值：报告、计划输入、作业文件、MAA 日志里的任务参数、凭据字段名、研究缓存键、换备选请求键（逐条见测试里的表）；还有不含对象的比较（改动路径、排序后的定时时间、setup 候选标识和 revision 字符串）。
+
+**doctor 恢复作业事务：走不到写入器**
+
+作业准备和换备选的待执行记录带 `jobPlan`；`maa-config.ts` 的 `transactionPending` 只接受 `source`、`reference` 和三种消耗授权，这条记录判为不支持，证据未知，不给修法（规格「检查与修法」：带未支持作业或训练资源的事务保留证据）。所以这一条无法先红：新测试 `tests/doctor.test.ts`「an interrupted job transaction over a same-length list in MAA key order is not restored; lock and bytes are kept」从一开始就通过，用来固定这个行为；原有的「unsupported transaction evidence and prohibited recovery settings cannot authorize a repair」的 `future-authorization` 子项也覆盖带 `jobPlan` 的记录。
+
+**F3：评测环境预检写入前没有预览**
+
+- 原因：`scripts/eval-preflight.ts` 的 `maa-process-double-and-daily-observer` 检查和宿主替身 `daily-closed` 的步骤直接调用 `write`，不带差异指纹。30 之后写入先以 `approved-diff-missing` 拒绝，到不了检查期待的 `closed-confirmation-required`。`check.ts` 的环境预检一步因此失败：`closed-double-not-observed`，另有 `host-double:claude:daily-closed`、`host-double:codex:daily-closed` 两项评分 `expected-behavior` 失败。真实评测批次的环境预检也会失败。
+- 修法：两处都先 `preview`，再带预览给出的指纹写入；仍然证明关着的 MAA 替身拒绝写入，日常观察器记下写入时的进程检查。查过其他内部调用者：`scripts/setup-smoke.ts`（setup 专用入口，不要求指纹）、`scripts/stage-demo.ts` 和 `scripts/stage-run-demo.ts`（作业计划，不要求指纹）、`eval/` 的场景定义（离线测试里由替身先预览）、`tests/` 下的写入，都不受影响。
+
+**先红后绿**
+
+1. `tests/stage-jobs.test.ts`「a batch prepares over a same-length list in MAA key order, and when MAA re-saves the list on exit or after the restart」三个子项，修复前：`existing-maa-order` 为 `rejected`/`request-invalid`（阶段 `check`），`exit-save` 为 `unknown`（阶段 `backup`），`restart-save` 为 `unknown`（阶段 `readback`）；修复后都是 `complete`，列表的值等于批准的列表，锁已释放。
+2. `tests/stage-run-alternates.test.ts`「a switch over the list MAA saved in its own key order writes the same-length continuation and reads it back」：修复前换备选被拒（写入器 `request-invalid`），修复后为 `prepared`，读回的列表等于批准。
+3. `tests/config-writer-diff.test.ts`「the minimal edit treats key order as no difference: equal objects keep their bytes, a changed one is written in the prepared order」：修复前抛 `configuration-text-unsupported`；修复后值相同的项保留字节，改了的项按准备的顺序整项写出，换顺序的同值项各自保留字节；最终核对仍拒绝值不同、数组顺序不同或多一个键的结果。
+4. `tests/config-value.test.ts`（新）：谓词的取值表；三个指纹各自是否算键顺序；比较位置的完整枚举和归类，配置值一类必须调用谓词；`comparableAt` 的七处调用和四处字节一致的写法都在。把消耗谓词里的一处比较临时改回 `JSON.stringify` 相等，这个测试以「classify this comparison」失败（已改回）。
+5. `check.ts` 的环境预检一步（与 `check.ts` 相同的临时主目录，只跑 `node scripts/eval-preflight.ts`）：修复前退出码 1，上面三项失败；修复后退出码 0，全部通过。
+
+**评测记录的可比性**
+
+30 改了四个提醒场景的定义（写入前要只读预览，写入带预览给出的指纹），也改了 `scripts/eval-daily.ts`、`scripts/eval-transaction.ts`、`scripts/eval-fixture.ts`；这三个文件在场景摘要的运行器源码里，所以全部场景的摘要都变了。提醒场景（其他场景也一样）在 30 之前的记录不能与之后的比较。本轮修复只改了随 skill 发布的脚本和 `scripts/eval-preflight.ts`，都不在场景摘要里，场景身份不再变化。
+
+**设计默认值**：同一配置值的定义以及三个指纹各自是否算键顺序，登记在规格「默认值及其来源」（设计默认值，2026-11-14）。只影响实现的一条记在这里：被改的对象如果键顺序和准备的不同，整个对象按准备的顺序写出，不保留文件里的顺序（协调者给的修法；MAA 按名读取属性，下一次保存又写回它自己的顺序）。
+
+**实际运行**（Windows，Node 24，本节提交的代码，一次一个文件）
+
+- `npm run typecheck` 通过。
+- 单个文件依次运行，全部通过：`config-writer-diff` 22 项、`config-projection` 16 项、`config-value` 3 项（新）、`maa-config` 129 项、`consumption-grant` 34 项、`doctor` 103 项、`doctor-scenarios` 22 项、`base-apply` 19 项、`stage-run-alternates` 13 项、`stage-jobs` 12 项、`training-plan` 9 项、`training-integration` 13 项、`training-config` 3 项、`setup` 29 项、`setup-scenarios` 27 项、`cross-skill-scenarios` 7 项、`daily-evaluation` 5 项、`evaluation` 11 项、`eval-comparability` 7 项、`eval-fixture` 7 项、`eval-host-double` 12 项、`eval-batch` 10 项、`docs-consistency` 5 项。
+- `check.ts` 里失败的那一步：用与 `check.ts` 相同的临时主目录只跑 `node scripts/eval-preflight.ts`，退出码 0，状态 `pass`。`check.ts` 测试之后的三项仓库检查（隐私、工单索引、元数据）也单独跑过，没有问题。
+- 没有运行完整离线入口 `node scripts/check.ts` 和 `tests/maa-process.test.ts`（按约定由协调者在冻结的提交上跑）。
+
+**未验证**
+
+- 没有在真实 MAA 上让它读按准备顺序写出的作业列表；System.Text.Json 按属性名读取、和键顺序无关，是库的行为，不是在 MAA 上实测的。这个库只要求多态任务的 `$type` 在最前；写入器整项写出的对象都在改动路径之下（作业列表项、房间列表的行等），改动路径从不指向带 `$type` 的任务本身，任务队列重排时每个任务保留原字节，所以不会挪动 `$type`。
+- MAA 启动时一定会整份保存一次，是按源码和 Fody 的默认行为推断的（「验收 1」）。
+- 真模型评测没有运行，原因同上。
