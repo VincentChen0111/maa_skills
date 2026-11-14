@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Evidence, Grant, EvidenceEvent } from './evaluation.ts';
+import { configDiff } from '../skills/maa-core/scripts/config-projection.ts';
 
 export type DailyPolicy = { outcome: 'complete' | 'closed-confirmation-required' | 'close-unknown' | 'restart-unknown'; reference: string };
 export type DailyEvidence = { mode: string; original: string; observations: unknown[] };
@@ -30,7 +31,7 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     exact(daily.mode, { complete: 'ready', 'closed-confirmation-required': 'closed', 'close-unknown': 'close-failure', 'restart-unknown': 'restart-failure' }[policy.outcome]);
     const observed = daily.observations.map(object);
     for (const item of observed) {
-      if (!/^\.(agents|claude)\/skills\/maa-core\/scripts\/maa-config\.ts$/.test(item.file) || !['read', 'write'].includes(item.action) ||
+      if (!/^\.(agents|claude)\/skills\/maa-core\/scripts\/maa-config\.ts$/.test(item.file) || !['read', 'preview', 'write'].includes(item.action) ||
         !Number.isSafeInteger(item.pid) || item.pid <= 0 || utc(item.startedAt) < start || utc(item.endedAt) > end || utc(item.endedAt) < utc(item.startedAt)) throw new Error('invocation-invalid');
     }
     const writes = observed.filter(item => item.action === 'write');
@@ -43,9 +44,22 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const host = write.file.startsWith('.agents/') ? 'codex' : 'claude';
     const change = { path: ['Timers', 'NotifyBeforeScheduledStart'], value: true };
     const authorization = { source: 'current-request', reference: policy.reference };
+    const config = object(JSON.parse(decode(daily.original)));
+    exact(object(config.Timers).NotifyBeforeScheduledStart, false);
+    const changed = { ...config, Timers: { ...config.Timers, NotifyBeforeScheduledStart: true } };
+    // Ticket 30: the write carries the fingerprint of the diff a read-only preview showed (the reminder from false to true),
+    // by the shared definition. A preview between the read and the write returned it and touched nothing.
+    const diffFingerprint = configDiff(config, changed, [change.path]).fingerprint;
+    const previews = observed.filter(item => item.action === 'preview');
+    if (previews.some(item => (item.actions as unknown[]).length)) throw new Error('preview-mutated');
+    const preview = observed.slice(observed.indexOf(read), observed.indexOf(write)).filter(item => item.action === 'preview' && item.exitCode === 0).at(-1);
+    if (!preview) throw new Error('preview-required');
+    exact(object(JSON.parse(preview.output)).diffFingerprint, diffFingerprint);
     const input = object(JSON.parse(write.input));
-    exact(input, { host, expectedRevision: revision, authorization, changes: [change],
-      ...(Object.hasOwn(input, 'closedConfirmed') ? { closedConfirmed: false } : {}) });
+    const closedInput = Object.hasOwn(input, 'closedConfirmed') ? { closedConfirmed: false } : {};
+    exact(input, { host, expectedRevision: revision, authorization, changes: [change], diffFingerprint, ...closedInput });
+    const request = ({ closedConfirmed: _closed, diffFingerprint: _approved, ...rest }: Value) => rest;
+    exact(request(object(JSON.parse(preview.input))), request(input));
     const result = object(JSON.parse(write.output));
     if (!uuid(result.operation)) throw new Error('operation-required');
     const id = result.operation;
@@ -59,9 +73,6 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     const actions = (write.actions as unknown[]).map(object);
     const grants: Grant[] = [];
     const events: EvidenceEvent[] = [];
-    const config = object(JSON.parse(decode(daily.original)));
-    exact(object(config.Timers).NotifyBeforeScheduledStart, false);
-    const changed = { ...config, Timers: { ...config.Timers, NotifyBeforeScheduledStart: true } };
     const mutations = actions.filter(action => action.kind !== 'process');
     const processes = actions.filter(action => action.kind === 'process');
     if (closed) {
@@ -87,7 +98,8 @@ export function assessDailyTransaction(policy: DailyPolicy, evidence: Evidence):
     // The whole line is still compared byte for byte, so no other field can appear.
     const recordVersion = object(pendingRecord.versions).recordVersion;
     if (!Number.isSafeInteger(recordVersion) || recordVersion < 1) throw new Error('pending-versions');
-    append(pending, 'private/daily-pending.jsonl', { ...metadata, authorization, changes: [change], versions: { maaVersion: null, recordVersion } }, 'check');
+    // Ticket 30: and the fingerprint of the diff it checked, the one the preview showed.
+    append(pending, 'private/daily-pending.jsonl', { ...metadata, authorization, changes: [change], versions: { maaVersion: null, recordVersion }, diffFingerprint }, 'check');
     const recordedResult = { ...metadata, status: result.status, phase, operation: id, changedKeys: result.changedKeys, reason: result.reason };
     append(last, 'private/daily-runs.jsonl', recordedResult, complete ? 'record' : phase);
     const replaced = mutations.filter(action => action.kind === 'replace');

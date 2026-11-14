@@ -7,6 +7,8 @@ import type { TrainingActionKind, TrainingPlan } from './training-state.ts';
 export type TrainingGrant = { planId: string; kind: TrainingActionKind | 'disable'; binding: TrainingPlan['binding'];
   target: { name: string; role: string; skill: number; rank: number }; assistant: string; dueAt: string; expectedTimer?: unknown };
 export type TrainingAsset = { file: string; content: string; sha256: string };
+/** Ticket 30: the task fields a training plan writes (the Infrast task's plan settings and room list, the OperProgress plans). */
+export const trainingTaskFields = ['Mode', 'Filename', 'PlanSelect', 'ContinueTraining', 'RoomList', 'UseWeeklySchedule', 'Plans'] as const;
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('training-configuration-invalid');
   return value as Record<string, unknown>;

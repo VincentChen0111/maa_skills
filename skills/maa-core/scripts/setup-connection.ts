@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readSettings } from './preferences.ts';
 import { repairOf, type CheckStatus, type LibraryCheck } from './checks.ts';
+import { projectionRevision } from './config-projection.ts';
 export type SetupContext = { home?: string; maaDirectory?: string };
 export type ConnectionContext = SetupContext & { adbPaths?: string[]; addresses?: string[] };
 /** Only adb process execution is substituted by tests. Arguments are always an array, never a shell. */
@@ -13,6 +14,11 @@ const systemAdb: AdbBoundary = { run: async (executable, args) => new Promise(re
   execFile(executable, args, { windowsHide: true, timeout: 5000, maxBuffer: 65536 }, (error, stdout) => resolveResult({ exitCode: error ? 1 : 0, stdout }));
 }) };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+/** Ticket 30: the connection fields setup's dedicated entry writes (the writer's connection route accepts only these). */
+export const connectionFields = ['AdbPath', 'Address', 'AutoDetect', 'AlwaysAutoDetect'] as const;
+/** What setup's discovery reads besides them: the current profile, its address history, emulator path and client type. */
+export const connectionDecisionFields: readonly (readonly string[])[] = [['Current'], ...[...connectionFields, 'AddressHistory'].map(field => ['Configurations', '*', 'Gui', 'ConnectSettings', field]),
+  ['Configurations', '*', 'Gui', 'StartUpSettings', 'EmulatorPath'], ['Configurations', '*', 'Gui', 'RuntimeSettings', 'ClientType']];
 function localAddress(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   if (/^emulator-\d{1,5}$/.test(value)) return true;
@@ -179,7 +185,8 @@ async function discover(context: ConnectionContext, adb: AdbBoundary) {
   }
   candidates.sort((a, b) => a.id.localeCompare(b.id));
   if (candidates.length > 128) throw new Error('too-many-connection-candidates');
-  const discoveryRevision = hash([current.config, candidates.map(({ id }) => id)]);
+  // Ticket 30: the configuration part is the approval projection, so MAA's own runtime writes do not stale a selection.
+  const discoveryRevision = hash([projectionRevision(current.config), candidates.map(({ id }) => id)]);
   return { directory, current, candidates, discoveryRevision, adbCount: paths.size, failedAdb };
 }
 
@@ -228,9 +235,9 @@ export async function prepareSetupConnection(request: SetupWriteRequest, context
   const settings = await readSettings(context.home);
   const { found, chosen } = selected;
   // Bind the exact configuration observed during candidate selection, before the adb test.
-  const expectedRevision = hash(found.current.config);
+  const expectedRevision = projectionRevision(found.current.config);
   const connect = object(found.current.gui.ConnectSettings);
-  const values = { AdbPath: chosen.adbPath, Address: chosen.address, AutoDetect: false, AlwaysAutoDetect: false };
+  const values: Record<typeof connectionFields[number], unknown> = { AdbPath: chosen.adbPath, Address: chosen.address, AutoDetect: false, AlwaysAutoDetect: false };
   if (Object.keys(values).some(key => !Object.hasOwn(connect, key))) return { status: 'rejected', reason: 'initialize-connection-in-maa' };
   const changes = Object.entries(values).filter(([key, value]) => connect[key] !== value)
     .map(([key, value]) => ({ path: ['Configurations', found.current.profileIndex, 'Gui', 'ConnectSettings', key], value }));

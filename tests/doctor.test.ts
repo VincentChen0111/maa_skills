@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
 import { type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { projectionRevision } from '../skills/maa-core/scripts/config-projection.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
@@ -285,7 +286,7 @@ test('recovery reports a changed MAA or record version since the pending record 
 test('the pending-record table accepts the version stamp with all three consumption grants, and nothing else new', async (t) => {
   const recordVersion = (await readVerificationRecord()).recordVersion;
   const grants = { medicineCount: 1, stoneCount: 2, expiringMedicine: { days: 2, forActivity: false } };
-  for (const mode of ['versions-and-grants', 'base-manifest', 'base-plan', 'report-grant', 'unknown-field']) await t.test(mode, async (t) => {
+  for (const mode of ['versions-and-grants', 'diff-fingerprint', 'diff-malformed', 'base-manifest', 'base-plan', 'report-grant', 'unknown-field']) await t.test(mode, async (t) => {
     const f = await fixture(t); const retained = await abandoned(f);
     const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
     const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
@@ -295,15 +296,35 @@ test('the pending-record table accepts the version stamp with all three consumpt
     if (mode === 'base-plan') pending.authorization.basePlan = { sha256: 'a'.repeat(64), binding: { profile: 0, task: 0 }, decision: { unverified: [], userWords: null } };
     if (mode === 'report-grant') pending.authorization.source = 'approved-report';
     if (mode === 'unknown-field') pending.authorization.grantedBy = 'synthetic';
+    // Ticket 30: the writer stores the approved diff's fingerprint; recovery accepts it and never reuses it.
+    if (mode === 'diff-fingerprint') pending.diffFingerprint = 'b'.repeat(64);
+    if (mode === 'diff-malformed') pending.diffFingerprint = 'approved';
     await writeFile(pendingFile, JSON.stringify(pending) + '\n');
     f.maa.version = async () => '6.22.0';
     const checked = await runChecks(f, f.maa, quiet);
-    const supported = mode === 'versions-and-grants';
+    const supported = mode === 'versions-and-grants' || mode === 'diff-fingerprint';
     assert.equal(checked.recovery.canReconcile, supported); assert.equal(checked.recovery.canRestore, supported);
     if (!supported) return;
     assert.equal(checked.recovery.versions?.state, 'same');
     const result = await executeRepairs({ ...f, host: 'codex', evidenceRevision: checked.recovery.evidenceRevision, approved: ['reconcile-lock'], reference: 'synthetic reconcile approval' }, f.maa);
     assert.equal(result.status, 'complete'); assert.ok(retained.id);
+  });
+});
+
+test('the restore decision still compares whole configurations: a difference outside the approval projection makes it unknown', async (t) => {
+  for (const mode of ['applied', 'unchanged']) await t.test(mode, async (t) => {
+    const f = await fixture(t);
+    // MAA saves its window placement when it exits. The approval projection leaves it out; recovery must not.
+    Object.assign(f.config, { Gui: { WindowPlacement: { Left: 1 } } }); await writeFile(f.file, JSON.stringify(f.config));
+    await abandoned(f, mode === 'applied');
+    assert.equal((await runChecks(f, f.maa, quiet)).recovery.comparison, mode);
+    const current = JSON.parse(await readFile(f.file, 'utf8'));
+    const moved = { ...current, Gui: { WindowPlacement: { Left: 2 } } };
+    assert.equal(projectionRevision(moved), projectionRevision(current));
+    await writeFile(f.file, JSON.stringify(moved));
+    const checked = await runChecks(f, f.maa, quiet);
+    assert.equal(checked.recovery.comparison, 'unknown');
+    assert.equal(checked.recovery.canRestore, false); assert.equal(checked.recovery.canReconcile, false);
   });
 });
 

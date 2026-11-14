@@ -30,8 +30,10 @@ test('cross-skill scenarios install several operating skills under their own nam
       call('account-snapshot.ts', 'inspect', { callbackFile: 'callbacks.json' });
       call('account-snapshot.ts', 'import', { callbackFile: 'callbacks.json' });
       const read = call('maa-config.ts', 'read', {});
-      const written = call('maa-config.ts', 'write', { host: host === '.agents' ? 'codex' : 'claude', expectedRevision: read.configuration.revision,
-        authorization: { source: 'current-request', reference: '开启定时提醒' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] });
+      // Ticket 30: the request is previewed, and written with the previewed diff's fingerprint.
+      const request = { host: host === '.agents' ? 'codex' : 'claude', expectedRevision: read.configuration.revision,
+        authorization: { source: 'current-request', reference: '开启定时提醒' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+      const written = call('maa-config.ts', 'write', { ...request, diffFingerprint: call('maa-config.ts', 'preview', request).diffFingerprint });
       assert.equal(written.status, 'complete');
     } else if (id === 'cross-skill-doctor-referral') {
       call('preferences.ts', 'read', { currentLanguage: 'zh-CN' });

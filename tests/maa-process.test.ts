@@ -209,7 +209,11 @@ test('Windows launches and normally closes a temporary GUI and completes a CLI c
   assert.equal(read.status, 0, read.stdout);
   const expectedRevision = JSON.parse(read.stdout).configuration.revision;
   assert.match(expectedRevision, /^[a-f0-9]{64}$/);
-  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 150_000, input: JSON.stringify({ host: 'codex', expectedRevision, closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] }) });
+  // Ticket 30: the read-only preview gives the diff fingerprint the write carries; it starts no process.
+  const request = { host: 'codex', expectedRevision, closedConfirmed: true, authorization: { source: 'current-request', reference: 'synthetic current request' }, changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+  const preview = spawnSync(process.execPath, [command, 'preview'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 10_000, input: JSON.stringify(request) });
+  assert.equal(preview.status, 0, preview.stdout);
+  const result = spawnSync(process.execPath, [command, 'write'], { env: { ...env, MAA_SKILLS_HOME: settingsDirectory }, encoding: 'utf8', timeout: 150_000, input: JSON.stringify({ ...request, diffFingerprint: JSON.parse(preview.stdout).diffFingerprint }) });
   assert.equal(result.status, 0, result.stdout);
   assert.deepEqual(Object.fromEntries(Object.entries(JSON.parse(result.stdout)).filter(([key]) => key !== 'operation')), { ok: true, status: 'complete', phase: 'complete', changedKeys: ['Timers.NotifyBeforeScheduledStart'], reason: null });
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-private-value|Synthetic|MAA_TEST_EXE/);

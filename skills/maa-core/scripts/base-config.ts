@@ -30,6 +30,8 @@ export const baseReferencePattern = /^base\/[a-f0-9]{64}#P1$/;
 export const userDefinedFile = 'user_defined';
 /** PlanSelect -1: at each run the GUI picks the first plan whose period contains the current time. */
 export const timeRotation = -1;
+/** Ticket 30: the Infrast task fields a base plan may write (`buildBaseChanges`); the writer refuses any other. */
+export const baseTaskFields = ['Mode', 'Filename', 'PlanSelect', 'CustomFileType'] as const;
 
 export function checkGrant(grant: unknown): BasePlanGrant {
   const value = object(grant), binding = object(value.binding), decision = object(value.decision);

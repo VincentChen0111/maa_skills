@@ -36,6 +36,12 @@ export const consumptionFields: Readonly<Record<string, Kind>> = {
   UseExpiringMedicine: 'expiring', MedicineExpireDays: 'expiring',
   UseExpireMedicineForActivity: 'activity',
 };
+/**
+ * Every task field this decision reads (ticket 30): the identity it recognizes Fight and Award tasks by, the Fight fields
+ * above, and the Award settings no grant opens. tests/config-projection.test.ts traces the predicate's reads against this
+ * table and requires each field to be in the approval projection.
+ */
+export const consumptionDecisionFields = { identity: ['$type', 'TaskType'], fight: Object.keys(consumptionFields), award: ['FreeGacha', 'SpecialAccess'] } as const;
 const kinds: Kind[] = ['medicine', 'stone', 'expiring', 'activity'];
 const quantityKinds: Kind[] = ['medicine', 'stone'];
 /**

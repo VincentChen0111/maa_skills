@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { consumptionConsumers, decideConsumption, type ConsumptionConsumer, type ConsumptionGrant, type ConsumptionTarget } from '../skills/maa-core/scripts/consumption-grant.ts';
-import { executeConfigWrite, inspectConfiguration, inspectConfigRecovery, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { executeConfigWrite, inspectConfiguration, inspectConfigRecovery, previewConfigWrite, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
 import { grade, type Policy } from '../scripts/evaluation.ts';
 
@@ -34,10 +34,13 @@ async function maaFixture(t: { after(fn: () => Promise<unknown>): void }, value:
   return { root, maaDirectory, privateDirectory, file, maa, processCalls: () => processCalls };
 }
 type Fixture = Awaited<ReturnType<typeof maaFixture>>;
+/** Read, preview, then write with the previewed diff's fingerprint (ticket 30); a refused preview leaves the write to refuse alike. */
 async function write(f: Fixture, grant: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[]) {
   const expectedRevision = (await inspectConfiguration(f.maaDirectory)).revision;
-  return executeConfigWrite({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true, expectedRevision,
-    authorization: { source: 'current-request', reference: 'synthetic approval', ...grant } as never, changes }, f.maa);
+  const request = { maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex' as const, closedConfirmed: true, expectedRevision,
+    authorization: { source: 'current-request', reference: 'synthetic approval', ...grant } as never, changes };
+  const diffFingerprint = (await previewConfigWrite(request)).diffFingerprint;
+  return executeConfigWrite({ ...request, ...(diffFingerprint ? { diffFingerprint } : {}) }, f.maa);
 }
 const task = (path: number, field: string) => ['Configurations', 0, 'TaskQueue', path, field];
 const stoneOn = (index: number, count: number) => [
@@ -337,12 +340,14 @@ test('an interrupted restore that took a closed class back without a grant can i
   const backups = join(f.privateDirectory, 'maa-config-backups'); const past = new Date(Date.now() - 60000);
   for (const file of await readdir(backups)) await utimes(join(backups, file), past, past);
   const start = f.maa.start;
+  const applied = await readFile(f.file, 'utf8');
   f.maa.start = async () => { throw new Error('synthetic restart failure'); };
   const interrupted = await executeRepairs({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
     approved: ['restore-config'], reference: 'restore the earlier settings', evidenceRevision, closedConfirmed: true }, f.maa);
   assert.equal(interrupted.status, 'unknown', JSON.stringify(interrupted));
-  assert.equal(await readFile(f.file, 'utf8') === original, false, 'the restore wrote its formatted configuration before the restart');
-  assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), JSON.parse(original));
+  assert.notEqual(await readFile(f.file, 'utf8'), applied, 'the restore wrote the configuration before the restart');
+  // Ticket 30: the writer edits only the changed values, so the restore puts back the original bytes exactly.
+  assert.equal(await readFile(f.file, 'utf8'), original);
   // The doctor process that held the retained lock has exited.
   const dead = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid;
   const lockFile = join(f.maaDirectory, 'config', '.maa-skills.lock'); const lock = JSON.parse(await readFile(lockFile, 'utf8'));
@@ -438,12 +443,14 @@ for (const [consumer, sample] of Object.entries(conformance)) {
  * recovery also `doctor-recovery` and `doctor-restore`). `plan` is the plan its authorization carries, which decides what grant
  * the predicate lets through: none for a base plan, only expiring medicine for a job or training plan, none for setup. Each row
  * names the tests that show, through that caller's own route, that it activates nothing without a grant and that a grant the
- * predicate refuses for its plan is refused.
+ * predicate refuses for its plan is refused. Ticket 30's read-only `previewConfigWrite` runs the same checks (`prepare`) with no
+ * process, lock or write; a file calling it is registered like a writer caller, with a test that its refusals are the predicate's.
  */
 const writerCallers: Record<string, { plan: 'request' | 'job' | 'training' | 'base' | 'setup' | 'recovery'; evidence: [file: string, title: string][] }> = {
   'skills/maa-core/scripts/maa-config.ts': { plan: 'request', evidence: [
     ['tests/base-apply.test.ts', 'the base grant is only reachable through base-apply: the writer CLI refuses it and a forged grant is rejected'],
-    ['tests/stage-run-alternates.test.ts', 'the unified writer accepts only the continuation list of approved jobs; the generic write CLI refuses any continuation']] },
+    ['tests/stage-run-alternates.test.ts', 'the unified writer accepts only the continuation list of approved jobs; the generic write CLI refuses any continuation'],
+    ['tests/config-writer-diff.test.ts', 'a preview runs the writer checks: a stale revision, a forbidden field and an unapproved consumption change are refused']] },
   'skills/maa-core/scripts/stage-jobs.ts': { plan: 'job', evidence: [
     ['tests/training-integration.test.ts', 'a job plan write enables nothing: open Fight consumption is left byte for byte, with or without an expiring grant']] },
   'skills/maa-core/scripts/stage-run.ts': { plan: 'job', evidence: [
@@ -464,7 +471,7 @@ test('every caller of the unified writer is registered with its plan and with te
   const callers = new Set<string>();
   for (const directory of ['skills', 'scripts', 'eval']) for (const path of await codeFiles(join(repository, directory))) {
     const text = await readFile(path, 'utf8');
-    if (text.split('\n').some(line => /\b(?:executeConfigWrite|executeSetupConfigWrite|executeConfigRecovery)\(/.test(line) && !/\bfunction\s+execute/.test(line))) {
+    if (text.split('\n').some(line => /\b(?:executeConfigWrite|executeSetupConfigWrite|executeConfigRecovery|previewConfigWrite)\(/.test(line) && !/\bfunction\s+(?:execute|preview)/.test(line))) {
       callers.add(relative(repository, path).replaceAll('\\', '/'));
     }
   }
