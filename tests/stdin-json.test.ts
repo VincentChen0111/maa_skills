@@ -167,7 +167,7 @@ test('conformance check fails when a consumer reads standard input directly or a
   const unlisted = new Map(files).set('maa-daily/scripts/new-tool.ts', 'const input = await readStdinJson({ maxBytes: null });');
   assert.deepEqual(stdinViolations(unlisted), ['maa-daily/scripts/new-tool.ts: reads standard input but is not in the conformance list']);
   const directForms = [
-    "const text = readFileSync(0, 'utf8');", 'const text = fs.readFileSync(0);', "const text = readFileSync('/dev/stdin', 'utf8');",
+    "const text = readFileSync(0, 'utf8');", 'const text = fs.readFileSync(0);', "const text = readFileSync('/dev/stdin', 'utf8');", "fs.readFile(0, 'utf8', done);",
     'const read = readSync(0, buffer);', 'const read = fs.readSync( 0, buffer, 0, 1024, null);',
     'const { stdin } = process;', "for await (const chunk of process['stdin']) raw += chunk;",
     "import { stdin } from 'node:process';", 'import { stdin } from "process";', "import { argv, stdin as input } from 'node:process';",
