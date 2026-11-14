@@ -16,12 +16,19 @@
 | 给 `skills/maa-account/` 补一份 `LICENSE`（与根目录相同的 MIT 全文） | skill-installer 逐个复制 skill 目录，其他五个目录都带 `LICENSE`，只有 maa-account 没带；单独安装时这份 MIT 声明会丢。打包检查第一次在本仓库载荷上运行就报了这一项。它不是 agent 读的指令文字 |
 | skills 方式只检查六个产品目录（`maa-core`、`maa-help`、`maa-setup`、`maa-account`、`maa-daily`、`maa-doctor`），宿主目录里的其他 skill 不检查；宿主自己的 `.git` 目录不检查 | 宿主的 skill 目录里本来就有别的 skill（例如 Codex 的 `.system`）；`.git` 是宿主克隆用的版本库数据，规格的禁含清单里没有它 |
 | 评测计划里「前」的载荷：ticket X 新增的场景用 X 自己合并后的载荷，X 影响到的已有场景用 X 合并前一个 main 提交；「后」一律是最终候选载荷。29 按工单原文用 29 合并前的载荷 | 工单的「前后」写法有几种（「同版本前后」「29 合并前后」「受影响…前后」），这条规则把每一种都落到一个具体提交上，并且对新增场景也有可比的「前」 |
-| 人工核实的场景指纹取被核实那份 `run.json` 的 `scenarioHash`，并要求它等于同一次 `compare` 另一侧同一宿主、同一场景那份；证据摘要是核实者读的四个落盘文件（`run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`）各自的 sha256，核实结束时重算相同；`evidenceHash` 不用来核对。第 1 轮审查后按协调者的处理意见改定。没有「前」的运行不进 `compare`，场景版本改为核对两件事：这一批清单的 `fingerprint.runner` 等于本次验收里配对用的「后」批次的；同一场景的重复运行 `scenarioHash` 相同。A 部分第 2 轮审查后按协调者的处理意见加 | 批次清单里没有逐场景的指纹，仓库也没有在运行之外重算 `scenarioIdentity` 的工具；`evidenceHash` 是脱敏前的摘要，落盘文件经过脱敏和重新排版，一般重算不出来。没有「前」时没有另一侧可比，运行器指纹相同说明评分器、夹具和替身与配对的那一批相同（框架整个验收冻结在一个提交上）。见「人工核实清单与记录格式」的两次演练 |
+| 人工核实的场景指纹取被核实那份 `run.json` 的 `scenarioHash`，并要求它等于同一次 `compare` 另一侧同一宿主、同一场景那份；证据摘要是核实者读的四个落盘文件（`run.json`、`evidence.json`、`host.jsonl`、`stderr.txt`）各自的 sha256，核实结束时重算相同；`evidenceHash` 不用来核对。第 1 轮审查后按协调者的处理意见改定。没有「前」的运行不进 `compare`，场景版本改为核对三件事：这一批清单的 `fingerprint.runner` 等于本次验收里配对用的「后」批次的；同一场景的重复运行 `scenarioHash` 相同；在冻结检出里重算的 `payloadFingerprint(selectScenarios(<这一批清单的 scenarios>, <载荷-最终>))` 等于这一批清单的 `fingerprint.payload`。前两件是 A 部分第 2 轮审查后按协调者的处理意见加的，第三件是 26 H 按 #85 加的（2026-11-14） | 批次清单里没有逐场景的指纹，仓库也没有在运行之外重算 `scenarioIdentity` 的工具；`evidenceHash` 是脱敏前的摘要，落盘文件经过脱敏和重新排版，一般重算不出来。没有「前」时没有另一侧可比，运行器指纹相同说明评分器、夹具和替身与配对的那一批相同（框架整个验收冻结在一个提交上）。各场景自己的定义文件不在运行器指纹里：只改了场景定义的框架（例如验收跨几天、从已经前进的 main 跑基线）两项都核对不出来，重算载荷指纹能核对出来，因为载荷指纹含这一批的场景定义（#85）。见「人工核实清单与记录格式」的演练 |
 | 人工核实第 3 步按载荷批次和 `compare` 现在的输出字段写：`overall.reasons` 里有批次条件的原因（`batchIncomparability`）或不带场景名的整组原因时，这一行每一份都记「无法判断」；有以这个场景结尾的原因、或 `scenarios[]` 里这一条是 `incomparable` 时，这一份记「无法判断」；只以别的场景结尾的原因不影响这一份的核实，但这一行的「分数不降」不成立。B 部分处理 A 部分第 1 轮审查转来的意见时定（2026-11-14） | 批次条件的原因说明两批不只差载荷，整组都不能配对；一个场景身份变了只说明那个场景不能配对，别的场景的配对和指纹仍然成立。任何场景不可比时工单都不许发布，这由「分数不降」那一半照旧阻止，不靠把别的场景的核实记成「无法判断」 |
 | 「前」的载荷在当前评分器下不能通过的场景，不安排这一对比较，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」，作为这个办法清不掉的发布门禁交给维护者；能不能通过由离线核对定：按场景测试里的驱动调用「前」载荷自己的 CLI，用本检出的评分器评分（见「Codex 评测计划」的「当前评分器下「前」载荷能不能通过」）。B 部分第 1 轮审查后定 | 评分器要的记录或动作晚于这个载荷时（25 的待执行记录 `versions`、10/25/08 的 doctor 记录、30 的预览和差异指纹），不论模型怎样做，「前」都失败；「前」失败、「后」通过在 `compareRuns` 里不算回归，这一对会显得「分数不降」，其实什么也没比。不能算通过，也不能悄悄删掉 |
 | 入口不自动拒绝这类配对，不加 `payload-contract-mismatch` 一类的静态代码。B 部分第 1 轮审查后定 | 计划不安排它们，记录里写明了每一对；入口要自动判断，要么为每次评分契约的变化在产品代码里认一个文字标记（漏写一个就会和这次一样漏掉），要么在批次开始前离线跑每个场景的驱动，而这些驱动只在测试里有，只看回复的场景也没有驱动 |
 | 没有「前」的场景另跑一批「基线」批次，载荷是最终候选，与「后」批次在同一个冻结的检出里跑：只建基线的 20 个（含 30 新增的三个），和比较未验证的 11 个。「后」批次只跑要比较的 86 个。A 部分第 2 轮和 B 部分第 1 轮审查后定 | 基线批次的 `run` 退出 0 就说明这批全部完成、全部通过、没有被拒的场景，人工核实从这里开始；两批运行器指纹相同，第 3 步据此核对没有「前」的运行的场景版本 |
 | 30 的前后比较与 27 新增那一行合成一行、一批：「前」都是 `6f95f27`（27 合并后，也就是 30 合并前的 main）；30 受影响的场景取走 `maa-config.ts` 读写的 daily 场景（05 的七个、27 的五个）和 core 三个。B 部分第 1 轮修正时按协调者转来的意见加 | 30 改的 skill 文字是 maa-daily 的配置事务（`SKILL.md` 第 2–4 步、`references/configuration.md`）和 maa-core 的 `SKILL.md`。走别的入口的 daily 场景（关卡、专精、基建排班、运行跟踪、备选）所在各行的「后」都在 30 之后，那几行的比较已经跨过 30 |
+| 26 H（框架修复包，2026-11-14）的报告审查用替身（分诊决定 D2，协调者定）：带 skill 的夹具在工作区 `.eval-bin` 放 `codex.cmd` 和 POSIX `codex` 两个垫片并放到 PATH 最前面，运行 `eval/review-double.mjs`；替身只回应 skill 写明的调用（`codex exec`，说明经标准输入），说明与本次运行私有目录里某一份 `review-brief.md` 一致才回复 `findings: []`，比较前两边都去掉开头的 BOM、统一换行、去掉结尾换行 | 审查员是另一个宿主进程，属于系统边界，工作规则允许替身；第一批真实运行里沙箱找不到 `codex`、登录目录又被拒绝读取，两个默认审查场景结构上不能通过。BOM、换行和结尾换行是 Windows 管道的传输差异，审查员照样读得懂；字符被换掉（例如 PowerShell 5.1 把中文换成 `?`）就不是这份说明。另一个方案（`reviewerAvailable:false` 变体）测不到默认审查协议本身 |
+| 运行器自己启动的宿主在夹具之外解析（`hostExecutable`）：显式路径照用、落在夹具里就拒绝；裸名字只在夹具以外的 PATH 目录里按进程启动器的规则找；找不到记 `host-unavailable`，不启动任何程序 | 垫片在夹具 PATH 的最前面，POSIX 上同名的可执行文件会顶替宿主；按启动器的规则（Windows 上只加 `.com`、`.exe`）找、跳过夹具目录，宿主还是原来那个。替身被误当宿主时报宿主替身的版本前缀，那次运行带替身标记，不会成为基线 |
+| Codex 沙箱 shell 不继承 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（`shell_environment_policy.exclude`，出自 `codexPermissionArguments`）；读保护检查的执行探针在同一配置下列一次环境，有变量的值含登录目录的任何形式（或探针没有结果）就不通过，不启动模型 | 第一批真实运行里模型列出环境变量，登录目录随 `CODEX_HOME` 出现在输出里。要用模型才能列环境的办法不可取，所以沿用执行探针的写法（不调用模型）；真实 Codex 是否照这条配置排除未验证，探针不通过就停，是失败即停的方向。Claude 一侧没有可以离线核实的排除办法，Claude 的真模型评测暂缓，恢复前要解决 |
+| 合成森空岛世界的凭据和账号标识（换取码、cred、签名密钥前缀、用户 id、帖子作者 id）每次运行新生成，只以 base64 写进 `.eval-network-responses.json`，不放进环境变量，按夹具秘密评分；场景定义只保留用户自己那份 token（在世界里加密存放）。一致性测试核对任何场景的秘密都不以明文出现在框架文件、环境变量和夹具写进工作区的文件里，例外只有世界本来存放秘密的两处：夹具的合成凭据文件 `private/credentials.json`、`doctor-remote-control` 的 MAA 配置 | 第一批真实运行里模型读了预加载器源码，把写在里面的明文复述出来。base64 输出里没有 `-`，带 `-` 的合成值不会碰巧出现在编码里。那两处例外模拟的是用户本来就有的秘密，技能规定不读、不复述，复述就是真实的泄漏 |
+| `daily-unknown`（分诊决定 D3 方案 a，协调者定）：世界里放提示词说的遗留锁（复用 doctor 场景的锁），maa-doctor 用场景字段 `companions` 装成同伴（提示词仍只点名 maa-daily），doctor check 写的最近检查记录是可选授权：字面值授权加 `optional: true` 的 `checkedAt`；评分器为此新增生成时间字段的 `optional` | maa-daily 规定把未知结果交给 maa-doctor 核对，doctor check 写自己的脱敏记录是设计行为（doctor 场景都授权了）；另一个方案是改载荷、禁止 daily 跑 doctor，等于在规格之外加限制。可选字段没写不算缺少，写了照样只认确切位置和执行窗口 |
+| `daily-unknown` 在 `ddd0ca8`（06 之前，没有 maa-doctor）上不比较，记「未验证」；在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」交给 doctor 核对、只因它写的旧格式记录挂 `authorization` 时，这一对记「未验证」，不当作「分数不降」的依据 | 入口在 `ddd0ca8` 上以 `payload-skill-missing` 拒绝。后三个载荷上不跑 doctor 的正确做法能通过（离线核对），按「不论怎样做都通不过才不安排」的规则照常比较；跑 doctor 的做法失败是评分契约晚于载荷，与 doctor 五相同，不是模型做错 |
+| D4（协调者定）：框架检出等于最终候选提交；三类批次都在 H 和载荷包 P 都合并、最终候选冻结之后才跑。D5（协调者定）：评分器只比对退出码的弱点（G1）不在这一轮修，另开后续工单；人工核实时期望非 0 退出的调用要看输出是不是预期的拒绝 | P 改的 `preferences.ts` 也在运行器指纹里，框架若停在更早的提交，P 的改动只能经载荷进来，运行器与最终候选不一致；G1 要改评分器和观察器，是另一轮框架改动 |
 | 两个临时宿主的原生安装从本地仓库安装，不从 GitHub | 本分支没有推送（构建规则不许推送），GitHub 上没有这个提交；本地安装用的仍是宿主自己的安装器，差别只在来源。最终验收要在发布载荷的公开提交上重做 |
 
 ## 版本一致与标签
@@ -192,9 +199,14 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
      - 这个场景的记录可比：`scenarios[]` 里 `host`、`scenario` 与这份相同的那一条，`status` 不是 `incomparable`，`reasons` 为空。`compareRuns` 逐条核对两份记录的模型、`hostVersion`、`scenarioHash` 和总分，不同就是 `model-differs`、`cli-version-differs`、`scenario-identity-differs`、`grade-total-differs`（在 `overall.reasons` 里以 `:<场景>` 结尾）。另外 `payload.before.commit`、`payload.after.commit` 分别是那一行的「前」提交和最终候选。
 
      `overall.reasons` 里只以别的场景结尾的原因不影响这一份的核实，但这时 `overall.status` 是 `incomparable`，这一行的「分数不降」照工单规则不能成立。`compare` 的子集里不能有「未验证的比较」表里的配对：那样的一对即使 `compare` 报 `pass` 也不算数（「前」在当前评分器下一定失败，见「Codex 评测计划」）。`compare` 的输出里不打印指纹，所以记录里的指纹从 `run.json` 抄。批次清单里没有逐场景的指纹。也不从检出重算 `scenarioIdentity`：它的输入有按宿主渲染的提示词和夹具在运行时生成的替身文件，仓库没有在运行之外重算它的工具。
-   - **无「前」（只建基线）**：基线批次里的运行（只建基线的 20 个，和「未验证的比较」里的 11 个场景）没有另一侧，不进任何 `compare`，上一项的三条不适用。取 `run.json` 的 `scenarioHash` 照抄进记录；场景版本改为核对下面两件事，任何一件对不上，这份运行的每一项都记「无法判断」：
+   - **无「前」（只建基线）**：基线批次里的运行（只建基线的 20 个，和「未验证的比较」里的 11 个场景）没有另一侧，不进任何 `compare`，上一项的三条不适用。取 `run.json` 的 `scenarioHash` 照抄进记录；场景版本改为核对下面三件事，任何一件对不上，这份运行的每一项都记「无法判断」：
      - 运行器相同：基线批次 `manifest.json` 的 `fingerprint.runner` 等于本次验收里配对用的「后」批次 `manifest.json` 的 `fingerprint.runner`（`runnerSources`：评分器、夹具、观察器、替身、脱敏和场景目录入口；各场景自己的定义文件不在里面，它们靠「Codex 评测计划」第 1 步把框架整个验收冻结在一个提交上）；两份清单的 `host` 和 `fingerprint` 的 `hostVersion`、`model`、`auth` 也相同，`payload` 的 `commit` 和 `digest` 相同（都是最终候选）。
      - 重复运行指纹相同：同一宿主、同一场景在本次验收里有不止一份运行（例如一份没通过、另开一批再跑），每一份 `run.json` 的 `scenarioHash` 都相同；只有一份时记「只有一份」。
+     - 载荷指纹重算相同（26 H 按 #85 加，2026-11-14）：在冻结检出（第 1 步的 `<最终检出>`）里用导出函数重算 `payloadFingerprint(selectScenarios(<基线清单的 scenarios>, <载荷-最终>))`，必须等于基线批次 `manifest.json` 的 `fingerprint.payload`。前两件查不出只改了场景定义的框架（各场景的定义文件不在运行器指纹里，只有一份基线运行时重复运行一项也不起作用）；载荷指纹含这一批的场景定义和装入的 skill，所以从别的框架（例如已经前进的 main）跑出的基线在这里对不上。这一步不启动宿主，不调用模型，输出 `match` 或 `differs`：
+
+       ```text
+       node --input-type=module -e "const {readFile}=await import('node:fs/promises');const {payloadFingerprint}=await import('./scripts/eval-batch.ts');const {selectScenarios}=await import('./scripts/eval-scenarios.ts');const m=JSON.parse(await readFile(process.argv[1],'utf8'));const f=await payloadFingerprint(selectScenarios(m.scenarios,process.argv[2]));console.log(f===m.fingerprint.payload?'match':'differs')" <基线批次目录>/manifest.json <载荷-最终>
+       ```
 
      记录的「指纹配对」一列写「无「前」（只建基线）」，比较未验证的那 11 个写「无「前」（比较未验证）」；compare 状态写「不适用」。
    - **证据文件摘要**：对要读的四个落盘文件各算 sha256，写进记录。PowerShell 用 `Get-FileHash -Algorithm SHA256 -Path run.json, evidence.json, host.jsonl, stderr.txt`，结果按小写记；Git Bash 或 Linux 用 `sha256sum run.json evidence.json host.jsonl stderr.txt`。核实写完时再算一次，四个都相同，才说明结论依据的就是记录里的这些字节；以后复查用同样的命令重算比对，不同就重新核实。
@@ -211,7 +223,7 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 | 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `run.json` 的 `id` | codex 或 claude | 场景 id | `run.json` 的 `scenarioHash` | `compare` 另一侧那份（和重跑的每一份）的运行 ID 与「指纹相同」；`compare` 的 `overall.status` 和 `overall.reasons`，`scenarios[]` 里这一条的 `status`；两边清单 `payload` 的 `commit` | `run.json`、`evidence.json`、`host.jsonl`、`stderr.txt` 各一个，核实结束时重算相同 | 按清单编号，例如「1 通过；2 不通过；3 无法判断」 | 按编号，例如「1 host.jsonl 第 8 行；2 events[1]」 | 例如维护者、协调者、独立核实子代理 | YYYY-MM-DD |
-| 基线批次里的运行：同上 | 同上 | 同上 | 同上 | 「无「前」（只建基线）」或「无「前」（比较未验证）」；compare 状态「不适用」；基线批次与配对的「后」批次的 `fingerprint.runner` 相同（写出两个批次目录名）；同一场景其他运行的 ID 与「指纹相同」，或「只有一份」；清单 `payload` 的 `commit` | 同上 | 同上 | 同上 | 同上 | 同上 |
+| 基线批次里的运行：同上 | 同上 | 同上 | 同上 | 「无「前」（只建基线）」或「无「前」（比较未验证）」；compare 状态「不适用」；基线批次与配对的「后」批次的 `fingerprint.runner` 相同（写出两个批次目录名）；同一场景其他运行的 ID 与「指纹相同」，或「只有一份」；在冻结检出里重算的载荷指纹与基线清单的 `fingerprint.payload` 相同（`match`）；清单 `payload` 的 `commit` | 同上 | 同上 | 同上 | 同上 | 同上 |
 
 ### 第 3 步在宿主替身批次上的演练（2026-11-14）
 
@@ -276,6 +288,17 @@ A 部分第 2 轮审查指出：第 3 步和记录格式要求 `compare` 另一�
 | 运行 ID | 宿主 | 场景 | 场景指纹 | 指纹配对 | 证据文件 sha256 | 逐项结论 | 依据位置 | 核实者角色 | 日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `f665860a-6355-42bd-9475-6bf274c9e627` | codex（宿主替身） | `daily-diff-approved` | `b2f9c7cf975fdb54e0baf5d0d2ca5c64ef86f87ac1442a00e7f54c76b11a9eba` | 「无「前」（只建基线）」；compare 状态「不适用」；`batch-Q42VTE` 与配对的「后」`batch-nn3DPN` 的 `fingerprint.runner` 相同（`8601bed8…`）；同一场景另一份 `0b5c7c32-6127-4a9d-b65c-f5f5cf818a91` 指纹相同；`payload.commit` `24deeb4…` | `run.json` `ae4f19418820a4066eed2d616d382bf02406568ed92d92841148aa8c59682281`；`evidence.json` `d746cf65e9e105e4d42717c989b46f2c4a505b2953c7eda443176d882d93c96d`；`host.jsonl` `ba56115362caee0a80e3ab1f9a1c3427bf91170cbce17a103fd070acbd0a257b`；`stderr.txt` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；重算相同 | 不适用（替身；「找对运行」因 `double: true` 本应记「无法判断」） | 无 | 构建者（演练） | 2026-11-14 |
+
+### 第 3 步「无「前」（只建基线）」第三项核对的演练（2026-11-14，26 H，#85）
+
+只用宿主替身，不调用模型，Codex 一侧；框架是 26 H 的检出（`a4c405f`），载荷用 `payload --commit HEAD`（当时就是 `a4c405f`）在仓库外的临时目录里做，跑完已删除。两批都是 `complete`。两批基线（`runBatch`，`auth: 'host-double'`，场景 `daily-run-ask-progress`）：一批在本检出里跑；另一批在一份框架副本里跑，副本和本检出只差 `eval/maa-daily/stage-run-scenarios.ts` 里这个场景的一句提示词（只改场景定义，不改运行器源码，模拟从已经前进的 main 跑基线）。然后在本检出里对两份清单各跑一次第 3 步的那条命令：
+
+| 基线清单 | `fingerprint.runner` 与本检出那批相同 | 第三项核对 |
+| --- | --- | --- |
+| 本检出跑的 | 是 | `match` |
+| 框架副本跑的 | 是 | `differs` |
+
+前两项在副本那一批上都核对不出差别（运行器指纹相同，只有一份运行），第三项能核对出来。
 
 ### 清单
 
@@ -428,7 +451,7 @@ A 部分第 2 轮审查指出：第 3 步和记录格式要求 `compare` 另一�
 
 | 比较 | 「前」的载荷（main 上的提交） | 计划比较的场景 | 每批运行数 | 不比较（当前评分器下「前」不能通过） |
 | --- | --- | --- | --- | --- |
-| 05 同版本前后、06 受影响 | `ddd0ca8`（05 合并后，也就是 06 合并前） | help 三、core 三、daily 三 | 9 | daily 的四个写入场景 |
+| 05 同版本前后、06 受影响 | `ddd0ca8`（05 合并后，也就是 06 合并前） | help 三、core 三、`daily-inspect`、`daily-forbidden` | 8 | daily 的四个写入场景；`daily-unknown`（26 H 起装 maa-doctor 同伴，这个载荷还没有 maa-doctor，入口拒绝） |
 | 13 受影响 | `1d7fec0`（13 合并前） | account 四 | 4 | 无 |
 | 13 新增 | `370ed68`（13 合并后） | 成本四 | 4 | 无 |
 | 14 受影响与 help 能力同步 | `6c582e7`（14 合并前） | help 三、account 四、成本四、基建三 | 14 | 无 |
@@ -453,7 +476,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 做法：
 
 - 对每个有 CLI 或写入契约的场景，按仓库里这个场景的测试驱动所做的调用（`tests/daily-evaluation.test.ts`、`doctor-scenarios`、`stage-scenarios`、`training-evaluation`、`account-installation`、`cost-scenarios`、`base-installation`、`gap-scenarios`；core 两个按 `scripts/eval-preflight.ts` 替身脚本的调用），用 `createFixture` 装入 `selectScenarios(<场景>, <载荷目录>)` 给出的 skill 目录（与 `run --payload` 装的一样），执行「前」载荷自己的 CLI，再用本检出的 `collectEvidence`、`renderPolicy` 和 `grade` 评分。写入场景试两种写法：30 的（先 `preview`，再带 `diffFingerprint` 写入）和 30 之前的（读完直接写），两种都不通过才算「不能通过」。
-- `f1ec4ed` 那一行的 49 个，把仓库里覆盖它们的 11 个场景测试原样运行（`setup-scenarios`、`setup-download-scenarios`、`doctor-scenarios`、`research-scenarios`、`skland-scenarios`、`community-scenarios`、`report-scenarios`、`base-report-scenarios`、`stage-run-scenarios`、`stage-alternate-scenarios`、`base-apply-scenarios`）：在系统临时目录里复制一份框架，只把 `createFixture` 复制 skill 的那一句改成从载荷复制，评分器、观察器、替身和场景定义都是本检出的。先在一个缺 `stage-run.ts` 的载荷（`ac89050`）上跑 `stage-run-scenarios`，确认测试装的确实是载荷里的 skill（找不到 `stage-run.ts` 而失败）。
+- `f1ec4ed` 那一行的 49 个，把仓库里覆盖它们的 11 个场景测试原样运行（`setup-scenarios`、`setup-download-scenarios`、`doctor-scenarios`、`research-scenarios`、`skland-scenarios`、`community-scenarios`、`report-scenarios`、`base-report-scenarios`、`stage-run-scenarios`、`stage-alternate-scenarios`、`base-apply-scenarios`）：在系统临时目录里复制一份框架，只把 `createFixture` 复制 skill 的那一句改成从载荷复制，评分器、观察器、替身和场景定义都是本检出的。先在一个缺 `stage-run.ts` 的载荷（`ac89050`）上跑 `stage-run-scenarios`，确认测试装的确实是载荷里的 skill（找不到 `stage-run.ts` 而失败）。结果（与「本包运行的命令」里的运行记录一致；26 H 按 #85 改正这里和下表那一格的说法）：10 个文件全部通过；`setup-scenarios` 24 项通过、3 项失败，失败的只有 `setup-connection-write` 的两个宿主（30 的差异指纹约定），它只建基线、不在这一行的 49 个里，所以这一行的计划不受影响。
 - `help-routing`、`help-preference`、`help-boundary`、`core-boundary` 没有期望调用、期望改动或事务，评分只看有没有越界，不受评分契约影响（在计划它们的每个载荷上，不调用任何命令的运行评分都是 `pass`）。
 - 对照：本分支 HEAD 的载荷上，上表前十行涉及的 48 个场景按 30 的写法全部 `pass`；30 之前的写法在 HEAD 上被写入器以 `approved-diff-missing` 拒绝，所以两种写法都要试。
 
@@ -471,7 +494,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 | `fc633d6` | help 三、core 三、daily 三、stage 六、training 四（19） | 同 `3ff4555` 的九个 |
 | `ac89050` | stage 六 | 无 |
 | `6f95f27` | `daily-consumable-unapproved`、`daily-consumable-existing`、`daily-quantity-rerun`、daily 三、core 三（9） | daily 的四个写入场景，评分项同 `ddd0ca8`，契约只有 30 的预览与差异指纹（这个载荷的待执行记录已经带 `versions`）；`daily-stone-approved`、`daily-expiring-approved`：`authorization`、`write-lock`、`expected-behavior`，契约是 30 的差异指纹 |
-| `f1ec4ed` | 49 个（11 个测试文件全部通过） | 无 |
+| `f1ec4ed` | 49 个（11 个测试文件里 10 个全部通过；`setup-scenarios` 有 3 项失败，都是只建基线、不在这一行的 `setup-connection-write`） | 无 |
 
 三种契约，依据在评分器源码和观察到的记录里：
 
@@ -479,7 +502,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 - **25 的待执行记录 `versions`**：25 之前的载荷写的 `private/daily-pending.jsonl` 一行只有 `id`、`skill`、`host`、`pid`、`startedAt`、`phase`、`authorization`、`changes`；`assessDailyTransaction` 要求 `versions`（`pending-versions`）。
 - **10、25、08 的 doctor 记录**：`private/doctor-latest.json` 的 `checks`、`recovery`、`version`、`skills` 四个键都与当前评分不符。再在中间几个提交上核对 `doctor-inspect`、`doctor-unknown-lock`：`4092277`（10 合并后）只差 `checks`、`recovery`、`version`；`bd3b3e6`（25 合并后）只差 `checks`；`f1ec4ed`（08 合并后）通过。所以 `skills` 是 10 加的，`version` 和 `recovery` 里的 `versions` 是 25 加的，`checks` 的行到 08 才是现在的样子。
 
-**未验证的比较**（每个宿主各一对，共 32 对，都交维护者，见文末）：
+**未验证的比较**（每个宿主各一对，共 33 对，都交维护者，见文末；最后一行是 26 H 加的）：
 
 | 场景 | 「前」 | 记录 |
 | --- | --- | --- |
@@ -488,8 +511,26 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 | `daily-reminder`、`daily-close-failure`、`daily-restart-failure` | `6f95f27` | 未验证：当前评分器要求 30 的预览与差异指纹，「前」载荷早于它 |
 | `daily-stone-approved`、`daily-expiring-approved` | `6f95f27` | 未验证：当前评分器要求 30 的差异指纹，「前」载荷早于它 |
 | doctor 五 | `3ff4555`、`fc633d6` | 未验证：当前评分器要求 10、25、08 改过的 doctor 记录，「前」载荷早于它 |
+| `daily-unknown` | `ddd0ca8` | 未验证：当前场景要求 maa-doctor 同伴（26 H，决定 D3 方案 a），「前」载荷早于 06，入口以 `payload-skill-missing` 拒绝 |
 
-它们影响的工单条目：05 七个 daily 场景的「同版本前后」（四个），06、15、24、07 受影响 daily 的前后不降（四个），24、07 受影响 doctor 的前后不降，27 新增四个场景里两个的「同版本前后」，以及 30 受影响的六个。这些场景在最终候选上的基线照常建（基线批次），人工核实照常做；能不能用别的办法补这些比较，或者凭基线发布，由维护者决定。入口不自动拒绝这类配对（设计默认值，见文首），计划里的命令已经不含它们。
+它们影响的工单条目：05 七个 daily 场景的「同版本前后」（四个写入场景，26 H 起另加 `daily-unknown`），06、15、24、07 受影响 daily 的前后不降（四个），24、07 受影响 doctor 的前后不降，27 新增四个场景里两个的「同版本前后」，以及 30 受影响的六个。这些场景在最终候选上的基线照常建（基线批次；`daily-unknown` 在「后」批次里），人工核实照常做；能不能用别的办法补这些比较，或者凭基线发布，由维护者决定。入口不自动拒绝这类配对（设计默认值，见文首），计划里的命令已经不含它们。`daily-unknown` 在 `ddd0ca8` 上是载荷做不了（入口拒绝），不是评分契约晚于载荷，放在这张表里是因为结果一样：这一对比较不了。
+
+### 26 H 改过的场景重新核对（2026-11-14）
+
+26 的框架修复包 H 改了七个场景的定义（`doctor-unknown-run`、`daily-unknown`、四个 `daily-alternate-*`、`account-skland-community-read` 的秘密声明）和两个报告场景走的审查员路径（`account-report-default-review`、`base-report-default-review`），所以按上一节的办法对它们计划里的每个「前」重做一次。框架是 H 的检出（`a4c405f` 之后只改了文档），载荷用 `payload --commit <提交>` 做在仓库外的临时目录里。这次用运行器本身驱动：宿主替身（`eval/host-double.mjs`，不调用模型）按场景测试驱动的调用逐条执行「前」载荷的 CLI，`runScenario` 装「前」载荷的 skill、用本检出的评分器评分；每条 node 调用都先加载测试用的断网守卫；两个报告场景经工作区的审查员垫片把说明文件经标准输入交给审查员替身，再记 `review`。对照：H 的 `HEAD` 载荷上十个驱动全部 `pass`。
+
+| 场景 | 「前」 | 结果 |
+| --- | --- | --- |
+| `doctor-unknown-run`（先 check，退出 1，再 analyze） | `f1ec4ed` | `pass` |
+| 四个 `daily-alternate-*`（偏好读取，再 `stage-run.ts read`） | `f1ec4ed` | 都 `pass` |
+| `account-skland-community-read`（每次运行新生成的森空岛世界凭据） | `f1ec4ed` | `pass` |
+| `account-report-default-review`、`base-report-default-review`（经审查员替身） | `f1ec4ed` | 都 `pass` |
+| `daily-unknown` | `ddd0ca8` | 入口拒绝：`payload-skill-missing`（maa-doctor）；记入上面「未验证的比较」，计划里 `ddd0ca8` 那一行去掉它 |
+| `daily-unknown`：只读偏好、不动锁 | `788ac13`、`3ff4555`、`fc633d6`、`6f95f27` | 都 `pass` |
+| `daily-unknown`：读偏好后交给 doctor 核对（`doctor.ts check`） | `788ac13`、`3ff4555`、`fc633d6` | 挂 `authorization`：这些载荷的 doctor 写出的最近检查记录早于 10、25、08 改过的格式，与上一节 doctor 五的契约相同 |
+| 同上 | `6f95f27` | `pass` |
+
+所以按文首的规则（「不论模型怎样做都通不过」才不安排比较），`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 三行照常比较：不跑 doctor 的正确做法能通过。但这三行的「前」若交给 doctor 核对，会因为 doctor 记录的契约失败；「前」失败、「后」通过在 `compareRuns` 里不算回归，这一对什么也没比。所以看这三行的 `compare` 结果时，`daily-unknown` 是「前」失败的，再看「前」那份 `evidence.json`：评分只挂 `authorization`，而且未授权的改动都在 `private/doctor-latest.json` 里，就在这一行的记录里写「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，交维护者，不当作「分数不降」的依据（设计默认值，2026-11-14，见文首）。
 
 ### 做载荷，在载荷上运行
 
@@ -522,9 +563,9 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 4. 每个「前」各跑一批，只跑那一行计划比较的场景（「不比较」一列的不跑）；再用 `--scenarios` 把「后」限定到同一组场景来比较。逐行的命令（场景 id 照抄，不用组名，因为组里还有别的场景）：
 
    ```text
-   # ddd0ca8（9 个）
-   node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary core-language core-append core-boundary daily-inspect daily-forbidden daily-unknown --payload <载荷-ddd0ca8> --executable <codex.exe>
-   node scripts/eval-batch.ts compare <前-ddd0ca8 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,core-language,core-append,core-boundary,daily-inspect,daily-forbidden,daily-unknown
+   # ddd0ca8（8 个；daily-unknown 不比较，见「26 H 改过的场景重新核对」）
+   node scripts/eval-batch.ts run codex <固定模型 id> help-routing help-preference help-boundary core-language core-append core-boundary daily-inspect daily-forbidden --payload <载荷-ddd0ca8> --executable <codex.exe>
+   node scripts/eval-batch.ts compare <前-ddd0ca8 的批次目录> <后的批次目录> --scenarios help-routing,help-preference,help-boundary,core-language,core-append,core-boundary,daily-inspect,daily-forbidden
    # 1d7fec0（4 个）
    node scripts/eval-batch.ts run codex <固定模型 id> account-inspect account-user-start account-boundary account-import --payload <载荷-1d7fec0> --executable <codex.exe>
    node scripts/eval-batch.ts compare <前-1d7fec0 的批次目录> <后的批次目录> --scenarios account-inspect,account-user-start,account-boundary,account-import
@@ -599,7 +640,7 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 可比性只有一个所有者，`scripts/evaluation.ts`：`scenarioIdentity` 决定场景指纹（评分器与运行器源码、评测装入的观察器与替身、未渲染的场景定义），产品文件不进场景指纹；`compareRuns` 要求同一场景的宿主、模型、CLI 版本、场景指纹和总分都相同；`batchIncomparability` 要求两批的宿主、CLI 版本、模型、认证方式和运行器指纹相同、都记了载荷来源，只有载荷可以不同。不满足时 `compare` 给出静态原因。
 
-- 08 改了 doctor 场景写出的检查行，27 改写了四个场景的拒绝诱饵，28 改了运行器，26 B 部分又改了评分器和运行器源码：这些都改变了场景指纹，所以之前的全部记录（包括 28 的两次试运行，它们本来也只用来定超时和估用量）与新记录不可比，原样保留，不改写。
+- 08 改了 doctor 场景写出的检查行，27 改写了四个场景的拒绝诱饵，28 改了运行器，26 B 部分又改了评分器和运行器源码：这些都改变了场景指纹，所以之前的全部记录（包括 28 的两次试运行，它们本来也只用来定超时和估用量）与新记录不可比，原样保留，不改写。26 H 又改了评分器、夹具、运行器、宿主适配、读保护检查和网络预加载器，新增审查员替身和垫片，同样如此：第一批真实运行的 `batch-bcrWVr`、`batch-XOuQYr` 只作诊断证据（见「框架修复包 H 之后的重跑范围」）。
 - 按上面的做法，「前」「后」都用最终候选的同一份框架运行，场景指纹和运行器指纹两边相同，比较的只是载荷。整个验收期间框架必须冻结在一个提交上；`scenarioHashSources` 或运行器指纹里的任何文件一改，之前的批次就都不能再比。
 - 「前」的载荷做不了的场景（例如 setup 在 07 之前不存在）由入口在任何宿主调用之前拒绝，不运行、不计通过或失败；比较时用 `--scenarios` 只取那一行的场景，子集里有一边拒绝过或没跑过的场景，整对记为无法比较并给出原因。载荷里有这个脚本但功能还没有的，「前」会失败，「后」通过不算回归。评分契约晚于载荷的场景（评分要的记录或动作这个载荷写不出来）也一样「前」一定失败、入口不拒绝；这样一对 `compare` 会报通过，却什么也没比，所以计划不安排，记「未验证」（见「当前评分器下「前」载荷能不能通过」）。
 - pass→fail 的场景用最终载荷单独重跑三次（`--rerun-of`），三次全过也只记不稳定；更换模型或 CLI 版本要重建基线。
@@ -610,13 +651,22 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 | 项 | 运行数 |
 | --- | --- |
-| 「前」的批次（上表合计，11 批）。A 部分第 1 轮审查后 24 那一行加 doctor 五、stage 六，从 147 改为 158；B 部分第 1 轮审查后去掉原计划里当前评分器下不能通过的 28 对，加入 30 受影响、能比较的六个（daily 三、core 三；30 受影响的四个写入场景同样不能通过，没有加入，与那 28 对合计 32 对未验证），改为 136 | 136 |
+| 「前」的批次（上表合计，11 批）。A 部分第 1 轮审查后 24 那一行加 doctor 五、stage 六，从 147 改为 158；B 部分第 1 轮审查后去掉原计划里当前评分器下不能通过的 28 对，加入 30 受影响、能比较的六个（daily 三、core 三；30 受影响的四个写入场景同样不能通过，没有加入，与那 28 对合计 32 对未验证），改为 136；26 H 去掉 `ddd0ca8` 那一行的 `daily-unknown`（载荷没有 maa-doctor，第 33 对未验证），改为 135 | 135 |
 | 「后」的批次（一批，要比较的 86 个场景） | 86 |
 | 基线批次（一批，没有「前」的 31 个：只建基线的 20 个和比较未验证的 11 个） | 31 |
 | pass→fail 重跑（按「后」批次的一成估，每个三次） | 约 27 |
-| 合计 | 约 280 |
+| 合计 | 约 279 |
 
-约 280 次运行，按一个登录目录同一时间只跑一批，串行约 4.7 小时；输入约 4,500–7,000 万 token（大部分是缓存），输出约 17–42 万 token；另有约 14 批的读保护检查（每批一次，约 6 秒、1.6 万 token）。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
+约 279 次运行，按一个登录目录同一时间只跑一批，串行约 4.7 小时；输入约 4,500–7,000 万 token（大部分是缓存），输出约 17–42 万 token；另有约 14 批的读保护检查（每批一次，约 6 秒、1.6 万 token）。套餐用量用完时批次停在 `quota-exhausted`，用 `resume` 续跑。这只是 Codex 一侧；Claude 一侧以后再跑同样的数量。
+
+### 框架修复包 H 之后的重跑范围（2026-11-14）
+
+26 H 改了 `scenarioHashSources` 和 `runnerSources` 里的文件（评分器、夹具、运行器、宿主适配、认证与读保护检查、批次入口和网络预加载器），新增了审查员替身和垫片（计入场景指纹和运行器指纹）。所以每个场景的场景指纹、每一批的运行器指纹都变了：「前」的 11 批（135 个）、「后」的 86 个、基线的 31 个三类批次全部在冻结的最终候选上重跑，H 之前的任何批次都不能再比。本检出里已有的 `batch-bcrWVr`（「后」，载荷 `21eb13d`）和 `batch-XOuQYr`（基线，31 个只跑了 18 个）只作诊断证据，原样保留，不改写，也不进任何 `compare`；本检出里没有「前」批次，别处是否跑过未核实，若有也同样作废。
+
+两条决定（设计默认值，2026-11-14，协调者在失败分诊里定，见文首）：
+
+- **D4：框架检出等于最终候选提交。**第 1 步的 `<最终检出>` 就是最终候选那个提交本身，不允许框架停在某个更早的提交、只用 `--payload` 换载荷。后果：载荷包 P 对 `skills/maa-core/scripts/preferences.ts`（也在 `runnerSources` 里）的改动同时改变运行器指纹，所以三类批次都要等 H 和 P 都合并、版本号改好、最终候选冻结之后才开始，「前」也不例外；H 冻结之后不能先跑「前」。
+- **D5：评分器只比对退出码的弱点（G1）不在这一轮修。**期望某个调用以非 0 退出的场景，解析失败造成的 exit 1 也会被当作预期的拒绝；分诊抽查的 4 个通过运行没有发现假通过，其余没有逐一核对。修它要改 `scripts/evaluation.ts` 和 `eval/observe-node.mjs`，另开后续工单。人工核实时，这类场景（期望 `exitCode` 非 0 的调用）要看 `host.jsonl` 里那次调用的输出是不是预期的拒绝原因，不是解析失败。
 
 ## 许可与第三方检查
 
@@ -714,11 +764,44 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 
 评分器和运行器指纹用的是检出自己的共享模块，不是载荷的（B 部分第 1 轮修正时按协调者的要求确认）：`runnerFingerprint` 按 `runnerSources` 从检出根目录读文件（`scripts/eval-batch.ts` 的 `repositoryRoot` 是检出），其中的 `skills/maa-core/scripts/preferences.ts`、`consumption-grant.ts`、`config-projection.ts` 是检出里的；评分器按相对路径从 `scripts/` 导入它们（`scripts/evaluation.ts` 导入 `consumption-grant.ts`，`scripts/eval-daily.ts` 和 `scripts/eval-transaction.ts` 导入 `config-projection.ts`，`scripts/eval-auth.ts` 导入 `preferences.ts`），也落在检出里。运行时的证据：`6f95f27` 和更早的载荷里没有 `config-projection.ts`，`ddd0ca8` 里也没有 `consumption-grant.ts`，评分照常进行；`ddd0ca8` 载荷上的批次运行器指纹与 `24deeb4` 载荷上的相同。
 
+### 26 H 运行的命令（2026-11-14）
+
+框架修复包 H（R5、R6、R7、R8a–c 和 #85）在自己的工作树里只跑了下面这些，没有启动真实宿主，没有调用模型，没有联网；完整离线入口没有跑（由协调者在冻结的头上跑）。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `node --test tests/eval-auth.test.ts` | 15 项通过 |
+| `node --test tests/eval-redact.test.ts` | 6 项通过 |
+| `node --test tests/eval-run.test.ts` | 5 项通过 |
+| `node --test tests/eval-host-double.test.ts` | 14 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-payload.test.ts` | 4 项通过 |
+| `node --test tests/evaluation.test.ts` | 13 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过 |
+| `node --test tests/eval-fixture.test.ts` | 8 项通过 |
+| `node --test tests/eval-network.test.ts` | 4 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 23 项通过 |
+| `node --test tests/daily-evaluation.test.ts` | 6 项通过 |
+| `node --test tests/stage-alternate-scenarios.test.ts` | 2 项通过 |
+| `node --test tests/stage-run-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/report-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/base-report-scenarios.test.ts` | 2 项通过 |
+| `node --test tests/community-scenarios.test.ts` | 4 项通过 |
+| `node --test tests/skland-scenarios.test.ts` | 1 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 5 项通过（文档改完后又跑一次） |
+| `node scripts/eval-selftest.ts` | 7 条规则、25 份样例，`ok: true` |
+| `node scripts/eval-preflight.ts`（临时 home，同离线入口的做法） | `status: pass`，两个宿主各三个替身运行都 `completed`、`pass` |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts` | 无发现；`errors: []` |
+| 「26 H 改过的场景重新核对」：`payload --commit` 做 `f1ec4ed`、`ddd0ca8`、`788ac13`、`3ff4555`、`fc633d6`、`6f95f27` 和 H 的 `HEAD` 七个载荷（仓库外临时目录，跑完已删），宿主替身按场景测试的驱动经 `runScenario` 跑，本检出评分 | 见那一节的表；对照 `HEAD` 十个驱动全 `pass` |
+| 第 3 步第三项核对的演练（两批宿主替身基线，一批来自只改了一句场景提示词的框架副本） | 本检出那批 `match`，副本那批 `differs`，两批运行器指纹相同 |
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
 
 - 所有真实模型验收：未验证。
+- 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否对 `sandbox` 和 `exec` 都按 `shell_environment_policy.exclude` 排除变量、是否还会自己再注入 `CODEX_HOME` 未验证（读保护检查的环境探针不通过时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
 - **用这个办法清不掉的发布门禁（需要维护者）**：当前评分器下「前」载荷不能通过的 32 对比较（每个宿主），记「未验证：当前评分器要求 <契约>，「前」载荷早于它」，明细和复现见「当前评分器下「前」载荷能不能通过」。涉及 05 七个 daily 场景里四个写入场景的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。
