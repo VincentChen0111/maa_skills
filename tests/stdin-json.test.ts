@@ -95,7 +95,38 @@ const consumers: Record<string, { args: string[]; doc: string }> = {
   'maa-core/scripts/training-plan.ts': { args: ['read'], doc: 'maa-core/references/training.md' },
   'maa-core/scripts/training-time.ts': { args: ['query'], doc: 'maa-core/references/training.md' },
 };
-const directRead = /process\s*\.\s*stdin\b|process\s*\[\s*['"`]stdin|\{[^}]*\bstdin\b[^}]*\}\s*=\s*process\b|\/dev\/stdin|readFileSync\(\s*0\s*[,)]|\bfd:\s*0\b|openStdin/;
+const quote = /['"`]/.source;
+const identifier = /[A-Za-z_$][\w$]*/.source;
+/** `process` or `node:process` as a module specifier. */
+const processModule = String.raw`${quote}(?:node:)?process${quote}`;
+/** Ways to reach standard input without naming a process object: file descriptor 0, the device, or stdin taken from the module itself. */
+const moduleReads = [
+  /\/dev\/stdin/, /\breadFile(?:Sync)?\(\s*0\s*[,)]/, /\breadSync\(\s*0\s*,/, /\bfd:\s*0\b/, /openStdin/,
+  // import { stdin } from 'node:process', with or without `as`, alone or among other names
+  new RegExp(String.raw`\bimport\b[^;]*?\{[^}]*\bstdin\b[^}]*\}\s*from\s*${processModule}`),
+  // require('process').stdin, (await import('node:process'))['stdin'], const { stdin } = require('process')
+  new RegExp(String.raw`\b(?:require|import)\s*\(\s*${processModule}\s*\)\s*\)?\s*(?:\??\.\s*stdin\b|\[\s*${quote}stdin)`),
+  new RegExp(String.raw`\{[^}]*\bstdin\b[^}]*\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*${processModule}`),
+];
+/** Every name a source binds to the process object: the global, an alias of it, and each default, namespace or require binding of node:process. */
+function processNames(text: string): string[] {
+  const names = new Set(['process']);
+  const bindings = [
+    new RegExp(String.raw`\bimport\s+(?:\*\s*as\s+)?(${identifier})\s*(?:,[^;]*?)?from\s*${processModule}`, 'g'),
+    new RegExp(String.raw`\b(?:const|let|var)\s+(${identifier})\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*${processModule}\s*\)`, 'g'),
+    new RegExp(String.raw`\b(?:const|let|var)\s+(${identifier})\s*=\s*(?:globalThis\s*\.\s*)?process\s*[;,)\n]`, 'g'),
+  ];
+  for (const binding of bindings) for (const [, name] of text.matchAll(binding)) names.add(name!);
+  return [...names];
+}
+/** Whether a source reads standard input itself instead of through the shared reader. */
+function readsStdinDirectly(text: string): boolean {
+  if (moduleReads.some(pattern => pattern.test(text))) return true;
+  return processNames(text).some(name => {
+    const bound = name.replace(/[$]/g, '\\$&');
+    return new RegExp(String.raw`(?<![\w$])${bound}\s*(?:\??\.\s*stdin\b|\[\s*${quote}stdin)|\{[^}]*\bstdin\b[^}]*\}\s*=\s*${bound}(?![\w$])`).test(text);
+  });
+}
 const sharedRead = /\breadStdinJson\(/;
 
 async function sources(root: string): Promise<Map<string, string>> {
@@ -110,7 +141,7 @@ async function sources(root: string): Promise<Map<string, string>> {
 function stdinViolations(files: Map<string, string>): string[] {
   const violations: string[] = [];
   for (const [name, text] of files) {
-    if (directRead.test(text) && name !== owner && !terminalReaders.includes(name)) violations.push(`${name}: reads standard input directly`);
+    if (readsStdinDirectly(text) && name !== owner && !terminalReaders.includes(name)) violations.push(`${name}: reads standard input directly`);
     if (sharedRead.test(text) && name !== owner && !Object.hasOwn(consumers, name)) violations.push(`${name}: reads standard input but is not in the conformance list`);
   }
   for (const name of Object.keys(consumers)) if (!sharedRead.test(files.get(name) ?? '')) violations.push(`${name}: does not use readStdinJson`);
@@ -121,7 +152,7 @@ function stdinViolations(files: Map<string, string>): string[] {
 test('conformance: every standard-input reader under skills/ is listed and uses readStdinJson; no file reads stdin itself', async () => {
   const files = await sources(skillsRoot);
   assert.deepEqual(stdinViolations(files), []);
-  const direct = [...files].filter(([, text]) => directRead.test(text)).map(([name]) => name).sort();
+  const direct = [...files].filter(([, text]) => readsStdinDirectly(text)).map(([name]) => name).sort();
   assert.deepEqual(direct, [owner, ...terminalReaders].sort(), 'only the shared reader and the terminal-only credential entry touch process.stdin');
   const shared = [...files].filter(([name, text]) => name !== owner && sharedRead.test(text)).map(([name]) => name).sort();
   assert.deepEqual(shared, Object.keys(consumers).sort(), 'the conformance list is exactly the set of JSON readers');
@@ -135,9 +166,28 @@ test('conformance check fails when a consumer reads standard input directly or a
   assert.deepEqual(stdinViolations(direct), [`${name}: does not use readStdinJson`, `${name}: reads standard input directly`]);
   const unlisted = new Map(files).set('maa-daily/scripts/new-tool.ts', 'const input = await readStdinJson({ maxBytes: null });');
   assert.deepEqual(stdinViolations(unlisted), ['maa-daily/scripts/new-tool.ts: reads standard input but is not in the conformance list']);
-  for (const source of ["const text = readFileSync(0, 'utf8');", 'const { stdin } = process;', "for await (const chunk of process['stdin']) raw += chunk;"]) {
+  const directForms = [
+    "const text = readFileSync(0, 'utf8');", 'const text = fs.readFileSync(0);', "const text = readFileSync('/dev/stdin', 'utf8');",
+    'const read = readSync(0, buffer);', 'const read = fs.readSync( 0, buffer, 0, 1024, null);',
+    'const { stdin } = process;', "for await (const chunk of process['stdin']) raw += chunk;",
+    "import { stdin } from 'node:process';", 'import { stdin } from "process";', "import { argv, stdin as input } from 'node:process';",
+    "import {\n  stdin as input,\n} from 'process';",
+    "import * as proc from 'node:process'; for await (const chunk of proc.stdin) raw += chunk;",
+    "import proc from 'process'; const input = proc['stdin'];", "import proc, { argv } from 'node:process'; const { stdin } = proc;",
+    "const input = require('process').stdin;", "const input = require('node:process')['stdin'];",
+    "const proc = require('node:process'); proc.stdin.on('data', read);", "const { stdin: input } = require('process');",
+    "const input = (await import('node:process')).stdin;", "const { stdin: input } = await import('node:process');",
+    'const proc = process; proc.stdin.on(\'data\', read);',
+  ];
+  for (const source of directForms) {
     const other = new Map(files).set('maa-core/scripts/other.ts', source);
     assert.deepEqual(stdinViolations(other), ['maa-core/scripts/other.ts: reads standard input directly'], source);
+  }
+  // Not standard input: a child process's own stdin, and other members of node:process.
+  for (const source of ["import { argv } from 'node:process';", "import * as proc from 'node:process'; const args = proc.argv;",
+    "const proc = require('process'); proc.exitCode = 1;", "child.stdin.end(input);", 'const read = readSync(fd, buffer);']) {
+    const other = new Map(files).set('maa-core/scripts/other.ts', source);
+    assert.deepEqual(stdinViolations(other), [], source);
   }
 });
 
