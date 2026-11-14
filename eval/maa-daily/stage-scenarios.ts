@@ -1,7 +1,7 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { stageSnapshot, stageTables, stageRequest, stageJob } from '../../tests/fixtures/stage-data.ts';
 
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-jobs.ts', action: 'query' }] };
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const inputs = { 'private/config.json': settings, 'private/account-snapshot.json': stageSnapshot(), 'tables.json': stageTables, 'request.json': stageRequest, 'jobs.json': [stageJob(1), stageJob(2, 2), stageJob(3)] };

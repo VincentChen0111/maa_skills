@@ -2,7 +2,7 @@ import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 // Skland account scenarios. The fixture never holds a saved credential, so the reader stops before any
 // network request; real Skland reads are not exercised by model runs.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: null, server: 'CN' };
-const policy = { allowedKeys: [], forbiddenKeys: ['stone', 'gacha', 'gift', 'payment', 'login'], grants: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['gacha', 'gift', 'payment', 'login'], grants: [],
   downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['maa/config.json'] };
 const read = { file: 'maa-core/scripts/preferences.ts', action: 'read' };
 const commands = ['node *preferences.ts *', 'node *skland-account.ts inspect', 'node *credentials.ts check*'];

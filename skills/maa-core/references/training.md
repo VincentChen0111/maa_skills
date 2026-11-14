@@ -22,7 +22,7 @@
 
 1. 明确授权的干员、技能、最终档次。读取 `maa-config.ts read` 的摘要，请用户选定**已有**配置、Infrast、OperProgress 队列位置和一个空闲单次槽。缺项时等待用户在 GUI 补齐，再读摘要；不隐式创建任务。选中的配置会临时仅启用当前训练任务，其他队列项停用；将这一具体影响纳入用户本次安排。
 2. `training-plan.ts prepare` 输入 `{query:<上述查询>, authorization: { source:"current-request"或"approved-report",reference:<授权原话或报告条目> }, binding:{profile:0,infrastTask:0,progressTask:1,timer:0}, currentTrainee:null或<当前受训者ID>, manualTraining:false}`。所有序号从 0 起；`currentTrainee:null` 明确当前没有受训者，不代表未知。当前是谁待核时先查询，不准备猜测。返回计划 ID，仅保存待执行记录。
-3. `training-plan.ts apply` 输入 `{id,host:"codex"或"claude",closedConfirmed?:true}`。只有已经收到用户关于已关闭 MAA 未被操作的确认才加 `closedConfirmed:true`。脚本复用安全事务；`complete` 仅代表配置及引用文件读回完成。检查阶段 `rejected`/`busy` 未写入，可在原因解除后继续；`unknown` 先核对，不能重试。准备时的配置名、队列和槽身份持续绑定；漂移停下核对，仅允许原生已完成后清空培养目标及关闭单次槽的已知变化。每次只安排一个阶段，原生单次定时按本机时钟触发；不创建外部定时器或点击设备。
+3. `training-plan.ts apply` 输入 `{id,host:"codex"或"claude",closedConfirmed?:true}`。只有已经收到用户关于已关闭 MAA 未被操作的确认才加 `closedConfirmed:true`。写入以 `training-expiring-grant-required` 拒绝、用户当次批准临期药随这份计划一起时，再加 `expiringMedicine`（同 maa-daily 配置事务接口的临期药授权）和 `reference`（用户这次批准的原话）；这时写入请求的来源记为当次请求，计划自己的授权仍在计划记录里。`reconcile` 清理单次槽时遇到同一原因码，也按这个方式附带。脚本复用安全事务；`complete` 仅代表配置及引用文件读回完成。检查阶段 `rejected`/`busy` 未写入，可在原因解除后继续；`unknown` 先核对，不能重试。准备时的配置名、队列和槽身份持续绑定；漂移停下核对，仅允许原生已完成后清空培养目标及关闭单次槽的已知变化。每次只安排一个阶段，原生单次定时按本机时钟触发；不创建外部定时器或点击设备。
 4. 原生执行之后，`training-plan.ts reconcile` 输入 `{id,logFile:<已选MAA目录内实际Core日志>,host,closedConfirmed?}`。只接受该实例目录内日志；保留原日志，不把完整日志贴到对话。日志须包含本动作实际 `append_task` 参数与同线程返回的 task_id，再以同进程/任务 ID/任务链的 TaskChainStart 关联回调；仅截一条完成消息不足。Infrast 需匹配本计划不可变训练文件、Training-only、禁续训和计划序号，OperProgress 需匹配唯一目标及下一档。缺失、多个候选或中途参数变化先核对；不能借材料刷新重放。`read` 输入 `{id}` 可随时读取安全摘要。
 
 计划在 `prepare` 时写下读到的 MAA 版本和核实记录版本（摘要的 `versions`，读不出为 null）。`apply` 的结果和 `reconcile` 的返回都带 `versions`：`state` 为 same、changed（`changed` 列出变了的项）、unknown 或 unrecorded（旧计划没有记录）。changed 时告诉用户准备之后 MAA 或核实记录换了版本；这只是提醒，不阻止执行，未核实的版本同样只提醒。
@@ -37,4 +37,4 @@
 
 计划记录、材料核对和实际事件保存在私有 `training-plans`，含每档历史和去重摘要。记录锁遗留或配置事务未知时，先保留现场交给核对；自动重放和自动删锁均不提供。训练自定义文件以内容 hash 命名，统一事务在持锁且关停后安装，记录原先缺失/一致状态与 manifest，GUI 备份、关停后漂移检查和重开读回都覆盖引用。失败不声称跨文件原子成功；恢复工具若不认识训练 manifest 必须留 unknown。
 
-训练、关卡作业和理智药是不同的批准范围；分别调用对应入口，不能在同一配置事务混合 `trainingPlan`、`jobPlan` 或 `medicineCount`。
+训练、关卡作业和理智药、碎石数量是不同的批准范围；分别调用对应入口，不能在同一配置事务混合 `trainingPlan`、`jobPlan`、`medicineCount` 或 `stoneCount`。临期药的当次批准 `expiringMedicine` 可以随计划一起提交：专精定时会运行到开着临期药的 Fight 任务时，没有它就以 `training-expiring-grant-required` 拒绝，请用户一起批准临期药或先关掉；运行到开着碎石的 Fight 任务时以 `training-stone-enabled` 拒绝，先经当次请求关掉碎石。

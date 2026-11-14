@@ -9,7 +9,7 @@ const configuration = { Current: 'Synthetic profile', Configurations: { 'Synthet
   ConnectSettings: { AdbPath: '', Address: '', AddressHistory: [], AutoDetect: true, AlwaysAutoDetect: false },
   RuntimeSettings: { ClientType: 'Official', StartGame: false } } } },
 Timers: { List: [], NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5 } };
-const quiet = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], expectedChanges: [], downloadGrants: [], expectedCalls: [],
+const quiet = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], expectedChanges: [], downloadGrants: [], expectedCalls: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'] };
 const call = (script: string, action: string, exitCode?: number) => ({ file: `maa-core/scripts/${script}`, action, ...(exitCode === undefined ? {} : { exitCode }) });
 const reminder = '开启定时提醒';

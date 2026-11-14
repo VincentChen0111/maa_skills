@@ -107,6 +107,11 @@ test('doctor CLI provides human and JSON reports with 0/1/2 exit codes and refus
   const healthy = invoke(['check', '--json']); assert.equal(healthy.status, windows ? 0 : 1, healthy.stdout); assert.equal(JSON.parse(healthy.stdout).exitCode, windows ? 0 : 1);
   const human = invoke(['check']); assert.equal(human.status, windows ? 0 : 1); assert.match(human.stdout, /configuration/); assert.match(human.stdout, /正常|normal/);
   const invalid = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all' }); assert.equal(invalid.status, 1); assert.equal(JSON.parse(invalid.stdout).status, 'rejected');
+  // 27: the repair input accepts the stone and expiring-medicine grants by name; any other key is refused as input.
+  const grants = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all', stoneCount: 1, expiringMedicine: { days: 2, forActivity: false } });
+  assert.equal(JSON.parse(grants.stdout).reason, 'named-approval-required');
+  const unknown = invoke(['repair', '--json'], { approved: ['all'], host: 'codex', reference: 'all', stonecount: 1 });
+  assert.equal(JSON.parse(unknown.stdout).reason, 'request-invalid');
   await writeFile(f.file, '{');
   const corrupt = invoke(['check', '--json']); assert.equal(corrupt.status, 1); assert.equal(JSON.parse(corrupt.stdout).checks.find((item: { id: string }) => item.id === 'configuration').status, 'error');
   await rm(f.privateDirectory, { recursive: true }); await writeFile(f.privateDirectory, 'synthetic blocked directory');
@@ -150,7 +155,7 @@ test('parallel approved restorations perform one transaction and reject the comp
 });
 
 test('unknown or malformed transaction metadata never permits either recovery action', async (t) => {
-  const cases: { target: 'lock' | 'pending' | 'authorization' | 'change'; key: string; value?: unknown; omit?: boolean; name?: string }[] = [
+  const cases: { target: 'lock' | 'pending' | 'authorization' | 'change'; key: string; value?: unknown; omit?: boolean; name?: string; also?: Record<string, unknown> }[] = [
     { target: 'lock', key: 'jobPlan', value: { file: 'synthetic-unverified-resource.json' } },
     { target: 'change', key: 'trainingPlan', value: { file: 'synthetic-unverified-resource.json' } },
     { target: 'pending', key: 'authorization', value: {} },
@@ -173,18 +178,31 @@ test('unknown or malformed transaction metadata never permits either recovery ac
     { target: 'authorization', key: 'medicineCount', value: 1.5 },
     { target: 'authorization', key: 'medicineCount', value: 2147483648 },
     { target: 'authorization', key: 'medicineCount', value: '1' },
+    // 27: stone and expiring-medicine grants follow the same strict schema; an approved report cannot carry one.
+    { target: 'authorization', key: 'stoneCount', value: -1 },
+    { target: 'authorization', key: 'stoneCount', value: 1.5 },
+    { target: 'authorization', key: 'stoneCount', value: 2147483648 },
+    { target: 'authorization', key: 'stoneCount', value: '1' },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 0, forActivity: false } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 31, forActivity: false } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 2 } },
+    { target: 'authorization', key: 'expiringMedicine', value: { days: 2, forActivity: false, extra: true } },
+    { target: 'authorization', key: 'expiringMedicine', value: 2 },
+    { target: 'authorization', key: 'stonecount', value: 1 },
+    { target: 'authorization', key: 'source', value: 'approved-report', also: { stoneCount: 1 } },
     { target: 'change', key: 'path', omit: true },
     { target: 'change', key: 'value', omit: true },
     { target: 'change', key: 'path', value: ['Timers', { name: 'NotifyBeforeScheduledStart' }] },
     { target: 'change', key: 'path', value: [] },
   ];
-  for (const sample of cases) await t.test(`${sample.target}.${sample.key} ${sample.omit ? 'missing' : JSON.stringify(sample.value)}`, async (t) => {
+  for (const sample of cases) await t.test(`${sample.target}.${sample.key} ${sample.omit ? 'missing' : JSON.stringify(sample.value)}${sample.also ? ' with ' + JSON.stringify(sample.also) : ''}`, async (t) => {
     const f = await fixture(t); const retained = await abandoned(f);
     const lock = JSON.parse(await readFile(retained.lockFile, 'utf8'));
     const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
     const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
     const target = sample.target === 'lock' ? lock : sample.target === 'pending' ? pending : sample.target === 'change' ? pending.changes[0] : pending['authorization'];
     if (sample.omit) delete target[sample.key]; else target[sample.key] = sample.value;
+    Object.assign(target, sample.also ?? {});
     await writeFile(retained.lockFile, JSON.stringify(lock)); await writeFile(pendingFile, JSON.stringify(pending) + '\n');
     const original = await readFile(f.file); const lockBytes = await readFile(retained.lockFile); const pendingBytes = await readFile(pendingFile);
     const checked = await runChecks(f, f.maa, quiet);
@@ -256,6 +274,36 @@ test('recovery reports a changed MAA or record version since the pending record 
     const result = await executeRepairs({ ...f, host: 'codex', evidenceRevision: checked.recovery.evidenceRevision, approved: ['reconcile-lock'], reference: 'synthetic reconcile approval' }, f.maa);
     assert.deepEqual([result.status, (result as { versions?: unknown }).versions], ['complete', checked.recovery.versions]);
     assert.ok(retained.id);
+  });
+});
+
+/**
+ * Merge of 27 with 23 and 25 (2026-11-14): the strict pending-record table accepts exactly 25's optional `versions` stamp and
+ * 27's three consumption grants beside the original fields. 23's `baseManifest` and `basePlan` stay unsupported evidence (a base
+ * plan's unknown outcome is reported, never restored), and a grant from an approved report is invalid as in 27.
+ */
+test('the pending-record table accepts the version stamp with all three consumption grants, and nothing else new', async (t) => {
+  const recordVersion = (await readVerificationRecord()).recordVersion;
+  const grants = { medicineCount: 1, stoneCount: 2, expiringMedicine: { days: 2, forActivity: false } };
+  for (const mode of ['versions-and-grants', 'base-manifest', 'base-plan', 'report-grant', 'unknown-field']) await t.test(mode, async (t) => {
+    const f = await fixture(t); const retained = await abandoned(f);
+    const pendingFile = join(f.privateDirectory, 'daily-pending.jsonl');
+    const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
+    pending.versions = { maaVersion: '6.22.0', recordVersion };
+    Object.assign(pending.authorization, grants);
+    if (mode === 'base-manifest') pending.baseManifest = { file: 'base-applied/synthetic.json', before: 'absent', sha256: 'a'.repeat(64), immutable: true };
+    if (mode === 'base-plan') pending.authorization.basePlan = { sha256: 'a'.repeat(64), binding: { profile: 0, task: 0 }, decision: { unverified: [], userWords: null } };
+    if (mode === 'report-grant') pending.authorization.source = 'approved-report';
+    if (mode === 'unknown-field') pending.authorization.grantedBy = 'synthetic';
+    await writeFile(pendingFile, JSON.stringify(pending) + '\n');
+    f.maa.version = async () => '6.22.0';
+    const checked = await runChecks(f, f.maa, quiet);
+    const supported = mode === 'versions-and-grants';
+    assert.equal(checked.recovery.canReconcile, supported); assert.equal(checked.recovery.canRestore, supported);
+    if (!supported) return;
+    assert.equal(checked.recovery.versions?.state, 'same');
+    const result = await executeRepairs({ ...f, host: 'codex', evidenceRevision: checked.recovery.evidenceRevision, approved: ['reconcile-lock'], reference: 'synthetic reconcile approval' }, f.maa);
+    assert.equal(result.status, 'complete'); assert.ok(retained.id);
   });
 });
 

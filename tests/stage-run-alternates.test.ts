@@ -5,6 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { executeConfigWrite, inspectConfiguration } from '../skills/maa-core/scripts/maa-config.ts';
+import { decideConsumption } from '../skills/maa-core/scripts/consumption-grant.ts';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { approvedJobFile, approvedJobList, type ApprovedJobPlan } from '../skills/maa-core/scripts/stage-job-plan.ts';
 import { decideStageRun, loadBatchView, observeStageRun, readStageRun, recordStageProgress, stageRunOutcome, startStageRun, switchStageRun, verifyStageRun }
@@ -220,6 +221,36 @@ test('the unified writer accepts only the continuation list of approved jobs; th
   const body = { runId: c.runId, stageId: 'synthetic_01', expectedRevision: before, host: 'claude' };
   assert.deepEqual(call({ ...body, extra: 1 }), { ok: false, status: 'check-required', reason: 'request-invalid' });
   assert.deepEqual(call(body), { ok: false, status: 'check-required', reason: 'switch-not-decided' });
+});
+
+/**
+ * Merge of 27 with 17 (2026-11-14), registered in tests/consumption-grant.test.ts's writer callers: the switch writes the
+ * continuation's Copilot list through the unified writer, whose consumption checks run on every write. It never activates a
+ * Fight task, and a medicine or stone quantity cannot ride along its job plan (the predicate's `conflicting-authorizations`).
+ */
+test('an alternate switch never activates a consuming task, and no quantity grant can ride along its job plan', async t => {
+  const c = await tracked(t);
+  const file = join(c.batch.maaDirectory, 'config/gui.new.json'), config = JSON.parse(await readFile(file, 'utf8'));
+  const consuming = { $type: 'FightTask', TaskType: 'Fight', IsEnable: true, StagePlan: ['1-7'], UseMedicine: true, MedicineCount: 2, UseStone: true,
+    UseStoneAllowSave: true, StoneCount: 3, UseExpiringMedicine: true, MedicineExpireDays: 2, UseExpireMedicineForActivity: false };
+  config.Configurations['Synthetic profile'].TaskQueue = [consuming];
+  await writeFile(file, JSON.stringify(config));
+  const plan = await pendingPlan(c.batch.privateDirectory, c.batch.operation);
+  const next: ApprovedJobPlan = { ...plan, continuation: { from, stages: [{ stageId: 'synthetic_01', job: 2, runs: 1 }] } };
+  // The write exactly as `switchStageRun` makes it, with an optional extra grant.
+  const write = async (extra: Record<string, unknown>) => executeConfigWrite({ maaDirectory: c.batch.maaDirectory, privateDirectory: c.batch.privateDirectory,
+    host: 'claude', expectedRevision: await revision(c), authorization: { source: 'current-request', reference: '合成用户批准', jobPlan: next, ...extra } as never,
+    changes: [{ path: ['Configurations', 0, 'Copilot', 'TaskList'], value: approvedJobList(next, c.batch.privateDirectory) },
+      { path: ['Configurations', 0, 'Copilot', 'EnableUserAdditional'], value: false }] }, c.batch.maa);
+  for (const grant of [{ medicineCount: 2 }, { stoneCount: 3 }]) {
+    const refused = await write(grant);
+    assert.deepEqual([refused.status, refused.reason], ['rejected', 'conflicting-authorizations'], JSON.stringify(grant));
+    assert.equal(decideConsumption({ source: 'current-request', ...grant }, [], { consumer: 'writer-whitelist', plan: 'job' }).reason, 'conflicting-authorizations');
+  }
+  const written = await write({});
+  assert.equal(written.status, 'complete', JSON.stringify(written));
+  assert.deepEqual((await profile(c)).TaskQueue, [consuming], 'the Fight task with medicine, stone and expiring medicine on is left alone');
+  assert.equal(decideConsumption({ source: 'current-request' }, [], { consumer: 'indirect-consumption', plan: 'job' }).allowed, true);
 });
 
 /**

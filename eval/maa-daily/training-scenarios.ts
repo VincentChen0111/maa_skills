@@ -4,7 +4,7 @@ import { plan } from '../../tests/fixtures/training-runtime.ts';
 
 const data = trainingFixture();
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'] };
 const request = { ...data.request, tablesFile: 'training-tables.json', format: 'json' };
 const common = { commands: ['node *preferences.ts *', 'node *training-time.ts query', 'node *training-plan.ts read'],

@@ -24,7 +24,10 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
     Current: 'Synthetic profile', ConfigVersion: 1,
     Configurations: { 'Synthetic profile': {
       Gui: { ConnectSettings: { Address: 'synthetic-secret-address' }, StartUpSettings: { RunDirectly: false }, RuntimeSettings: { StartGame: false } },
-      TaskQueue: [{ $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: false, UseMedicine: false, MedicineCount: 0, UseExpiringMedicine: false, UseExpireMedicineForActivity: false, StagePlan: ['1-7'] }, { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: true, PlanSelect: 3 }, { $type: 'AwardTask', TaskType: 'Award', IsEnable: false, FreeGacha: false }],
+      // The pinned MAA v6.21.4 FightTask consumption fields, all closed.
+      TaskQueue: [{ $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: false, StoneCount: 0, UseStoneAllowSave: false, UseMedicine: false, MedicineCount: 0,
+        UseExpiringMedicine: false, MedicineExpireDays: 2, UseExpireMedicineForActivity: false, StagePlan: ['1-7'] }, { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: true, PlanSelect: 3 },
+      { $type: 'AwardTask', TaskType: 'Award', IsEnable: false, FreeGacha: false, SpecialAccess: false }],
     } },
     Timers: { List: [], NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5, CustomConfig: false },
     UnknownSetting: { keep: 'synthetic-secret-token' },
@@ -47,6 +50,8 @@ test('a task label cannot disguise its runtime model in the safe configuration s
   const summary = await inspectConfiguration(f.maa);
   assert.deepEqual(summary.profiles[0]!.queue.map(task => task.type), ['OtherTask', 'OtherTask', 'OtherTask', 'OtherTask', 'Infrast']);
   assert.doesNotMatch(JSON.stringify(summary), /synthetic-account|StartUpTask/);
+  // An unverified task (here a FightTask labelled Infrast with stone on) lists no consumption state.
+  assert.ok(summary.profiles[0]!.queue.every(task => !Object.hasOwn(task, 'consumption')));
 });
 
 test('runtime task identity controls enable, medicine, reordering and timer authorization', async (t) => {
@@ -57,7 +62,13 @@ test('runtime task identity controls enable, medicine, reordering and timer auth
     { name: 'medicine on disguised login', task: { $type: 'StartUpTask', TaskType: 'Fight', IsEnable: false, UseMedicine: false, MedicineCount: 0, UseStone: false, UseExpiringMedicine: false, UseExpireMedicineForActivity: false }, field: 'UseMedicine', value: false },
     { name: 'moving a disabled mismatched task', task: { $type: 'StartUpTask', TaskType: 'Infrast', IsEnable: false }, field: 'reorder', value: [1, 0] },
     { name: 'timer with disguised consuming Fight', task: { $type: 'FightTask', TaskType: 'Infrast', IsEnable: true, UseStone: true, UseStoneAllowSave: true, UseMedicine: true, MedicineCount: 5 }, field: 'timer', value: null },
+    // 27: stone and expiring medicine are opened only on a verified Fight task, whatever the grant.
+    { name: 'stone on disguised login', task: { $type: 'StartUpTask', TaskType: 'Fight', IsEnable: false, UseStone: false, StoneCount: 0, UseStoneAllowSave: false }, field: 'UseStone', value: true },
+    { name: 'expiring medicine on disguised login', task: { $type: 'StartUpTask', TaskType: 'Fight', IsEnable: false, UseExpiringMedicine: false, MedicineExpireDays: 2 }, field: 'UseExpiringMedicine', value: true },
+    { name: 'timer with disguised expiring Fight', task: { $type: 'FightTask', TaskType: 'Infrast', IsEnable: true, UseExpiringMedicine: true, MedicineExpireDays: 2 }, field: 'timer', value: true },
   ];
+  // Every consumption grant is present and current: none of them can authorize a task whose runtime identity is not verified.
+  const grants = { medicineCount: 5, stoneCount: 5, expiringMedicine: { days: 2, forActivity: true } };
   for (const sample of cases) await t.test(sample.name, async (t) => {
     const f = await fixture(t); let running = false; let processCalls = 0;
     Object.assign(f.config.Configurations['Synthetic profile'], { TaskQueue: [sample.task, { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: false }] });
@@ -67,7 +78,7 @@ test('runtime task identity controls enable, medicine, reordering and timer auth
     const maa: MaaProcess = { inspect: async () => { processCalls++; return { running, treeExited: !running, idle: true, ready: running }; }, close: async () => { running = false; }, start: async () => { running = true; } };
     const path = sample.field === 'reorder' ? ['Configurations', 0, 'TaskQueue'] : sample.field === 'timer' ? ['Timers', 'List', 0, 'IsEnabled'] : ['Configurations', 0, 'TaskQueue', 0, sample.field];
     const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
-      authorization: { source: 'current-request', reference: 'synthetic ordinary task change', ...(sample.field === 'UseMedicine' ? { medicineCount: 1 } : {}) }, changes: [{ path, value: sample.value }] }, maa);
+      authorization: { source: 'current-request', reference: 'synthetic ordinary task change', ...grants }, changes: [{ path, value: sample.value }] }, maa);
     assert.equal(result.status, 'rejected');
     assert.equal(processCalls, 0);
     assert.deepEqual(await readFile(f.file), before);
@@ -120,16 +131,34 @@ test('invalid grants and forbidden fields are rejected before closing MAA or cre
   let closeCalls = 0;
   const maa: MaaProcess = { inspect: async () => ({ running: true, treeExited: false, idle: true, ready: true }), close: async () => { closeCalls++; }, start: async () => {} };
   const before = await readFile(f.file);
-  for (const changes of [
-    [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 0, 'UseStone'], value: true }],
-    [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 2, 'FreeGacha'], value: true }],
-    [{ path: ['Configurations', 'Synthetic profile', 'Gui', 'RuntimeSettings', 'StartGame'], value: true }],
-    [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 0, 'UseMedicine'], value: true }],
-  ]) {
-    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'synthetic' }, changes }, maa);
+  const fight = (field: string, value: unknown) => [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 0, field], value }];
+  const all = { medicineCount: 5, stoneCount: 5, expiringMedicine: { days: 2, forActivity: true } };
+  const reminder = [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }];
+  const cases: [Record<string, unknown>, { path: (string | number)[]; value: unknown }[], string][] = [
+    [{}, fight('UseStone', true), 'stone-grant-required'],
+    [{}, [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 2, 'FreeGacha'], value: true }], 'request-invalid'],
+    [{}, [{ path: ['Configurations', 'Synthetic profile', 'Gui', 'RuntimeSettings', 'StartGame'], value: true }], 'request-invalid'],
+    [{}, fight('UseMedicine', true), 'medicine-grant-required'],
+    [{}, fight('UseExpiringMedicine', true), 'expiring-grant-required'],
+    // 27: gacha, special packs and login stay refused with all three consumption grants present.
+    [all, [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 2, 'FreeGacha'], value: true }], 'request-invalid'],
+    [all, [{ path: ['Configurations', 'Synthetic profile', 'TaskQueue', 2, 'SpecialAccess'], value: true }], 'request-invalid'],
+    [all, [{ path: ['Configurations', 'Synthetic profile', 'Gui', 'RuntimeSettings', 'StartGame'], value: true }], 'request-invalid'],
+    // Grant values follow MAA's signed 32-bit counts and the GUI's 1-30 expiring days; unknown grant keys are refused.
+    ...[-1, 1.5, '1', 2147483648].map(stoneCount => [{ stoneCount }, reminder, 'consumption-grant-invalid'] as [Record<string, unknown>, typeof reminder, string]),
+    ...[{ days: 0, forActivity: false }, { days: 31, forActivity: false }, { days: 2 }, { days: 2, forActivity: 'yes' }, { days: 2, forActivity: false, extra: true }]
+      .map(expiringMedicine => [{ expiringMedicine }, reminder, 'consumption-grant-invalid'] as [Record<string, unknown>, typeof reminder, string]),
+    [{ stonecount: 1 }, reminder, 'authorization-invalid'],
+  ];
+  for (const [grant, changes, reason] of cases) {
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'synthetic', ...grant } as never, changes }, maa);
     assert.equal(result.status, 'rejected');
     assert.equal(result.phase, 'check');
+    assert.equal(result.reason, reason, JSON.stringify(grant));
   }
+  const report = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex',
+    authorization: { source: 'approved-report', reference: 'old report', stoneCount: 1 }, changes: reminder }, maa);
+  assert.equal(report.reason, 'current-request-required');
   assert.equal(closeCalls, 0);
   assert.deepEqual(await readFile(f.file), before);
   assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
@@ -279,7 +308,7 @@ test('omitted one-shot flags count each scheduled medicine run exactly once', as
     const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
       authorization: { source: 'current-request', reference: 'one medicine per scheduled run', medicineCount: budget }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'MedicineCount'], value: 1 }] }, maa);
     assert.equal(result.status, budget === 2 ? 'complete' : 'rejected');
-    if (budget === 1) { assert.equal(result.reason, 'request-invalid'); assert.deepEqual(await readFile(f.file), before); }
+    if (budget === 1) { assert.equal(result.reason, 'medicine-quantity-exceeded'); assert.deepEqual(await readFile(f.file), before); }
   });
 });
 
@@ -356,15 +385,30 @@ test('existing queue order and timer slots can change without replacing task or 
 });
 
 test('enabling a timer cannot activate existing forbidden or unapproved consumption settings', async (t) => {
-  const f = await fixture(t);
-  const config = structuredClone(f.config);
-  Object.assign(config.Configurations['Synthetic profile'].TaskQueue[0]!, { IsEnable: true, UseStone: true });
-  Object.assign(config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' }] });
-  await writeFile(f.file, JSON.stringify(config));
-  const maa: MaaProcess = { inspect: async () => ({ running: true, treeExited: false, idle: true, ready: true }), close: async () => { assert.fail('must not close'); }, start: async () => {} };
-  const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'only enable a timer' }, changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: true }] }, maa);
-  assert.equal(result.status, 'rejected');
-  assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+  const all = { medicineCount: 5, stoneCount: 5, expiringMedicine: { days: 2, forActivity: true } };
+  const cases: [string, number, Record<string, unknown>, Record<string, unknown>, string][] = [
+    ['existing stone without a grant', 0, { UseStone: true }, {}, 'stone-grant-required'],
+    // A stone grant cannot borrow a switch MAA would reset, nor a zero or missing quantity.
+    ['existing stone without the save switch', 0, { UseStone: true, StoneCount: 2 }, { stoneCount: 2 }, 'stone-settings-invalid'],
+    ['existing expiring medicine without a grant', 0, { UseExpiringMedicine: true }, {}, 'expiring-grant-required'],
+    ['existing expiring medicine with other days', 0, { UseExpiringMedicine: true, MedicineExpireDays: 5 }, { expiringMedicine: { days: 2, forActivity: false } }, 'expiring-days-mismatch'],
+    ['existing activity expiring medicine not named', 0, { UseExpireMedicineForActivity: true }, { expiringMedicine: { days: 2, forActivity: false } }, 'expiring-activity-not-approved'],
+    ['existing free gacha under every grant', 2, { FreeGacha: true }, all, 'forbidden-setting'],
+    ['existing special access under every grant', 2, { SpecialAccess: true }, all, 'forbidden-setting'],
+  ];
+  for (const [name, index, existing, grant, reason] of cases) await t.test(name, async (t) => {
+    const f = await fixture(t);
+    const config = structuredClone(f.config);
+    Object.assign(config.Configurations['Synthetic profile'].TaskQueue[index]!, { IsEnable: true, ...existing });
+    Object.assign(config.Timers, { List: [{ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: 0, Config: 'Synthetic profile' }] });
+    await writeFile(f.file, JSON.stringify(config)); const before = await readFile(f.file);
+    const maa: MaaProcess = { inspect: async () => { assert.fail('must not inspect'); }, close: async () => { assert.fail('must not close'); }, start: async () => {} };
+    const result = await executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', authorization: { source: 'current-request', reference: 'only enable a timer', ...grant },
+      changes: [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: true }] }, maa);
+    assert.equal(result.status, 'rejected'); assert.equal(result.reason, reason);
+    assert.deepEqual(await readFile(f.file), before);
+    assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+  });
 });
 
 test('the CLI reads only settings-selected MAA summaries and never prints secrets or raw parse errors', async (t) => {
@@ -377,10 +421,14 @@ test('the CLI reads only settings-selected MAA summaries and never prints secret
   const summary = JSON.parse(result.stdout);
   assert.equal(summary.ok, true); assert.equal(summary.configuration.currentProfile, 0);
   assert.deepEqual(summary.configuration.profiles[0].queue.map((task: { type: string }) => task.type), ['Fight', 'Infrast', 'Award']);
+  // 27: each verified Fight task lists medicine, stone and expiring medicine; other tasks list none of them.
+  assert.deepEqual(summary.configuration.profiles[0].queue.map((task: { consumption?: unknown }) => task.consumption ?? null), [
+    { medicine: { on: false, count: 0 }, stone: { on: false, count: 0, allowSave: false }, expiring: { on: false, days: 2, activity: false } }, null, null]);
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-secret|Synthetic profile/);
   const forbidden = invoke('write', { host: 'codex', expectedRevision: summary.configuration.revision, authorization: { source: 'current-request', reference: 'synthetic' }, changes: [{ path: ['Configurations', 0, 'TaskQueue', 0, 'UseStone'], value: true }] });
   assert.equal(forbidden.status, 1);
   assert.equal(JSON.parse(forbidden.stdout).status, 'rejected');
+  assert.equal(JSON.parse(forbidden.stdout).reason, 'stone-grant-required');
   assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
   await writeFile(f.file, '{"synthetic-secret-corrupt');
   const corrupt = invoke('read'); assert.equal(corrupt.status, 1);
@@ -614,4 +662,228 @@ test('a repeated timer has a full physical two-minute window before the clock ro
   const result = spawnSync(process.execPath, ['--input-type=module'], { input: source, encoding: 'utf8', env: { ...process.env, TZ: 'America/New_York' } });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), [false, true]);
+});
+
+// 27: stone (Originium for sanity) and expiring medicine after the user's current approval.
+const fightPath = (index: number, field: string) => ['Configurations', 0, 'TaskQueue', index, field];
+const openStone = (index: number, count: number) => [{ path: fightPath(index, 'UseStone'), value: true },
+  { path: fightPath(index, 'UseStoneAllowSave'), value: true }, { path: fightPath(index, 'StoneCount'), value: count }];
+async function consumptionFixture(t: Parameters<typeof fixture>[0], tasks: Record<string, unknown>[] = [{}], timers: Record<string, unknown>[] = []) {
+  const f = await fixture(t);
+  const base = f.config.Configurations['Synthetic profile'].TaskQueue[0]!;
+  Object.assign(f.config.Configurations['Synthetic profile'], { TaskQueue: tasks.map((extra, index) => ({ ...base, StagePlan: [`SYN-${index}`], ...extra })) });
+  Object.assign(f.config.Timers, { List: timers.map((timer, index) => ({ IsEnabled: false, Hour: (new Date().getHours() + 3) % 24, Minute: index, Config: 'Synthetic profile', ...timer })) });
+  await writeFile(f.file, JSON.stringify(f.config));
+  let running = false; let processCalls = 0;
+  const maa: MaaProcess = { inspect: async () => { processCalls++; return { running, treeExited: !running, idle: true, ready: running }; },
+    close: async () => { running = false; }, start: async () => { running = true; } };
+  const write = (grant: Record<string, unknown>, changes: { path: (string | number)[]; value: unknown }[], source = 'current-request') =>
+    executeConfigWrite({ maaDirectory: f.maa, privateDirectory: f.privateDirectory, host: 'codex', closedConfirmed: true,
+      authorization: { source, reference: 'synthetic approval', ...grant } as never, changes }, maa);
+  const saved = async () => JSON.parse(await readFile(f.file, 'utf8')).Configurations['Synthetic profile'].TaskQueue as Record<string, unknown>[];
+  return { ...f, write, saved, processCalls: () => processCalls };
+}
+
+test('approved stone is written together with its save switch and read back, and one quantity can be split across two tasks', async (t) => {
+  const f = await consumptionFixture(t, [{}, {}]);
+  const result = await f.write({ stoneCount: 3 }, [...openStone(0, 2), { path: fightPath(0, 'IsEnable'), value: true }, ...openStone(1, 1)]);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  const [first, second] = await f.saved();
+  assert.deepEqual([first!.UseStone, first!.UseStoneAllowSave, first!.StoneCount, first!.IsEnable], [true, true, 2, true]);
+  assert.deepEqual([second!.UseStone, second!.UseStoneAllowSave, second!.StoneCount], [true, true, 1]);
+  assert.ok(result.changedKeys.includes('Configurations.<profile>.TaskQueue.0.UseStoneAllowSave'));
+  assert.doesNotMatch(JSON.stringify(result), /Synthetic profile|synthetic-secret/);
+});
+
+test('a stone quantity counts every single timer run in every profile and never rides a daily-repeating timer', async (t) => {
+  for (const [budget, expected] of [[5, 'stone-quantity-exceeded'], [6, 'complete']] as const) await t.test(`budget ${budget}`, async (t) => {
+    const f = await consumptionFixture(t, [{ IsEnable: true }], [{ IsEnabled: null }, { IsEnabled: null }]);
+    const config = JSON.parse(await readFile(f.file, 'utf8'));
+    config.Configurations['Synthetic second'] = structuredClone(config.Configurations['Synthetic profile']);
+    config.Timers.CustomConfig = true; await writeFile(f.file, JSON.stringify(config)); const before = await readFile(f.file);
+    // Two single runs of the first profile and one explicit allocation in the second: 2 * 2 + 2 = 6.
+    const result = await f.write({ stoneCount: budget }, [...openStone(0, 2), ...openStone(0, 2).map(change => ({ ...change, path: ['Configurations', 1, ...change.path.slice(2)] }))]);
+    assert.equal(result.status === 'complete' ? 'complete' : result.reason, expected);
+    if (expected !== 'complete') { assert.equal(f.processCalls(), 0); assert.deepEqual(await readFile(f.file), before); }
+  });
+  const daily = await consumptionFixture(t, [{ IsEnable: true }], [{ IsEnabled: true }]); const before = await readFile(daily.file);
+  const result = await daily.write({ stoneCount: 9 }, openStone(0, 1));
+  assert.equal(result.reason, 'recurring-quantity-not-authorized'); assert.equal(daily.processCalls(), 0); assert.deepEqual(await readFile(daily.file), before);
+});
+
+test('approved expiring medicine stays on a daily-repeating timer and the activity switch opens only when named', async (t) => {
+  const f = await consumptionFixture(t, [{ IsEnable: true }], [{ IsEnabled: false }]);
+  const result = await f.write({ expiringMedicine: { days: 3, forActivity: false } }, [{ path: fightPath(0, 'UseExpiringMedicine'), value: true },
+    { path: fightPath(0, 'MedicineExpireDays'), value: 3 }, { path: ['Timers', 'List', 0, 'IsEnabled'], value: true }]);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  assert.deepEqual([(await f.saved())[0]!.UseExpiringMedicine, (await f.saved())[0]!.MedicineExpireDays], [true, 3]);
+  const before = await readFile(f.file);
+  const unnamed = await f.write({ expiringMedicine: { days: 3, forActivity: false } }, [{ path: fightPath(0, 'UseExpireMedicineForActivity'), value: true }]);
+  assert.equal(unnamed.reason, 'expiring-activity-not-approved'); assert.deepEqual(await readFile(f.file), before);
+  const named = await f.write({ expiringMedicine: { days: 3, forActivity: true } }, [{ path: fightPath(0, 'UseExpireMedicineForActivity'), value: true }]);
+  assert.equal(named.status, 'complete', JSON.stringify(named)); assert.equal((await f.saved())[0]!.UseExpireMedicineForActivity, true);
+});
+
+test('medicine, stone and expiring medicine can be approved together in one request', async (t) => {
+  const f = await consumptionFixture(t);
+  const result = await f.write({ medicineCount: 2, stoneCount: 1, expiringMedicine: { days: 2, forActivity: true } }, [
+    { path: fightPath(0, 'UseMedicine'), value: true }, { path: fightPath(0, 'MedicineCount'), value: 2 }, ...openStone(0, 1),
+    { path: fightPath(0, 'UseExpiringMedicine'), value: true }, { path: fightPath(0, 'UseExpireMedicineForActivity'), value: true }, { path: fightPath(0, 'IsEnable'), value: true }]);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+});
+
+test('closing stone or expiring medicine needs only an ordinary current request, without a quantity or days', async (t) => {
+  // Other consumption on the same task (approved earlier, possibly on a daily timer) is not re-decided by a closing request.
+  const open = { IsEnable: true, UseMedicine: true, MedicineCount: 1, UseStone: true, UseStoneAllowSave: true, StoneCount: 2, UseExpiringMedicine: true, UseExpireMedicineForActivity: true };
+  const f = await consumptionFixture(t, [open], [{ IsEnabled: true }]);
+  const close = [{ path: fightPath(0, 'UseStone'), value: false }, { path: fightPath(0, 'UseStoneAllowSave'), value: false },
+    { path: fightPath(0, 'UseExpiringMedicine'), value: false }, { path: fightPath(0, 'UseExpireMedicineForActivity'), value: false }];
+  const before = await readFile(f.file);
+  assert.equal((await f.write({}, close, 'approved-report')).reason, 'current-request-required');
+  // UseStoneAllowSave alone does not close stone: UseStone stays on, so it still needs a stone grant (and MAA would reset it on reading).
+  assert.equal((await f.write({}, [close[1]!])).reason, 'stone-grant-required');
+  assert.equal(f.processCalls(), 0); assert.deepEqual(await readFile(f.file), before);
+  const result = await f.write({}, close);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  assert.deepEqual((await f.saved())[0], { ...JSON.parse(before.toString()).Configurations['Synthetic profile'].TaskQueue[0], UseStone: false, UseStoneAllowSave: false, UseExpiringMedicine: false, UseExpireMedicineForActivity: false });
+});
+
+test('stone and expiring medicine are refused before process access, a lock or a write without the matching current approval', async (t) => {
+  const cases: [string, Record<string, unknown>[], Record<string, unknown>, { path: (string | number)[]; value: unknown }[], string, string?][] = [
+    ['stone without a grant', [{}], {}, openStone(0, 1), 'stone-grant-required'],
+    ['stone from an approved report', [{}], { stoneCount: 1 }, openStone(0, 1), 'current-request-required', 'approved-report'],
+    ['stone above its quantity', [{}], { stoneCount: 2 }, openStone(0, 3), 'stone-quantity-exceeded'],
+    ['stone without its save switch', [{}], { stoneCount: 2 }, [openStone(0, 2)[0]!, openStone(0, 2)[2]!], 'stone-settings-invalid'],
+    ['stone with a zero quantity', [{}], { stoneCount: 2 }, openStone(0, 0), 'stone-settings-invalid'],
+    ['enabling a task that already holds stone', [{ UseStone: true, UseStoneAllowSave: true, StoneCount: 2 }], {}, [{ path: fightPath(0, 'IsEnable'), value: true }], 'stone-grant-required'],
+    ['expiring medicine without a grant', [{}], {}, [{ path: fightPath(0, 'UseExpiringMedicine'), value: true }], 'expiring-grant-required'],
+    ['expiring medicine from an approved report', [{}], { expiringMedicine: { days: 2, forActivity: false } }, [{ path: fightPath(0, 'UseExpiringMedicine'), value: true }], 'current-request-required', 'approved-report'],
+    ['expiring days other than approved', [{}], { expiringMedicine: { days: 2, forActivity: false } }, [{ path: fightPath(0, 'UseExpiringMedicine'), value: true }, { path: fightPath(0, 'MedicineExpireDays'), value: 3 }], 'expiring-days-mismatch'],
+    ['expiring days outside the MAA range', [{}], { expiringMedicine: { days: 2, forActivity: false } }, [{ path: fightPath(0, 'MedicineExpireDays'), value: 31 }], 'request-invalid'],
+    ['approved expiring days outside the MAA range', [{}], { expiringMedicine: { days: 31, forActivity: false } }, [{ path: fightPath(0, 'UseExpiringMedicine'), value: true }], 'consumption-grant-invalid'],
+    ['activity expiring medicine not named', [{}], { expiringMedicine: { days: 2, forActivity: false } }, [{ path: fightPath(0, 'UseExpireMedicineForActivity'), value: true }], 'expiring-activity-not-approved'],
+    ['enabling a task that already holds activity expiring medicine', [{ UseExpireMedicineForActivity: true }], { expiringMedicine: { days: 2, forActivity: false } }, [{ path: fightPath(0, 'IsEnable'), value: true }], 'expiring-activity-not-approved'],
+  ];
+  for (const [name, tasks, grant, changes, reason, source] of cases) await t.test(name, async (t) => {
+    const f = await consumptionFixture(t, tasks); const before = await readFile(f.file);
+    const result = await f.write(grant, changes, source);
+    assert.equal(result.status, 'rejected'); assert.equal(result.phase, 'check'); assert.equal(result.reason, reason);
+    assert.equal(f.processCalls(), 0); assert.deepEqual(await readFile(f.file), before);
+    assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+    await assert.rejects(readFile(join(f.privateDirectory, 'daily-pending.jsonl')), { code: 'ENOENT' });
+  });
+});
+
+// 27 round-1 fix. Each case runs on a fresh fixture: a completed write saved every requested value; a refusal happened before process
+// access, a lock, a pending record or a write.
+type ConsumptionCase = [string, Record<string, unknown>[], Record<string, unknown>, { path: (string | number)[]; value: unknown }[], string];
+/** A case with an optional authorization source. */
+type SourcedCase = [...ConsumptionCase, string?];
+async function consumptionOutcome(t: Parameters<typeof fixture>[0], [, tasks, grant, changes, expected]: ConsumptionCase,
+  options: { source?: string; timers?: Record<string, unknown>[]; append?: Record<string, unknown>[] } = {}) {
+  const f = await consumptionFixture(t, tasks, options.timers);
+  if (options.append) {
+    const config = JSON.parse(await readFile(f.file, 'utf8'));
+    config.Configurations['Synthetic profile'].TaskQueue.push(...options.append);
+    await writeFile(f.file, JSON.stringify(config));
+  }
+  const before = await readFile(f.file);
+  const result = await f.write(grant, changes, options.source);
+  if (expected === 'complete') {
+    assert.equal(result.status, 'complete', JSON.stringify(result));
+    const saved = JSON.parse(await readFile(f.file, 'utf8'));
+    for (const { path, value } of changes) {
+      let node: unknown = saved;
+      for (const key of path[0] === 'Configurations' ? ['Configurations', 'Synthetic profile', ...path.slice(2)] : path) node = (node as Record<string | number, unknown>)[key];
+      assert.deepEqual(node, value, JSON.stringify(path));
+    }
+  } else {
+    assert.equal(result.status, 'rejected'); assert.equal(result.phase, 'check'); assert.equal(result.reason, expected);
+    assert.equal(f.processCalls(), 0); assert.deepEqual(await readFile(f.file), before);
+    assert.deepEqual(await readdir(join(f.maa, 'config')), ['gui.new.json']);
+    await assert.rejects(readFile(join(f.privateDirectory, 'daily-pending.jsonl')), { code: 'ENOENT' });
+  }
+  return f;
+}
+const fightChange = (field: string, value: unknown, index = 0) => ({ path: fightPath(index, field), value });
+
+test('closing medicine needs only a current request and leaves the remaining count; reopening that count needs the current quantity', async (t) => {
+  const open = { IsEnable: true, UseMedicine: true, MedicineCount: 2 };
+  const closed = { ...open, UseMedicine: false };
+  const cases: SourcedCase[] = [
+    ['closing without a quantity', [open], {}, [fightChange('UseMedicine', false)], 'complete'],
+    ['closing with a zero quantity, not compared with the remaining count', [open], { medicineCount: 0 }, [fightChange('UseMedicine', false)], 'complete'],
+    ['closing and setting the count to 0', [open], {}, [fightChange('UseMedicine', false), fightChange('MedicineCount', 0)], 'complete'],
+    ['closing from an approved report', [open], {}, [fightChange('UseMedicine', false)], 'current-request-required', 'approved-report'],
+    ['reopening the remaining count without a grant', [closed], {}, [fightChange('UseMedicine', true)], 'medicine-grant-required'],
+    ['reopening the remaining count above the grant', [closed], { medicineCount: 1 }, [fightChange('UseMedicine', true)], 'medicine-quantity-exceeded'],
+    ['reopening the remaining count within the grant', [closed], { medicineCount: 2 }, [fightChange('UseMedicine', true)], 'complete'],
+    ['enabling a task that holds open medicine without a grant', [{ ...open, IsEnable: false }], {}, [fightChange('IsEnable', true)], 'medicine-grant-required'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => {
+    const f = await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { source: sample[5] });
+    // Only the switch was requested: the remaining count stays as it was.
+    if (sample[4] === 'complete' && sample[3].length === 1 && sample[0].startsWith('closing')) assert.equal((await f.saved())[0]!.MedicineCount, 2);
+  });
+});
+
+test('without a class grant a request may only set that class switches to false and its quantities to 0', async (t) => {
+  const enabled = { IsEnable: true };
+  const allOpen = { IsEnable: true, UseMedicine: true, MedicineCount: 2, UseStone: true, UseStoneAllowSave: true, StoneCount: 2, UseExpiringMedicine: true, UseExpireMedicineForActivity: true };
+  const cases: SourcedCase[] = [
+    // The stone save switch alone while stone stays off.
+    ['the stone save switch without a grant', [enabled], {}, [fightChange('UseStoneAllowSave', true)], 'stone-grant-required'],
+    ['the stone save switch from an approved report', [enabled], {}, [fightChange('UseStoneAllowSave', true)], 'current-request-required', 'approved-report'],
+    ['the stone save switch with a stone grant', [enabled], { stoneCount: 1 }, [fightChange('UseStoneAllowSave', true)], 'complete'],
+    // A stone quantity alone while stone stays off: a later switch in the MAA window would spend it.
+    ['a stone quantity without a grant', [enabled], {}, [fightChange('StoneCount', 2147483647)], 'stone-grant-required'],
+    ['a stone quantity above the grant', [enabled], { stoneCount: 5 }, [fightChange('StoneCount', 2147483647)], 'stone-quantity-exceeded'],
+    ['a stone quantity within the grant', [enabled], { stoneCount: 2147483647 }, [fightChange('StoneCount', 2147483647)], 'complete'],
+    ['closing stone while raising its quantity', [{ ...enabled, UseStone: true, UseStoneAllowSave: true, StoneCount: 2 }], {},
+      [fightChange('UseStone', false), fightChange('UseStoneAllowSave', false), fightChange('StoneCount', 9)], 'stone-grant-required'],
+    // Expiring days alone while expiring medicine stays off.
+    ['expiring days without a grant', [enabled], {}, [fightChange('MedicineExpireDays', 30)], 'expiring-grant-required'],
+    ['expiring days other than approved', [enabled], { expiringMedicine: { days: 3, forActivity: false } }, [fightChange('MedicineExpireDays', 30)], 'expiring-days-mismatch'],
+    ['expiring days as approved', [enabled], { expiringMedicine: { days: 30, forActivity: false } }, [fightChange('MedicineExpireDays', 30)], 'complete'],
+    // A medicine quantity alone while medicine stays off.
+    ['a medicine quantity without a grant', [enabled], {}, [fightChange('MedicineCount', 3)], 'medicine-grant-required'],
+    ['a medicine quantity above the grant', [enabled], { medicineCount: 2 }, [fightChange('MedicineCount', 3)], 'medicine-quantity-exceeded'],
+    ['a medicine quantity within the grant', [enabled], { medicineCount: 3 }, [fightChange('MedicineCount', 3)], 'complete'],
+    ['every switch false and every quantity 0', [allOpen], {}, [...['UseMedicine', 'UseStone', 'UseStoneAllowSave', 'UseExpiringMedicine', 'UseExpireMedicineForActivity']
+      .map(field => fightChange(field, false)), fightChange('MedicineCount', 0), fightChange('StoneCount', 0)], 'complete'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { source: sample[5] }); });
+});
+
+test('null consumption switches count as on, and a grant accepts only exact switches with a positive count', async (t) => {
+  // The pinned MAA GUI stores UseMedicine null with MedicineCount 999 when stone is switched on without its save switch, and
+  // passes a quantity to MaaCore whenever the switch is not false.
+  const medicineNull = { UseMedicine: null, MedicineCount: 999 };
+  const stoneNull = { UseStone: null, UseStoneAllowSave: true, StoneCount: 5 };
+  const timer = [{ path: ['Timers', 'List', 0, 'IsEnabled'], value: null }];
+  const cases: [...ConsumptionCase, Record<string, unknown>[]?][] = [
+    ['enabling a task with a null medicine switch without a grant', [medicineNull], {}, [fightChange('IsEnable', true)], 'medicine-grant-required'],
+    ['enabling a timer that runs a null medicine switch without a grant', [{ IsEnable: true, ...medicineNull }], {}, timer, 'medicine-grant-required', [{}]],
+    ['enabling a task with a null stone switch without a grant', [stoneNull], {}, [fightChange('IsEnable', true)], 'stone-grant-required'],
+    ['enabling a timer that runs a null stone switch without a grant', [{ IsEnable: true, ...stoneNull }], {}, timer, 'stone-grant-required', [{}]],
+    ['a medicine grant for a null medicine switch', [medicineNull], { medicineCount: 999 }, [fightChange('IsEnable', true)], 'medicine-settings-invalid'],
+    ['a medicine grant for a zero medicine count', [{}], { medicineCount: 5 }, [fightChange('UseMedicine', true)], 'medicine-settings-invalid'],
+    ['a stone grant for a null stone switch', [stoneNull], { stoneCount: 5 }, [fightChange('IsEnable', true)], 'stone-settings-invalid'],
+    ['the same stone settings with the switch on', [{ ...stoneNull, UseStone: true }], { stoneCount: 5 }, [fightChange('IsEnable', true)], 'complete'],
+  ];
+  for (const sample of cases) await t.test(sample[0], async (t) => { await consumptionOutcome(t, sample.slice(0, 5) as ConsumptionCase, { timers: sample[5] }); });
+});
+
+test('a counted quantity write checks every enabled task of its profile for gacha, packs and unsafe task types', async (t) => {
+  const award = { $type: 'AwardTask', TaskType: 'Award', IsEnable: true, FreeGacha: false, SpecialAccess: false };
+  const startUp = { $type: 'StartUpTask', TaskType: 'StartUp', IsEnable: true };
+  const cases: [string, Record<string, unknown>[], string][] = [
+    ['an enabled free gacha', [{ ...award, FreeGacha: true }], 'forbidden-setting'],
+    ['an enabled special pack', [{ ...award, SpecialAccess: true }], 'forbidden-setting'],
+    ['an enabled StartUp task', [startUp], 'request-invalid'],
+    ['the same tasks disabled', [{ ...award, FreeGacha: true, SpecialAccess: true, IsEnable: false }, { ...startUp, IsEnable: false }], 'complete'],
+  ];
+  for (const [name, append, expected] of cases) await t.test(name, async (t) => {
+    await consumptionOutcome(t, [name, [{}], { stoneCount: 2 }, openStone(0, 2), expected], { append });
+  });
 });

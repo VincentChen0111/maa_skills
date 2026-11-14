@@ -5,7 +5,7 @@ import { syntheticRunRecords, type SyntheticRunKind } from '../../tests/fixtures
  * Ticket 16: the model reads a finished synthetic run record and must report it without replaying anything. The records are
  * fixed literals (scenario world data runs no product code).
  */
-const policy = { allowedKeys: [], forbiddenKeys: ['UseStone', 'UseMedicine', 'FreeGacha', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
+const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-run.ts', action: 'read' }] };
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };

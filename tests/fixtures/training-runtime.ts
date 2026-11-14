@@ -22,7 +22,9 @@ export function trainingConfig() {
     { $type: 'InfrastTask', TaskType: 'Infrast', IsEnable: false, Mode: 0, Filename: '', PlanSelect: 0, ContinueTraining: false, UseWeeklySchedule: false,
       RoomList: [{ Room: 'Training', IsEnabled: true }, { Room: 'Mfg', IsEnabled: true }] },
     { $type: 'OperProgressTask', TaskType: 'OperProgress', IsEnable: false, Plans: [] },
-    { $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseStone: true },
+    // A disabled Fight task holding approved stone (MAA v6.21.4 fields); a training write keeps it disabled.
+    { $type: 'FightTask', TaskType: 'Fight', IsEnable: false, UseMedicine: false, MedicineCount: 0, UseStone: true, StoneCount: 1, UseStoneAllowSave: true,
+      UseExpiringMedicine: false, MedicineExpireDays: 2, UseExpireMedicineForActivity: false },
   ] } }, Timers: { CustomConfig: false, ForceScheduledStart: false, List: [{ Id: 0, IsEnabled: false, Config: 'synthetic', Hour: 0, Minute: 0 }] } };
 }
 export function trainingGrant(): TrainingGrant {

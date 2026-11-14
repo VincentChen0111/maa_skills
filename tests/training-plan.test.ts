@@ -179,3 +179,28 @@ test('R1-1 manual M1 completion, fresh materials and apply schedule the authoriz
   assert.equal((await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, f.maa, { home: f.root })).status, 'complete');
   assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')).Configurations.synthetic.TaskQueue[1].Plans[0].SkillMastery, [2, 0, 0]);
 });
+
+test('27: a training apply passes a current expiring-medicine approval to the writer when an enabled timer reaches open expiring medicine', async t => {
+  const f = await configFixture(t), data = trainingFixture();
+  Object.assign(f.config.Configurations, { other: { TaskQueue: [{ $type: 'FightTask', TaskType: 'Fight', IsEnable: true, UseMedicine: false, MedicineCount: 0, UseStone: false, StoneCount: 0,
+    UseStoneAllowSave: false, UseExpiringMedicine: true, MedicineExpireDays: 2, UseExpireMedicineForActivity: false }] } });
+  f.config.Timers.CustomConfig = true;
+  f.config.Timers.List.push({ Id: 1, IsEnabled: true, Config: 'other', Hour: (new Date().getHours() + 3) % 24, Minute: 30 });
+  await writeFile(f.file, JSON.stringify(f.config));
+  await writeFile(join(f.root, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }));
+  await writeFile(join(f.root, 'snapshot.json'), JSON.stringify(data.snapshot)); await writeFile(join(f.root, 'tables.json'), JSON.stringify(data.tables));
+  const plan = await prepareTrainingPlan({ query: { ...data.request, snapshotFile: join(f.root, 'snapshot.json'), tablesFile: join(f.root, 'tables.json') },
+    binding: { profile: 0, infrastTask: 0, progressTask: 1, timer: 0 }, currentTrainee: null,
+    authorization: { source: 'approved-report', reference: 'synthetic approved training report entry' } }, { home: f.root });
+  const before = await readFile(f.file, 'utf8');
+  const refused = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true }, f.maa, { home: f.root });
+  assert.equal(refused.status, 'rejected'); assert.equal(refused.reason, 'training-expiring-grant-required');
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.equal((await readTrainingPlan(plan.id, { home: f.root })).state, 'pending');
+  const expiringMedicine = { days: 2, forActivity: false };
+  await assert.rejects(applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true, expiringMedicine }, f.maa, { home: f.root }), /training-authorization-required/);
+  const applied = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true, expiringMedicine, reference: 'synthetic current expiring approval with this plan' }, f.maa, { home: f.root });
+  assert.equal(applied.status, 'complete', JSON.stringify(applied));
+  const pending = JSON.parse((await readFile(join(f.privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim().split('\n').at(-1)!);
+  assert.equal(pending.authorization.source, 'current-request'); assert.deepEqual(pending.authorization.expiringMedicine, expiringMedicine);
+  assert.equal(pending.authorization.trainingPlan.planId, plan.id);
+});

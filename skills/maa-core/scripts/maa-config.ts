@@ -7,6 +7,7 @@ import { readSettings } from './preferences.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 import { prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
+import { consumptionFields, consumptionRefusals, decideConsumption, type ConsumptionDecision, type ConsumptionGrant, type ConsumptionTarget, type ExpiringMedicineGrant } from './consumption-grant.ts';
 import { compareVersionStamp, isVersionStamp, readVersionStamp, type MaaVersionStamp, type VersionDrift } from './maa-version.ts';
 import { baseReferencePattern, buildBaseChanges, checkGrant, inspectBaseAsset, installBaseAsset, loadBaseAsset, type BaseAsset, type BasePlanGrant } from './base-config.ts';
 
@@ -15,7 +16,8 @@ export type WriteRequest = {
   maaDirectory: string; privateDirectory: string; host: 'codex' | 'claude';
   expectedRevision: string;
   closedConfirmed?: boolean;
-  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant; basePlan?: BasePlanGrant };
+  authorization: { source: 'current-request' | 'approved-report'; reference: string; medicineCount?: number; stoneCount?: number;
+    expiringMedicine?: ExpiringMedicineGrant; jobPlan?: ApprovedJobPlan; trainingPlan?: TrainingGrant; basePlan?: BasePlanGrant };
   changes: Change[];
 };
 export type MaaState = { running: boolean; treeExited: boolean; idle: boolean; ready: boolean };
@@ -71,20 +73,34 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
   }
   return JSON.stringify(value);
 }
-function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', baseAsset?: BaseAsset | null) {
-  if (['medicineCount', 'jobPlan', 'trainingPlan', 'basePlan'].filter(key => Object.hasOwn(request.authorization, key)).length > 1) throw new Error('conflicting-authorizations');
+/**
+ * `restoreTo` is given only on doctor's restore-config path: the interrupted transaction's backup, whose values the request
+ * writes back; or 'recorded-values' when replaying the pending record of such a restore, whose values this writer took from
+ * that backup. The changed-field decision then goes to the predicate as `doctor-restore` with each task's backup task, so a
+ * class that ends closed may take back its pre-transaction values without its grant. Ordinary writes never pass it.
+ */
+function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 'setup' | 'recovery', baseAsset?: BaseAsset | null,
+  restoreTo?: RecordValue | 'recorded-values') {
+  const plans = ['jobPlan', 'trainingPlan', 'basePlan'].filter(key => Object.hasOwn(request.authorization, key));
+  if (plans.length > 1) throw new Error('conflicting-authorizations');
+  // The consumption predicate owns which grants may accompany a plan: only the expiring-medicine grant may accompany a job or
+  // training plan, and none a base plan (it never touches consumption fields).
+  const plan = plans[0] === 'jobPlan' ? 'job' as const : plans[0] === 'trainingPlan' ? 'training' as const : plans[0] === 'basePlan' ? 'base' as const : undefined;
+  const decide = (decision: ConsumptionDecision) => { if (!decision.allowed) throw new Error(decision.reason!); return decision; };
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
-  if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan'].includes(key))
+  if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
     || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');
   // Ticket 23: an approved base plan derives its own exact change set; the copy was loaded from the approved report.
   if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
   const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
   // The derived set may be empty (fields already at target): then the transaction only installs the copy (see writeConfiguration).
-  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan'].includes(key)) || request.authorization.source !== 'approved-report'
+  // A consumption grant alongside reaches the predicate, which refuses it for a base plan with its static reason.
+  if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
+    || request.authorization.source !== 'approved-report'
     || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
-  const medicineTasks = new Set<string>();
+  const consumptionTasks = new Set<string>();
   const enabledTasks: (string | number)[][] = [];
   const dependencies: (string | number)[][] = [];
   if (training) dependencies.push(['Configurations', training.profile, 'TaskQueue'], ['Timers']);
@@ -148,11 +164,13 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
         allowed = change.value === false || ordinaryTaskTypes.has(type ?? '');
         if (change.value === true && old !== true) enabledTasks.push(path.slice(0, 4));
       }
-      if (type === 'Fight' && ['UseMedicine', 'MedicineCount'].includes(String(path[4]))) {
-        const amount = request.authorization.medicineCount;
-        allowed = request.authorization.source === 'current-request' && Number.isSafeInteger(amount) && Number(amount) >= 0 && Number(amount) <= 2147483647
-          && (path[4] === 'UseMedicine' ? typeof value === 'boolean' : Number.isInteger(value) && Number(value) >= 0 && Number(value) <= Number(amount));
-        medicineTasks.add(JSON.stringify(path.slice(0, 4)));
+      if (type === 'Fight' && Object.hasOwn(consumptionFields, String(path[4]))) {
+        // Field types and MAA ranges here; whether the grant opens the task's final settings is the predicate's decision below.
+        const field = String(path[4]);
+        allowed = field.startsWith('Use') ? typeof value === 'boolean'
+          : field === 'MedicineExpireDays' ? Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 30
+          : Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 2147483647;
+        consumptionTasks.add(JSON.stringify(path.slice(0, 4)));
       }
     }
     if (training || base) allowed = true;
@@ -182,9 +200,28 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
       queue.forEach((task, index) => { if (object(task).IsEnable !== false) enabledTasks.push([...queuePath, index]); });
     }
   }
-  const consumingTasks = new Map<string, number>();
-  const checkedTasks = [...enabledTasks, ...[...medicineTasks].map(value => JSON.parse(value) as (string | number)[])];
-  const consumingProfiles = new Set(checkedTasks.filter(path => { const task = object(at(next, path)); return knownTaskType(task) === 'Fight' && task.UseMedicine !== false; }).map(path => String(path[1])));
+  // Every consumption decision is the predicate's: changed fields, activated tasks, then the quantity budget.
+  const same = (left: (string | number)[], right: (string | number)[]) => JSON.stringify(left) === JSON.stringify(right);
+  const identity = (path: (string | number)[]) => {
+    const type = knownTaskType(object(at(next, path)));
+    if (!ordinaryTaskTypes.has(type ?? '') && !(training && type === 'OperProgress' && path[1] === training.profile
+      && path[3] === request.authorization.trainingPlan!.binding.progressTask)) throw new Error('unsafe-task-settings');
+  };
+  const changedTasks = [...consumptionTasks].map(value => JSON.parse(value) as (string | number)[]);
+  const changedTargets = changedTasks.map(path => ({ task: at(next, path), before: at(config, path) }));
+  const restoring = restoreTo === undefined ? null : changedTasks.map((path, index) => ({ ...changedTargets[index]!, restore: restoreTo === 'recorded-values' ? changedTargets[index]!.task : at(restoreTo, path) }));
+  const changed = decide(restoring
+    ? decideConsumption(request.authorization, restoring, { consumer: 'doctor-restore', plan })
+    : decideConsumption(request.authorization, changedTargets, { consumer: 'writer-whitelist', plan }));
+  enabledTasks.forEach(identity);
+  const activated = decide(decideConsumption(request.authorization, enabledTasks.map(path => ({ task: at(next, path), activated: true })), { consumer: 'indirect-consumption', plan }));
+  // A profile consumes when this request changes an open medicine or stone quantity, or activates a task holding one.
+  const quantityOpen = (state: ConsumptionDecision['tasks'][number] | undefined, kinds: string[]) => !!state
+    && (kinds.includes('medicine') && state.medicine.on !== false || kinds.includes('stone') && state.stone.on !== false);
+  const counted = [...changedTasks.filter((path, index) => quantityOpen(changed.tasks[index],
+    request.changes.filter(change => same(change.path.slice(0, 4), path)).map(change => consumptionFields[String(change.path[4])]!))),
+  ...enabledTasks.filter((_, index) => quantityOpen(activated.tasks[index], ['medicine', 'stone']))];
+  const consumingProfiles = new Set(counted.map(path => String(path[1])));
   if (consumingProfiles.size) {
     dependencies.push(['Timers']);
     if (object(next.Timers).CustomConfig !== true) dependencies.push(['Current']);
@@ -193,41 +230,25 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
     dependencies.push(['Configurations', profile, 'TaskQueue']);
     const queue = at(next, ['Configurations', profile, 'TaskQueue']);
     if (!Array.isArray(queue)) throw new Error('configuration-invalid');
-    queue.forEach((value, index) => { if (object(value).IsEnable !== false) checkedTasks.push(['Configurations', profile, 'TaskQueue', index]); });
+    queue.forEach((value, index) => { if (object(value).IsEnable !== false) counted.push(['Configurations', profile, 'TaskQueue', index]); });
   }
-  for (const path of checkedTasks) {
-    const task = object(at(next, path));
-    const type = knownTaskType(task);
-    if (!ordinaryTaskTypes.has(type ?? '') && !(training && type === 'OperProgress' && path[1] === training.profile
-      && path[3] === request.authorization.trainingPlan!.binding.progressTask)) throw new Error('unsafe-task-settings');
-    if (type === 'Fight') {
-      if (task.UseStone !== false || task.UseExpiringMedicine !== false || task.UseExpireMedicineForActivity !== false) throw new Error('unsafe-task-settings');
-      if (task.UseMedicine !== false && (task.UseMedicine !== true || request.authorization.source !== 'current-request' || !Number.isSafeInteger(request.authorization.medicineCount)
-        || !Number.isInteger(task.MedicineCount) || Number(task.MedicineCount) <= 0 || Number(task.MedicineCount) > Number(request.authorization.medicineCount))) throw new Error('medicine-authorization-required');
-      if (task.UseMedicine === true) consumingTasks.set(JSON.stringify(path), Number(task.MedicineCount));
-    }
-    if (type === 'Award' && (task.FreeGacha !== false || task.SpecialAccess === true)) throw new Error('unsafe-task-settings');
-  }
-  const scheduledRuns = new Map<string, number>();
+  const countedTasks = [...new Map(counted.map(path => [JSON.stringify(path), path])).values()];
+  countedTasks.forEach(identity);
+  const scheduledRuns = new Map<string, number>(); const recurringProfiles = new Set<string>();
   const timers = object(next.Timers);
   if (!Array.isArray(timers.List)) throw new Error('configuration-invalid');
   for (const value of timers.List) {
     const timer = object(value); if (timer.IsEnabled === false) continue;
     const profile = String(timers.CustomConfig === true ? timer.Config : next.Current);
     if (!consumingProfiles.has(profile)) continue;
-    const amount = [...consumingTasks].filter(([key]) => {
-      const path = JSON.parse(key) as (string | number)[];
-      return path[1] === profile && object(at(next, path)).IsEnable !== false;
-    }).reduce((sum, [, count]) => sum + count, 0);
-    if (amount > 0 && timerEnabled(timer) !== null) throw new Error('recurring-medicine-not-authorized');
     scheduledRuns.set(profile, (scheduledRuns.get(profile) ?? 0) + 1);
+    if (timerEnabled(timer) !== null) recurringProfiles.add(profile);
   }
-  const requiredMedicine = [...consumingTasks].reduce((sum, [key, count]) => {
-    const path = JSON.parse(key) as (string | number)[];
-    const repetitions = object(at(next, path)).IsEnable !== false ? scheduledRuns.get(String(path[1])) ?? 0 : 0;
-    return sum + count * Math.max(1, repetitions);
-  }, 0);
-  if (requiredMedicine > (request.authorization.medicineCount ?? 0)) throw new Error('medicine-budget-exceeded');
+  const budget = countedTasks.map((path): ConsumptionTarget => {
+    const task = at(next, path); const enabled = object(task).IsEnable !== false; const profile = String(path[1]);
+    return { task, counted: true, runs: enabled ? scheduledRuns.get(profile) ?? 0 : 0, recurring: enabled && recurringProfiles.has(profile) };
+  });
+  decide(decideConsumption(request.authorization, budget, { consumer: 'quantity-budget', plan }));
   return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
 }
 export async function readConfiguration(maaDirectory: string): Promise<RecordValue> {
@@ -237,6 +258,8 @@ export async function readConfiguration(maaDirectory: string): Promise<RecordVal
  * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with.
  * Returns field kinds only (never a profile name or value); `timerProfileMissing` marks an enabled timer whose
  * configuration no longer exists. Unknown task types and fields the writer never manages are not judged.
+ * Stone and expiring medicine (27) are not judged here either: they are MAA's own states (the GUI saves a null stone switch when
+ * stone is on without allow-save), shown in the read summary as the consumption predicate classifies them; an error here blocks.
  */
 export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {
   const config = object(value); const invalid = new Set<string>(); let timerProfileMissing = false;
@@ -326,10 +349,10 @@ function transactionMetadata(value: unknown, pending = false): RecordValue {
 
 function transactionPending(value: unknown): RecordValue {
   const record = transactionMetadata(value, true);
-  const authorization = transactionFields(record.authorization, ['source', 'reference'], ['medicineCount']);
+  const authorization = transactionFields(record.authorization, ['source', 'reference'], ['medicineCount', 'stoneCount', 'expiringMedicine']);
   if ((authorization.source !== 'current-request' && authorization.source !== 'approved-report')
     || typeof authorization.reference !== 'string' || !authorization.reference.trim()
-    || Object.hasOwn(authorization, 'medicineCount') && (!Number.isInteger(authorization.medicineCount) || Number(authorization.medicineCount) < 0 || Number(authorization.medicineCount) > 2147483647)) throw new Error('transaction-authorization-invalid');
+    || !decideConsumption(authorization as ConsumptionGrant, [], { consumer: 'pending-record' }).allowed) throw new Error('transaction-authorization-invalid');
   if (Object.hasOwn(record, 'versions') && !isVersionStamp(record.versions)) throw new Error('transaction-versions-invalid');
   if (!Array.isArray(record.changes) || !record.changes.length || record.changes.length > 1000) throw new Error('pending-changes');
   for (const item of record.changes) {
@@ -379,7 +402,9 @@ async function recoveryEvidence(context: RecoveryContext, maa: MaaProcess) {
       for (const field of ['id', 'skill', 'host', 'pid', 'startedAt']) if (record[field] !== metadata[field]) throw new Error('pending-owner-mismatch');
       pendingStamp = { versions: record.versions };
       pending = { ...record, maaDirectory: context.maaDirectory, privateDirectory: context.privateDirectory } as WriteRequest;
-      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined).config;
+      // A doctor record is a restore this writer built from an earlier backup: replay it with the same restore allowance.
+      const expected = prepare(backup, pending, record.skill === 'maa-setup' || record.skill === 'maa-doctor' ? 'recovery' : undefined, null,
+        record.skill === 'maa-doctor' ? 'recorded-values' : undefined).config;
       summary.backup = 'matched-latest';
       if (!current || summary.configuration !== 'valid') throw new Error('current-invalid');
       summary.comparison = revision(current) === revision(backup) ? 'unchanged' : revision(current) === revision(expected) ? 'applied' : 'unknown';
@@ -404,13 +429,18 @@ export async function inspectConfigRecovery(context: RecoveryContext, maa: MaaPr
 }
 
 export type RecoveryRequest = RecoveryContext & { host: 'codex' | 'claude'; action: 'reconcile-lock' | 'restore-config';
-  evidenceRevision: string; reference: string; closedConfirmed?: boolean; medicineCount?: number };
+  evidenceRevision: string; reference: string; closedConfirmed?: boolean; medicineCount?: number; stoneCount?: number; expiringMedicine?: ExpiringMedicineGrant };
 
 /** Recovery is owned by the same writer as ordinary configuration changes. */
 export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaProcess) {
   const rejected = (reason: string) => ({ status: 'rejected', reason });
   if (!['codex', 'claude'].includes(request.host) || !['reconcile-lock', 'restore-config'].includes(request.action)
     || typeof request.reference !== 'string' || !request.reference.trim() || !/^[a-f0-9]{64}$/.test(request.evidenceRevision)) return rejected('approval-required');
+  // Only the repair request's own current grant may reopen consumption; the original transaction's grant is never reused.
+  // A class that stays closed may take back the backup's values without a grant (the writer passes the backup as restoreTo).
+  const grant = Object.fromEntries((['medicineCount', 'stoneCount', 'expiringMedicine'] as const).filter(key => request[key] !== undefined).map(key => [key, request[key]]));
+  const granted = decideConsumption({ source: 'current-request', ...grant }, [], { consumer: 'doctor-recovery' });
+  if (!granted.allowed) return rejected(granted.reason!);
   const guardFile = join(request.maaDirectory, 'config', '.maa-skills-recovery.lock');
   const guardId = randomUUID(); let guard;
   try { guard = await open(guardFile, 'wx', 0o600); } catch { return rejected('recovery-busy-or-unknown'); }
@@ -437,8 +467,8 @@ export async function executeConfigRecovery(request: RecoveryRequest, maa: MaaPr
       try {
         return { ...await writeConfiguration({ maaDirectory: request.maaDirectory, privateDirectory: request.privateDirectory, host: request.host,
           expectedRevision: revision(evidence.current!), closedConfirmed: request.closedConfirmed,
-          authorization: { source: 'current-request', reference: request.reference, ...(request.medicineCount === undefined ? {} : { medicineCount: request.medicineCount }) }, changes }, maa,
-        { lock, rawLock: evidence.rawLock! }), versions: evidence.summary.versions };
+          authorization: { source: 'current-request', reference: request.reference, ...grant }, changes }, maa,
+        { lock, rawLock: evidence.rawLock!, restoreTo: evidence.backup! }), versions: evidence.summary.versions };
       } finally { await lock.close(); }
     }
     await unlink(join(request.maaDirectory, 'config', '.maa-skills.lock'));
@@ -486,10 +516,13 @@ export async function inspectConfiguration(maaDirectory: string) {
     profiles: names.map((name, index) => {
       const profile = object(object(config.Configurations)[name]);
       const copilot = profile.Copilot && typeof profile.Copilot === 'object' && !Array.isArray(profile.Copilot) ? object(profile.Copilot) : null;
-      return { index, jobCount: Array.isArray(copilot?.TaskList) ? copilot.TaskList.length : null, queue: Array.isArray(profile.TaskQueue) ? profile.TaskQueue.map(value => {
-        const task = object(value);
-        return { type: knownTaskType(task) ?? 'OtherTask', enabled: safeBoolean(task.IsEnable) };
-      }) : [] };
+      const queue = Array.isArray(profile.TaskQueue) ? profile.TaskQueue.map(object) : [];
+      // Medicine, stone and expiring medicine as the consumption predicate classifies them; only for a verified Fight task.
+      const states = decideConsumption({ source: 'current-request' }, queue.map(task => ({ task })), { consumer: 'read-summary' }).tasks;
+      return { index, jobCount: Array.isArray(copilot?.TaskList) ? copilot.TaskList.length : null, queue: queue.map((task, position) => {
+        const type = knownTaskType(task) ?? 'OtherTask'; const consumption = states[position];
+        return { type, enabled: safeBoolean(task.IsEnable), ...(type === 'Fight' && consumption ? { consumption } : {}) };
+      }) };
     }),
     reminderEnabled: safeBoolean(timers.NotifyBeforeScheduledStart),
     reminderMinutes: integer(timers.ScheduledStartNotificationMinutes, 1439),
@@ -546,7 +579,7 @@ export async function executeSetupConfigWrite(request: SetupWriteRequest, contex
   return writeConfiguration(write, boundary, undefined, 'setup');
 }
 
-async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string }, connection?: 'setup') {
+async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recovery?: { lock: FileHandle; rawLock: string; restoreTo: RecordValue }, connection?: 'setup') {
   const id = randomUUID();
   const rejected = (reason: string) => ({ status: 'rejected', phase: 'check', operation: id, changedKeys: [] as string[], reason });
   let original: RecordValue;
@@ -565,8 +598,9 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
   try {
     request = structuredClone(request);
     if (request.closedConfirmed !== undefined && typeof request.closedConfirmed !== 'boolean') return rejected('request-invalid');
-    const medicine = request.authorization?.medicineCount;
-    if (medicine !== undefined && (!Number.isInteger(medicine) || medicine < 0 || medicine > 2147483647)) return rejected('medicine-quantity-invalid');
+    // Grant values are validated by the consumption predicate in prepare; unknown grant keys never reach a pending record.
+    if (!request.authorization || typeof request.authorization !== 'object' || Object.keys(request.authorization)
+      .some(key => !['source', 'reference', 'medicineCount', 'stoneCount', 'expiringMedicine', 'jobPlan', 'trainingPlan', 'basePlan'].includes(key))) return rejected('authorization-invalid');
     if (!['codex', 'claude'].includes(request.host) || !['current-request', 'approved-report'].includes(request.authorization.source)
       || typeof request.authorization.reference !== 'string' || !request.authorization.reference.trim()
       || !Array.isArray(request.changes) || !request.changes.length && !request.authorization.basePlan) return rejected('authorization-invalid');
@@ -589,7 +623,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
       if (!baseReferencePattern.test(request.authorization.reference)) return rejected('authorization-invalid');
       baseAsset = await loadBaseAsset(request.privateDirectory, request.authorization.reference, checkGrant(request.authorization.basePlan));
     }
-    const prepared = prepare(original, request, recovery ? 'recovery' : connection, baseAsset);
+    const prepared = prepare(original, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     trainingAsset = prepared.trainingAsset;
     if (trainingAsset) assetBefore = await inspectTrainingAsset(trainingAsset);
     if (baseAsset) baseBefore = await inspectBaseAsset(baseAsset, request.privateDirectory);
@@ -603,7 +637,11 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     targets.push(...prepared.dependencies.map(path => ({ path, value: comparableAt(original, path) })));
     const now = new Date(); const end = new Date(now.getTime() + 120000);
     if (!checkMaintenanceWindow(original, now, end) || !checkMaintenanceWindow(prepared.config, now, end)) return rejected('timer-window');
-  } catch { return rejected('request-invalid'); }
+  } catch (error) {
+    // The predicate's static reasons tell the agent which approval is missing; every other check stays request-invalid.
+    const reason = error instanceof Error ? error.message : '';
+    return rejected((consumptionRefusals as readonly string[]).includes(reason) ? reason : 'request-invalid');
+  }
   const file = join(request.maaDirectory, 'config', 'gui.new.json');
   const lockFile = join(request.maaDirectory, 'config', '.maa-skills.lock');
   const locked = async () => {
@@ -646,7 +684,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     await appendFile(join(request.privateDirectory, 'daily-pending.jsonl'), JSON.stringify({ ...metadata, authorization, changes, trainingManifest, baseManifest, versions }) + '\n', { mode: 0o600 });
     original = await readConfiguration(request.maaDirectory);
     checkTargets(original);
-    const preview = prepare(original, request, recovery ? 'recovery' : connection, baseAsset);
+    const preview = prepare(original, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     closeStarted = new Date();
     const deadline = new Date(closeStarted.getTime() + 120000);
     if (!checkMaintenanceWindow(original, closeStarted, deadline) || !checkMaintenanceWindow(preview.config, closeStarted, deadline)) throw new Error('timer-window');
@@ -658,7 +696,7 @@ async function writeConfiguration(request: WriteRequest, maa: MaaProcess, recove
     const stoppedConfiguration = object(JSON.parse(before.toString('utf8').replace(/^\uFEFF/, '')));
     checkTargets(stoppedConfiguration);
     await checkAsset();
-    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, baseAsset);
+    const prepared = prepare(stoppedConfiguration, request, recovery ? 'recovery' : connection, baseAsset, recovery?.restoreTo);
     const { config, changedKeys } = prepared;
     const checkBeforeRestart = () => {
       if (Date.now() > deadline.getTime() - 60000 || !checkMaintenanceWindow(config, closeStarted, deadline)) throw new Error('maintenance-budget-exceeded');

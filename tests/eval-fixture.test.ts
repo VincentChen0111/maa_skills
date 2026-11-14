@@ -22,7 +22,7 @@ test('isolated demonstration records real config changes and locks without touch
   const evidence = await collectEvidence(fixture, { completed: true, calls: [{ tool: 'shell', input: 'node probe.ts write', succeeded: true }], outputs: [result.stdout] });
   assert.equal(grade(fixture.policy, evidence).status, 'pass');
   assert.equal(evidence.events.map((event) => event.kind).join(','), 'lock-acquired,write,lock-released');
-  await writeFile(join(fixture.workspace, 'maa/config.json'), JSON.stringify({ queue: ['2-1'], stone: false }));
+  await writeFile(join(fixture.workspace, 'maa/config.json'), JSON.stringify({ queue: ['2-1'], gacha: false }));
   const tampered = await collectEvidence(fixture, evidence.transcript);
   assert.ok(grade(fixture.policy, tampered).failed.includes('authorization'));
   assert.ok(grade(fixture.policy, tampered).failed.includes('write-lock'));

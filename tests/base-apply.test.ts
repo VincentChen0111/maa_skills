@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { applyBasePlan, checkBaseApply } from '../skills/maa-core/scripts/base-apply.ts';
 import { executeConfigWrite, inspectConfiguration, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { decideConsumption } from '../skills/maa-core/scripts/consumption-grant.ts';
 import { approveBaseReportItems, draftBaseReport, type BaseContent } from '../skills/maa-core/scripts/base-report.ts';
 import { loadAdviceReport, recordReviewSkip, saveAdviceReport } from '../skills/maa-core/scripts/advice-report.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
@@ -407,6 +408,46 @@ test('the writer binds a base grant to the approved bytes and route: even the fu
   const empty = fakeMaa(), configAfter = await readFile(h.configFile);
   assert.equal((await writeDirect(h, { basePlan: grant(sha) }, [], empty.maa)).status, 'rejected'); assert.deepEqual(empty.calls, []);
   assert.deepEqual(await readFile(h.configFile), configAfter);
+});
+
+/**
+ * Merge of 27 with 23 (design default, 2026-11-14): a base plan is a third plan source next to job and training plans. It never
+ * touches consumption fields, so no medicine, stone or expiring-medicine grant may accompany it; the consumption predicate owns
+ * that refusal (`plan: 'base'`) and gives its static reason, before MAA is touched.
+ */
+test('a base plan carries no consumption grant: medicine, stone or expiring medicine alongside it is refused by the consumption predicate', async (t) => {
+  const h = await home(t), before = await readFile(h.configFile), sha = await approvedSha(h);
+  const grants: [string, Record<string, unknown>][] = [['medicine', { medicineCount: 0 }], ['stone', { stoneCount: 1 }],
+    ['expiring medicine', { expiringMedicine: { days: 2, forActivity: false } }]];
+  for (const [name, fields] of grants) {
+    const { maa, calls } = fakeMaa();
+    const result = await writeDirect(h, { basePlan: grant(sha), ...fields }, derivedChanges(h, sha), maa);
+    assert.deepEqual([result.status, result.reason], ['rejected', 'conflicting-authorizations'], name); assert.deepEqual(calls, [], name);
+    assert.equal(decideConsumption({ source: 'approved-report', ...fields }, [], { consumer: 'writer-whitelist', plan: 'base' }).reason, 'conflicting-authorizations', name);
+  }
+  await nothingWritten(h, before);
+  assert.equal(decideConsumption({ source: 'approved-report' }, [], { consumer: 'writer-whitelist', plan: 'base' }).allowed, true, 'a base plan alone passes the predicate');
+  const control = await writeDirect(h, { basePlan: grant(sha) }, derivedChanges(h, sha), fakeMaa().maa);
+  assert.equal(control.status, 'complete', JSON.stringify(control));
+});
+
+/**
+ * Merge of 27 with 23 (2026-11-14), registered in tests/consumption-grant.test.ts's writer callers: base-apply writes through the
+ * unified writer, whose indirect-consumption check runs on every write. A base apply changes four fields of the Infrast task
+ * only, so it never activates a Fight task, whatever medicine, stone or expiring medicine that task holds.
+ */
+test('a base apply never activates a consuming task: an enabled Fight task with medicine, stone and expiring medicine on is left alone', async (t) => {
+  const config = infrastConfig(), queue: Record<string, unknown>[] = config.Configurations.synthetic.TaskQueue;
+  const consuming = { ...queue[0]!, IsEnable: true, UseMedicine: true, MedicineCount: 2, UseStone: true, UseStoneAllowSave: true, StoneCount: 3,
+    UseExpiringMedicine: true, MedicineExpireDays: 2 };
+  queue[0] = consuming;
+  const h = await home(t, { config });
+  const result = await applyBasePlan(await request(h, { decision: accept(['maa-timers']) }), fakeMaa().maa, { home: h.home });
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  assert.deepEqual(JSON.parse(await readFile(h.configFile, 'utf8')).Configurations.synthetic.TaskQueue[0], consuming);
+  // The writer's indirect-consumption decision for this write has nothing activated; the same task activated needs a grant.
+  assert.equal(decideConsumption({ source: 'approved-report' }, [], { consumer: 'indirect-consumption', plan: 'base' }).allowed, true);
+  assert.equal(decideConsumption({ source: 'approved-report' }, [{ task: consuming, activated: true }], { consumer: 'indirect-consumption', plan: 'base' }).allowed, false);
 });
 
 test('the writer proves the approved hash again from the report: a version whose plan, scope hash or permitted action disagrees is refused', async (t) => {
