@@ -131,7 +131,40 @@ node scripts/release-check.ts package <已安装目录> --mode plugin|skills
 
 工单的验收条目「两个临时宿主环境从实际发布内容原生安装和更新五个 skill」。本节是在预发布提交上的试运行；最终验收要在发布载荷的公开提交上按同样的步骤重做，这里的结果不能代替它。
 
-结果：未验证（尚未运行，运行后在此记录）。
+### 做法
+
+沿用此前各票的做法（[help 验证记录](help-verification.md)「原生安装」、[account 验证记录](account-verification.md)「新载荷的真实原生安装与更新」）：Codex 用官方 skill-installer 一次安装多个 `skills/<名称>` 到临时 `CODEX_HOME`，Claude Code 在临时 `CLAUDE_CONFIG_DIR` 里走插件市场的添加、安装、更新。和此前不同的只有来源：此前从 GitHub 上的公开固定提交安装；本分支没有推送，所以从本地安装（见「设计默认值」）。
+
+- 安装的提交：`e61c05da6e89f5c75f62b6459a469e5712a22cf5`（本分支第二个提交；之后的提交只改本文件）。2026-11-14，Windows，Node 24。
+- 宿主：Codex CLI `0.167.0-alpha.3.2`，Claude Code `2.1.321`。
+- 隔离：一次性临时根目录下的 home、`APPDATA`、`LOCALAPPDATA`、临时目录、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、私有目录和项目目录；子进程环境里去掉了所有名字像凭据或指向宿主的变量；`HTTP(S)_PROXY` 指向本机一个不通的端口，任何联网都会失败；空的全局 git 配置，不读系统 git 配置。没有登录，没有运行模型，没有碰维护者的宿主目录、登录目录或已安装的 skill。
+- 来源：在临时根目录建一个裸仓库，从本 worktree 取这个提交作为分支 `release-candidate`。
+  - Codex：临时 git 配置把 `https://github.com/VincentChen0111/maa_skills.git` 改写到这个裸仓库，官方安装器原样运行：`python -B -s -X utf8 install-skill-from-github.py --repo VincentChen0111/maa_skills --ref release-candidate --method git --path skills/maa-core skills/maa-help skills/maa-setup skills/maa-account skills/maa-daily skills/maa-doctor --dest <临时 CODEX_HOME>/skills`。安装器是 Codex 自己在临时 `CODEX_HOME` 里放出来的系统 skill（运行 `codex debug prompt-input` 时放出，这条命令只在本地拼出模型会看到的提示，不调用模型）。
+  - Claude Code：从裸仓库克隆出一个目录，`claude plugin marketplace add <该目录>`，再 `plugin install maa-skills@maa-skills --scope user`、`plugin marketplace update maa-skills`、`plugin update maa-skills@maa-skills --scope user`；另在临时项目里 `plugin install … --scope project`。
+- 开发目录联接：在临时项目里建 `.agents/skills/<名称>` 和 `.claude/skills/<名称>` 两组目录联接，指向本 clone 的 `skills/<名称>`；用完只删联接（`rmdir` 不碰目标），再核对 clone 的文件数没变。
+- 执行脚本放在会话的临时目录，不进仓库；每条命令的输出和汇总 `native-evidence.json` 放在本机 `.tmp/native26/`（被 Git 忽略，里面有临时路径，不提交）。
+
+### 结果
+
+| 项 | Codex | Claude Code |
+| --- | --- | --- |
+| 首次安装 | 退出 0，六个目录装好 | 市场添加、安装都退出 0；装到临时配置的插件缓存目录，安装记录的 `gitCommitSha` 等于上面的提交，版本 `0.1.0-dev.0` |
+| 已有目标再装一次 | 退出 1，安装器报目标已存在，没有覆盖 | — |
+| 更新 | 按宿主说明的流程：核实六个 `maa-*` 目录都在临时根目录下再删除，用同一条命令整体重装，退出 0 | `marketplace update`、`plugin update` 都退出 0，报告已是最新的 `0.1.0-dev.0`。本地目录市场的插件按目录读取，没有版本可升，验证的只是更新入口，不是跨版本升级 |
+| 打包检查（`release-check.ts package`） | skills 方式通过（首次安装后、更新后各一次） | plugin 方式通过（检查的是缓存目录，没有 `.git`） |
+| 安装文件与提交逐字节比较（git blob 哈希） | 六个目录共 78 个文件，全部存在且相同 | 提交里的 418 个文件，全部存在且相同 |
+| 入口可达 | `codex debug prompt-input` 的可用 skill 列表里有全部六个，根目录别名指向临时 `CODEX_HOME/skills`；安装前列表里没有 | `claude plugin details` 列出六个 skill；`claude plugin validate` 通过，带两条提示（市场描述缺 `description`、插件没有图标），README 没有一行安装命令（建议项） |
+| 共享脚本可达 | 经 `maa-setup/../maa-core/scripts/preferences.ts` 在临时私有目录 `read`、`set`、再 `read` 都退出 0，语言变为 `en`；`maa-core/scripts` 的 42 个脚本逐个导入，0 个失败 | 经 `skills/maa-daily/../maa-core/scripts/preferences.ts` 同样三步退出 0，语言变为 `en`；42 个脚本导入 0 失败 |
+| 临时项目 | — | 项目范围安装退出 0，临时项目里写出 `.claude/settings.json` 启用该插件 |
+| 开发目录联接 | `.agents/skills` 布局打包检查通过；用另一个空的临时 `CODEX_HOME` 运行 `codex debug prompt-input`，六个 skill 都从临时项目的 `.agents/skills` 列出 | `.claude/skills` 布局打包检查通过；经联接的 `maa-doctor/../maa-core/scripts/preferences.ts read` 退出 0 |
+| 清理 | 联接全部删除（剩余 0），clone 的 `skills/` 文件数不变；临时根目录随后删除 | 同左 |
+
+### 仍未验证
+
+- 从 GitHub 上公开的发布提交安装（此前各票的做法）：本分支没有推送，没有做。最终验收要在发布载荷的公开提交上做。
+- 跨版本升级：两个宿主都没有做（Claude 的本地目录市场没有版本可升；Codex 的更新是同一版本的整体重装）。
+- 让模型通过这些入口实际调用 skill：不在本包范围，属于模型门禁。
+- Claude 的入口可达只看了 `plugin details` 的组件清单，没有启动会话（启动会话需要登录）。
 
 ## 人工核实清单与记录格式
 
@@ -388,7 +421,7 @@ node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <�
 | `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
 | 打包检查里的隐私规则 | 本分支载荷按两种安装方式复制后，没有发现（`tests/release-package.test.ts` 最后一项） |
 
-发布时还要改、本包没有改的：README 开头的英文简介还写着「no playable automation is shipped yet」，`.claude-plugin/plugin.json` 的描述还写着「implementation in progress」；它们随版本号改动一起改。
+发布时还要改、本包没有改的：README 开头的英文简介还写着「no playable automation is shipped yet」，`.claude-plugin/plugin.json` 的描述还写着「implementation in progress」；它们随版本号改动一起改。`claude plugin validate` 另提示市场描述没有 `description`、插件没有图标、README 没有一行安装命令，都是建议，不影响校验通过，是否补上由发布那一步决定。
 
 ## 发布说明草稿
 
@@ -408,7 +441,11 @@ node scripts/eval-batch.ts compare <前的批次目录> <后的批次目录> <�
 | `node --test tests/privacy.test.ts` | 4 项通过 |
 | `node --test tests/help-installation.test.ts` | 6 项通过 |
 | `node scripts/release-check.ts versions` | `ok: true`，预发布模式 |
-| `node scripts/privacy.ts`、`node scripts/tracker.ts`、`node scripts/metadata.ts` | 见下文最后一次运行 |
+| `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
+| `node scripts/tracker.ts`（只检查） | `{"ready":["27","28","30"],"errors":[]}` |
+| `node scripts/metadata.ts`；`inspectMetadata` 在本仓库上 | 退出 0；`[]` |
+| `node scripts/eval-batch.ts list`（只载入场景目录，不调用模型），在临时目录里用 `f1ec4ed` 的框架配 12 个提交的 `skills/` | 见「Codex 评测计划」的「问题」 |
+| 两个临时宿主的原生安装试运行 | 见上文「结果」 |
 | 完整离线入口 | 没有跑，由协调者跑 |
 
 ## 未验证与需要维护者的事项
