@@ -48,7 +48,7 @@ const groups: { group: string; subject?: string; companions: string[]; scenarios
 /** The catalog, each scenario installing its skills from the checkout or from the given payload directory. */
 export function scenarioCatalog(payload?: string): ScenarioEntry[] {
   return groups.flatMap(({ group, subject, companions, scenarios }) => scenarios.map((definition) => {
-    const names = [...new Set([...(definition.skills ?? []), ...companions])];
+    const names = [...new Set([...(definition.skills ?? []), ...companions, ...(definition.companions ?? [])])];
     return { group, definition, ...(subject ? { skillDirectory: skillDirectory(subject, payload) } : {}),
       companionSkills: Object.fromEntries(names.map((name) => [name, skillDirectory(name, payload)])) };
   }));

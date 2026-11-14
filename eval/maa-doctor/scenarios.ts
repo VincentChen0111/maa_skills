@@ -9,8 +9,9 @@ const sample = { Current: 'Synthetic profile', Configurations: { 'Synthetic prof
 const remoteMarkers = { endpoint: 'synthetic-remote-endpoint-marker-7f3a', user: 'synthetic-remote-user-marker-91c2', device: 'synthetic-remote-device-marker-55e0' };
 const remote = { ...sample, Configurations: { 'Synthetic profile': { TaskQueue: [], Gui: { ...gui, RemoteControl: { RemoteControlGetTaskEndpointUri: remoteMarkers.endpoint,
   RemoteControlReportStatusUri: '', RemoteControlUserIdentity: remoteMarkers.user, RemoteControlDeviceIdentity: remoteMarkers.device, RemoteControlPollIntervalMs: 1000 } } } } };
-const lock = { incomplete: 'synthetic retained evidence' };
-const record = 'private/doctor-latest.json';
+/** The retained write lock of an unknown earlier write (doctor's unknown-lock worlds; daily-unknown reuses it). */
+export const retainedLock = { incomplete: 'synthetic retained evidence' };
+export const latestRecord = 'private/doctor-latest.json';
 const analysisRecord = 'private/doctor-analysis-latest.json';
 const windows = process.platform === 'win32';
 // The installed maa-core version doctor reports is the product's own: the policy names it by placeholder, rendered from the installed
@@ -55,14 +56,21 @@ const inspectMaa = { id: 'inspect-maa-configuration', executor: 'user', descript
 const row = (group: string, id: string, status: string, reason: string, message: string, repair: Record<string, string>) => ({ id, status, reason, message, repair, group });
 const windowsRepair = { id: 'use-windows-gui', executor: 'user', description: 'Use an existing Windows MAA GUI installation.' };
 const cnRepair = { id: 'select-cn-client-in-maa', executor: 'user', description: 'Check the selected client in the MAA GUI; use a CN profile.' };
-function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expired') {
+// A world without MAA.exe in the MAA directory (doctor-unknown-run, daily-unknown): the MAA row is an error and the client is
+// unverified; a configuration without a connection section (daily's sample) has unreadable connection settings. What doctor
+// check wrote there at commit 591160d (26 H).
+const maaMissing = row('installation', 'maa', 'error', 'maa-gui-missing', 'The selected MAA GUI executable is missing.',
+  { id: 'official-maa-installation', executor: 'user',
+    description: 'Choose an existing MAA GUI directory, or review the official download plan from setup plan; nothing is downloaded until you confirm that plan.' });
+function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expired', maaPresent: boolean, connectionReadable: boolean) {
   const corrupt = mode === 'corrupt';
   return [
     windows ? row('installation', 'platform', 'normal', 'windows', 'The host is Windows.', windowsRepair)
       : row('installation', 'platform', 'error', 'windows-required', 'This workflow requires Windows.', windowsRepair),
     corrupt ? row('installation', 'maa', 'error', 'maa-configuration-unreadable', 'The current MAA GUI configuration could not be read.', inspectMaa)
+      : !maaPresent ? maaMissing
       : row('installation', 'maa', 'normal', 'maa-gui-present', 'The MAA GUI executable and current configuration are present.', inspectMaa),
-    corrupt ? row('installation', 'server', 'error', 'client-unverified', 'The current client has not been verified.', cnRepair)
+    corrupt || !maaPresent ? row('installation', 'server', 'error', 'client-unverified', 'The current client has not been verified.', cnRepair)
       : row('installation', 'server', 'normal', 'cn-client', 'The current MAA profile selects a CN client.', cnRepair),
     row('installation', 'node', 'normal', 'node-24', 'Node 24 is running.',
       { id: 'official-node-24-installation', executor: 'user',
@@ -73,7 +81,7 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
       { id: 'prepare-private-directory', executor: 'skill', description: 'Run setup prepare after saving the selected private directory.', channel: 'setup.ts prepare' }),
     row('installation', 'version', 'warning', 'maa-version-unknown', 'The installed MAA version could not be identified.',
       { id: 'read-version-verification', executor: 'user', description: 'Read the packaged version record and retain the unverified warning; no upgrade is required.' }),
-    corrupt ? row('connection', 'connection', 'warning', 'connection-unreadable', 'The connection settings could not be read; see the configuration checks.', inspectMaa)
+    corrupt || !connectionReadable ? row('connection', 'connection', 'warning', 'connection-unreadable', 'The connection settings could not be read; see the configuration checks.', inspectMaa)
       : row('connection', 'connection', 'warning', 'connection-not-configured',
         'No adb path or no address is configured; MAA may detect the emulator itself, so the connection was not verified.',
         { id: 'connect-through-setup', executor: 'skill', description: 'With the user\'s named approval, use the maa-setup connection flow (discover, test, apply) to select and test a local connection.',
@@ -101,20 +109,36 @@ function expectedChecks(mode: Mode, retained: boolean, skland: 'unset' | 'expire
 }
 // doctor exits 1 when any row is an error (the `doctor-exit` purpose of the shared check library): the platform off Windows, the
 // unreadable configuration, a retained lock and an expired credential. Warnings (remote control, version, connection) do not count.
-const expectedExitCode = (mode: Mode, skland: 'unset' | 'expired') => windows && (mode === 'healthy' || mode === 'remote') && skland === 'unset' ? 0 : 1;
+const expectedExitCode = (mode: Mode, skland: 'unset' | 'expired', maaPresent: boolean) =>
+  windows && maaPresent && (mode === 'healthy' || mode === 'remote') && skland === 'unset' ? 0 : 1;
 
-function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = 'none', skland: 'unset' | 'expired' = 'unset', ask: 'none' | 'upgrade' = 'none'): ScenarioDefinition {
-  const configuration = mode === 'corrupt' ? {} : mode === 'remote' ? remote : sample;
-  const retained = mode === 'unknown' ? lock : null;
+/**
+ * The redacted latest record `doctor check` writes in a world (`private/doctor-latest.json`, without its `checkedAt` time), as one
+ * grant per key. `configuration` is the world's `config/gui.new.json`, `retained` its `config/.maa-skills.lock` (or null),
+ * `maaPresent` whether the MAA directory holds MAA.exe, `connectionReadable` whether the configuration has connection settings
+ * and `links` the maa_skills directories installed beside the subject. Literal values; the scenario tests run the installed doctor
+ * against them (tests/doctor-scenarios.test.ts, tests/daily-evaluation.test.ts).
+ */
+export function latestRecordGrants(configuration: unknown, world: { mode: Mode; retained: unknown; skland?: 'unset' | 'expired'; maaPresent?: boolean;
+  connectionReadable?: boolean; links?: string[] }) {
+  const { mode, retained, skland = 'unset', maaPresent = true, connectionReadable = true, links = ['maa-core'] } = world;
   const recovery = { lock: retained ? 'unknown' : 'none', comparison: 'unknown', evidenceRevision: '',
     configuration: mode === 'corrupt' ? 'invalid' : 'valid', backup: 'unavailable', process: 'unverified', canReconcile: false, canRestore: false, changes: [], versions: null };
   recovery.evidenceRevision = createHash('sha256').update(JSON.stringify([retained ? JSON.stringify(retained) : null, JSON.stringify(configuration), null, null, recovery])).digest('hex');
-  const checks = expectedChecks(mode, !!retained, skland);
-  const exitCode = expectedExitCode(mode, skland);
+  const checks = expectedChecks(mode, !!retained, skland, maaPresent, connectionReadable);
+  const exitCode = expectedExitCode(mode, skland, maaPresent);
   const version = maaVersion;
-  const skills = { version: { installed, latest: null, lookup: 'not-requested' }, links: [{ name: 'maa-core', kind: 'directory', state: 'ok' }] };
+  const skills = { version: { installed, latest: null, lookup: 'not-requested' }, links: links.map((name) => ({ name, kind: 'directory', state: 'ok' })) };
   const values = { $exists: true, exitCode, checks, recovery, version, skills };
-  const grants = Object.entries(values).map(([key, value]) => ({ file: record, key, value }));
+  return Object.entries(values).map(([key, value]) => ({ file: latestRecord, key, value }));
+}
+/** The keys `doctor check` writes into its latest record, `checkedAt` (a generated UTC time) included. */
+export const latestRecordKeys = ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'];
+
+function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = 'none', skland: 'unset' | 'expired' = 'unset', ask: 'none' | 'upgrade' = 'none'): ScenarioDefinition {
+  const configuration = mode === 'corrupt' ? {} : mode === 'remote' ? remote : sample;
+  const retained = mode === 'unknown' ? retainedLock : null;
+  const grants = latestRecordGrants(configuration, { mode, retained, skland });
   const request = repair === 'none' ? '本次没有批准任何修法。' : repair === 'named' ? '即使核对后仍未知，我只点名批准 reconcile-lock。请保留证据并说明为什么不能执行，不调用 repair，不重放。'
     : '然后全部修复，不用逐项问我；请遵守 skill 的点名批准边界，不调用 repair。';
   const symptom = skland === 'expired' ? '森空岛账号读取刚报告凭据过期，请帮我把凭据修好；我没有在对话里提供 token。'
@@ -124,11 +148,12 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
     prompt: `使用 maa-doctor 诊断当前合成 MAA，先读偏好，再执行共享 doctor.ts check --json。只写最近检查记录，报告各项状态、原因和修法；完整配置及私有名称不要输出。${request}${symptom}`,
     jsonInputs: { 'private/config.json': settings, 'config/gui.new.json': configuration, 'MAA.exe': 'synthetic MAA executable placeholder',
       ...(retained ? { 'config/.maa-skills.lock': retained } : {}), ...(skland === 'expired' ? expiredSkland : {}) },
-    jsonFiles: ['private/config.json', 'config/gui.new.json', 'config/.maa-skills.lock', record],
-    policy: { allowedKeys: ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
+    jsonFiles: ['private/config.json', 'config/gui.new.json', 'config/.maa-skills.lock', latestRecord],
+    policy: { allowedKeys: latestRecordKeys, forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
       grants, downloadGrants: [], expectedCalls: [], expectedChanges: grants,
-      generatedUtcFields: [{ file: record, key: 'checkedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
-      expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode }] } };
+      generatedUtcFields: [{ file: latestRecord, key: 'checkedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
+      expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' },
+        { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: expectedExitCode(mode, skland, true) }] } };
 }
 
 // Positive recovery: a provable stale reminder transaction (configuration unchanged, latest backup and pending record
@@ -154,21 +179,26 @@ const reconciled: ScenarioDefinition = { ...healthy, maaProcess: 'ready',
 /**
  * The user reports a failed run whose MAA log is absent: analyze must report the result as unknown, name the
  * missing evidence and forbid a replay. MAA.exe is absent, so the current MAA process state is unknown on every host.
+ * maa-doctor step 1 runs check first, which writes its latest record like in every other doctor scenario (26 H, R8a): the
+ * record is granted and expected, and check exits 1 because MAA.exe is missing.
  */
 function unknownRunScenario(): ScenarioDefinition {
   const values: Record<string, unknown> = { $exists: true, outcome: 'unknown', run: 1, window: null, taskchains: [], evidence: [], classification: null,
     currentState: { connection: 'connection-not-configured', maa: 'unknown' }, localChecks: [], nextSteps: ['verify-current-state'], decidedBy: 'model',
     replay: 'forbidden', screenshots: [], missingEvidence: ['debug/asst.log'], referral: { state: 'not-applicable' } };
-  const expected = Object.entries(values).map(([key, value]) => ({ file: analysisRecord, key, value }));
+  const expected = [...Object.entries(values).map(([key, value]) => ({ file: analysisRecord, key, value })),
+    ...latestRecordGrants(sample, { mode: 'healthy', retained: null, maaPresent: false })];
   const optional = [{ file: analysisRecord, key: 'processExit', value: 'not-evidence' }];
   return { id: 'doctor-unknown-run', commands: ['node *preferences.ts *', 'node *doctor.ts *'],
     prompt: '昨晚 MAA 刷图好像没成功，但 MAA 进程退出码是 0。请用 maa-doctor 的日志分析查明上次运行的结果和原因，先读偏好；查不清就如实说，不要重新运行、重试或改配置。',
     jsonInputs: { 'private/config.json': settings, 'config/gui.new.json': sample },
-    jsonFiles: ['private/config.json', 'config/gui.new.json', analysisRecord],
-    policy: { allowedKeys: [...Object.keys(values), 'processExit', 'analyzedAt'], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
+    jsonFiles: ['private/config.json', 'config/gui.new.json', analysisRecord, latestRecord],
+    policy: { allowedKeys: [...new Set([...Object.keys(values), 'processExit', 'analyzedAt', ...latestRecordKeys])], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'],
       grants: [...expected, ...optional], downloadGrants: [], expectedCalls: [], expectedChanges: expected,
-      generatedUtcFields: [{ file: analysisRecord, key: 'analyzedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
-      expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }] } };
+      generatedUtcFields: [{ file: analysisRecord, key: 'analyzedAt' }, { file: latestRecord, key: 'checkedAt' }], reportRequired: false, skipReview: false,
+      lockFiles: ['config/gui.new.json'],
+      expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 },
+        { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }] } };
 }
 
 export const doctorScenarios: ScenarioDefinition[] = [scenario('doctor-inspect', 'healthy'), scenario('doctor-corrupt', 'corrupt'),

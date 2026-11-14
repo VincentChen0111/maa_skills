@@ -12,7 +12,7 @@ const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-run.ts', action: 'read' }] };
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const prefix = '使用 maa-daily。这一批指定关卡的跟踪已经结束，run-request.json 里是这次运行记录的 runId；每关的备选都是我事先批准过的。'
-  + '这一次先只读：调用共享 stage-run.ts read 读取这条记录，不调用其他动作，也不改任何文件。';
+  + '这一次先只读：调用共享 stage-run.ts read 读取这条记录（只读），不调用 start、observe、verify、decide、progress 或 switch，也不改任何文件。';
 const cases: [string, AlternateRunKind, string][] = [
   ['daily-alternate-medicine-used', 'medicine-used',
     'SYN-1 失败了，记录里还有我批准过的备选。按记录告诉我结果、MAA 报告的用药，以及现在能不能换备选或重试、为什么，下一步需要我做什么。'],

@@ -48,6 +48,16 @@ if (host === 'codex' && args.includes('login') && args.includes('status')) {
 // On Windows a deny entry without `windows.sandbox="mxc"` is refused, as the real CLI does. `script.sandbox` picks other behaviours:
 // 'by-name' (a sandbox that compares path strings exactly: a short name, a junction or another case gets through), 'ignore-deny'
 // (every read succeeds), 'silent' (a denied path runs nothing and exits 0), 'deny-all' (every read fails), 'refuse'.
+// Codex's `-c shell_environment_policy.exclude=["NAME",...]`: variables a command the host runs (in `sandbox` and in a turn) does
+// not inherit, names matched ignoring case. `script.environmentPolicy: 'ignore'` is a Codex that does not apply it.
+const commandEnvironment = (list) => {
+  const values = list.filter((_, index) => list[index - 1] === '-c');
+  const names = host !== 'codex' || script.environmentPolicy === 'ignore' ? new Set() : new Set(values.flatMap((value) => {
+    const match = value.match(/^shell_environment_policy\.exclude=\[(.*)\]$/);
+    return match ? [...match[1].matchAll(/"([^"]*)"/g)].map((name) => name[1].toUpperCase()) : [];
+  }));
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !names.has(name.toUpperCase())));
+};
 if (host === 'codex' && args[0] === 'sandbox') {
   if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(), configDirectory: process.env.CODEX_HOME, args })}\n`);
   const end = args.indexOf('--');
@@ -69,7 +79,7 @@ if (host === 'codex' && args[0] === 'sandbox') {
   if (blocked && !scriptIndex) { process.stderr.write('Permission denied\n'); process.exit(1); }
   const patch = "{const f=require('fs');f.readFileSync=()=>{throw Object.assign(new Error('EPERM: operation not permitted, open'),{code:'EPERM'})}};";
   const run = blocked ? command.map((part, index) => index === scriptIndex ? patch + part : part) : command;
-  const result = spawnSync(run[0] === 'node' ? process.execPath : run[0], run.slice(1), { cwd: process.cwd(), env: process.env, encoding: 'utf8', windowsHide: true });
+  const result = spawnSync(run[0] === 'node' ? process.execPath : run[0], run.slice(1), { cwd: process.cwd(), env: commandEnvironment(options), encoding: 'utf8', windowsHide: true });
   process.stdout.write(result.stdout ?? ''); process.stderr.write(result.stderr ?? '');
   process.exit(result.status ?? 1);
 }
@@ -94,7 +104,7 @@ const readCommand = (path) => ['node', '-e', 'process.stdout.write(require("fs")
 const quote = (value) => /[\s"]/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 const execute = (command, input) => {
   const [program, ...rest] = command;
-  const result = spawnSync(program === 'node' ? process.execPath : program, rest, { cwd: process.cwd(), env: process.env, encoding: 'utf8', windowsHide: true,
+  const result = spawnSync(program === 'node' ? process.execPath : program, rest, { cwd: process.cwd(), env: commandEnvironment(args), encoding: 'utf8', windowsHide: true,
     input: input === undefined ? '' : typeof input === 'string' ? input : JSON.stringify(input) });
   return { exitCode: result.status ?? 1, stdout: result.stdout ?? '', output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 };
@@ -121,7 +131,9 @@ for (const step of toolless ? [] : script.steps ?? []) {
   if (usesSentinel(step) && !sentinel) continue;
   if (step.shell) {
     const command = step.shell.map(resolvePath);
-    calls.push({ kind: 'shell', text: command.map(quote).join(' '), ...execute(command, fill(step.input)) });
+    // `stdinFile`: the command reads a file on standard input (a path, or an earlier step's output such as a review brief's `file`).
+    const input = step.stdinFile !== undefined ? readFileSync(fill(step.stdinFile), 'utf8') : fill(step.input);
+    calls.push({ kind: 'shell', text: command.map(quote).join(' '), ...execute(command, input) });
   } else if (step.shellRead) {
     const path = resolvePath(step.shellRead);
     const command = readCommand(path);

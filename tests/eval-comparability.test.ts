@@ -41,7 +41,10 @@ const repositoryPath = (path: string) => relative(repository, path).replaceAll('
 // Harness files a run installs into its workspace under another name (scripts/eval-fixture.ts); an import of the installed
 // name inside eval/ is an import of the source here.
 const installedHarness: Record<string, string> = { '.eval-node-observer.mjs': 'eval/observe-node.mjs', '.eval-daily-observer.mjs': 'eval/daily-observer.mjs',
-  '.eval-maa-process.mjs': 'eval/maa-process.mjs', '.eval-setup-boundary.mjs': 'eval/setup-boundary.mjs', '.eval-network-fixture.mjs': 'eval/network-fixture.mjs' };
+  '.eval-maa-process.mjs': 'eval/maa-process.mjs', '.eval-setup-boundary.mjs': 'eval/setup-boundary.mjs', '.eval-network-fixture.mjs': 'eval/network-fixture.mjs',
+  '.eval-review-double.mjs': 'eval/review-double.mjs' };
+// The reviewer shims (26 H): written from `reviewerShims` in scripts/eval-fixture.ts, not modules; their text is harness too.
+const installedShims = ['.eval-bin/codex', '.eval-bin/codex.cmd'];
 type Edge = { from: string; to: string; names: string };
 /**
  * Every import that runs: static imports and re-exports that are not `import type` / `export type`, side-effect imports and
@@ -189,7 +192,7 @@ test('scenario world data runs no product code: the runtime import closure of ev
     'eval/maa-core/scenarios.ts', 'eval/maa-daily/base-apply-scenarios.ts', 'eval/maa-daily/scenarios.ts', 'eval/maa-daily/stage-alternate-scenarios.ts',
     'eval/maa-daily/stage-run-scenarios.ts', 'eval/maa-daily/stage-scenarios.ts', 'eval/maa-daily/training-scenarios.ts', 'eval/maa-doctor/scenarios.ts',
     'eval/maa-help/scenarios.ts', 'eval/maa-process.mjs', 'eval/maa-setup/scenarios.ts', 'eval/network-fixture.mjs', 'eval/observe-node.mjs', 'eval/probe.ts',
-    'eval/report-observer.ts', 'eval/rule-samples.ts', 'eval/setup-boundary.mjs', 'scripts/eval-scenarios.ts', 'tests/fixtures/base-apply-worlds.ts',
+    'eval/report-observer.ts', 'eval/review-double.mjs', 'eval/rule-samples.ts', 'eval/setup-boundary.mjs', 'scripts/eval-scenarios.ts', 'tests/fixtures/base-apply-worlds.ts',
     'tests/fixtures/base-plan-data.ts', 'tests/fixtures/cost-data.ts', 'tests/fixtures/gap-data.ts', 'tests/fixtures/report-data.ts', 'tests/fixtures/stage-alternate-records.ts',
     'tests/fixtures/stage-data.ts', 'tests/fixtures/stage-run-records.ts', 'tests/fixtures/training-data.ts', 'tests/fixtures/training-runtime.ts']);
   // The allow-listed values reach identity only as network fixture URLs, and only their pinned commit may vary: repository
@@ -216,9 +219,12 @@ test('every producer of a scenario identity input and every consumer of the scen
   // runner: scenarioHashSources, checked against the runner's import closure in tests/eval-batch.test.ts.
   // harness: exactly the files scripts/eval-fixture.ts installs.
   const run = await import('../scripts/eval-run.ts') as Record<string, unknown>;
-  const installed = [...new Set((await readFile(join(repository, 'scripts/eval-fixture.ts'), 'utf8')).match(/\.eval-[a-z-]+\.mjs/g))].sort();
+  const modules = [...new Set((await readFile(join(repository, 'scripts/eval-fixture.ts'), 'utf8')).match(/\.eval-[a-z-]+\.mjs/g))].sort();
+  const shims = Object.keys((await import('../scripts/eval-fixture.ts')).reviewerShims).map((name) => `.eval-bin/${name}`).sort();
+  assert.deepEqual(shims, installedShims, 'the reviewer shims the fixture writes');
+  const installed = [...modules, ...shims].sort();
   assert.deepEqual([...(run.scenarioHarnessFiles as string[] | undefined) ?? []].sort(), installed, 'the scenario hash counts every installed harness file');
-  assert.deepEqual(Object.keys(installedHarness).sort(), installed, 'the closure walk knows every installed harness name');
+  assert.deepEqual(Object.keys(installedHarness).sort(), modules, 'the closure walk knows every installed harness name');
   // Consumers. scenarioHash: written once (eval-run), read only by the owner (RunRecord field, sameScenario twice, the
   // completeness check). The verdict: compareRuns is defined in the owner and called only by compareBatches (per scenario
   // and overall), which only the compare command calls; its exit code comes from that verdict.

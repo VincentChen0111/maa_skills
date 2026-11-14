@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runScenario } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
-import { claudePermissionPath, classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
+import { claudePermissionPath, classifyHostRun, hostArguments, hostExecutable } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
@@ -275,4 +275,55 @@ test('the runner grades this run\'s approvals against the scenario\'s declaratio
       { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference: baseApplyWorlds.approved.reference, profile: 0, task: 1 } }] })] });
   assert.equal(held.reason, 'completed');
   assert.equal(held.record.grade.status, 'pass', `the world's earlier approval is not graded as this run's: ${JSON.stringify(held.record.grade)}`);
+});
+
+test('26 H (R5): the default review of a report reaches the reviewer double through the fixture PATH and passes the report-review rule', async (t) => {
+  const { root, write } = await scratch(t);
+  const scenario = baseReportScenarios.find((item) => item.id === 'base-report-default-review')!;
+  const scripts = '.agents/skills/maa-core/scripts';
+  const draft = { goals: { source: 'user-stated', text: '我想要龙门币和赤金稳定' }, ...planInput() };
+  // The model's shell runs the reviewer command the skill prescribes, with the brief file on standard input.
+  const exec = ['codex', 'exec', '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check', '-'];
+  const reviewer = process.platform === 'win32' ? ['cmd.exe', '/d', '/c', ...exec] : ['sh', '-c', exec.join(' ')];
+  const hash = '{{output:1:reportHash}}', codexReviewer = { host: 'codex', method: 'codex-exec' };
+  const steps = (stdinFile: string, last: unknown) => [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } },
+    { shell: ['node', `${scripts}/base-report.ts`, 'draft'], input: draft },
+    { shell: ['node', `${scripts}/base-report.ts`, 'brief'], input: { reportHash: hash } },
+    { shell: reviewer, stdinFile }, last];
+  const run = async (name: string, stdinFile: string, last: unknown) => runScenario({ host: 'codex', model: 'requested-model', scenario,
+    skillDirectory: fileURLToPath(new URL('../skills/maa-account', import.meta.url)), companionSkills: { 'maa-core': core }, executable: process.execPath,
+    executableArgs: [double, await write(`${name}.json`, { host: 'codex', steps: steps(stdinFile, last) })], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  const reviewed = await run('reviewed', '{{output:2:file}}', { shell: ['node', `${scripts}/base-report.ts`, 'review'],
+    input: { reportHash: hash, reviewer: codexReviewer, briefSha256: '{{output:2:sha256}}', findings: [] } });
+  assert.equal(reviewed.reason, 'completed');
+  assert.equal(reviewed.record.grade.status, 'pass', JSON.stringify(reviewed.record.grade));
+  const host = await readFile(join(reviewed.artifactDirectory, 'host.jsonl'), 'utf8');
+  assert.match(host, /\\"findings\\":\[\]/, 'the reviewer reply reached the model');
+  // A brief that is not this run's gets no reply: the agent records the failure as the skill says, and the report is not reviewed.
+  await writeFile(join(root, 'other-brief.md'), '# 不是这次的审查说明\n');
+  const other = await run('other', join(root, 'other-brief.md'), { shell: ['node', `${scripts}/base-report.ts`, 'fail'],
+    input: { reportHash: hash, reviewer: codexReviewer, reason: 'no-usable-result' } });
+  assert.equal(other.reason, 'completed');
+  assert.deepEqual(other.record.grade.failed, ['report-review', 'expected-behavior'], JSON.stringify(other.record.grade));
+  assert.match(await readFile(join(other.artifactDirectory, 'host.jsonl'), 'utf8'), /not one of this run/);
+});
+
+test('26 H (R5): the runner resolves its own host binary outside the fixture, so the reviewer shim on the fixture PATH never stands in for the host', async (t) => {
+  const { root } = await scratch(t);
+  const fixtureRoot = join(root, 'maa-evaluation-xyz'); const shims = join(fixtureRoot, 'workspace', '.eval-bin'); const real = join(root, 'bin');
+  await mkdir(shims, { recursive: true }); await mkdir(real);
+  // Whatever a spawner would pick from the shim directory (an executable named like the host, with or without .exe) is skipped.
+  const name = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  for (const directory of [shims, real]) await writeFile(join(directory, name), '#!/bin/sh\n', { mode: 0o755 });
+  await writeFile(join(shims, 'codex.cmd'), '@echo off\r\n');
+  const env = { PATH: [shims, real].join(delimiter) };
+  assert.equal(hostExecutable('codex', env, fixtureRoot), join(real, name));
+  assert.equal(hostExecutable('codex', { PATH: shims }, fixtureRoot), undefined, 'found only through the fixture: unavailable');
+  assert.equal(hostExecutable(join(shims, name), env, fixtureRoot), undefined, 'an explicit path into the fixture is refused too');
+  assert.equal(hostExecutable(process.execPath, env, fixtureRoot), process.execPath, 'an explicit path elsewhere is used as given');
+  assert.equal(hostExecutable('maa-synthetic-absent-cli', env, fixtureRoot), undefined);
+  // runScenario starts no host it cannot resolve that way: the bare name of an absent CLI stays host-unavailable.
+  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario: 'approved-write', executable: 'maa-synthetic-absent-cli',
+    auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  assert.equal(result.reason, 'host-unavailable');
 });

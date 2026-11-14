@@ -1,11 +1,104 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, access, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
+import { scenarioHarnessFiles } from '../scripts/eval-run.ts';
+
+/** The model's shell running `codex <args>` in the fixture: cmd.exe resolves it through PATH and PATHEXT on Windows, sh elsewhere. */
+const codexInShell = (workspace: string, env: NodeJS.ProcessEnv, args: string[], input: string | Buffer) => process.platform === 'win32'
+  ? spawnSync('cmd.exe', ['/d', '/c', 'codex', ...args], { cwd: workspace, env, input, encoding: 'utf8', windowsHide: true })
+  : spawnSync('sh', ['-c', `codex ${args.map((arg) => `'${arg}'`).join(' ')}`], { cwd: workspace, env, input, encoding: 'utf8' });
+
+test('26 H (R5): a fixture with skills puts the reviewer shim first on PATH, and the reviewer double answers only this run\'s review brief', async (t) => {
+  const bare = await createFixture(); t.after(() => bare.dispose());
+  assert.equal(bare.env.PATH ?? bare.env.Path, process.env.PATH, 'no skills, no reviewer: the probe fixtures keep the runner PATH');
+  await assert.rejects(access(join(bare.workspace, '.eval-bin')));
+  const fixture = await createFixture({ companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) } });
+  t.after(() => fixture.dispose());
+  const shims = join(fixture.workspace, '.eval-bin');
+  for (const key of ['PATH', 'Path']) if (fixture.env[key] !== undefined) assert.equal(fixture.env[key]!.split(delimiter)[0], shims, key);
+  for (const file of ['.eval-review-double.mjs', '.eval-bin/codex.cmd', '.eval-bin/codex']) {
+    assert.ok(fixture.original.has(file), file);
+    assert.ok(scenarioHarnessFiles.includes(file), `${file} counts toward the scenario hash`);
+  }
+  // A brief as the report tools write it: <private>/reports/<kind>/<hash>/review-brief.md.
+  const hash = 'a'.repeat(64);
+  const brief = '# 建议报告独立审查说明\n\n你是一名独立审查员……报告：base-plan / ' + hash + '\n';
+  await mkdir(join(fixture.workspace, 'private/reports/base-plan', hash), { recursive: true });
+  await writeFile(join(fixture.workspace, 'private/reports/base-plan', hash, 'review-brief.md'), brief);
+  const exec = ['exec', '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check', '-'];
+  const reply = (stdout: string) => JSON.parse(stdout.match(/```json\n(.+)\n```/)![1]!);
+  const answered = codexInShell(fixture.workspace, fixture.env, exec, brief);
+  assert.equal(answered.status, 0, answered.stderr);
+  assert.deepEqual(reply(answered.stdout), { reportHash: hash, findings: [] });
+  // A Windows pipe's byte-order mark and CRLF line ends are transport, not content.
+  const piped = codexInShell(fixture.workspace, fixture.env, exec, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(brief.replaceAll('\n', '\r\n'))]));
+  assert.equal(piped.status, 0, piped.stderr); assert.deepEqual(reply(piped.stdout), { reportHash: hash, findings: [] });
+  // A brief whose characters changed on the way (Windows PowerShell 5.1 turns CJK into ?), or any other text, is not this run's.
+  for (const other of [brief.replace(/[^\x00-\x7f]/g, '?'), 'Review the report.', '']) {
+    const refused = codexInShell(fixture.workspace, fixture.env, exec, other);
+    assert.equal(refused.status, 1, other); assert.equal(refused.stdout.trim(), '', other); assert.match(refused.stderr, /review brief/);
+  }
+  // `--json` gives the final message as an agent message item; -o also writes it to the named file.
+  const json = codexInShell(fixture.workspace, fixture.env, ['exec', '--json', '--skip-git-repo-check', '-o', 'review-reply.txt', '-'], brief);
+  assert.equal(json.status, 0, json.stderr);
+  const message = json.stdout.trim().split('\n').map((line) => JSON.parse(line)).find((event) => event.type === 'item.completed')?.item;
+  assert.equal(message?.type, 'agent_message'); assert.deepEqual(reply(message.text), { reportHash: hash, findings: [] });
+  assert.equal(await readFile(join(fixture.workspace, 'review-reply.txt'), 'utf8'), message.text);
+  // Only the reviewer call the skill prescribes is answered: a prompt instead of the brief, a resumed session or any other command fails.
+  for (const args of [['exec', '--skip-git-repo-check', 'review the brief file'], ['exec', 'resume', '--last'], ['login', 'status'], []]) {
+    const refused = codexInShell(fixture.workspace, fixture.env, args, brief);
+    assert.equal(refused.status, 1, args.join(' ')); assert.equal(refused.stdout.trim(), '', args.join(' '));
+  }
+  // Mistaken for a host, it reports a double's version, so a run started through it is marked a double (never a baseline).
+  const version = codexInShell(fixture.workspace, fixture.env, ['--version'], '');
+  assert.equal(version.status, 0); assert.match(version.stdout, /^maa-eval-host-double /);
+});
+
+// Triage T1 on the harness side: the model's shell on the Windows evaluation host is Windows PowerShell 5.1, and the reviewer
+// call goes through the .eval-bin/codex.cmd shim. A Chinese brief must reach the reviewer double byte for byte when the
+// command lets cmd.exe redirect the file into `codex exec -`; a plain PowerShell pipe re-encodes the text and the double
+// refuses it by design (it compares content, so a brief that lost characters is not this run's brief).
+test('26 H: from Windows PowerShell a Chinese brief redirected by cmd reaches the reviewer double; a PowerShell pipe changes it and is refused', { skip: process.platform !== 'win32' }, async (t) => {
+  const fixture = await createFixture({ companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) } });
+  t.after(() => fixture.dispose());
+  const hash = 'b'.repeat(64);
+  // As the report tools write it: UTF-8 without a byte-order mark, at <private>/reports/<kind>/<hash>/review-brief.md.
+  const relativeBrief = `private\\reports\\account-report\\${hash}\\review-brief.md`;
+  const brief = `# 建议报告独立审查说明\n\n你是一名独立审查员，只审一轮，只报告真实错误。\n\n报告：account-report / ${hash}\n\n## 报告正文\n\n先练能天使，精二需要芯片和龙门币。\n`;
+  await mkdir(join(fixture.workspace, 'private/reports/account-report', hash), { recursive: true });
+  await writeFile(join(fixture.workspace, relativeBrief), brief);
+  const shim = join(fixture.workspace, '.eval-bin', 'codex.cmd');
+  const quoted = (text: string) => `'${text.replaceAll("'", "''")}'`;
+  const exec = 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check -';
+  // The brief path is relative to the workspace (the shell's working directory) so no quoting passes from PowerShell to cmd.
+  // The guard stops before anything runs if `codex` would resolve to anything but the fixture's shim: no real host ever starts.
+  const powershell = (command: string, codePage: number) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `[Console]::InputEncoding = [System.Text.Encoding]::GetEncoding(${codePage}); `
+    + `if ((Get-Command codex).Source -ne ${quoted(shim)}) { [Console]::Error.WriteLine('codex does not resolve to the reviewer shim'); exit 99 }; ${command}`],
+  { cwd: fixture.workspace, env: fixture.env, encoding: 'utf8', timeout: 60_000, windowsHide: true });
+  const reply = (stdout: string) => JSON.parse(stdout.match(/```json\n(.+)\n```/)![1]!);
+  for (const codePage of [65001, 936]) {
+    // cmd.exe opens the file and hands its bytes to the shim's standard input unchanged.
+    const redirected = powershell(`cmd /d /c "${exec} < ${relativeBrief}"`, codePage);
+    assert.equal(redirected.status, 0, `${codePage}: ${redirected.stderr}`);
+    assert.deepEqual(reply(redirected.stdout), { reportHash: hash, findings: [] }, String(codePage));
+    // A plain pipe: Windows PowerShell 5.1 re-encodes the string for the native command (the Chinese characters become `?`,
+    // with a byte-order mark under code page 65001), and without -Encoding Get-Content also decodes the BOM-less UTF-8 file
+    // with the ANSI code page. Either way the bytes differ from the brief, so the double refuses: exit 1, nothing on stdout.
+    for (const read of [`Get-Content -Raw ${relativeBrief}`, `Get-Content -Raw -Encoding UTF8 ${relativeBrief}`]) {
+      const piped = powershell(`${read} | ${exec}`, codePage);
+      assert.equal(piped.status, 1, `${codePage} ${read}: ${piped.stdout}${piped.stderr}`);
+      assert.equal(piped.stdout.trim(), '', `${codePage} ${read}`);
+      assert.match(piped.stderr, /not one of this run's review briefs/, `${codePage} ${read}`);
+    }
+  }
+});
 
 test('isolated demonstration records real config changes and locks without touching the caller home', async (t) => {
   const fixture = await createFixture();

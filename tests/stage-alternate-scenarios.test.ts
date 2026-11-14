@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
@@ -17,6 +18,23 @@ const expected: Record<string, Want> = {
   'daily-alternate-prepared': { execution: 'failed', stages: ['not-three-star', 'unknown'], next: 'start-alternate', decisions: ['stop-and-tell-user'], first: { job: 1, next: 2 }, medicine: 0,
     switch: 'prepared' },
 };
+
+test('the read-only request names every other stage-run action it excludes, so the preferences read the grader expects is not excluded with them', async () => {
+  // 26 H (R8c): 「不调用其他动作」 also covered the preferences read the skill and the grader require. stage-run.ts's actions
+  // are fixed (start, observe, verify, decide, progress, switch, read); the request names each one except read, as
+  // stage-run-scenarios.ts does for its own read-only runs.
+  const excluded = ['start', 'observe', 'verify', 'decide', 'progress', 'switch'];
+  const source = await readFile(resolve('skills/maa-core/scripts/stage-run.ts'), 'utf8');
+  const actions = JSON.parse(source.match(/!(\[[^\]]+\])\.includes\(action!\)/)![1]!.replaceAll("'", '"')) as string[];
+  assert.deepEqual(actions.filter(action => action !== 'read').sort(), [...excluded].sort());
+  for (const scenario of stageAlternateScenarios) {
+    assert.ok(!scenario.prompt.includes('其他动作'), scenario.id);
+    const sentence = scenario.prompt.match(/不调用([^，。]*)/)?.[1] ?? '';
+    for (const action of excluded) assert.ok(sentence.includes(action), `${scenario.id}: ${action}`);
+    assert.ok(!/read|preferences|偏好/.test(sentence), scenario.id);
+    assert.deepEqual(scenario.policy.expectedInvocations?.map(item => item.file), ['maa-core/scripts/preferences.ts', 'maa-core/scripts/stage-run.ts']);
+  }
+});
 
 test('alternate-switch scenarios read a finished record through the installed CLI on both hosts and change nothing', async t => {
   assert.deepEqual(stageAlternateScenarios.map(scenario => scenario.id), Object.keys(expected));
