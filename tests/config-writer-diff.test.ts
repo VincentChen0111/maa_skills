@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeConfigWrite, inspectConfiguration, previewConfigWrite, type MaaProcess, type WriteRequest } from '../skills/maa-core/scripts/maa-config.ts';
+import { editConfigurationText } from '../skills/maa-core/scripts/config-edit.ts';
 import { buildTrainingChanges } from '../skills/maa-core/scripts/training-config.ts';
 import { configFixture, trainingGrant } from './fixtures/training-runtime.ts';
 import './fixtures/maa-version-guard.ts';
@@ -204,6 +205,22 @@ test('after shutdown the writer recomputes the diff: a value MAA saved on exit r
   assert.equal(existsSync(join(f.privateDirectory, 'maa-config-backups')), false);
   const runs = (await readFile(join(f.privateDirectory, 'daily-runs.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(runs.map(run => [run.status, run.reason]), [['rejected', 'approved-diff-mismatch']]);
+});
+
+// Ticket 30, review round 1: MAA saves objects in its own key order, which need not be the order the writer prepared.
+test('the minimal edit treats key order as no difference: equal objects keep their bytes, a changed one is written in the prepared order', () => {
+  const text = '{\n  "List": [\n    { "B": 1, "A": 2 },\n    { "B": 3, "A": 4 }\n  ],\n  "Other": { "Y": 1, "X": 2 },\n  "Order": [1, 2]\n}\n';
+  // The first item equals its old value in another key order; the second changed. "Other" differs from the file only in key order.
+  const after = { List: [{ A: 2, B: 1 }, { A: 5, B: 3 }], Other: { X: 2, Y: 1 }, Order: [1, 2] };
+  assert.equal(editConfigurationText(text, after, [['List']]),
+    '{\n  "List": [\n    { "B": 1, "A": 2 },\n    {\n      "A": 5,\n      "B": 3\n    }\n  ],\n  "Other": { "Y": 1, "X": 2 },\n  "Order": [1, 2]\n}\n');
+  // A permutation of equal items in another key order keeps each item's own bytes.
+  assert.equal(editConfigurationText(text, { ...after, List: [{ A: 4, B: 3 }, { A: 2, B: 1 }] }, [['List']]),
+    '{\n  "List": [\n    { "B": 3, "A": 4 },\n    { "B": 1, "A": 2 }\n  ],\n  "Other": { "Y": 1, "X": 2 },\n  "Order": [1, 2]\n}\n');
+  // The check after the edit stays: any value or array order the edit did not produce is refused and nothing is returned.
+  assert.throws(() => editConfigurationText(text, { ...after, Other: { X: 2, Y: 9 } }, [['List']]), /configuration-text-unsupported/);
+  assert.throws(() => editConfigurationText(text, { ...after, Order: [2, 1] }, [['List']]), /configuration-text-unsupported/);
+  assert.throws(() => editConfigurationText(text, { ...after, Other: { X: 2, Y: 1, Z: null } }, [['List']]), /configuration-text-unsupported/);
 });
 
 test('the writer replaces only the changed values: every other byte of the file stays as MAA wrote it', async (t) => {

@@ -8,10 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runChecks, executeRepairs } from '../skills/maa-core/scripts/doctor.ts';
-import { type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
+import { executeConfigRecovery, inspectConfigRecovery, type MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { projectionRevision } from '../skills/maa-core/scripts/config-projection.ts';
 import { readVerificationRecord } from '../skills/maa-core/scripts/maa-version.ts';
 import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
+import { preparedBatch } from './fixtures/stage-run-data.ts';
+import { inMaaOrder, resaveInMaaOrder } from './fixtures/maa-key-order.ts';
 
 const windows = process.platform === 'win32';
 // MAA.exe metadata and adb are system boundaries; the other checks read the real temporary directories.
@@ -326,6 +328,34 @@ test('the restore decision still compares whole configurations: a difference out
     assert.equal(checked.recovery.comparison, 'unknown');
     assert.equal(checked.recovery.canRestore, false); assert.equal(checked.recovery.canReconcile, false);
   });
+});
+
+// Ticket 30, review round 1: a job transaction is not one doctor restores. Its pending record carries the job plan, which
+// the recovery table of pending records does not accept, so a backup and a current list in MAA's key order never reach the
+// writer from doctor: the evidence stays unknown, the lock and the configuration stay as they are.
+test('an interrupted job transaction over a same-length list in MAA key order is not restored; lock and bytes are kept', async (t) => {
+  const batch = await preparedBatch(); t.after(() => batch.dispose());
+  const file = join(batch.maaDirectory, 'config/gui.new.json'), pendingFile = join(batch.privateDirectory, 'daily-pending.jsonl');
+  const dead = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }); assert.equal(dead.status, 0);
+  const pending = JSON.parse((await readFile(pendingFile, 'utf8')).trim());
+  assert.ok(pending.authorization.jobPlan, 'the transaction is the job preparation');
+  pending.pid = dead.pid; await writeFile(pendingFile, JSON.stringify(pending) + '\n');
+  // The backup held an earlier list of the same length, which MAA had saved in its own key order; MAA re-saved the new one too.
+  const backupFile = join(batch.privateDirectory, 'maa-config-backups', `${pending.id}.json`);
+  const backup = JSON.parse(await readFile(backupFile, 'utf8'));
+  backup.Configurations['Synthetic profile'].Copilot.TaskList = [0, 1, 2].map(index =>
+    inMaaOrder({ Name: 'SYN-0', FilePath: 'earlier.json', CopilotId: 9, IsRaid: false, IsChecked: false, IsNavNameOverride: false, Index: index }));
+  await writeFile(backupFile, JSON.stringify(backup, null, 2));
+  await resaveInMaaOrder(file);
+  const lockFile = join(batch.maaDirectory, 'config/.maa-skills.lock');
+  await writeFile(lockFile, JSON.stringify({ id: pending.id, skill: pending.skill, host: pending.host, pid: dead.pid, startedAt: pending.startedAt, phase: 'readback' }));
+  const before = await readFile(file), lock = await readFile(lockFile);
+  const summary = await inspectConfigRecovery(batch, batch.maa);
+  assert.deepEqual([summary.lock, summary.comparison, summary.canRestore, summary.canReconcile], ['stale', 'unknown', false, false]);
+  const result = await executeConfigRecovery({ maaDirectory: batch.maaDirectory, privateDirectory: batch.privateDirectory, host: 'codex', action: 'restore-config',
+    reference: 'synthetic named restore', evidenceRevision: summary.evidenceRevision, closedConfirmed: true }, batch.maa);
+  assert.deepEqual([result.status, result.reason], ['rejected', 'reconciliation-unproven']);
+  assert.deepEqual(await readFile(file), before); assert.deepEqual(await readFile(lockFile), lock);
 });
 
 test('a restoration writes the current version stamp into its own pending record', async (t) => {

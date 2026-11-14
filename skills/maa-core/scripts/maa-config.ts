@@ -10,7 +10,7 @@ import { connectionFields, prepareSetupConnection, type SetupWriteRequest, type 
 import { consumptionFields, consumptionRefusals, decideConsumption, type ConsumptionDecision, type ConsumptionGrant, type ConsumptionTarget, type ExpiringMedicineGrant } from './consumption-grant.ts';
 import { compareVersionStamp, isVersionStamp, readVersionStamp, type MaaVersionStamp, type VersionDrift } from './maa-version.ts';
 import { baseReferencePattern, baseTaskFields, buildBaseChanges, checkGrant, inspectBaseAsset, installBaseAsset, loadBaseAsset, type BaseAsset, type BasePlanGrant } from './base-config.ts';
-import { configDiff, projectionRevision, wholeConfigFingerprint, type FieldPattern } from './config-projection.ts';
+import { configDiff, configValueKey, projectionRevision, sameConfigValue, wholeConfigFingerprint, type FieldPattern } from './config-projection.ts';
 import { editConfigurationText } from './config-edit.ts';
 
 export type Change = { path: (string | number)[]; value: unknown };
@@ -98,6 +98,7 @@ function knownTaskType(task: RecordValue): string | undefined {
 }
 const ordinaryTaskTypes = new Set(['Fight', 'Infrast', 'Recruit', 'Mall', 'Award', 'UserDataUpdate', 'CloseDown']);
 function timerEnabled(timer: RecordValue): unknown { return Object.hasOwn(timer, 'IsEnabled') ? timer.IsEnabled : null; }
+/** The value at a path in `sameConfigValue`'s form (object key order does not count), Timer's omitted null flag as null. */
 function comparableAt(config: RecordValue, path: (string | number)[]): string | undefined {
   const value = structuredClone(at(config, path));
   // Only Timer.IsEnabled has a verified omitted-null constructor/serializer equivalence.
@@ -105,7 +106,7 @@ function comparableAt(config: RecordValue, path: (string | number)[]): string | 
     const timers = path.length === 1 ? object(value).List : path[1] === 'List' ? (path.length === 2 ? value : path.length === 3 ? [value] : []) : [];
     if (Array.isArray(timers)) for (const item of timers) { const timer = object(item); if (timer.IsEnabled === null) delete timer.IsEnabled; }
   }
-  return JSON.stringify(value);
+  return configValueKey(value);
 }
 /**
  * `restoreTo` is given only on doctor's restore-config path: the interrupted transaction's backup, whose values the request
@@ -123,7 +124,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   const decide = (decision: ConsumptionDecision) => { if (!decision.allowed) throw new Error(decision.reason!); return decision; };
   const training = request.authorization.trainingPlan ? buildTrainingChanges(config, request.authorization.trainingPlan, request.privateDirectory) : null;
   if (training && (Object.keys(request.authorization).some(key => !['source', 'reference', 'trainingPlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
-    || JSON.stringify(training.changes) !== JSON.stringify(request.changes))) throw new Error('training-change-scope-mismatch');
+    || !sameConfigValue(training.changes, request.changes))) throw new Error('training-change-scope-mismatch');
   // Ticket 23: an approved base plan derives its own exact change set; the copy was loaded from the approved report.
   if (request.authorization.basePlan && !baseAsset) throw new Error('base-asset-required');
   const base = request.authorization.basePlan ? buildBaseChanges(config, request.authorization.basePlan, baseAsset!) : null;
@@ -131,7 +132,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   // A consumption grant alongside reaches the predicate, which refuses it for a base plan with its static reason.
   if (base && (Object.keys(request.authorization).some(key => !['source', 'reference', 'basePlan', 'medicineCount', 'stoneCount', 'expiringMedicine'].includes(key))
     || request.authorization.source !== 'approved-report'
-    || JSON.stringify(base.changes) !== JSON.stringify(request.changes))) throw new Error('base-change-scope-mismatch');
+    || !sameConfigValue(base.changes, request.changes))) throw new Error('base-change-scope-mismatch');
   const next = structuredClone(config);
   const keys = new Set<string>();
   const consumptionTasks = new Set<string>();
@@ -154,7 +155,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
     let allowed = path.length === 2 && path[0] === 'Timers' && path[1] === 'NotifyBeforeScheduledStart' && typeof change.value === 'boolean';
     if (path.length === 4 && path[0] === 'Configurations' && path[2] === 'Copilot' && request.authorization.jobPlan) {
       if (path[1] !== config.Current) throw new Error('job-profile-not-current');
-      if (path[3] === 'TaskList') allowed = JSON.stringify(value) === JSON.stringify(approvedJobList(request.authorization.jobPlan, request.privateDirectory));
+      if (path[3] === 'TaskList') allowed = sameConfigValue(value, approvedJobList(request.authorization.jobPlan, request.privateDirectory));
       if (path[3] === 'EnableUserAdditional') allowed = value === false;
       dependencies.push(['Current'], ['Configurations', String(path[1]), 'Copilot']);
     }
@@ -286,7 +287,7 @@ function prepare(config: RecordValue, request: WriteRequest, connectionMode?: 's
   });
   decide(decideConsumption(request.authorization, budget, { consumer: 'quantity-budget', plan }));
   if (dependencies.some(path => !writerDependencies.some(pattern => matchesField(pattern, path)))) throw new Error('dependency-unregistered');
-  return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => JSON.stringify(at(config, change.path)) !== JSON.stringify(at(next, change.path))).map(change => changedKey(change.path)) };
+  return { config: next, dependencies, trainingAsset: training?.asset ?? null, changedKeys: request.changes.filter(change => !sameConfigValue(at(config, change.path), at(next, change.path))).map(change => changedKey(change.path)) };
 }
 /** Whitelisted summary of one changed value: no profile name, task label, address, path or other text. */
 function summarize(path: (string | number)[], value: unknown, names: string[]): unknown {

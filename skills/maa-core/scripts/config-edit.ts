@@ -7,13 +7,19 @@
  * The parser here only finds where each value starts and ends; values themselves are always decoded by `JSON.parse`. The
  * result is checked: parsing it must give exactly the configuration the writer prepared, or the edit throws and nothing
  * is written.
+ *
+ * Review round 1: "the same value" is `sameConfigValue`, for which object key order does not count (MAA saves objects in
+ * its own key order, for example each `Copilot.TaskList` item). A value equal to the old one keeps its bytes whatever its
+ * key order; a changed object whose keys are in another order than the prepared one is written whole, in the prepared
+ * order; the final check compares by the same predicate, so array order and every value still have to match exactly.
  */
+import { sameConfigValue } from './config-projection.ts';
+
 type Node = { start: number; end: number; kind: 'object' | 'array' | 'scalar'; members: Member[]; items: Node[] };
 type Member = { key: string; keyStart: number; keyEnd: number; value: Node };
 type Path = (string | number)[];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 const literal = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
 /** A UTF-8 byte-order mark, which MAA's reader accepts and the writer keeps. */
 const bom = String.fromCharCode(0xfeff);
@@ -87,16 +93,18 @@ export function editConfigurationText(text: string, after: unknown, paths: Path[
     return result + text.slice(cursor, node.end);
   };
   const render = (node: Node, value: unknown): string => {
-    if (same(JSON.parse(slice(node)), value)) return slice(node);
+    if (sameConfigValue(JSON.parse(slice(node)), value)) return slice(node);
     if (node.kind === 'array' && Array.isArray(value) && value.length === node.items.length) {
       // A permutation of the old items (a queue reorder) keeps each item's own bytes; otherwise each item is edited in place.
       const old = node.items.map(item => JSON.parse(slice(item)) as unknown), used = new Set<number>();
-      const order = value.map(item => { const index = old.findIndex((candidate, at) => !used.has(at) && same(candidate, item)); used.add(index); return index; });
+      const order = value.map(item => { const index = old.findIndex((candidate, at) => !used.has(at) && sameConfigValue(candidate, item)); used.add(index); return index; });
       const pieces = order.every(index => index >= 0) ? order.map(index => slice(node.items[index]!)) : node.items.map((item, index) => render(item, value[index]));
       return splice(node, node.items.map((item, index) => ({ start: item.start, end: item.end, text: pieces[index]! })));
     }
-    if (node.kind === 'object' && isRecord(value) && new Set(node.members.map(item => item.key)).size === node.members.length
-      && node.members.length === Object.keys(value).length && node.members.every(item => Object.hasOwn(value, item.key))) {
+    // Members are edited in place only when the file holds the prepared keys in the prepared order (so no key repeats);
+    // otherwise the object is written whole in the prepared order (MAA's own save may have put its keys in another order).
+    const keys = isRecord(value) ? Object.keys(value) : [];
+    if (node.kind === 'object' && isRecord(value) && node.members.length === keys.length && node.members.every((item, index) => item.key === keys[index])) {
       return splice(node, node.members.map(item => ({ start: item.value.start, end: item.value.end, text: render(item.value, value[item.key]) })));
     }
     return serialize(value, indentAt(node.start));
@@ -126,6 +134,6 @@ export function editConfigurationText(text: string, after: unknown, paths: Path[
   let result = '', cursor = 0;
   for (const edit of edits) { result += text.slice(cursor, edit.start) + edit.text; cursor = edit.end; }
   result += text.slice(cursor);
-  if (!same(JSON.parse(result.startsWith(bom) ? result.slice(1) : result), after)) throw new Error('configuration-text-unsupported');
+  if (!sameConfigValue(JSON.parse(result.startsWith(bom) ? result.slice(1) : result), after)) throw new Error('configuration-text-unsupported');
   return result;
 }

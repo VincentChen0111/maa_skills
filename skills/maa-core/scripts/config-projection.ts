@@ -9,6 +9,11 @@
  * - `wholeConfigFingerprint`: every field. Doctor decides "the configuration equals the backup" or "equals the expected
  *   result" with it, because recovery is offered only on an exact match (spec 「检查与修法」).
  *
+ * Both fingerprints hash the raw JSON, so object key order counts in them. For the revision that is required: a request
+ * names a profile by its position in `Configurations`, and that position is the key order. For doctor it is the exact
+ * match the spec asks for, unchanged by review round 1 (reasons in docs/daily-verification.md, 「第一轮审查修复」 under 30).
+ * Every other comparison of configuration values goes through `sameConfigValue` below, the diff fingerprint included.
+ *
  * Fail-closed: a field is in the projection unless it is listed below. Each exclusion is a field the pinned MAA v6.21.4
  * writes by itself while it runs (sources in docs/daily-verification.md, 「30 配置写入器加固」) and that no maa-skills code
  * reads or writes. Fields MAA also changes at runtime but the writer reads or writes (for example `IsEnable`, `PlanSelect`,
@@ -41,6 +46,24 @@ export const projectionExclusions: readonly FieldPattern[] = [
 
 type Value = unknown;
 const isRecord = (value: Value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * Ticket 30, review round 1: the one definition of "the same configuration value". Object key order does not count: MAA
+ * reads every field by name, and it rewrites the whole file in its own key order (for example a `Copilot.TaskList` item,
+ * which maa-skills generates in another order). Everything else counts exactly as `JSON.stringify` writes it: array order,
+ * which keys are present (an omitted key and a null differ), and every value.
+ *
+ * Its users: the minimal edit's render decision and final check (config-edit.ts), the target checks before and after
+ * MAA closes, the read-back, the plan and changed-key checks (maa-config.ts), the consumption predicate's field
+ * comparisons, the training binding checks, and the diff below. tests/config-value.test.ts enumerates every comparison
+ * of values in `skills/` and the kind each one uses.
+ */
+export function configValueKey(value: Value): string {
+  return JSON.stringify(value, (_key, item: Value) => isRecord(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+}
+export function sameConfigValue(left: Value, right: Value): boolean {
+  return configValueKey(left) === configValueKey(right);
+}
 const keyMatches = (pattern: string, key: string | number) =>
   typeof key === 'number' ? pattern === '#' || pattern === String(key) : pattern === '*' || pattern === key;
 
@@ -88,12 +111,14 @@ export type DiffEntry = { path: (string | number)[]; before: unknown; after: unk
  * after closing MAA, the pending record) and the eval grader share. An entry for each resolved change path whose projected
  * value differs; the fingerprint covers the exact paths and values, so the same request on a configuration that differs
  * only outside the projection has the same fingerprint, and any other difference at a changed field gives another.
+ * Review round 1: "differs" and the fingerprint follow `sameConfigValue`, so MAA saving a changed object in its own key
+ * order changes neither.
  */
 export function configDiff(before: Value, after: Value, paths: (string | number)[][]): { entries: DiffEntry[]; fingerprint: string } {
   const projectedBefore = projectConfig(before), projectedAfter = projectConfig(after);
   const entries = paths.map(path => ({ path, before: valueAt(projectedBefore, path), after: valueAt(projectedAfter, path) }))
-    .filter(entry => JSON.stringify(entry.before) !== JSON.stringify(entry.after));
-  return { entries, fingerprint: createHash('sha256').update(JSON.stringify(entries.map(entry => [entry.path, entry.before, entry.after]))).digest('hex') };
+    .filter(entry => !sameConfigValue(entry.before, entry.after));
+  return { entries, fingerprint: createHash('sha256').update(configValueKey(entries.map(entry => [entry.path, entry.before, entry.after]))).digest('hex') };
 }
 
 /**

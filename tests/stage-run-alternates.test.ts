@@ -11,6 +11,7 @@ import { approvedJobFile, approvedJobList, type ApprovedJobPlan } from '../skill
 import { decideStageRun, loadBatchView, observeStageRun, readStageRun, recordStageProgress, stageRunOutcome, startStageRun, switchStageRun, verifyStageRun }
   from '../skills/maa-core/scripts/stage-run.ts';
 import { attempt, chainEnd, connection, copilotStart, core, preparedBatch, type PreparedBatch } from './fixtures/stage-run-data.ts';
+import { maaJobItemOrder, resaveInMaaOrder } from './fixtures/maa-key-order.ts';
 
 const pendingPlan = async (privateDirectory: string, operation: string): Promise<ApprovedJobPlan> => {
   const lines = (await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
@@ -101,6 +102,19 @@ const decideAndSwitch = async (c: Tracked, reason = 'MAA 报告这一关失败�
 const listed = async (c: Tracked) => (await profile(c)).Copilot.TaskList.map((item: { CopilotId: number; Index: number }) => [item.CopilotId, item.Index]);
 const completions = async (c: Tracked) => (await readFile(join(c.batch.privateDirectory, 'daily-runs.jsonl'), 'utf8')).split(/\r?\n/).filter(line => line.includes('"status":"complete"')).length;
 const ledgerFile = (c: Tracked, key: string) => join(c.batch.privateDirectory, 'stage-runs', 'switches', `${key}.json`);
+
+// Ticket 30, review round 1: by the time a run fails, MAA has saved the job list in its own key order. A continuation of
+// the same length then edits every item in place; key order is not a configuration value, so the switch still goes through.
+test('a switch over the list MAA saved in its own key order writes the same-length continuation and reads it back', async t => {
+  const c = await tracked(t);
+  await resaveInMaaOrder(join(c.batch.maaDirectory, 'config/gui.new.json'));
+  assert.deepEqual(Object.keys((await profile(c)).Copilot.TaskList[0]), [...maaJobItemOrder]);
+  await failedPrimary(c);
+  const switched = await decideAndSwitch(c);
+  assert.deepEqual([switched.state, switched.write?.reason ?? null], ['prepared', null], JSON.stringify(switched));
+  assert.deepEqual(await listed(c), [[2, 0], [2, 1], [4, 2]], 'three items before and after: the same length');
+  assert.deepEqual((await profile(c)).Copilot.TaskList, approvedJobList(await pendingPlan(c.batch.privateDirectory, switched.operation!), c.batch.privateDirectory));
+});
 
 test('not three stars after a 3-star run: the alternate makes up only the runs not yet cleared', async t => {
   const c = await tracked(t), t0 = fromNow(-600), files = c.batch.files;
