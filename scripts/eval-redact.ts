@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -9,11 +10,14 @@ import { fixturePrefix } from './eval-fixture.ts';
  * The one owner of what an evaluation writes to disk. Every artifact (run records, evidence, raw host output, invocation,
  * scenario, batch manifest, read-protection output) is written through `artifactWriter`, which replaces each private path
  * with a fixed placeholder first; this module alone decides which paths those are. `tests/eval-redact.test.ts` enumerates
- * every producer and every artifact. It also owns the long form of a path (`longPath`), which the redaction and the login
- * directory overlap check (`scripts/eval-auth.ts`) both use.
+ * every producer and every artifact. It also owns the forms of a path: the long form (`longPath`), which the redaction and
+ * the login directory overlap check (`scripts/eval-auth.ts`) both use; the forms of the login directory the runner holds
+ * (`loginDirectoryForms`); and the matcher that finds a path in any spelling (`pathMatcher`), which the redaction and the
+ * grader's secret-output rule (`scripts/evaluation.ts`) both use.
  */
 export type ArtifactContext = {
-  loginDirectory?: string; sentinel?: string; fixture?: { root: string; workspace: string }; executable?: string;
+  /** The login directory, or every form of it the runner holds (`loginDirectoryForms`); likewise the sentinel inside it. */
+  loginDirectory?: string | readonly string[]; sentinel?: string | readonly string[]; fixture?: { root: string; workspace: string }; executable?: string;
   /** A batch's payload directory (`--payload`): it stands where the checkout stands, so it is replaced like the repository. */
   payload?: string;
   /** Exact values (not paths) that must not reach disk either, such as the sentinel's content. */
@@ -23,12 +27,14 @@ export type ArtifactContext = {
 type RedactedPath = [path: string | undefined, placeholder: string, generated?: string];
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const each = (value: string | readonly string[] | undefined): readonly (string | undefined)[] => typeof value === 'string' || value === undefined ? [value] : value;
 /**
  * The private paths of one artifact context, each with its placeholder. Besides the context's own fixture, any evaluation
  * fixture (the version probe's, the read-protection check's) is covered by its generated name.
  */
 function privatePaths(context: ArtifactContext): RedactedPath[] {
-  return [[context.sentinel, '<login-dir>/<sentinel>'], [context.loginDirectory, '<login-dir>'], [context.fixture?.workspace, '<workspace>'],
+  return [...each(context.sentinel).map((path): RedactedPath => [path, '<login-dir>/<sentinel>']),
+    ...each(context.loginDirectory).map((path): RedactedPath => [path, '<login-dir>']), [context.fixture?.workspace, '<workspace>'],
     [context.fixture?.root, '<fixture>'], [join(tmpdir(), fixturePrefix), '<fixture>', '[A-Za-z0-9]{6}'], [repositoryRoot, '<repo>'], [context.payload, '<payload>'],
     [context.executable && isAbsolute(context.executable) ? context.executable : undefined, '<host-executable>'], [homedir(), '<home>']];
 }
@@ -86,6 +92,39 @@ export function longPath(path: string): string {
  */
 function spellings(path: string): string[] {
   return [...new Set([path, resolve(path), longPath(path)])];
+}
+/**
+ * The forms of a login directory the runner holds, decided once before any use (#80): its long form first, which every use
+ * takes (the host's configuration variable, the sentinel and the prompt naming it, the lock beside it), then the form it was
+ * given where that differs. The deny rules handed to each host, the grader's secret paths, the redaction and the
+ * read-protection probe take every form, so a host that matches its rules by string still denies whichever of the two a model
+ * names; the probe proves the forms no rule names are denied too.
+ */
+export function loginDirectoryForms(given: string): readonly string[] {
+  const long = longPath(given);
+  return Object.freeze(long === given ? [long] : [long, given]);
+}
+/**
+ * The 8.3 short form Windows gives a path (`cmd`'s `%~s`; a part that does not exist yet stays as written) when it differs from
+ * the path and names the same place; undefined where there is none (not Windows, short names off on the volume). The path reaches `cmd` through a
+ * variable, which `cmd` expands once and does not parse further, and `/u` makes it print UTF-16, so any character survives; a
+ * garbled answer fails the same-place check. Only the read-protection probe uses it: hosts are never handed a short form.
+ */
+export function shortPath(path: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const result = spawnSync('cmd.exe', ['/d', '/u', '/c', 'for %I in ("%MAA_EVAL_SHORT_PATH%") do @echo %~sI'],
+    { env: { ...process.env, MAA_EVAL_SHORT_PATH: path }, windowsVerbatimArguments: true, windowsHide: true, timeout: 10_000 });
+  const short = result.status === 0 && result.stdout ? Buffer.from(result.stdout).toString('utf16le').trim() : '';
+  return short && short.toLowerCase() !== path.toLowerCase() && longPath(short) === longPath(path) ? short : undefined;
+}
+/**
+ * Whether a text names a path in any spelling the redaction replaces: as given, resolved or in its long form; any run of
+ * separators, JSON escapes or percent-encoding; either case. These are the redaction's own patterns, so the redaction and the
+ * grader's secret-output rule never disagree about what names a path.
+ */
+export function pathMatcher(path: string): (text: string) => boolean {
+  const patterns = spellings(path).map((spelling) => pathPattern(spelling));
+  return (text) => patterns.some((pattern) => text.search(pattern) >= 0);
 }
 
 /** The redaction every artifact goes through: private paths (longest first, so a nested path keeps its own placeholder), then values. */

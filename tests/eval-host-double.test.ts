@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runScenario } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
-import { classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
+import { claudePermissionPath, classifyHostRun, hostArguments } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
@@ -127,9 +127,13 @@ test('Claude runs drop --bare, name every isolation switch and offer only the fi
   // Help scenarios declare no commands: only the file tool is offered.
   const helpOnly = hostArguments('claude', { model: 'm', workspace: root, commands: [] });
   assert.equal(helpOnly[helpOnly.indexOf('--tools') + 1], 'Read');
-  const codex = hostArguments('codex', { model: 'm', workspace: root, loginDirectory: join(root, 'login') });
+  // Every form of the login directory the runner holds (its long form, then the form it was given) is denied, on both hosts.
+  const forms = [join(root, 'login'), join(root, 'given-link', 'login')];
+  const codex = hostArguments('codex', { model: 'm', workspace: root, loginDirectories: forms });
   assert.ok(!codex.includes('--sandbox'), 'a --sandbox flag would replace the permission profile');
-  assert.ok(codex.includes(`permissions.maa_eval.filesystem={'${join(root, 'login')}'='deny'}`));
+  assert.ok(codex.includes(`permissions.maa_eval.filesystem={'${forms[0]}'='deny','${forms[1]}'='deny'}`));
+  const claude = hostArguments('claude', { model: 'm', workspace: root, loginDirectories: forms });
+  assert.deepEqual(JSON.parse(claude[claude.indexOf('--settings') + 1]!).permissions.deny, forms.map((form) => `Read(${claudePermissionPath(form)}/**)`));
   assert.ok(codex.includes('cli_auth_credentials_store="file"'));
   // The built-in image tool reads files on disk outside the command sandbox; it is switched off for every Codex run.
   assert.equal(codex[codex.indexOf('features.view_image=false') - 1], '-c');

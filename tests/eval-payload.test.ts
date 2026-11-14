@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
-import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -156,6 +156,14 @@ test('a batch on a payload installs the payload\'s skills, refuses what it canno
   await assert.rejects(runBatch({ ...noHost, payload: oldPayload, entries: selectScenarios(['core-language']) }), /^Error: payload-entry-outside$/);
   await assert.rejects(runBatch({ ...noHost, auth: 'plan', loginDirectory: join(oldPayload, 'login'), payload: oldPayload, entries: selectScenarios(['core-language'], oldPayload) }),
     /^Error: payload-directory-refused:overlaps-login-directory$/);
+  // In whichever form either is named (#80): a login directory named through a junction into the payload, and a payload named
+  // through a junction while the login directory inside it is named in the long form.
+  const toPayload = join(root, 'payload-link'); await symlink(oldPayload, toPayload, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(runBatch({ ...noHost, auth: 'plan', loginDirectory: join(toPayload, 'login'), payload: oldPayload, entries: selectScenarios(['core-language'], oldPayload) }),
+    /^Error: payload-directory-refused:overlaps-login-directory$/, 'a login directory named through a junction');
+  await assert.rejects(runBatch({ ...noHost, auth: 'plan', loginDirectory: join(oldPayload, 'login'), payload: toPayload, entries: selectScenarios(['core-language'], toPayload) }),
+    /^Error: payload-directory-refused:overlaps-login-directory$/, 'a payload named through a junction');
+  await rm(toPayload, { force: true });
   const edited = join(root, 'edited');
   await cp(oldPayload, edited, { recursive: true });
   await appendFile(join(edited, 'skills/maa-core/SKILL.md'), 'edited after it was made\n');
