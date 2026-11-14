@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runScenario } from '../scripts/eval-run.ts';
 import { compareRuns } from '../scripts/evaluation.ts';
-import { claudePermissionPath, classifyHostRun, hostArguments, hostExecutable } from '../scripts/eval-host.ts';
+import { childPath, claudePermissionPath, classifyHostRun, codexPermissionArguments, hostArguments, hostExecutable, sandboxPathRefusal, tomlBasicString } from '../scripts/eval-host.ts';
 import { coreScenarios } from '../eval/maa-core/scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { baseReportScenarios } from '../eval/maa-account/base-report-scenarios.ts';
@@ -15,6 +16,7 @@ import { communityScenarios } from '../eval/maa-account/community-scenarios.ts';
 import { baseApplyScenarios, baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
 import { planInput } from './fixtures/base-plan-data.ts';
 import { reportDraft } from './fixtures/report-data.ts';
+import { inlineTable, setPath } from './fixtures/toml-inline-table.ts';
 
 const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
 const core = fileURLToPath(new URL('../skills/maa-core', import.meta.url));
@@ -129,7 +131,7 @@ test('Claude runs drop --bare, name every isolation switch and offer only the fi
   assert.equal(helpOnly[helpOnly.indexOf('--tools') + 1], 'Read');
   // Every form of the login directory the runner holds (its long form, then the form it was given) is denied, on both hosts.
   const forms = [join(root, 'login'), join(root, 'given-link', 'login')];
-  const codex = hostArguments('codex', { model: 'm', workspace: root, loginDirectories: forms });
+  const codex = hostArguments('codex', { model: 'm', workspace: root, loginDirectories: forms, shellPath: 'synthetic-path' });
   assert.ok(!codex.includes('--sandbox'), 'a --sandbox flag would replace the permission profile');
   assert.ok(codex.includes(`permissions.maa_eval.filesystem={'${forms[0]}'='deny','${forms[1]}'='deny'}`));
   const claude = hostArguments('claude', { model: 'm', workspace: root, loginDirectories: forms });
@@ -137,7 +139,7 @@ test('Claude runs drop --bare, name every isolation switch and offer only the fi
   assert.ok(codex.includes('cli_auth_credentials_store="file"'));
   // The built-in image tool reads files on disk outside the command sandbox; it is switched off for every Codex run.
   assert.equal(codex[codex.indexOf('features.view_image=false') - 1], '-c');
-  assert.ok(hostArguments('codex', { model: 'm', workspace: root, readOnly: true }).includes('features.view_image=false'));
+  assert.ok(hostArguments('codex', { model: 'm', workspace: root, readOnly: true, shellPath: 'synthetic-path' }).includes('features.view_image=false'));
 });
 
 test('the host-double mode refuses an executable that is not the double, and plan login never starts tools without a read-protection pass', async (t) => {
@@ -326,4 +328,67 @@ test('26 H (R5): the runner resolves its own host binary outside the fixture, so
   const result = await runScenario({ host: 'codex', model: 'requested-model', scenario: 'approved-write', executable: 'maa-synthetic-absent-cli',
     auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
   assert.equal(result.reason, 'host-unavailable');
+});
+
+test('26 H2: a Codex scenario run pins the sandboxed shell to the PATH the run gives the host (reviewer shims first), through the one permission profile', async (t) => {
+  const { root, write } = await scratch(t);
+  const environment = join(root, 'environment.jsonl');
+  // `arg0`: the double puts Codex's helper directory first on its commands' PATH, as the real CLI does.
+  const script = await write('codex.json', { host: 'codex', steps: steps('codex'), environment, arg0: true });
+  const result = await runScenario({ host: 'codex', model: 'requested-model', scenario, skillDirectory: core, executable: process.execPath, executableArgs: [double, script],
+    auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+  assert.equal(result.reason, 'completed');
+  assert.equal(result.record.grade.status, 'pass', JSON.stringify(result.record.grade));
+  const seen = JSON.parse((await readFile(environment, 'utf8')).trim()) as { args: string[]; path: string };
+  assert.equal(seen.path.split(delimiter)[0], join(result.fixtureDirectory, 'workspace', '.eval-bin'), 'the PATH the host was given starts with the reviewer shims');
+  const sets = seen.args.filter((arg) => arg.startsWith('shell_environment_policy.set='));
+  assert.equal(sets.length, 1);
+  assert.equal(setPath(sets[0]), seen.path, 'the set parses back to exactly the PATH the host was given');
+  assert.deepEqual(seen.args.slice(seen.args.indexOf('features.view_image=false') + 1, -1), codexPermissionArguments({ shellPath: seen.path }), 'from codexPermissionArguments');
+  // The saved invocation names the workspace (and so the shims) by placeholder only; the pinned PATH value is recorded as <shell-path>.
+  const invocation = await readFile(join(result.artifactDirectory, 'invocation.json'), 'utf8');
+  assert.ok(invocation.includes('shell_environment_policy.set={PATH=') && invocation.includes('<workspace>') && !invocation.includes('maa-evaluation-'));
+});
+
+test('26 H2: the sandboxed shell PATH is written as a TOML basic string: backslashes, quotes, apostrophes, non-ASCII, semicolons and spaces round-trip; control characters, lone surrogates and a missing PATH are refused', () => {
+  // Drive-letter forms are left out only because the repository's privacy check flags them; a drive letter and its colon need no escape.
+  const path = ['\\\\server\\Program Files\\nodejs', 'tools\\it\'s "quoted"', '用户\\工具 目录', 'emoji 😀', 'trailing\\'].join(';');
+  const encoded = tomlBasicString(path);
+  assert.equal(encoded, String.raw`"\\\\server\\Program Files\\nodejs;tools\\it's \"quoted\";用户\\工具 目录;emoji 😀;trailing\\"`);
+  assert.deepEqual(inlineTable(`{PATH=${encoded}}`), { PATH: path }, 'parses back to the same PATH');
+  assert.equal(sandboxPathRefusal(path), undefined);
+  const profile = codexPermissionArguments({ loginDirectories: ['\\\\server\\login'], shellPath: path });
+  // The exclusion stays as it was; the set is one more -c value after it.
+  assert.deepEqual(profile.slice(-4), ['-c', 'shell_environment_policy.exclude=["CODEX_HOME","CLAUDE_CONFIG_DIR"]', '-c', `shell_environment_policy.set={PATH=${encoded}}`]);
+  assert.equal(setPath(profile.at(-1)), path);
+  for (const bad of ['a\nb', 'a\rb', 'a\tb', 'a\u0000b', 'a\u001fb', 'a\u007fb', 'a\u0085b', 'a\ud800b', 'a\udc00b']) {
+    assert.equal(tomlBasicString(bad), undefined, JSON.stringify(bad));
+    assert.equal(sandboxPathRefusal(bad), 'sandbox-path-unencodable', JSON.stringify(bad));
+    assert.throws(() => codexPermissionArguments({ shellPath: bad }), /sandbox-path-unencodable/, JSON.stringify(bad));
+  }
+  for (const missing of [undefined, '']) {
+    assert.equal(sandboxPathRefusal(missing), 'sandbox-path-missing', String(missing));
+    assert.throws(() => codexPermissionArguments({ shellPath: missing }), /sandbox-path-missing/);
+    assert.throws(() => hostArguments('codex', { model: 'm', workspace: 'w', ...(missing === undefined ? {} : { shellPath: missing }) }), /sandbox-path-missing/);
+  }
+  assert.ok(!hostArguments('claude', { model: 'm', workspace: 'w' }).some((arg) => arg.includes('shell_environment_policy')), 'Claude runs carry no Codex profile');
+});
+
+test('26 H2: childPath picks the PATH a spawned process receives (Windows: the first spelling ignoring case in sorted order; elsewhere PATH itself)', () => {
+  const cases: [string, NodeJS.ProcessEnv][] = [['PATH and Path', { PATH: 'synthetic-upper', Path: 'synthetic-mixed' }], ['Path only', { Path: 'synthetic-mixed' }],
+    ['path and Path', { path: 'synthetic-lower', Path: 'synthetic-mixed' }], ['PATH unset, Path set', { PATH: undefined, Path: 'synthetic-mixed' }],
+    ['PATH only', { PATH: 'synthetic-upper' }], ['none', {}]];
+  for (const [name, env] of cases) {
+    const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(process.env.PATH ?? null))'],
+      { env: { ...env, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, encoding: 'utf8', windowsHide: true });
+    assert.equal(child.status, 0, child.stderr);
+    const received = JSON.parse(child.stdout) as string | null;
+    const picked = childPath(env);
+    if (picked !== undefined) assert.equal(received, picked, name);
+    // When the spawner hands over no PATH, Windows (libuv) copies the runner's own PATH in; childPath does not follow it there:
+    // no PATH is refused (`sandboxPathRefusal`), never filled in. Elsewhere the child has none.
+    else assert.equal(received === (process.platform === 'win32' ? process.env.PATH ?? null : null), true, `${name}: no PATH handed over`);
+  }
+  assert.equal(childPath({ PATH: undefined, Path: 'synthetic-mixed' }), undefined, 'a spelling the spawner drops is not used');
+  assert.equal(sandboxPathRefusal(childPath({})), 'sandbox-path-missing');
 });

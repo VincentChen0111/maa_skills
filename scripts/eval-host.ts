@@ -45,8 +45,12 @@ export function claudeSettings(loginDirectories: readonly string[] = []): string
   });
 }
 
-/** `loginDirectories`: every form of the login directory the runner holds (`loginDirectoryForms`), each denied. */
-export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectories?: readonly string[] };
+/**
+ * `loginDirectories`: every form of the login directory the runner holds (`loginDirectoryForms`), each denied. `shellPath` (Codex,
+ * required there): the PATH of the child environment the run gives the host (`childPath`), which the sandboxed shell is pinned to.
+ */
+export type HostArgumentOptions = { model: string; workspace: string; commands?: string[]; toolless?: boolean; readOnly?: boolean; loginDirectories?: readonly string[];
+  shellPath?: string };
 /**
  * Variables the sandboxed shell never inherits (26 H, R6): the host's own process needs `CODEX_HOME` to find the plan login, which
  * the runner points at the login directory, but a command the model runs must not see it (a first real run listed it). The Claude
@@ -54,18 +58,59 @@ export type HostArgumentOptions = { model: string; workspace: string; commands?:
  */
 export const sandboxExcludedVariables = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR'];
 /**
- * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base, one
- * deny entry per form of the login directory and the shell environment exclusion. `exec` and the read-protection enforcement
- * probe (`codex sandbox`) both take it from here.
+ * The PATH a process spawned with `env` receives, picked the way Node's spawner picks it: on Windows, where names ignore case, the
+ * first name equal to `PATH` ignoring case in sorted order (a later spelling is dropped even when that first one has no value);
+ * elsewhere `PATH` itself. Undefined when the spawner hands over no PATH; Windows then copies the runner's own PATH into the child,
+ * which this does not follow: no PATH is refused (`sandboxPathRefusal`), never filled in. The one place the evaluation picks a
+ * PATH out of a child environment.
  */
-export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }): string[] {
+export function childPath(env: NodeJS.ProcessEnv): string | undefined {
+  const name = process.platform === 'win32' ? Object.keys(env).sort().find((key) => key.toUpperCase() === 'PATH') : 'PATH';
+  return name === undefined ? undefined : env[name];
+}
+/**
+ * A TOML basic string holding `value` exactly: `\` and `"` escaped, everything else as it is (TOML is UTF-8). Undefined when the
+ * value holds a control character (Unicode `Cc`, tab included) or a lone surrogate, which this form does not carry as given. Never
+ * a literal string (`'…'`), which cannot hold `'`.
+ */
+export function tomlBasicString(value: string): string | undefined {
+  return /[\p{Cc}\p{Cs}]/u.test(value) ? undefined : `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+}
+export type SandboxPathRefusal = 'sandbox-path-missing' | 'sandbox-path-unencodable';
+/** Why the sandboxed shell cannot be pinned to `path` (none or empty; one `tomlBasicString` cannot write); undefined when it can. */
+export function sandboxPathRefusal(path: string | undefined): SandboxPathRefusal | undefined {
+  return !path ? 'sandbox-path-missing' : tomlBasicString(path) === undefined ? 'sandbox-path-unencodable' : undefined;
+}
+/**
+ * The Codex permission profile: the sandbox (MXC on Windows, the only one that enforces deny-read there), the profile's base, one
+ * deny entry per form of the login directory, the shell environment exclusion and the shell's PATH. `exec` and the read-protection
+ * enforcement probe (`codex sandbox`) both take it from here, with the same `shellPath`, so the probe checks what the model runs under.
+ * 26 H2: Codex puts its own helper directory, which lies under `CODEX_HOME` (the login directory), first on the PATH its commands
+ * inherit, and the exclusion cannot take one entry out of a variable; so `shell_environment_policy.set` pins PATH to `shellPath`,
+ * the PATH of the child environment the runner gives the host. Without a PATH that can be pinned there is no profile: this throws
+ * the refusal code, and callers check `sandboxPathRefusal` first so that nothing starts.
+ */
+export function codexPermissionArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[]; shellPath?: string }): string[] {
+  const refusal = sandboxPathRefusal(options.shellPath);
+  if (refusal) throw new Error(refusal);
   return [...(process.platform === 'win32' ? ['-c', 'windows.sandbox="mxc"'] : []),
     '-c', 'default_permissions="maa_eval"', '-c', `permissions.maa_eval.extends="${options.readOnly ? ':read-only' : ':workspace'}"`,
     ...(options.loginDirectories?.length ? ['-c', `permissions.maa_eval.filesystem={${options.loginDirectories.map((directory) => `'${directory}'='deny'`).join(',')}}`] : []),
-    '-c', `shell_environment_policy.exclude=[${sandboxExcludedVariables.map((name) => `"${name}"`).join(',')}]`];
+    '-c', `shell_environment_policy.exclude=[${sandboxExcludedVariables.map((name) => `"${name}"`).join(',')}]`,
+    '-c', `shell_environment_policy.set={PATH=${tomlBasicString(options.shellPath!)}}`];
+}
+/**
+ * The arguments as a record keeps them: the pinned PATH value becomes `<shell-path>`. The PATH can name places the path redaction
+ * does not know (npm adds `node_modules/.bin` of every directory above the repository, and a user's PATH has its own entries), so its
+ * value is not written into the recorded arguments (output the model prints still goes through the one redaction); the arguments given
+ * to the host are unchanged. It is the same child-environment PATH the run used.
+ */
+export const recordedShellPath = '<shell-path>';
+export function recordedArguments(args: readonly string[]): string[] {
+  return args.map((arg) => (arg.startsWith('shell_environment_policy.set=') ? `shell_environment_policy.set={PATH=${recordedShellPath}}` : arg));
 }
 /** `codex sandbox` running one command under exactly the profile `exec` gets for the same options; no model is involved. */
-export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[] }, command: string[]): string[] {
+export function codexSandboxArguments(options: { readOnly?: boolean; loginDirectories?: readonly string[]; shellPath?: string }, command: string[]): string[] {
   return ['sandbox', ...codexPermissionArguments(options), '--', ...command];
 }
 /** One argument set for every authentication mode, so plan-login and API-key records share the runner fingerprint. */
@@ -98,7 +143,7 @@ function events(raw: string): RecordValue[] {
 
 export type RunReason = 'completed' | 'not-run' | 'ci-disabled' | 'host-unavailable' | 'timeout' | 'auth-failed' | 'quota-exhausted' | 'network-unavailable'
   | 'host-nonzero-exit' | 'incomplete-transcript' | 'invalid-evidence' | 'isolation-unverified' | 'read-protection-required' | 'login-directory-refused'
-  | 'api-key-in-environment' | 'host-double-required';
+  | 'api-key-in-environment' | 'host-double-required' | 'sandbox-path-refused';
 export type AuthDetail = 'not-logged-in' | 'login-expired' | 'api-key-rejected';
 export type HostOutcome = { reason: RunReason; detail?: AuthDetail };
 export type HostExecution = { raw: string; stderr: string; exitCode: number | null; error?: NodeJS.ErrnoException };
@@ -184,9 +229,10 @@ export function claudeIsolationProblems(raw: string, expected: { tools: string[]
 /**
  * The host binary the runner itself starts for a run (26 H, R5). The fixture puts the reviewer shims first on the PATH the model's
  * shell inherits; the runner never starts its host through them. A path (absolute or with a directory part) is used as given unless
- * it lies inside the fixture; a bare name is looked up on the PATH entries outside the fixture the way the process spawner looks it
- * up (on Windows the name itself when it has an extension, then with .com and .exe appended; elsewhere an executable file of that
- * name). Undefined when nothing outside the fixture matches: the host is then unavailable and nothing is started.
+ * it lies inside the fixture; a bare name is looked up on the entries of the PATH the spawner would hand over (`childPath`) that lie
+ * outside the fixture, the way the process spawner looks it up (on Windows the name itself when it has an extension, then with .com
+ * and .exe appended; elsewhere an executable file of that name). Undefined when nothing outside the fixture matches: the host is
+ * then unavailable and nothing is started.
  */
 export function hostExecutable(executable: string, env: NodeJS.ProcessEnv, fixtureRoot: string): string | undefined {
   const root = resolve(fixtureRoot);
@@ -194,7 +240,7 @@ export function hostExecutable(executable: string, env: NodeJS.ProcessEnv, fixtu
   if (isAbsolute(executable) || /[\\/]/.test(executable)) return inside(executable) ? undefined : resolve(executable);
   const windows = process.platform === 'win32';
   const names = windows ? [...(extname(executable) ? [executable] : []), `${executable}.com`, `${executable}.exe`] : [executable];
-  for (const entry of (env.PATH ?? env.Path ?? '').split(delimiter)) {
+  for (const entry of (childPath(env) ?? '').split(delimiter)) {
     const directory = entry.replace(/^"(.*)"$/, '$1');
     if (!directory || !isAbsolute(directory) || inside(directory)) continue;
     for (const name of names) {

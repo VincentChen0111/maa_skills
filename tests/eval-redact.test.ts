@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { realpathSync, rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join, relative } from 'node:path';
+import { basename, delimiter, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runBatch } from '../scripts/eval-batch.ts';
 import { selectScenarios } from '../scripts/eval-scenarios.ts';
@@ -125,8 +125,21 @@ test('every producer writes every artifact through the one redaction: no private
     await writeFile(script, JSON.stringify({ host, noise: [loginDirectory, home, repository],
       authStatus: host === 'claude' ? { loggedIn: true, authMethod: 'claude.ai' } : 'Logged in using ChatGPT',
       steps: host === 'claude' ? [{ fileRead: '{{sentinel}}', deny: true }, { shellRead: '{{sentinel}}', deny: true }] : [{ shellRead: '{{sentinel}}', deny: true }] }));
-    const { directory, manifest } = await runBatch({ host, model: 'fixed-model', entries: selectScenarios(['core-language']), executable: process.execPath,
-      executableArgs: [double, script], loginDirectory, batchParent: join(root, 'batches') });
+    // 26 H2: the PATH pinned into the Codex profile can name places no redaction knows (npm adds `node_modules/.bin` of every
+    // directory above the repository, and a user's PATH has its own entries). One such entry is put first on the runner's PATH for
+    // this batch, so the child environment and the pinned PATH carry it; it must reach no artifact.
+    const pathMarker = `PathMarker${unique()}`;
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+    const originalPath = process.env[pathKey];
+    process.env[pathKey] = [join(tmpdir(), pathMarker, 'node_modules', '.bin'), originalPath].filter(Boolean).join(delimiter);
+    let batch: Awaited<ReturnType<typeof runBatch>>;
+    try {
+      batch = await runBatch({ host, model: 'fixed-model', entries: selectScenarios(['core-language']), executable: process.execPath,
+        executableArgs: [double, script], loginDirectory, batchParent: join(root, 'batches') });
+    } finally {
+      if (originalPath === undefined) delete process.env[pathKey]; else process.env[pathKey] = originalPath;
+    }
+    const { directory, manifest } = batch;
     assert.equal(manifest.status, 'complete', `${host}: ${JSON.stringify(manifest.abort)}`);
     // Every artifact, by producer: the batch (manifest), the read-protection check, and each scenario run.
     const written = (await files(directory)).map((path) => relative(directory, path).replaceAll('\\', '/'));
@@ -134,7 +147,7 @@ test('every producer writes every artifact through the one redaction: no private
     assert.deepEqual(written.sort(), ['manifest.json', `read-protection-${host}.jsonl`, `read-protection-${host}.stderr.txt`,
       ...['evidence.json', 'host.jsonl', 'invocation.json', 'run.json', 'scenario.json', 'stderr.txt'].map((file) => `${run}/${file}`)].sort(),
       'a new artifact must be added to this list and written through artifactWriter');
-    const markers = [loginMarker, homeMarker, 'maa-evaluation-', ...(basename(repository).length >= 8 ? [basename(repository)] : [])].map((marker) => marker.toLowerCase());
+    const markers = [loginMarker, homeMarker, pathMarker, 'maa-evaluation-', ...(basename(repository).length >= 8 ? [basename(repository)] : [])].map((marker) => marker.toLowerCase());
     for (const file of written) {
       const text = (await readFile(join(directory, file), 'utf8')).toLowerCase();
       for (const marker of markers) assert.ok(!text.includes(marker), `${host} ${file} names ${marker}`);
