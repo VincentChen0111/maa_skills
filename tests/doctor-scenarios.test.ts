@@ -29,6 +29,25 @@ test('doctor scenarios observe actual installed CLI checks and exact redacted la
   });
 });
 
+test('every doctor scenario starts with doctor check, as maa-doctor step 1 requires, and grants the latest record that check writes (26 H, R8a)', () => {
+  for (const scenario of doctorScenarios) {
+    const invocations = scenario.policy.expectedInvocations ?? [];
+    const check = invocations.findIndex((item) => item.file === 'maa-core/scripts/doctor.ts' && item.action === 'check');
+    assert.ok(check >= 0 && invocations.slice(0, check).every((item) => item.file !== 'maa-core/scripts/doctor.ts'), `${scenario.id}: check comes first`);
+    const record = 'private/doctor-latest.json';
+    assert.ok(scenario.jsonFiles?.includes(record), scenario.id);
+    for (const key of ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills']) {
+      assert.ok(scenario.policy.grants.some((grant) => grant.file === record && grant.key === key), `${scenario.id}: ${key} granted`);
+      assert.ok(scenario.policy.expectedChanges.some((grant) => grant.file === record && grant.key === key), `${scenario.id}: ${key} expected`);
+    }
+    assert.ok(scenario.policy.generatedUtcFields?.some((field) => field.file === record && field.key === 'checkedAt'), scenario.id);
+    assert.ok(['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'].every((key) => scenario.policy.allowedKeys.includes(key)), scenario.id);
+  }
+  const unknownRun = doctorScenarios.find((item) => item.id === 'doctor-unknown-run')!;
+  assert.deepEqual(unknownRun.policy.expectedInvocations, [{ file: 'maa-core/scripts/preferences.ts', action: 'read' },
+    { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 }, { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }]);
+});
+
 // Windows only: the scenario's expected behaviour is MAA on Windows; off Windows ticket 10's platform check is an error, so doctor's output differs.
 test('the approved reconcile scenario runs check, the named repair and a closing check through the installed CLI and grades the exact recovery', { skip: process.platform !== 'win32' }, async (t) => {
   const scenario = doctorScenarios.find((item) => item.id === 'doctor-reconcile-approved')!;

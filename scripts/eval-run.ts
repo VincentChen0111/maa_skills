@@ -31,10 +31,12 @@ export const scenarioHarnessFiles = ['.eval-node-observer.mjs', '.eval-daily-obs
 /**
  * `skills` names repository skills a cross-skill scenario installs under their own names (the batch entry resolves them);
  * the prompt then lists every installed operating skill instead of a single subject.
+ * `companions` names repository skills installed beside the subject under their own names (the batch entry resolves them, like
+ * its group's companions); unlike `skills`, the prompt still names only the subject (daily-unknown hands over to maa-doctor).
  * `chatSecrets`: synthetic values the prompt itself pastes into the chat; they are graded like the fixture secret.
  */
 export type ScenarioDefinition = { id: string; prompt: string; policy: Omit<Policy, 'secrets'>; jsonInputs?: Record<string, unknown>; jsonFiles?: string[]; commands?: string[];
-  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[]; chatSecrets?: string[] };
+  maaProcess?: MaaProcessMode; networkFixtures?: Record<string, unknown>; setupBoundary?: boolean; skills?: string[]; companions?: string[]; chatSecrets?: string[] };
 /**
  * plan: the maintainer's plan login in the dedicated directory; tool-enabled runs need a pass object from readProtectionCheck.
  * The API-key mode is an explicit opt-in that forwards only MAA_EVAL_* keys. host-double: only `eval/host-double.mjs`, never a model.
