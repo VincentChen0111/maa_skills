@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
@@ -146,8 +147,11 @@ test('Windows: the documented command hands a Chinese brief at a path with a spa
   // Guard: both PowerShell and cmd resolve codex to the fake before anything runs it.
   const resolved = powershell('(Get-Command codex).Source; cmd /d /c where codex');
   assert.equal(resolved.status, 0, resolved.stdout + resolved.stderr);
-  const fake = join(bin, 'codex.cmd').toLowerCase();
-  assert.deepEqual(resolved.stdout.trim().split(/\r?\n/).slice(0, 2).map(line => line.trim().toLowerCase()), [fake, fake]);
+  // Compare canonical long paths: PowerShell keeps an 8.3 short TEMP (CI runners use RUNNER~1) while `where` prints the long form.
+  // A line that is not an existing file throws here, so the guard still fails closed.
+  const canonical = (file: string) => realpathSync.native(file).toLowerCase();
+  const fake = canonical(join(bin, 'codex.cmd'));
+  assert.deepEqual(resolved.stdout.trim().split(/\r?\n/).slice(0, 2).map(line => canonical(line.trim())), [fake, fake]);
 
   const chinese = '审查说明：只看这份培养报告，第 1 步「精英化」花费是否算对？';
   const brief = Buffer.from(`# ${chinese}\r\n\r\n报告全文 {"S1":"合成干员 → 精英1"} 🙂 ?\n`, 'utf8');
