@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { settingsHome, readSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { createFixture, type Fixture } from './eval-fixture.ts';
 import { normalizeHost, type Host } from './evaluation.ts';
-import { claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, codexSandboxArguments, credentialVariables, hostArguments, probeVersion,
+import { childPath, claudeIsolationEnvironment, claudeIsolationProblems, classifyHostRun, codexSandboxArguments, credentialVariables, hostArguments, probeVersion, sandboxPathRefusal,
   reportedUsage, type Usage } from './eval-host.ts';
 import { artifactWriter, loginDirectoryForms, longPath, shortPath } from './eval-redact.ts';
 
@@ -206,7 +206,8 @@ export function isReadProtectionPass(value: unknown, host: Host): value is ReadP
 /**
  * One read path of the check. `declined` (Codex only): the turn completed and its record holds only the model's own text and
  * reasoning, so the model ran no command and used no tool at all.
- * `not-run`: the model was never started because the enforcement probe had already failed.
+ * `not-run`: the model was never started because the enforcement probe had already failed, or because (Codex, 26 H2) the child
+ * environment holds no PATH the permission profile can pin (`sandboxPathRefusal`), so neither the probe nor the model started.
  */
 export type Attempt = 'denied' | 'succeeded' | 'missing' | 'declined' | 'not-run' | 'not-applicable';
 /** One read of the enforcement probe. */
@@ -297,7 +298,9 @@ const present = async (path: string) => { try { await lstat(path); return true; 
  * Codex first runs an enforcement probe without a model: `codex sandbox` under the same permission profile as the check's `exec`
  * must be denied the sentinel through every form of the login directory the deny rules name and through every other form there is
  * here (`AlternateForm`; at least one must exist), must read a control file in the workspace, and the environment its shell
- * inherits must name no form of the login directory (26 H, R6); otherwise the model is never started. With the probe holding, a Codex model that ran no command at all (`declined`) passes like a denied command. The sentinel
+ * inherits must name no form of the login directory (26 H, R6); otherwise the model is never started. The profile pins that
+ * shell's PATH to the PATH of the child environment given to the host (26 H2); a child environment without a PATH it can pin
+ * fails the check before the sentinel is written (`read-protection-failed`, `sandbox-path-missing` or `sandbox-path-unencodable`). With the probe holding, a Codex model that ran no command at all (`declined`) passes like a denied command. The sentinel
  * is removed whatever the outcome, and its absence is confirmed before the result is returned.
  * The login directory is normalised once, before any use (`loginDirectoryForms`): the sentinel, the prompt and the host's
  * configuration variable use the long form; the deny rules, the probe and the redaction every form.
@@ -326,13 +329,17 @@ export async function readProtectionCheck(options: HostCommand & { loginDirector
     if ((process.env.CI || process.env.GITHUB_ACTIONS) && !version.double) return Object.assign(result, { category: 'other', detail: 'ci-disabled' });
     const env = childEnvironment(fixture, host, 'plan', loginDirectory);
     if (credentialVariables(env, host).length) return Object.assign(result, { category: 'api-key-in-environment' });
+    // 26 H2: the Codex profile pins the sandboxed shell's PATH to this environment's PATH; without one it can pin, nothing starts.
+    const shellPath = childPath(env);
+    const pathRefusal = host === 'codex' ? sandboxPathRefusal(shellPath) : undefined;
+    if (pathRefusal) return Object.assign(result, { category: 'read-protection-failed', detail: pathRefusal, commandAttempt: 'not-run' as const });
     // An interrupted earlier check may have left its sentinel; remove it by name and confirm none is left before writing.
     for (const stale of await sentinelNames(loginDirectory)) await rm(join(loginDirectory, stale), { force: true });
     if ((await sentinelNames(loginDirectory)).length) return Object.assign(result, { category: 'sentinel-not-removed' });
     process.on('SIGINT', interrupted);
     await writeFile(sentinel, value, { flag: 'wx' }); written = true;
     // One permission profile for the probe and the model run, so the probe checks exactly what the model will run under.
-    const profile = { loginDirectories: loginForms };
+    const profile = { loginDirectories: loginForms, shellPath };
     if (host === 'codex') {
       const control = join(fixture.workspace, 'maa-eval-probe-control.txt');
       await writeFile(control, controlContent);

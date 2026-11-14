@@ -4,7 +4,7 @@
 // Usage: node host-double.mjs <script.json> <host arguments...>
 import { appendFileSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve, sep } from 'node:path';
+import { delimiter, dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const doubleVersionPrefix = 'maa-eval-host-double';
@@ -50,16 +50,75 @@ if (host === 'codex' && args.includes('login') && args.includes('status')) {
 // (every read succeeds), 'silent' (a denied path runs nothing and exits 0), 'deny-all' (every read fails), 'refuse'.
 // Codex's `-c shell_environment_policy.exclude=["NAME",...]`: variables a command the host runs (in `sandbox` and in a turn) does
 // not inherit, names matched ignoring case. `script.environmentPolicy: 'ignore'` is a Codex that does not apply it.
+// 26 H2: the real CLI puts its own helper directory, `<CODEX_HOME>/tmp/arg0-windows/codex-arg0<random>` (coordinator diagnostic,
+// 2026-11-14, names only), first on the PATH its commands inherit; `script.arg0: true` does the same (`tmp/arg0` off Windows).
+// `-c shell_environment_policy.set={NAME="value",...}` (TOML basic strings) then replaces those variables, after the exclusion,
+// names matched ignoring case on Windows. `script.setPolicy: 'ignore'` is a Codex that does not apply it: a command then sees what
+// it would see with no set at all. A set that does not parse stops the host, as a configuration error does.
+const sameName = (a, b) => process.platform === 'win32' ? a.toUpperCase() === b.toUpperCase() : a === b;
+const inlineTable = (text) => {
+  const body = text.match(/^\{(.*)\}$/s)?.[1];
+  if (body === undefined) return undefined;
+  const table = {}; let at = 0;
+  const space = () => { while (body[at] === ' ' || body[at] === '\t') at += 1; };
+  space(); if (at === body.length) return table;
+  for (;;) {
+    space();
+    const key = body.slice(at).match(/^[A-Za-z0-9_-]+/)?.[0];
+    if (!key) return undefined;
+    at += key.length; space();
+    if (body[at++] !== '=') return undefined;
+    space();
+    if (body[at++] !== '"') return undefined;
+    let value = '';
+    for (;;) {
+      const char = body[at++];
+      if (char === undefined) return undefined;
+      if (char === '"') break;
+      if (char === '\\') {
+        const escape = body[at++];
+        const simple = { '"': '"', '\\': '\\', b: '\b', t: '\t', n: '\n', f: '\f', r: '\r' }[escape];
+        if (simple !== undefined) { value += simple; continue; }
+        const size = escape === 'u' ? 4 : escape === 'U' ? 8 : 0;
+        const hex = body.slice(at, at + size);
+        if (!size || !new RegExp(`^[0-9A-Fa-f]{${size}}$`).test(hex)) return undefined;
+        value += String.fromCodePoint(parseInt(hex, 16)); at += size; continue;
+      }
+      if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(char)) return undefined;
+      value += char;
+    }
+    table[key] = value; space();
+    if (at === body.length) return table;
+    if (body[at++] !== ',') return undefined;
+  }
+};
 const commandEnvironment = (list) => {
   const values = list.filter((_, index) => list[index - 1] === '-c');
   const names = host !== 'codex' || script.environmentPolicy === 'ignore' ? new Set() : new Set(values.flatMap((value) => {
     const match = value.match(/^shell_environment_policy\.exclude=\[(.*)\]$/);
     return match ? [...match[1].matchAll(/"([^"]*)"/g)].map((name) => name[1].toUpperCase()) : [];
   }));
-  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !names.has(name.toUpperCase())));
+  const own = { ...process.env };
+  if (host === 'codex' && script.arg0 && process.env.CODEX_HOME) {
+    const helper = join(process.env.CODEX_HOME, 'tmp', process.platform === 'win32' ? 'arg0-windows' : 'arg0', `codex-arg0${Math.random().toString(36).slice(2, 8)}`);
+    const current = process.env.PATH;
+    for (const name of Object.keys(own)) if (sameName(name, 'PATH')) delete own[name];
+    own.PATH = current ? `${helper}${delimiter}${current}` : helper;
+  }
+  const environment = Object.fromEntries(Object.entries(own).filter(([name]) => !names.has(name.toUpperCase())));
+  if (host !== 'codex' || script.setPolicy === 'ignore') return environment;
+  for (const value of values.filter((item) => item.startsWith('shell_environment_policy.set='))) {
+    const table = inlineTable(value.slice('shell_environment_policy.set='.length));
+    if (!table) { process.stderr.write('error: invalid value for shell_environment_policy.set\n'); process.exit(2); }
+    for (const [name, item] of Object.entries(table)) {
+      for (const existing of Object.keys(environment)) if (sameName(existing, name)) delete environment[existing];
+      environment[name] = item;
+    }
+  }
+  return environment;
 };
 if (host === 'codex' && args[0] === 'sandbox') {
-  if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(), configDirectory: process.env.CODEX_HOME, args })}\n`);
+  if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(), configDirectory: process.env.CODEX_HOME, path: process.env.PATH, args })}\n`);
   const end = args.indexOf('--');
   const options = end < 0 ? [] : args.slice(1, end);
   const command = end < 0 ? [] : args.slice(end + 1);
@@ -86,10 +145,10 @@ if (host === 'codex' && args[0] === 'sandbox') {
 
 let prompt = '';
 try { prompt = readFileSync(0, 'utf8'); } catch { /* no stdin */ }
-// Tests inspect which variables reached the host: names only, plus the configuration directory it was pointed at, and what lies
-// beside the workspace (the fixture root) when the host starts.
+// Tests inspect which variables reached the host: names only, plus the configuration directory it was pointed at, the PATH it was
+// given (26 H2: Codex's sandboxed shell is pinned to it), and what lies beside the workspace (the fixture root) when it starts.
 if (script.environment) appendFileSync(script.environment, `${JSON.stringify({ names: Object.keys(process.env).sort(),
-  configDirectory: host === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME, args, fixtureEntries: readdirSync(dirname(process.cwd())).sort() })}\n`);
+  configDirectory: host === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME, path: process.env.PATH, args, fixtureEntries: readdirSync(dirname(process.cwd())).sort() })}\n`);
 const startedAt = new Date().toISOString();
 const journal = (kind) => { if (script.journal) appendFileSync(script.journal, `${JSON.stringify({ kind, host, pid: process.pid, startedAt, endedAt: new Date().toISOString() })}\n`); };
 if (script.sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, script.sleepMs);

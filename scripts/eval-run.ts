@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createFixture, collectEvidence, renderPolicy, type MaaProcessMode } from './eval-fixture.ts';
 import { normalizeHost, grade, scenarioIdentity, type Host, type RunRecord, type Evidence, type Policy, type ExecutionWindow } from './evaluation.ts';
-import { claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, hostExecutable, probeVersion, reportedUsage,
-  type RunReason } from './eval-host.ts';
+import { childPath, claudeIsolationProblems, classifyHostRun, credentialVariables, expectedClaudeTools, hostArguments, hostExecutable, probeVersion, reportedUsage,
+  sandboxPathRefusal, type RunReason } from './eval-host.ts';
 import { childEnvironment, isReadProtectionPass, loginDirectoryRefusal, type ReadProtectionPass } from './eval-auth.ts';
 import { artifactWriter } from './eval-redact.ts';
 import { observeReports, withReportEvidence } from '../eval/report-observer.ts';
@@ -96,9 +96,12 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
         ? `已安装的待测 skill：${installed.map((name) => `${layout}/skills/${name}/SKILL.md`).join('、')}。先读与本次请求相关的 SKILL.md，再按其说明操作。`
         : `先读 ${layout}/skills/${installed[0]}/SKILL.md，再按待测 skill 说明操作。`);
     const commands = options.reviewBrief ? [] : custom ? custom.commands ?? custom.policy.expectedCalls : ['node probe.ts write'];
-    const args = hostArguments(options.host, { model: options.model, workspace: fixture.workspace, commands, readOnly: !!options.reviewBrief,
-      ...(loginForms ? { loginDirectories: loginForms } : {}) });
     const env = childEnvironment(fixture, options.host, auth.mode, loginDirectory);
+    // 26 H2: Codex's sandboxed shell is pinned to this environment's PATH (`codexPermissionArguments`); without one it can pin, no host starts.
+    const shellPath = childPath(env);
+    const pathRefusal = options.host === 'codex' ? sandboxPathRefusal(shellPath) : undefined;
+    const args = pathRefusal ? [] : hostArguments(options.host, { model: options.model, workspace: fixture.workspace, commands, readOnly: !!options.reviewBrief,
+      ...(loginForms ? { loginDirectories: loginForms } : {}), shellPath });
     // Every form of the login directory is a secret path: found in any spelling the redaction recognises, in either case.
     const secretPaths = loginForms ? [...loginForms] : [];
     if (version.available) {
@@ -108,6 +111,7 @@ export async function runScenario(options: RunOptions): Promise<RunOutcome> {
       else if (auth.mode === 'plan' && await loginDirectoryRefusal(loginDirectory!, { fixtureRoot: fixture.root, host: options.host,
         ...(options.payloadDirectory ? { payloadDirectory: options.payloadDirectory } : {}) })) reason = 'login-directory-refused';
       else if (auth.mode === 'plan' && credentialVariables(env, options.host).length) reason = 'api-key-in-environment';
+      else if (pathRefusal) reason = 'sandbox-path-refused';
       else {
         // Never copy the caller's auth files: plan login is used in place in its dedicated directory, API keys only from MAA_EVAL_*.
         const startedAt = new Date().toISOString();
