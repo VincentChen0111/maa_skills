@@ -1,6 +1,6 @@
 # 识别导入接口
 
-共享实现位于相邻 `maa-core/scripts/account-snapshot.ts`。Node 24 运行；动作 `inspect` 只读，`import` 写入设置指定的私有目录内 `account-snapshot.json`。标准输入为一个 JSON 对象，禁止把路径或内容插值到 shell 命令。JSON 输出只含状态、计数、时间和 Markdown 摘要，不输出路径、账号标识或原始回调；`format: "markdown"` 可直接输出摘要。输出语言优先采用设置文件，未设时使用 `currentLanguage`（默认 `zh-CN`；目前摘要模板有中文及英文，其他语言由 agent 按设置翻译）。
+共享实现位于相邻 `maa-core/scripts/account-snapshot.ts`。Node 24 运行；动作 `inspect` 只读，`import` 写入设置指定的私有目录内 `account-snapshot.json`。标准输入为一个 JSON 对象，禁止把路径或内容插值到 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。JSON 输出只含状态、计数、时间和 Markdown 摘要，不输出路径、账号标识或原始回调；`format: "markdown"` 可直接输出摘要。输出语言优先采用设置文件，未设时使用 `currentLanguage`（默认 `zh-CN`；目前摘要模板有中文及英文，其他语言由 agent 按设置翻译）。
 
 | 输入 | 用途 |
 | --- | --- |
@@ -13,7 +13,7 @@
 
 `readAt` 是本次实际读取时间；`sourceTimes` 保留文件里的 `syncTime`，缺失为 null，不能把旧缓存的导入说成新扫描。原始回调按输入顺序采用每域最后一次完成、未完成或已识别的错误；较新的未完成/错误会使旧完成结果失效。多个扫描批次或账号的结果须由用户分别提供，工具不合并跨账号缓存。
 
-所有动作退出码 0 表示命令完成，并不表示两类识别都完整；仍须核对 `coverage`。不可读文件、无配置目录、非法请求或保存失败退出 1，错误码为 `account-check-required`；互斥文件已存在时为 `account-busy`。导入失败保留已有快照；成功解析到的缺失、未完成或损坏状态会写入新快照，避免沿用旧数据充当这次识别结果。快照使用临时文件与改名替换，锁不会自动抢占。
+所有动作退出码 0 表示命令完成，并不表示两类识别都完整；仍须核对 `coverage`。失败都退出 1，错误码说明原因：没有配置 MAA 目录、也没给识别结果文件时为 `maa-directory-required`（这时不导入：请用户先设置 MAA 目录或给出 MAA 的识别结果文件，不拿私有目录或工作区里的其他文件充当识别结果）；请求不合法时为 `invalid-request`、`invalid-format` 或 `conflicting-input`；标准输入不是 JSON 时为 `input-json-invalid`，可能已经丢字时为 `input-encoding-lossy`；识别结果文件的内容不对时为对应代码（例如 `recognition-failed`、`invalid-ownership`）；设置不可读时为 `settings-unreadable`；文件读不了或保存失败时为 `account-check-required`；互斥文件已存在时为 `account-busy`。照实把错误码告诉用户，不绕过脚本另写快照。导入失败保留已有快照；成功解析到的缺失、未完成或损坏状态会写入新快照，避免沿用旧数据充当这次识别结果。快照使用临时文件与改名替换，锁不会自动抢占。
 
 ## 共享工具直接输入
 

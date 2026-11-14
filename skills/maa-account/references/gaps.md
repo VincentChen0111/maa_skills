@@ -1,6 +1,6 @@
 # 加工与材料凭证缺口接口
 
-Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标准输入传 JSON。`query --no-craft` 选择不加工方案；JSON 的 `mode: "no-craft"` 等价。默认选择 `craft`。两种方案总是独立计算后一起返回，比较时不能把两者的分配加在一起。缺共享脚本时按入口同版本安装指引处理。
+Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标准输入传 JSON。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。`query --no-craft` 选择不加工方案；JSON 的 `mode: "no-craft"` 等价。默认选择 `craft`。两种方案总是独立计算后一起返回，比较时不能把两者的分配加在一起。缺共享脚本时按入口同版本安装指引处理。
 
 只读已有 `account-snapshot.json`、设置和固定公开表；可用 `snapshotFile` 明确指定快照。此接口不刷新识别、不写报告、不加工、不兑换、不做设备或采购操作。旧 `operator-cost.ts query` 的单目标 `raw` 和纯库存 `no-craft` 接口保持原有含义；涉及材料券或共同库存时使用本接口。
 

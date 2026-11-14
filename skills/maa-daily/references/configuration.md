@@ -1,6 +1,6 @@
 # 配置事务接口
 
-唯一实现随 maa-core 安装：`../maa-core/scripts/maa-config.ts`（从 maa-daily 根目录定位）。Node 24；Windows MAA GUI 配置为 `config/gui.new.json`。CLI 从共享设置取 MAA 与私有目录，不接受临时覆盖路径。只把下面 JSON 传给标准输入，使用宿主的参数数组或安全 stdin，不把用户文字拼进 shell。
+唯一实现随 maa-core 安装：`../maa-core/scripts/maa-config.ts`（从 maa-daily 根目录定位）。Node 24；Windows MAA GUI 配置为 `config/gui.new.json`。CLI 从共享设置取 MAA 与私有目录，不接受临时覆盖路径。只把下面 JSON 传给标准输入，使用宿主的参数数组或安全 stdin，不把用户文字拼进 shell。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 ## 读取与写入
 

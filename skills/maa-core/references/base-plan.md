@@ -6,7 +6,7 @@
 
 ## 命令
 
-`node <maa-core>/scripts/base-plan.ts <动作>`，参数是经标准输入传入的 JSON；`format` 为 `json`（默认）或 `markdown`。
+`node <maa-core>/scripts/base-plan.ts <动作>`，参数是经标准输入传入的 JSON；`format` 为 `json`（默认）或 `markdown`。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 | 动作 | 输入 | 结果 |
 | --- | --- | --- |
@@ -33,6 +33,7 @@
 - `runs`：用户的 MAA 每天运行基建换班的时间（MAA 的定时），`hh:mm`，至少一个、不重复。MAA 运行时按当时时间选包含它的计划，所以要容忍提前运行，时间段的开始要比运行时间早容差时长：用户说「08:00 和 20:00 换班」时，`runs` 写 `08:00`、`20:00`，时间段写 `07:00-19:00`、`19:00-07:00`（上例）。不写 `runs` 时检查把时间段里换计划的时刻当作运行时间，提前运行就会落到上一班。
 - `fiammetta`：`{target, order?}`，`order` 只能是 `pre`（默认）；`post` 会被拒绝（`shift-fiammetta-post`）：MAA 在所有设施换班之后才执行菲亚梅塔的两步，宿舍 1 只剩目标和菲亚梅塔，宿舍 1 名单里的其他人整班不恢复，目标也离开工作的房间。`drones`：`{room, index, order}`。
 - `mood`、`moodDefault`：每小时净消耗（上班）和每小时恢复（在宿舍），带依据；`combos`：`{members, dependsOn?, basis}`；`exclusions`：`{members, basis}`；`efficiency`：每间房每个计划的基础、技能、全局三部分，带依据、条件和未建模部分。这些都是推断；没给时对应的验收门是「未核实」，不是通过。
+- 文字（`title`、`description`、班次的 `name` 和 `reasons`、各处的依据 `basis`、条件和未建模部分，以及基建报告的 `summary`、`assumptions` 和假设的目标）里不写「最优」「最佳」「最好」「最强」「最高效」「optimal」「optimum」「best」，否定句也不写（例如「不是最优」「本方案不声称最优」）：第 15 项验收门不区分肯定和否定，见到这些词就不通过。要说明局限时，写做了哪些检查、没有和其他排法比较过。
 - `tolerance`：早晚上线的容差，小时，默认 1。
 - `target`：私有目录里的相对路径，默认 `base-plans/plan-<哈希>.json`；`base`：在私有目录里已有的排班文件上修改，保留本工具不认识的字段。
 

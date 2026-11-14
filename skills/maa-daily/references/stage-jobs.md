@@ -1,6 +1,6 @@
 # 指定关卡作业
 
-共享入口为 `node <本目录>/../maa-core/scripts/stage-jobs.ts <action>`，JSON 走标准输入。先读偏好，用已保存语言解释结果；Markdown 模板为中文，其他语言由 agent 翻译，保留 ID、状态和数字。MAA 配置仍只有 [统一事务入口](configuration.md) 写入。
+共享入口为 `node <本目录>/../maa-core/scripts/stage-jobs.ts <action>`，JSON 走标准输入。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。先读偏好，用已保存语言解释结果；Markdown 模板为中文，其他语言由 agent 翻译，保留 ID、状态和数字。MAA 配置仍只有 [统一事务入口](configuration.md) 写入。
 
 ## 范围和候选
 

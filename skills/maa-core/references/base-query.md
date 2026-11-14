@@ -2,7 +2,7 @@
 
 `base-query.ts query` 是只读入口：从 11 生成的账号快照和固定游戏表查基建技能。需要 Node 24。用户请求查询干员或某类房间时，maa-account 读本页后调用；排班、收益模拟和写入 MAA 属于后续入口。
 
-标准输入传 JSON，用户文本和路径都作为数据：
+Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。标准输入传 JSON，用户文本和路径都作为数据：
 
 ```json
 {"operators":["干员名或 char_ 游戏 ID"],"room":"制造站","format":"markdown","currentLanguage":"zh-CN"}

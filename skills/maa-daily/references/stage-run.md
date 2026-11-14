@@ -1,6 +1,6 @@
 # 关卡运行跟踪
 
-共享入口为 `node <本目录>/../maa-core/scripts/stage-run.ts <action>`，JSON 走标准输入。先读偏好，用已保存语言解释结果。脚本对 MAA 只读：读配置摘要、MAA 自己的 `debug/asst.log` 和 `debug/gui.log`、看进程状态；不启动、不关闭、不点游戏、不操作设备，也不改配置。唯一的例外是换备选的 `switch`（见「换备选」）：判断允许后，经统一写入通道把作业列表换成已批准的备选，写入通道会关闭并重开 MAA；它同样不点游戏、不操作设备，开始仍由用户点。运行记录存在私有目录 `stage-runs/<runId>.json`，换备选的记录在 `stage-runs/switches/`。
+共享入口为 `node <本目录>/../maa-core/scripts/stage-run.ts <action>`，JSON 走标准输入。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。先读偏好，用已保存语言解释结果。脚本对 MAA 只读：读配置摘要、MAA 自己的 `debug/asst.log` 和 `debug/gui.log`、看进程状态；不启动、不关闭、不点游戏、不操作设备，也不改配置。唯一的例外是换备选的 `switch`（见「换备选」）：判断允许后，经统一写入通道把作业列表换成已批准的备选，写入通道会关闭并重开 MAA；它同样不点游戏、不操作设备，开始仍由用户点。运行记录存在私有目录 `stage-runs/<runId>.json`，换备选的记录在 `stage-runs/switches/`。
 
 ## 开始信号
 

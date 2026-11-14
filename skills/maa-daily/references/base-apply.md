@@ -1,6 +1,6 @@
 # 应用已批准的基建排班
 
-用户要把 maa-account 基建报告里批准过的排班写进 MAA 时用本页。唯一实现随 maa-core 安装：`../maa-core/scripts/base-apply.ts`（从 maa-daily 根目录定位），Node 24。参数经标准输入传 JSON，不把用户文字拼进命令行。
+用户要把 maa-account 基建报告里批准过的排班写进 MAA 时用本页。唯一实现随 maa-core 安装：`../maa-core/scripts/base-apply.ts`（从 maa-daily 根目录定位），Node 24。参数经标准输入传 JSON，不把用户文字拼进命令行。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 ## 范围
 

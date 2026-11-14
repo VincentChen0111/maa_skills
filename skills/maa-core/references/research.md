@@ -20,7 +20,7 @@
 - 风控（`risk-control`）后整个 NGA 来源暂停 30 分钟，期间所有进程、所有传输方式都不发请求（`risk-stopped`）。不要换传输方式、换工具、用浏览器或网页抓取去绕过；如实告诉用户停到什么时候，可以先用缓存。森空岛社区和 B 站（实验性）各自有自己的闸门和暂停，规则相同。
 - 森空岛社区（2026-11-14 起）用用户自己设置的森空岛凭据，和账号快照是同一个 token、同一套会话（`skland-session.ts`）。读不到时按结果的 `repair` 处理：`enter-credential` 或 `reenter-credential`（没有设置、记录损坏或换了电脑和用户、被拒）时，请用户自己在终端运行 `node <maa-core>/scripts/credentials.ts input skland`，不在对话里要 token；`retry-later` 时请用户稍后再试（凭据无法读取而修法是它时，是 Windows 加密这次没有完成）；`use-windows` 时请用户在保存凭据的 Windows 用户下使用；`check-system-time` 时请用户检查系统时间；后三种都不要请用户重新输入。没有凭据时不发请求，也不匿名尝试。读不到时不要改用账号快照工具、浏览器或网页抓取。
 - B 站支持是实验性的，随时可能失效；告诉用户这一点，不要让报告依赖它。B 站只在读字幕时用用户自己保存的 SESSDATA，没有凭据也能读视频的公开信息。字幕页为 `credential-required`、`credential-rejected`，或 `credential-unreadable` 且没有原因时，请用户自己在终端运行 `node <maa-core>/scripts/credentials.ts input bilibili`，不在对话里要 SESSDATA；原因为 `protection-failed` 时请用户稍后再试，为 `windows-required` 时请用户在保存凭据的 Windows 用户下使用，这两种不要请用户重新输入。
-- 用户的文本（关键词、帖子链接）作为 JSON 经标准输入传入，不拼进命令行。
+- 用户的文本（关键词、帖子链接）作为 JSON 经标准输入传入，不拼进命令行。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 ## 命令
 

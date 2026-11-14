@@ -1,6 +1,6 @@
 # 检查与恢复接口
 
-共享入口是相邻 `../../maa-core/scripts/doctor.ts`，动作为 `check [--json] [--online]`、`analyze [--json]` 和 `repair [--json]`。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒（`analyze` 为运行已完成）；1 存在错误、修法拒绝、输入被拒或结果未知（`analyze` 为失败、停止或未知）；2 意外失败。错误不回显配置、路径、原始异常或批准文本。`check` 的退出码把所有错误算上；关卡运行重试前的核对（maa-daily 的 `stage-run.ts verify`）调用同一组检查，但只让与重试有关的检查挡住，两者都由 `checks.ts` 的 `blockingChecks` 判断，划分见规格「默认值及其来源」。
+共享入口是相邻 `../../maa-core/scripts/doctor.ts`，动作为 `check [--json] [--online]`、`analyze [--json]` 和 `repair [--json]`。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。默认人类可读输出，加 `--json` 返回结构化结果。退出码：0 正常或仅有提醒（`analyze` 为运行已完成）；1 存在错误、修法拒绝、输入被拒或结果未知（`analyze` 为失败、停止或未知）；2 意外失败。错误不回显配置、路径、原始异常或批准文本。`check` 的退出码把所有错误算上；关卡运行重试前的核对（maa-daily 的 `stage-run.ts verify`）调用同一组检查，但只让与重试有关的检查挡住，两者都由 `checks.ts` 的 `blockingChecks` 判断，划分见规格「默认值及其来源」。
 
 `check` 返回 `checkedAt`、`exitCode`、`checks`、`recovery`、`version` 和 `skills`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`group`、`status`（normal/warning/error）、`reason`、`repair`（id、executor 为 skill/user、description；执行者为 skill 时另有 `channel`，即执行它的现有脚本入口），新增各项另有 `message` 一句说明和可选的 `details`（只含字段种类、文件名或 skill 名）。setup 和 doctor 共用 `maa-core/scripts/checks.ts` 的原因与修法表，安装组与 `setup.ts check` 是同一个函数（`inspectInstallation`）；导出的 `runChecks(context, maa)` 的 context 需要 `home`（设置目录）。本接口不替 setup 推定下载或人工操作授权。
 

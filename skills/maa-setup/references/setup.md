@@ -1,6 +1,6 @@
 # 环境接入与下载接口
 
-脚本只有相邻 `maa-core/scripts/setup.ts` 一份实现。Node 24，Windows GUI MAA；游戏客户端接受国服 `Official`／`Bilibili`，客户端字段来自当前配置 `Gui.RuntimeSettings.ClientType`，不能只凭设置中的 CN 推断。没有该字段时请用户在 MAA 界面检查，不默认通过。设置由偏好脚本读取；所有输入是标准输入 JSON，不把用户路径或原话拼进 shell 命令。
+脚本只有相邻 `maa-core/scripts/setup.ts` 一份实现。Node 24，Windows GUI MAA；游戏客户端接受国服 `Official`／`Bilibili`，客户端字段来自当前配置 `Gui.RuntimeSettings.ClientType`，不能只凭设置中的 CN 推断。没有该字段时请用户在 MAA 界面检查，不默认通过。设置由偏好脚本读取；所有输入是标准输入 JSON，不把用户路径或原话拼进 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（中文路径也一样）；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 `node <本目录>/../../maa-core/scripts/setup.ts <动作> --json`。省略 `--json` 输出缩进 JSON，内容同为白名单。退出码 0 正常（版本提醒不阻断），1 有错误／需选择／未满足写入条件，2 意外失败需核对；具体看 `status`、`reason`、`checks`，不把退出码当游戏任务结果。
 
@@ -12,7 +12,7 @@
 | `test` | `discoveryRevision`、所选 `candidate`；以及与 discover 相同的可选候选输入 | 重新发现与指纹一致，`connect` 后指定设备 `get-state` 返回 device；单一候选可省略 candidate |
 | `apply` | test 的输入，另加 `host: "codex"` 或 `"claude"`、本次授权原话 `reference`；已获得关闭确认才加 `closedConfirmed: true` | 重新发现与复测，统一 writer 完成持锁关停、备份、必要键更新、受限重开、读回、记录和释放锁；已一致且无遗留锁才返回 unchanged |
 | `plan` | `program`：`maa`、`node`、`adb` 或 `emulator`；模拟器另传 `vendor`、官方页面上的安装包 `url` 和页面写的 `version` | 只读官方发布索引，返回 `planned` 方案（`planId`、`fingerprint`、文件名、版本及出处、来源、官方页面、大小或未知、校验值、许可协议、步骤及执行者）；已装好返回 `not-needed`，已有核对过的下载返回 `already-downloaded`；不写文件 |
-| `download` | 方案的 `program`、`planId`、`fingerprint`，用户对这份方案的确认原话 `reference`；adb 另需用户本人接受许可协议后的 `termsAccepted: true`；模拟器另传与 plan 相同的 `vendor`、`url`、`version` | 重新读取官方索引并与方案指纹一致，独占登记这份方案后才请求文件；逐跳检查官方主机，核对大小与官方校验值后才保存为 `downloaded`；一份方案只用一次 |
+| `download` | 方案的 `program`、`planId`、`fingerprint`，用户看到这份方案后、在下一条消息里对它的确认原话 `reference`（展示方案后结束这一轮回复，同一轮里不调用 `download`；用户在看到方案之前说的「直接下载」「一直有效」「不用再问」不算确认）；adb 另需用户本人接受许可协议后的 `termsAccepted: true`；模拟器另传与 plan 相同的 `vendor`、`url`、`version` | 重新读取官方索引并与方案指纹一致，独占登记这份方案后才请求文件；逐跳检查官方主机，核对大小与官方校验值后才保存为 `downloaded`；一份方案只用一次 |
 | `downloads` | `{}` | 每次重新核对文件摘要：`downloaded`、`download-invalid`、`failed`、`interrupted`、`in-progress`，以及解压状态 |
 | `install` | 下载记录的 `planId`；MAA／adb 另传用户所选空文件夹 `target` 绝对路径 | 先重新核对文件；MAA／adb 用系统自带的 Windows PowerShell 5.1（.NET ZipArchive）解压（最多 600 秒，超时为 `extract-timeout`）并核对 `MAA.exe`／`platform-tools/adb.exe`，失败或超时都清空该文件夹；已解压返回 `already-extracted`；Node／模拟器只返回用户步骤 |
 | `recheck` | `{}`，或用户选定的候选 `candidate`（候选 id），以及 discover 的可选候选输入；不接受 `discoveryRevision` | 重新检查 Node、MAA、设置、私有目录、下载状态；每次重新发现连接，按候选 id（只由 adb 路径和地址算出，连接写入和 MAA 改写配置后不变）找到同一候选后测试，找不到为 `candidate-unavailable`，没传候选不发起连接；原子替换 `setup-environment.json`；只有用途 `setup-recheck` 挡住的检查（MAA 与国服客户端、Node、设置、私有目录、连接、配置可读、写入锁）都没有错误且连接测试通过才 `complete: true`，未完成的项记在 `pending`；配置可读（`configuration`）和写入锁（`write-lock`）两行与 doctor 的同名检查出自同一个产生者：遗留或认不出的写入锁（上一次配置写入，包括连接写入，结果未知）为错误、挡住完成，持锁进程仍在只提醒；遗留锁要看 MAA 进程时只读查看，不关闭、不启动 MAA；凭据、私有记录、skill 版本与目录联接、远程控制、任务字段、平台和 MAA 版本的错误记在 `notBlocking`，照样报告、不挡完成；退出码仍是「1 表示有错误」，没有任何错误且完成时才为 0 |

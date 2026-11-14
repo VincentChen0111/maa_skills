@@ -1,6 +1,6 @@
 # 森空岛账号快照接口
 
-共享实现位于相邻 `maa-core/scripts/skland-account.ts`（森空岛会话在同目录的 `skland-session.ts`），需要 Node 24。它用用户自己在本地脚本里保存的森空岛 token 只读读取账号数据，不需要开模拟器。标准输入是一个 JSON 对象；路径等数据只经标准输入传递，不拼进 shell 命令。
+共享实现位于相邻 `maa-core/scripts/skland-account.ts`（森空岛会话在同目录的 `skland-session.ts`），需要 Node 24。它用用户自己在本地脚本里保存的森空岛 token 只读读取账号数据，不需要开模拟器。标准输入是一个 JSON 对象；路径等数据只经标准输入传递，不拼进 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
 ## 谁做什么
 
@@ -39,6 +39,7 @@
 | `windows-required`、`protection-failed` | 当前环境解不开凭据 | 按摘要说明处理 |
 | `account-busy` | 另一个快照写入正在进行，本次没有保存 | 保留锁，稍后再试，不删除锁 |
 | `snapshot-missing` | `compare` 缺少一边的快照，`missing` 列出 `maa` 或 `skland` | 先按对应流程建立那份快照 |
+| `input-encoding-lossy`、`input-json-invalid` | 标准输入可能已经丢字（Windows PowerShell 管道），或不是 JSON；什么都没做 | 非 ASCII 字符和 `?` 改成 `\uXXXX` 转义后重发 |
 | `account-check-required` | 设置不可读、请求不合法或其他失败 | 先核对，不自动重放 |
 
 ## 快照内容
