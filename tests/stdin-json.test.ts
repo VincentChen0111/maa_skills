@@ -95,7 +95,7 @@ const consumers: Record<string, { args: string[]; doc: string }> = {
   'maa-core/scripts/training-plan.ts': { args: ['read'], doc: 'maa-core/references/training.md' },
   'maa-core/scripts/training-time.ts': { args: ['query'], doc: 'maa-core/references/training.md' },
 };
-const directRead = /process\.stdin\b|\/dev\/stdin|readFileSync\(\s*0\s*[,)]|\bfd:\s*0\b|openStdin/;
+const directRead = /process\s*\.\s*stdin\b|process\s*\[\s*['"`]stdin|\{[^}]*\bstdin\b[^}]*\}\s*=\s*process\b|\/dev\/stdin|readFileSync\(\s*0\s*[,)]|\bfd:\s*0\b|openStdin/;
 const sharedRead = /\breadStdinJson\(/;
 
 async function sources(root: string): Promise<Map<string, string>> {
@@ -135,8 +135,10 @@ test('conformance check fails when a consumer reads standard input directly or a
   assert.deepEqual(stdinViolations(direct), [`${name}: does not use readStdinJson`, `${name}: reads standard input directly`]);
   const unlisted = new Map(files).set('maa-daily/scripts/new-tool.ts', 'const input = await readStdinJson({ maxBytes: null });');
   assert.deepEqual(stdinViolations(unlisted), ['maa-daily/scripts/new-tool.ts: reads standard input but is not in the conformance list']);
-  const fdRead = new Map(files).set('maa-core/scripts/other.ts', "const text = readFileSync(0, 'utf8');");
-  assert.deepEqual(stdinViolations(fdRead), ['maa-core/scripts/other.ts: reads standard input directly']);
+  for (const source of ["const text = readFileSync(0, 'utf8');", 'const { stdin } = process;', "for await (const chunk of process['stdin']) raw += chunk;"]) {
+    const other = new Map(files).set('maa-core/scripts/other.ts', source);
+    assert.deepEqual(stdinViolations(other), ['maa-core/scripts/other.ts: reads standard input directly'], source);
+  }
 });
 
 test('conformance: every listed CLI refuses a marked request with a ? as input-encoding-lossy and writes nothing', async (t) => {
