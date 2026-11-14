@@ -843,6 +843,10 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node scripts/metadata.ts` | 退出 0 |
 | `node scripts/privacy.ts` | `{"ok":true,"findings":[]}` |
 | `node scripts/tracker.ts` | `errors: []` |
+| `node scripts/eval-batch.ts payload --commit HEAD --out <系统临时目录下的新空目录>`（HEAD 是改版本号的提交 `b63007b`） | `commit` `b63007bc160b`，`trees.skills` `401732ac5c8f62f67649eeeef037a9badc15fea4`，`trees[".claude-plugin"]` `e69d80fa425fe0693da3ba6f1b08c40374a88439`，`digest` `7b33877cdadcd468ae7267c49f3994608873124d1d35195190263bf9611cada7` |
+| `node scripts/eval-batch.ts list --payload <同一目录>` | 117 个场景，没有一个 `refused`；第 3 步「后」批次的 86 个（三个组展开后）和基线批次的 31 个合起来正好是这 117 个，没有重叠。用完目录已删除 |
+
+`trees` 和 `digest` 只随载荷变：这之后只改文档的提交（例如本记录这一段）不改变它们，冻结时在 `<最终候选>` 上重做载荷，这三个值应当与上表相同（D7）。
 
 未验证：标签检查（`release-check.ts tag`）没有跑，还没有标签；两个宿主在这个候选上的原生安装与更新没有跑；三类模型批次都没有跑。
 
