@@ -326,11 +326,14 @@ function editedText(bytes: Buffer, config: RecordValue, changes: Change[]) {
   return editConfigurationText(text, config, changes.map(change => change.path));
 }
 /**
- * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with.
- * Returns field kinds only (never a profile name or value); `timerProfileMissing` marks an enabled timer whose
- * configuration no longer exists. Unknown task types and fields the writer never manages are not judged.
- * Stone and expiring medicine (27) are not judged here either: they are MAA's own states (the GUI saves a null stone switch when
- * stone is on without allow-save), shown in the read summary as the consumption predicate classifies them; an error here blocks.
+ * Doctor's read-only check of the fields this writer manages, by the same type and range rules it writes with, except that the
+ * medicine switch is judged by MAA's own type (`bool?`). Returns field kinds only (never a profile name or value);
+ * `timerProfileMissing` marks an enabled timer whose configuration no longer exists. Unknown task types and fields the writer
+ * never manages are not judged. An error here blocks a stage retry (`blockingChecks`).
+ * Issue #82: a null `UseMedicine` is valid. The pinned GUI saves it when stone is turned on without allow-save: both switches
+ * null and MedicineCount 999; after a restart only UseStone is reset to false. The read summary and the consumption predicate
+ * treat null as on, so this check accepting it opens no spending. Strings, numbers, objects and arrays stay invalid.
+ * Stone and expiring medicine (27) are not judged here; the read summary shows them as the consumption predicate classifies them.
  */
 export function inspectManagedFields(value: unknown): { invalid: string[]; timerProfileMissing: boolean } {
   const config = object(value); const invalid = new Set<string>(); let timerProfileMissing = false;
@@ -347,7 +350,7 @@ export function inspectManagedFields(value: unknown): { invalid: string[]; timer
       const task = item as RecordValue;
       if (Object.hasOwn(task, 'IsEnable') && typeof task.IsEnable !== 'boolean') invalid.add('task.IsEnable');
       if (knownTaskType(task) !== 'Fight') continue;
-      if (Object.hasOwn(task, 'UseMedicine') && typeof task.UseMedicine !== 'boolean') invalid.add('fight.UseMedicine');
+      if (Object.hasOwn(task, 'UseMedicine') && task.UseMedicine !== null && typeof task.UseMedicine !== 'boolean') invalid.add('fight.UseMedicine');
       if (Object.hasOwn(task, 'MedicineCount') && !integer(task.MedicineCount, 0, 2147483647)) invalid.add('fight.MedicineCount');
     }
   }

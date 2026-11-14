@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { updateSettings } from '../skills/maa-core/scripts/preferences.ts';
 import { runChecks, githubReleaseLookup, type ReleaseLookup } from '../skills/maa-core/scripts/doctor.ts';
 import { checkSetup } from '../skills/maa-core/scripts/setup.ts';
-import { checkGroups, skillRepairChannels } from '../skills/maa-core/scripts/checks.ts';
+import { blockingChecks, checkGroups, skillRepairChannels } from '../skills/maa-core/scripts/checks.ts';
 import { assessMaaVersion } from '../skills/maa-core/scripts/maa-version.ts';
 import type { MaaProcess } from '../skills/maa-core/scripts/maa-config.ts';
 import { discoverSetupConnections, isAdbExecutablePath, type AdbBoundary } from '../skills/maa-core/scripts/setup-connection.ts';
@@ -196,11 +196,50 @@ test('configuration field checks validate the fields this project writes and nam
 });
 
 /**
- * Merge of 27 with 10 (2026-11-14): the field check keeps 10's scope (task, medicine and timer fields). Stone and expiring
- * medicine are MAA's own states that the read summary classifies through the consumption predicate; a null stone switch is
- * what the MAA GUI saves when stone is on without "allow saving", so it must not become a blocking configuration error.
+ * Issue #82 (2026-11-14): the switches the pinned MAA GUI (v6.21.4) saves when the user turns stone on without "allow saving".
+ * The `UseStone` setter in FightTaskUserControlModel.cs stores null for stone, sets MedicineCount to 999 and, when medicine was off,
+ * stores the same null for medicine; after an MAA restart `OnDeserialized` resets only UseStone to false. `UseMedicine` is `bool?`
+ * in MAA and the read summary and the consumption predicate treat null as on (spending: tests/maa-config.test.ts), so the field
+ * check accepts it: no blocking error with a misleading "invalid field" reason. Other non-boolean medicine switches stay errors.
  */
-test('stone and expiring-medicine states MAA itself saves are not configuration-field errors and block nothing', async (t) => {
+const guiStoneOnStates = [
+  ['as the GUI saves it', { UseStone: null, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
+  ['after an MAA restart', { UseStone: false, UseMedicine: null, MedicineCount: 999, UseStoneAllowSave: false }],
+] as const;
+test('the medicine and stone switches the MAA GUI saves when stone is turned on without allow-save are valid fields and block no stage retry', async (t) => {
+  const fight = { $type: 'FightTask', TaskType: 'Fight', IsEnable: true, StoneCount: 0 };
+  for (const [name, state] of guiStoneOnStates) await t.test(name, async (t) => {
+    const f = await fixture(t);
+    const config = structuredClone(f.config);
+    config.Configurations[profile].TaskQueue = [{ ...fight, ...state }];
+    await writeFile(f.file, JSON.stringify(config));
+    const result = await runChecks(f.context, f.maa, quiet);
+    assert.deepEqual([row(result, 'configuration-fields').status, row(result, 'configuration-fields').reason], ['normal', 'managed-fields-valid']);
+    assert.equal(blockingChecks(result.checks, 'stage-retry').blocking.includes('configuration-fields'), false);
+    assert.equal(result.exitCode, windows ? 0 : 1);
+  });
+  for (const [name, value] of [['a string', 'true'], ['a number', 1], ['an object', {}], ['an array', [true]]] as const) {
+    await t.test(`a medicine switch that is ${name} stays a blocking field error`, async (t) => {
+      const f = await fixture(t);
+      const config = structuredClone(f.config);
+      config.Configurations[profile].TaskQueue = [{ ...fight, ...guiStoneOnStates[0][1], UseMedicine: value }];
+      await writeFile(f.file, JSON.stringify(config));
+      const result = await runChecks(f.context, f.maa, quiet);
+      assert.deepEqual([row(result, 'configuration-fields').status, row(result, 'configuration-fields').reason], ['error', 'managed-fields-invalid']);
+      assert.deepEqual(row(result, 'configuration-fields').details, ['fight.UseMedicine']);
+      assert.equal(blockingChecks(result.checks, 'stage-retry').blocking.includes('configuration-fields'), true);
+      assert.equal(result.exitCode, 1);
+    });
+  }
+});
+
+/**
+ * Merge of 27 with 10 (2026-11-14): the field check keeps 10's scope (task, medicine and timer fields). Stone and expiring
+ * medicine are not judged; the read summary classifies them through the consumption predicate. Corrected for Issue #82: the
+ * state the GUI saves when stone is turned on without "allow saving" is the test above. The first task here (stone null,
+ * medicine off) is not a state the GUI's switch setters produce; it stays as an extra case: the stone switch is not judged at all.
+ */
+test('stone and expiring-medicine states are not configuration-field errors and block nothing', async (t) => {
   const f = await fixture(t);
   const config = structuredClone(f.config);
   const fight = { $type: 'FightTask', TaskType: 'Fight', IsEnable: true, UseMedicine: false, MedicineCount: 0, StoneCount: 3, UseStoneAllowSave: false,
