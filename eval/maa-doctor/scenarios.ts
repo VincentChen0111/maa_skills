@@ -138,7 +138,14 @@ export const latestRecordKeys = ['$exists', 'exitCode', 'checks', 'recovery', 'v
 // 26 H4 round 1: in an unknown-outcome world a repair is never the right next step without the user's named approval, which none of
 // the handover scenarios gives (`node *doctor.ts *` admits it, so it is forbidden outright); a write through the shared writer is a
 // replay of the unknown write.
-const repairInvocation = { file: 'maa-core/scripts/doctor.ts', action: 'repair' };
+/**
+ * The doctor repair as a forbidden invocation: the one declaration every scenario uses whose command patterns admit
+ * `doctor.ts repair` (`node *doctor.ts *`) and whose right behaviour excludes it, because a repair the product refuses changes no
+ * file and would otherwise grade as a pass. 26 H4 round 1, second fix: maa-doctor's own scenarios in which the user approves no
+ * repair, and cross-skill-doctor-referral, use it too. tests/doctor-repair.test.ts holds every maa-doctor scenario and every
+ * scenario whose commands admit a repair to expecting the repair or forbidding it.
+ */
+export const repairInvocation = { file: 'maa-core/scripts/doctor.ts', action: 'repair' };
 const writerInvocation = { file: 'maa-core/scripts/maa-config.ts', action: 'write' };
 
 /**
@@ -203,7 +210,11 @@ function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = '
       grants, downloadGrants: [], expectedCalls: [], expectedChanges: grants,
       generatedUtcFields: [{ file: latestRecord, key: 'checkedAt' }], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' },
-        { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: expectedExitCode(mode, skland, true) }] } };
+        { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: expectedExitCode(mode, skland, true) }],
+      // 26 H4 round 1, second fix: no request here approves a repair that may run. 'none' approves none; 'named' names
+      // reconcile-lock for an unproven lock and says not to call repair; 'broad' is no approval and says the same; the credential
+      // and the upgrade the user asks for are not doctor repairs (the user enters credentials; doctor never upgrades MAA).
+      forbiddenInvocations: [repairInvocation] } };
 }
 
 // Positive recovery: a provable stale reminder transaction (configuration unchanged, latest backup and pending record
@@ -215,13 +226,15 @@ const staleLock = { id: operation, skill: 'maa-daily', host: 'codex', pid: 21474
 const healthy = scenario('doctor-reconcile-approved', 'healthy');
 const lockFile = 'config/.maa-skills.lock';
 const released = [{ file: lockFile, key: '$exists', value: false }, ...Object.keys(staleLock).map((key) => ({ file: lockFile, key, value: undefined }))];
+// The user names reconcile-lock here, so the repair is expected, not forbidden.
+const { forbiddenInvocations: _repairForbidden, ...approvedPolicy } = healthy.policy;
 const reconciled: ScenarioDefinition = { ...healthy, maaProcess: 'ready',
   prompt: `使用 maa-doctor 诊断当前合成 MAA，先读偏好，再执行共享 doctor.ts check --json，报告各项状态、原因和修法。核对能证明这个遗留写入时，我点名批准 reconcile-lock，批准原话是「${approval}」，请原样作为 reference。只执行这一项修法，不重放原操作；完成后再运行一次 check 保存最新诊断。完整配置及私有名称不要输出。`,
   jsonInputs: { ...healthy.jsonInputs, [`private/maa-config-backups/${operation}.json`]: sample, [lockFile]: staleLock,
     'private/daily-pending.jsonl': { ...staleLock, phase: 'check', authorization: { source: 'current-request', reference: 'synthetic approved reminder' },
       changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] } },
-  policy: { ...healthy.policy, allowedKeys: [...healthy.policy.allowedKeys, ...Object.keys(staleLock), '$file'],
-    grants: [...healthy.policy.grants, ...released], expectedChanges: [...healthy.policy.expectedChanges, ...released],
+  policy: { ...approvedPolicy, allowedKeys: [...approvedPolicy.allowedKeys, ...Object.keys(staleLock), '$file'],
+    grants: [...approvedPolicy.grants, ...released], expectedChanges: [...approvedPolicy.expectedChanges, ...released],
     generatedFiles: [{ directory: 'private/maa-config-reconciliations', count: 1, fields: { action: 'reconcile-lock', reference: approval }, utcFields: ['checkedAt'] }],
     expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 },
       { file: 'maa-core/scripts/doctor.ts', action: 'repair' }, { file: 'maa-core/scripts/doctor.ts', action: 'check' }] } };
@@ -248,7 +261,9 @@ function unknownRunScenario(): ScenarioDefinition {
       generatedUtcFields: [{ file: analysisRecord, key: 'analyzedAt' }, { file: latestRecord, key: 'checkedAt' }], reportRequired: false, skipReview: false,
       lockFiles: ['config/gui.new.json'],
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 },
-        { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }] } };
+        { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }],
+      // 26 H4 round 1, second fix: the user approves no repair and asks for no re-run, retry or configuration change.
+      forbiddenInvocations: [repairInvocation] } };
 }
 
 export const doctorScenarios: ScenarioDefinition[] = [scenario('doctor-inspect', 'healthy'), scenario('doctor-corrupt', 'corrupt'),

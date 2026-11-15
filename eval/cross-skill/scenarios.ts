@@ -1,5 +1,6 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { accountScenarios } from '../maa-account/scenarios.ts';
+import { repairInvocation } from '../maa-doctor/scenarios.ts';
 
 // Cross-skill handoffs. Each scenario names the operating skills installed together under their own names (plus maa-core);
 // the prompt lists them and the model picks the right entry. Only the MAA process boundary is replaced.
@@ -30,5 +31,6 @@ export const crossSkillScenarios: ScenarioDefinition[] = [
   { id: 'cross-skill-doctor-referral', skills: ['maa-doctor', 'maa-setup'], commands: ['node *preferences.ts *', 'node *doctor.ts *'],
     jsonInputs: { 'private/config.json': { ...settings, maaDirectory: null } }, jsonFiles: ['private/config.json'],
     prompt: '使用 maa-doctor 帮我诊断 MAA。先读偏好，再运行共享 doctor.ts check --json。如果问题属于接入（例如还没有设置 MAA 目录），告诉我应该用哪个入口处理，不要自己设置目录、修改设置或写入任何配置。',
-    policy: { ...quiet, expectedInvocations: [call('preferences.ts', 'read'), call('doctor.ts', 'check', 1)] } },
+    // 26 H4 round 1, second fix: `node *doctor.ts *` admits a repair, which this user (no setting, no write) never approves.
+    policy: { ...quiet, expectedInvocations: [call('preferences.ts', 'read'), call('doctor.ts', 'check', 1)], forbiddenInvocations: [repairInvocation] } },
 ];
