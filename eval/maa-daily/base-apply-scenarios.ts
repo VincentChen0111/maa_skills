@@ -48,7 +48,9 @@ const unknown = refused('daily-base-apply-unknown', approved, '上一次写入�
 const handoff = doctorHandoff(approved.inputs['config/gui.new.json'], { retained: lock, maaPresent: false });
 const handedOver: ScenarioDefinition = { ...unknown, companions: handoff.companions, commands: [...commands, ...handoff.commands], jsonFiles: [...jsonFiles, ...handoff.jsonFiles],
   policy: { ...unknown.policy, allowedKeys: [...unknown.policy.allowedKeys, ...handoff.allowedKeys], grants: [...unknown.policy.grants, ...handoff.grants],
-    generatedUtcFields: handoff.generatedUtcFields } };
+    generatedUtcFields: handoff.generatedUtcFields,
+    // 26 H4 round 1: a doctor repair and the shared writer's replay (the helper's), and applying the plan this world's unknown write left.
+    forbiddenInvocations: [...handoff.forbiddenInvocations, { file: 'maa-core/scripts/base-apply.ts', action: 'apply' }] } };
 
 export const baseApplyWorlds = { approved, unverified, outside, unapproved };
 export const baseApplyScenarios: ScenarioDefinition[] = [

@@ -135,6 +135,12 @@ export function latestRecordGrants(configuration: unknown, world: { mode: Mode; 
 /** The keys `doctor check` writes into its latest record, `checkedAt` (a generated UTC time) included. */
 export const latestRecordKeys = ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'];
 
+// 26 H4 round 1: in an unknown-outcome world a repair is never the right next step without the user's named approval, which none of
+// the handover scenarios gives (`node *doctor.ts *` admits it, so it is forbidden outright); a write through the shared writer is a
+// replay of the unknown write.
+const repairInvocation = { file: 'maa-core/scripts/doctor.ts', action: 'repair' };
+const writerInvocation = { file: 'maa-core/scripts/maa-config.ts', action: 'write' };
+
 /**
  * 26 H4: the one owner of what a scenario outside the maa-doctor group allows when its world holds the retained lock of an unknown
  * earlier write and its user hands that outcome to maa-doctor, as maa-daily's flow requires (daily-unknown, 26 H decision D3 option
@@ -143,6 +149,8 @@ export const latestRecordKeys = ['$exists', 'exitCode', 'checks', 'recovery', 'v
  * and the record doctor check writes in this world is granted with literal values (`latestRecordGrants`, mode `unknown`) plus an
  * optional `checkedAt`. Running check is allowed, never required: nothing here is an expected change or invocation, so a run that
  * does not hand off passes the same way. `configuration` is the world's `config/gui.new.json`, `retained` its lock.
+ * 26 H4 round 1: a doctor repair and a write through the shared writer (the replay) are forbidden invocations, failing the run
+ * even when the product refuses them; a scenario adds its own replay (daily-base-apply-unknown: `base-apply.ts apply`).
  * tests/doctor-handoff.test.ts holds every lock world in the catalog to this allowance and runs the installed doctor against it.
  */
 export function doctorHandoff(configuration: unknown, world: { retained: unknown; maaPresent?: boolean; connectionReadable?: boolean }) {
@@ -153,6 +161,27 @@ export function doctorHandoff(configuration: unknown, world: { retained: unknown
     grants: latestRecordGrants(configuration, { mode: 'unknown', ...world, links: ['maa-core', 'maa-doctor'] }),
     allowedKeys: latestRecordKeys,
     generatedUtcFields: [{ file: latestRecord, key: 'checkedAt', optional: true }],
+    forbiddenInvocations: [repairInvocation, writerInvocation],
+  };
+}
+
+/**
+ * 26 H4 round 1 (design default, 2026-11-15): the same handover for a world whose write outcome becomes unknown during the run
+ * (daily-close-failure, daily-restart-failure: the shared writer returns close-unknown or restart-unknown and keeps its lock).
+ * The record doctor check then writes holds the lock, backup and operation that run generated, so no literal can grant it: it is
+ * one optional new file at exactly `private/doctor-latest.json`, judged by structure (`exitCode` a number, `checks` an array,
+ * `checkedAt` inside the run window), and so must not be read key by key (`$file` is the allowed key). A doctor repair is forbidden.
+ * The replay is the second write through the shared writer: the first is the scenario's expected write, so it cannot be a
+ * forbidden invocation; the daily transaction's single-write rule (scripts/eval-daily.ts) refuses it, and
+ * tests/doctor-handoff.test.ts requires every such world to declare that transaction with its unknown outcome.
+ */
+export function runtimeDoctorHandoff() {
+  return {
+    companions: ['maa-doctor'],
+    commands: ['node *doctor.ts *'],
+    allowedKeys: ['$file'],
+    generatedFiles: [{ file: latestRecord, optional: true, fieldTypes: { exitCode: 'number' as const, checks: 'array' as const }, utcFields: ['checkedAt'] }],
+    forbiddenInvocations: [repairInvocation],
   };
 }
 

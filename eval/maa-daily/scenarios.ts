@@ -1,5 +1,5 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { doctorHandoff, retainedLock } from '../maa-doctor/scenarios.ts';
+import { doctorHandoff, retainedLock, runtimeDoctorHandoff } from '../maa-doctor/scenarios.ts';
 
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const sample = { Current: 'Synthetic profile', Configurations: { 'Synthetic profile': { TaskQueue: [{ TaskType: 'Fight', IsEnable: false, UseStone: false }] } }, Timers: { List: [], NotifyBeforeScheduledStart: false, ScheduledStartNotificationMinutes: 5 } };
@@ -35,6 +35,9 @@ const approved = (id: string, reference: string, prompt: string, consumption: Re
 const reminder = '开启定时提醒';
 // 26 H4: daily-unknown's world (the doctor scenarios' lock, no MAA.exe, no connection section) through the one handoff helper.
 const handoff = doctorHandoff(sample, { retained: retainedLock, maaPresent: false, connectionReadable: false });
+// 26 H4 round 1: a failed close or restart leaves the write outcome unknown and the lock retained during the run; maa-daily's flow
+// hands that to maa-doctor, allowed (not required) through the runtime helper, whose record is judged by structure.
+const runtimeHandoff = runtimeDoctorHandoff();
 const transactionCases = [
   ['daily-reminder', 'ready', 'complete'],
   ['daily-closed', 'closed', 'closed-confirmation-required'],
@@ -56,10 +59,12 @@ export const dailyScenarios: ScenarioDefinition[] = [
     jsonInputs: { ...common.jsonInputs, 'config/.maa-skills.lock': retainedLock },
     jsonFiles: [...common.jsonFiles, 'config/.maa-skills.lock', ...handoff.jsonFiles],
     policy: { ...policy, allowedKeys: handoff.allowedKeys, grants: handoff.grants, generatedUtcFields: handoff.generatedUtcFields,
-      expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }] } },
-  ...transactionCases.map(([id, maaProcess, outcome]) => ({ ...common, id, maaProcess,
+      forbiddenInvocations: handoff.forbiddenInvocations, expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }] } },
+  ...transactionCases.map(([id, maaProcess, outcome]): ScenarioDefinition => ({ ...common, id, maaProcess,
+    ...(outcome.endsWith('-unknown') ? { commands: [...common.commands, ...runtimeHandoff.commands], companions: runtimeHandoff.companions } : {}),
     prompt: '使用 maa-daily。本次授权原话是「开启定时提醒」，请原样保存到写入请求的 authorization.reference。请先读摘要，再用共享写入脚本开启 NotifyBeforeScheduledStart，其他字段保持原样。我尚未确认是否正在操作已关闭的 MAA；若脚本要求确认，请停下等待。若返回 unknown，保留证据并按流程说明，不重试。',
     policy: { ...policy, allowedKeys: ['Timers', '$file'], dailyTransaction: { outcome, reference: reminder },
+      ...(outcome.endsWith('-unknown') ? { generatedFiles: runtimeHandoff.generatedFiles, forbiddenInvocations: runtimeHandoff.forbiddenInvocations } : {}),
       expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' },
         { file: 'maa-core/scripts/maa-config.ts', action: 'read' },
         { file: 'maa-core/scripts/maa-config.ts', action: 'write', exitCode: outcome === 'complete' ? 0 : 1 }] },

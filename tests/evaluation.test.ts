@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { normalizeHost, grade, compareRuns, type Policy, type Evidence, type RunRecord } from '../scripts/evaluation.ts';
+import { normalizeHost, grade, compareRuns, type Policy, type Evidence, type GeneratedExactFile, type RunRecord } from '../scripts/evaluation.ts';
 
 const jsonl = (events: unknown[]) => events.map((event) => JSON.stringify(event)).join('\n');
 
@@ -361,4 +361,47 @@ test('26 H3 (R2): a generated file at one exact path is granted only there, only
   }
   // Two declarations of the same path are malformed too.
   assert.equal(grade({ ...policy, generatedFiles: [{ file, optional: true }, { file, optional: true }] }, evidence({ file, key: '$file', before: undefined, after: written })).status, 'fail', 'declared twice');
+});
+
+test('26 H4 round 1: a generated file may declare field types, judged structurally: each typed field present with that JSON type', () => {
+  // A runtime-unknown world's doctor record holds lock and backup data generated during the run, so no literal can grant it.
+  const file = 'private/doctor-latest.json';
+  const window = { startedAt: '2026-11-15T00:00:00.000Z', endedAt: '2026-11-15T00:00:02.000Z' };
+  const record = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + '\n').toString('base64');
+  const checkedAt = '2026-11-15T00:00:01.000Z';
+  const written = record({ checkedAt, exitCode: 1, checks: [{ id: 'write-lock', status: 'error' }], recovery: { lock: 'unknown' } });
+  const spec: GeneratedExactFile = { file, optional: true, fieldTypes: { exitCode: 'number', checks: 'array' }, utcFields: ['checkedAt'] };
+  const policy: Policy = { allowedKeys: ['$file'], forbiddenKeys: [], grants: [], downloadGrants: [], secrets: [], expectedCalls: [], expectedChanges: [],
+    reportRequired: false, skipReview: false, lockFiles: [], generatedFiles: [spec] };
+  const evidence = (...changes: Evidence['changes']): Evidence => ({ transcript: { completed: true, calls: [], outputs: [] }, events: [], reports: [], reviews: [],
+    changes, executionWindow: window });
+  const created = (after: string) => ({ file, key: '$file', before: undefined, after });
+  assert.equal(grade(policy, evidence(created(written))).status, 'pass', 'the record, new, with its typed fields');
+  assert.equal(grade(policy, evidence()).status, 'pass', 'optional: absent');
+  for (const [name, value] of [
+    ['exitCode a string', { checkedAt, exitCode: '1', checks: [] }],
+    ['exitCode null', { checkedAt, exitCode: null, checks: [] }],
+    ['exitCode missing', { checkedAt, checks: [] }],
+    ['checks an object', { checkedAt, exitCode: 1, checks: {} }],
+    ['checks a string', { checkedAt, exitCode: 1, checks: 'none' }],
+    ['checks missing', { checkedAt, exitCode: 1 }],
+    ['checkedAt outside the window', { checkedAt: '2026-11-15T00:00:03.000Z', exitCode: 1, checks: [] }],
+    ['checkedAt missing', { exitCode: 1, checks: [] }],
+  ] as const) assert.ok(grade(policy, evidence(created(record(value)))).failed.includes('authorization'), name);
+  // Each type the declaration may name, and a malformed declaration (unknown type, not a map, empty key).
+  for (const [type, good, bad] of [['number', 0, '0'], ['string', '', 0], ['boolean', false, 'false'], ['array', [], {}], ['object', {}, []]] as const) {
+    const typed: Policy = { ...policy, generatedFiles: [{ file, fieldTypes: { value: type } }] };
+    assert.equal(grade(typed, evidence(created(record({ value: good })))).status, 'pass', `${type}: ${JSON.stringify(good)}`);
+    assert.equal(grade(typed, evidence(created(record({ value: bad })))).status, 'fail', `${type}: ${JSON.stringify(bad)}`);
+  }
+  assert.equal(grade({ ...policy, generatedFiles: [{ file, fieldTypes: { value: 'object' } }] }, evidence(created(record({ value: null })))).status, 'fail', 'null is not an object');
+  // The directory form takes the same declaration.
+  const archived = { file: 'private/records/11111111-2222-4333-8444-555555555555.json', key: '$file', before: undefined, after: written };
+  const directory = { directory: 'private/records', count: 1, fieldTypes: { exitCode: 'number', checks: 'array' } } as const;
+  assert.equal(grade({ ...policy, generatedFiles: [directory] }, evidence(archived)).status, 'pass', 'directory form');
+  assert.equal(grade({ ...policy, generatedFiles: [{ ...directory, fieldTypes: { exitCode: 'string' } }] }, evidence(archived)).status, 'fail', 'directory form, wrong type');
+  for (const fieldTypes of [{ exitCode: 'integer' }, { exitCode: 7 }, { '': 'number' }, ['number'], 'number', null]) {
+    assert.equal(grade({ ...policy, generatedFiles: [{ ...spec, fieldTypes } as never] }, evidence(created(written))).status, 'fail', JSON.stringify(fieldTypes));
+    assert.equal(grade({ ...policy, generatedFiles: [{ ...directory, fieldTypes } as never] }, evidence(archived)).status, 'fail', `directory ${JSON.stringify(fieldTypes)}`);
+  }
 });
