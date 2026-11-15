@@ -3,7 +3,8 @@ import { calculateOperatorCost, loadOperatorCostTables, formatOperatorCostMarkdo
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { snapshotFiles } from './account-snapshot.ts';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 
@@ -442,6 +443,37 @@ export async function loadGapTables(fetcher?: typeof fetch): Promise<GapTables> 
   const [building, stages] = await Promise.all([load('building'), load('stages')]);
   return { ...tables, building: building.value, stages: stages.value,
     sources: [...tables.sources ?? [], building.source, stages.source].sort((a, b) => a.file.localeCompare(b.file)) };
+}
+
+export type SnapshotDomain = 'operators' | 'skills' | 'inventory' | 'base';
+export type SnapshotUsed = { file: string; source: string | null; readAt: string | null; selected: 'named' | 'default' | 'skland-covers-more' };
+/** A domain counts only when its coverage is complete; skills (level, mastery) also need values, which MAA recognition never has. */
+const snapshotCovers = (snapshot: unknown, domain: SnapshotDomain) => {
+  const value = object(snapshot), coverage = object(value.coverage);
+  if (domain === 'skills') return object(coverage.operators).status === 'complete' && Array.isArray(value.operators) && value.operators.some(row => object(row).skillLevel != null);
+  return object(coverage[domain]).status === 'complete';
+};
+const usedOf = (snapshot: unknown, file: string, selected: SnapshotUsed['selected']): SnapshotUsed => {
+  const value = object(snapshot);
+  return { file: basename(file), source: typeof value.source === 'string' ? value.source : null, readAt: typeof value.readAt === 'string' ? value.readAt : null, selected };
+};
+/**
+ * Ticket 32 follow-on OB-9 (local version of the shared `selectSnapshot(neededDomains)` contract): the default snapshot stays
+ * the source unless the Skland snapshot covers every needed domain the default covers and more; then the Skland snapshot is
+ * read whole, never merged, and the caller prints which file, its source and read time. A missing or unreadable Skland
+ * snapshot only leaves the default; a missing default with a Skland snapshot uses the Skland snapshot.
+ */
+export async function selectSnapshot(privateDirectory: string, needed: SnapshotDomain[]): Promise<{ snapshot: unknown; used: SnapshotUsed }> {
+  const read = async (name: string) => { try { return { ok: true as const, value: JSON.parse((await readFile(join(privateDirectory, name), 'utf8')).replace(/^\uFEFF/, '')) as unknown }; }
+    catch (error) { return { ok: false as const, missing: (error as NodeJS.ErrnoException).code === 'ENOENT' }; } };
+  const [fallback, skland] = [await read(snapshotFiles.maa), await read(snapshotFiles.skland)];
+  if (!fallback.ok && !fallback.missing) throw new Error('snapshot-unreadable');
+  if (!fallback.ok) { if (skland.ok) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') }; throw new Error('snapshot-unavailable'); }
+  if (skland.ok) {
+    const own = needed.filter(domain => snapshotCovers(fallback.value, domain)), other = needed.filter(domain => snapshotCovers(skland.value, domain));
+    if (own.every(domain => other.includes(domain)) && other.length > own.length) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
+  }
+  return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default') };
 }
 
 /** Reads only the selected snapshot and pinned public sources; no recognition, reports or account writes. */

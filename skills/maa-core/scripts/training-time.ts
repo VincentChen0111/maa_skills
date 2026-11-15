@@ -1,12 +1,12 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
 import { queryBaseSkills, isBaseRoom } from './base-query.ts';
-import { calculateCultivationGaps, formatDecomposition, type GapTables, type GapResult, type GapPlan } from './cultivation-gaps.ts';
+import { calculateCultivationGaps, formatDecomposition, selectSnapshot, type GapTables, type GapResult, type GapPlan, type SnapshotUsed } from './cultivation-gaps.ts';
 import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { staticCode, trainingCheckRequired, type TierPayment, type Spend } from './training-state.ts';
@@ -57,7 +57,8 @@ export type TrainingAssistant = { id: string; name: string; available: boolean |
 export type TrainingResult = { status: 'ok' | 'needs-input'; operator: { id: string; name: string } | null; skill: number | null; skillId: string | null;
   skillName: string | null; currentRank: number | null; targetRank: number | null; role: string | null; materials: GapResult; issues: string[];
   /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the time its inventory reflects, and the materials of the next tier to start. */
-  inTrainingRank: number | null; costFromRank: number | null; inventoryAt: string | null; startMaterials: GapResult | null;
+  inTrainingRank: number | null; inTrainingSource: 'user-confirmed' | 'snapshot' | null; costFromRank: number | null; inventoryAt: string | null; startMaterials: GapResult | null;
+  trainingRoom: { level: number; source: 'user-confirmed' | 'snapshot' } | null; snapshotUsed: SnapshotUsed | null;
   /** Ticket 32 R3-2: other plans' tiers paid after the inventory time, whose cost was taken out of the stock before the gate. */
   reservedTiers: TierPayment[];
   stages: { rank: number; baseSeconds: number | null; recommendedAssistant: string | null; afterStartAssistant: string | null; estimatedSeconds: number | null; assistants: TrainingAssistant[] }[];
@@ -145,7 +146,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const cost = materials.costs[0];
   const result: TrainingResult = { status: 'needs-input', operator: cost?.operator ?? null, skill, skillId: null, skillName: null,
     currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []],
-    inTrainingRank: null, costFromRank: null, inventoryAt: null, startMaterials: null, reservedTiers: [], stages: [],
+    inTrainingRank: null, inTrainingSource: null, costFromRank: null, inventoryAt: null, startMaterials: null, trainingRoom: null, snapshotUsed: null, reservedTiers: [], stages: [],
     assumptions: ['Estimated duration = base seconds / (1 + assistant base bonus + applicable skill bonuses). This is a table/text inference, not live timing.',
       'Actual countdown and completion evidence supersede estimates; active skills do not prove assignment or condition activation.'] };
   const sharedIssues = result.issues.length;
@@ -163,13 +164,23 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const start = evidence && integer(evidence.completedRank, 0, 3) && evidence.completedRank > observed ? evidence.completedRank : observed;
   result.currentRank = start;
   // The user confirms the next rank is training now and its materials were already taken from the inventory this snapshot reflects.
+  // Ticket 32 follow-on item 7: a Skland read shows who is in the training room. The plan's operator training this skill
+  // (`targetSkill` is 0-based, -1 idle) with seconds left is the next tier in progress, paid before that read; no trainee or
+  // another one means it is not training now; a trainee without the training fields says nothing.
+  const trainingRooms = snapshot.source === 'skland' ? array(object(snapshot.base).rooms).map(object).filter(room => room.type === 'training') : [];
+  const trainees = trainingRooms.flatMap(room => array(room.operators).map(object)).filter(row => row.role === 'trainee');
+  const own = trainees.find(row => row.id === cost.operator!.id);
+  const trainingNow = !trainingRooms.length ? null : !own ? false : !Number.isSafeInteger(own.targetSkill) || !Number.isSafeInteger(own.remainSecs) ? null
+    : own.targetSkill === skill - 1 && Number(own.remainSecs) > 0;
   if (request.inTraining !== undefined) {
     const fact = object(request.inTraining);
     if (evidence || Object.keys(fact).some(key => !['source', 'rank'].includes(key)) || fact.source !== 'user-confirmed' || fact.rank !== start + 1 || start + 1 > targetRank)
       result.issues.push('training:in-training-invalid');
     else if (!inventoryAt) result.issues.push('training:in-training-inventory-time-unknown');
-    else result.inTrainingRank = start + 1;
-  }
+    // The same read that dates the inventory shows the operator not training this skill: its materials are not counted as paid.
+    else if (trainingNow === false) result.issues.push('training:in-training-snapshot-conflict');
+    else { result.inTrainingRank = start + 1; result.inTrainingSource = 'user-confirmed'; }
+  } else if (!evidence && trainingNow === true && inventoryAt && start + 1 <= targetRank) { result.inTrainingRank = start + 1; result.inTrainingSource = 'snapshot'; }
   // A tier paid at or before the inventory time is already gone from it and is not counted again. A tier this plan paid
   // after it, or when the inventory time is unknown, still has its materials in it and is counted, whatever rank was stated.
   const paidBefore = (at: unknown) => inventoryAt !== null && time(at) !== null && Date.parse(at as string) <= Date.parse(inventoryAt);
@@ -216,9 +227,13 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   result.skillName = typeof name === 'string' && name.trim() ? name : null;
   result.role = typeof char.profession === 'string' && Object.hasOwn(professions, char.profession) ? char.profession : null;
   if (!result.skillName || !result.role) result.issues.push('training:target-identity-incomplete');
-  if (facts.source !== 'user-confirmed' || !integer(facts.trainingRoomLevel, 1, 3)) result.issues.push('training:room-unverified');
+  // Ticket 32 follow-on OB-4: a user-confirmed level overrides; otherwise the snapshot's one training room with a known level.
+  const snapshotRooms = array(object(snapshot.base).rooms).map(object).filter(room => room.type === 'training');
+  result.trainingRoom = facts.source === 'user-confirmed' && integer(facts.trainingRoomLevel, 1, 3) ? { level: facts.trainingRoomLevel, source: 'user-confirmed' }
+    : snapshotRooms.length === 1 && integer(snapshotRooms[0]!.level, 1, 3) ? { level: snapshotRooms[0]!.level, source: 'snapshot' } : null;
+  if (!result.trainingRoom) result.issues.push('training:room-unverified');
   const trainingData = object(object(tables.building).trainingData);
-  const roomLimit = object(array(trainingData.phases)[Number(facts.trainingRoomLevel) - 1]).specSkillLvlLimit;
+  const roomLimit = object(array(trainingData.phases)[(result.trainingRoom?.level ?? 0) - 1]).specSkillLvlLimit;
   if (!integer(roomLimit, 1, 3) || roomLimit < targetRank) result.issues.push('training:room-rank-unavailable');
   const base = trainingData.basicSpeedBuff;
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
@@ -274,9 +289,13 @@ export const trainingSources: Record<string, PublicJsonSource> = { ...craftingSo
 export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch; evidence?: TrainingEvidence; payments?: TierPayment[] } = {}) {
   const request = object(input), settings = await readSettings(options.home);
   // Ticket 32: read failures carry static codes (never a path) so the CLI can say what to check.
-  let snapshot: unknown;
-  try { snapshot = JSON.parse(await readFile(typeof request.snapshotFile === 'string' ? request.snapshotFile : join(settings.privateDirectory, 'account-snapshot.json'), 'utf8')); }
-  catch { throw new Error('training-snapshot-unreadable'); }
+  // Ticket 32 follow-on OB-9: a named snapshot is read as named; otherwise the one whole snapshot that covers what training needs.
+  let snapshot: unknown, snapshotUsed: SnapshotUsed;
+  if (typeof request.snapshotFile === 'string') {
+    try { snapshot = JSON.parse(await readFile(request.snapshotFile, 'utf8')); } catch { throw new Error('training-snapshot-unreadable'); }
+    const value = object(snapshot);
+    snapshotUsed = { file: basename(request.snapshotFile), source: typeof value.source === 'string' ? value.source : null, readAt: typeof value.readAt === 'string' ? value.readAt : null, selected: 'named' };
+  } else ({ snapshot, used: snapshotUsed } = await selectSnapshot(settings.privateDirectory, ['operators', 'skills', 'inventory', 'base']).catch(() => { throw new Error('training-snapshot-unreadable'); }));
   let tables: TrainingTables;
   if (typeof request.tablesFile === 'string') { try { tables = JSON.parse(await readFile(request.tablesFile, 'utf8')); } catch { throw new Error('training-tables-unreadable'); } }
   else {
@@ -288,6 +307,7 @@ export async function queryTraining(input: unknown, options: { home?: string; fe
   }
   const { tablesFile: _tables, snapshotFile: _snapshot, format: _format, ...body } = request;
   const result = calculateTraining(tables, snapshot, body, options.evidence, options.payments);
+  result.snapshotUsed = snapshotUsed;
   return { result, language: settings.language ?? 'zh-CN', source: request.tablesFile ? 'supplied-unverified' : 'fixed-public', sources: request.tablesFile ? [] : tables.sources ?? [] };
 }
 
@@ -304,8 +324,12 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
   // Ticket 32 R4-2: the other plans' tiers taken out of this stock, and how the user can lift it.
   if (result.reservedTiers.length) lines.push('', en ? `Tiers already paid after this inventory was read (by this plan or another) are taken out of it: ${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank} (${row.at})`).join(', ')}. A newer inventory read stops this.`
     : `在这份库存读取之后已经付过料的档次（本计划或别的计划）已从库存里扣掉：${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank}（${row.at}）`).join('、')}；重新读取库存（扫描时间晚于这些付料）后就不再扣。`);
-  if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (user-confirmed); its materials are already paid and not counted again.`
-    : `M${result.inTrainingRank} 正在训练（用户确认），材料已付，不再计入。`);
+  if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (${result.inTrainingSource === 'snapshot' ? 'the Skland read shows it' : 'user-confirmed'}); its materials are already paid and not counted again.`
+    : `M${result.inTrainingRank} 正在训练（${result.inTrainingSource === 'snapshot' ? '森空岛读取时训练室里正在练这个技能' : '用户确认'}），材料已付，不再计入。`);
+  const used = result.snapshotUsed, room = result.trainingRoom;
+  if (used) lines.push('', en ? `Snapshot: ${used.file} (${used.source ?? '?'}, read ${used.readAt ?? '?'})${used.selected === 'skland-covers-more' ? '; chosen because it covers skills/base the default snapshot lacks' : ''}.`
+    : `快照：${used.file}（${used.source ?? '?'}，读取时间 ${used.readAt ?? '?'}）${used.selected === 'skland-covers-more' ? '；默认快照缺技能/基建，整份改用这一份' : ''}。`);
+  if (room) lines.push(en ? `Training room level ${room.level} (${room.source === 'snapshot' ? 'from the snapshot' : 'user-confirmed'}).` : `训练室等级 ${room.level}（${room.source === 'snapshot' ? '取自快照' : '用户确认'}）。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);
   // Ticket 32 R2-4: what the next start still lacks, down to base materials and the LMD gap (the start gate's tier).
   const gate = result.startMaterials ?? result.materials, decomposition = gate.comparison?.craft.decomposition, noCraft = gate.comparison?.noCraft;

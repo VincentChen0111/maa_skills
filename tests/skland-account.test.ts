@@ -143,7 +143,8 @@ test('the base keeps rooms, stationed operators and raw mood with its own time; 
   assert.deepEqual(rooms.map(room => [room.type, room.slotId, room.level, room.operators.length]), [
     ['control', 'slot_control', 5, 0], ['power', 'slot_power_1', 3, 1], ['manufacture', 'slot_manu_1', 3, 1], ['dormitory', 'slot_dorm_1', 5, 0], ['training', 'slot_train', 3, 1]]);
   assert.deepEqual(rooms[2]!.operators[0], { id: 'char_9001_synth', moodRaw: 8_640_000, moodAt: '2025-11-13T00:00:00.000Z' });
-  assert.deepEqual(rooms[4]!.operators[0], { id: 'char_9001_synth', role: 'trainee', moodRaw: 7_200_000, moodAt: '2025-11-13T00:00:00.000Z' });
+  // Ticket 32 follow-on item 7: the trainee keeps the skill in training (0-based; -1 idle) and the seconds left at read time.
+  assert.deepEqual(rooms[4]!.operators[0], { id: 'char_9001_synth', role: 'trainee', targetSkill: 0, remainSecs: 0, moodRaw: 7_200_000, moodAt: '2025-11-13T00:00:00.000Z' });
   const text = JSON.stringify(snapshot);
   for (const value of secretValues()) assert.equal(text.includes(value), false);
   for (const key of ['recruit', 'avatar', 'secretary', 'nickName', 'skinId', 'ap', 'mainStageProgress']) assert.equal(text.includes(`"${key}"`), false, key);
@@ -461,4 +462,20 @@ test('the same synthetic account through MAA and Skland is readable by the same 
   const missing = runCli(f, 'compare', {});
   assert.equal(missing.code, 1);
   assert.deepEqual(JSON.parse(missing.stderr), { ok: false, saved: false, error: 'snapshot-missing', missing: ['skland'] });
+});
+
+test('32 follow-on item 7: the training state is kept only when valid; an invalid value is a base coverage issue, never a guess', () => {
+  const training = (trainee: Record<string, unknown>, remainSecs: unknown) => {
+    const info = sklandInfo() as { building: { training: Record<string, unknown> } };
+    Object.assign(info.building.training, { trainee: { ...info.building.training.trainee as object, ...trainee }, remainSecs });
+    const snapshot = sklandSnapshot({ info, cultivate: sklandCultivate() }, readAt);
+    return { operator: snapshot.base!.rooms.find(room => room.type === 'training')!.operators[0] as Record<string, unknown>, coverage: snapshot.coverage.base };
+  };
+  assert.deepEqual([training({ targetSkill: 2 }, 3600).operator.targetSkill, training({ targetSkill: 2 }, 3600).operator.remainSecs], [2, 3600]);
+  assert.equal(training({ targetSkill: -1 }, 0).operator.targetSkill, -1);
+  for (const [skill, seconds] of [[3, 10], ['1', 10], [1, -5], [1, 1.5]] as const) {
+    const parsed = training({ targetSkill: skill }, seconds);
+    assert.equal('targetSkill' in parsed.operator && 'remainSecs' in parsed.operator, false, JSON.stringify([skill, seconds]));
+    assert.ok(parsed.coverage.issues.includes('invalid-training-state'), JSON.stringify(parsed.coverage));
+  }
 });

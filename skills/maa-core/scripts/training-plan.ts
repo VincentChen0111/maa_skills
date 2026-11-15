@@ -150,7 +150,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     assistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
     afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
     materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
-    history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
+    history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: result.inTrainingSource === 'snapshot' ? 'in-training-snapshot' : 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
     // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
     // hand, no later than this plan. Every later tier records its own countdown time.
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),

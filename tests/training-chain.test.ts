@@ -599,3 +599,17 @@ test('32 R6-1 conformance: for any gate scan S0 <= later inventory I <= start st
   }
   assert.ok(checked > 100, String(checked));
 });
+
+test('32 item 7: a plan prepared from a Skland read that shows this tier training only observes it, paid at the read time', async t => {
+  const f = trainingFixture(), at = '2026-11-12T00:00:00.000Z'; f.snapshot.items.mat = 20;
+  for (const operator of f.snapshot.operators) Object.assign(operator, { skillLevel: 7, mastery: { '1': 0, '2': 0, '3': 0 } });
+  Object.assign(f.snapshot, { source: 'skland', readAt: at, sourceTimes: { operators: at, inventory: at },
+    base: { rooms: [{ type: 'training', slotId: 'slot_train', level: 3, operators: [{ id: 'char_synthetic', role: 'trainee', targetSkill: 0, remainSecs: 3600, moodRaw: 0, moodAt: at }] }] },
+    coverage: { operators: { status: 'complete', issues: [] }, inventory: { status: 'complete', issues: [] }, base: { status: 'complete', issues: [] } } });
+  const w = await world(t, f), query = { ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  await assert.rejects(prepareTrainingPlan({ query, binding, currentTrainee: null, authorization: { source: 'current-request', reference: '接着练到专二' } }, { home: w.root }),
+    /training-in-training-trainee-conflict/);
+  const prepared = await prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', authorization: { source: 'current-request', reference: '接着练到专二' } }, { home: w.root });
+  assert.deepEqual([prepared.manualTraining, prepared.paidAt, prepared.preplacementRequired], [true, { '1': at }, false]);
+  assert.ok(prepared.history.some(entry => entry.kind === 'in-training-snapshot' && entry.rank === 1));
+});
