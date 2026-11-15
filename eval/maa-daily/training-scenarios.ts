@@ -150,7 +150,7 @@ export const trainingFollowOnScenarios: ScenarioDefinition[] = [
     jsonInputs: world(data, sklandRequest, { 'private/account-snapshot-skland.json': skland(undefined, 1) }),
     policy: { ...policy, expectedInvocations: [preferencesRead, invoked('prepare')], forbiddenInvocations: forbidden('apply'),
       ...created({ rank: 2, state: 'pending', target: { ...synthetic, currentRank: 1, goal: 2 }, preplacementRequired: true,
-        snapshotUsed: { file: 'account-snapshot-skland.json', source: 'skland', readAt: sklandAt, selected: 'skland-covers-more' }, trainingRoom: { level: 3, source: 'snapshot' } }) } },
+        snapshotUsed: { file: 'account-snapshot-skland.json', source: 'skland', readAt: sklandAt, chosen: 'skland-covers', lacking: ['skills', 'base'] }, trainingRoom: { level: 3, source: 'snapshot' } }) } },
   { id: 'training-chain-skland-in-progress', commands: chainCommands, jsonFiles: chainFiles,
     prompt: `使用 maa-daily。合成干员一技能的专一现在正在训练室里练，森空岛快照里能看到。我批准练完接着练到专二（原话：「专一练完接着练专二」）。按训练接口从这个进行中的档次续接，准备训练计划：查询输入在 training-request.json，${binding}。${busy}${prepareOnly}`,
     jsonInputs: world(data, sklandRequest, { 'private/account-snapshot-skland.json': skland({ id: 'char_synthetic', role: 'trainee', targetSkill: 0, remainSecs: 7200, moodRaw: 0, moodAt: sklandAt }) }),

@@ -4,9 +4,10 @@ import { readPublicJson, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { snapshotFiles } from './account-snapshot.ts';
+import { selectSnapshot, snapshotFiles, snapshotSourceLine, type SnapshotDomain, type SnapshotSelection } from './account-snapshot.ts';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { checkRequiredFor } from './check-required.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -475,61 +476,28 @@ export async function loadGapTables(fetcher?: typeof fetch): Promise<GapTables> 
     sources: [...tables.sources ?? [], building.source, stages.source].sort((a, b) => a.file.localeCompare(b.file)) };
 }
 
-export type SnapshotDomain = 'operators' | 'skills' | 'inventory' | 'base';
-export type SnapshotUsed = { file: string; source: string | null; readAt: string | null; selected: 'named' | 'default' | 'skland-covers-more' | 'default-inventory-newer' };
-/** A domain counts only when its coverage is complete; skills (level, mastery) also need values, which MAA recognition never has. */
-const snapshotCovers = (snapshot: unknown, domain: SnapshotDomain) => {
-  const value = object(snapshot), coverage = object(value.coverage);
-  if (domain === 'skills') return object(coverage.operators).status === 'complete' && Array.isArray(value.operators) && value.operators.some(row => object(row).skillLevel != null);
-  return object(coverage[domain]).status === 'complete';
-};
-const usedOf = (snapshot: unknown, file: string, selected: SnapshotUsed['selected']): SnapshotUsed => {
-  const value = object(snapshot);
-  return { file: basename(file), source: typeof value.source === 'string' ? value.source : null, readAt: typeof value.readAt === 'string' ? value.readAt : null, selected };
-};
+/** What a training plan and a gap result record about the snapshot they read (the shared `selectSnapshot` choice and the file). */
+export type SnapshotUsed = Pick<SnapshotSelection, 'source' | 'readAt' | 'chosen' | 'lacking'> & { file: string };
+/** Training and gaps read the same snapshot: what the costs, recipe conditions and the training start gate need. */
+export const trainingSnapshotDomains: readonly SnapshotDomain[] = ['operators', 'skills', 'inventory', 'base'];
 /**
- * Ticket 32 follow-on OB-9 (local version of the shared `selectSnapshot(neededDomains)` contract): the default snapshot stays
- * the source unless the Skland snapshot covers every needed domain the default covers and more; then the Skland snapshot is
- * read whole, never merged, and the caller prints which file, its source and read time. A missing or unreadable Skland
- * snapshot only leaves the default; a missing default with a Skland snapshot uses the Skland snapshot.
+ * Ticket 32 follow-on OB-9, adopting the shared `selectSnapshot`: a named file as it is; otherwise one whole snapshot, the Skland
+ * one when it covers what the MAA one lacks, but never over a newer MAA depot scan (FO1-1/FO2-4: `newestInventory`), since
+ * the training start gate spends from this inventory. Read failures come back as `SnapshotSelectionError`.
  */
-export async function selectSnapshot(privateDirectory: string, needed: SnapshotDomain[]): Promise<{ snapshot: unknown; used: SnapshotUsed }> {
-  const read = async (name: string) => { try { return { ok: true as const, value: JSON.parse((await readFile(join(privateDirectory, name), 'utf8')).replace(/^\uFEFF/, '')) as unknown }; }
-    catch (error) { return { ok: false as const, missing: (error as NodeJS.ErrnoException).code === 'ENOENT' }; } };
-  const [fallback, skland] = [await read(snapshotFiles.maa), await read(snapshotFiles.skland)];
-  if (!fallback.ok && !fallback.missing) throw new Error('gaps-snapshot-unavailable');
-  if (!fallback.ok) { if (skland.ok) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') }; throw new Error('gaps-snapshot-unavailable'); }
-  if (skland.ok) {
-    const own = needed.filter(domain => snapshotCovers(fallback.value, domain)), other = needed.filter(domain => snapshotCovers(skland.value, domain));
-    // Ticket 32 FO1-1: never trade a newer inventory for coverage; the start gate counts this stock. The Skland inventory is as of
-    // its read; the default's is its depot scan time, bounded by its import time when the scan time is missing.
-    const inventoryTime = (value: unknown) => { const data = object(value), at = data.source === 'skland' ? data.readAt : object(data.sourceTimes).inventory ?? data.readAt;
-      return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? Date.parse(at) : null; };
-    const fresh = inventoryTime(skland.value), stale = inventoryTime(fallback.value);
-    // Ticket 32 FO2-4: the age rule protects a newer inventory; a default snapshot that holds no counts has none to protect.
-    const status = object(object(object(fallback.value).coverage).inventory).status;
-    const holdsInventory = (status === 'complete' || status === 'partial') && Object.keys(object(object(fallback.value).items)).length > 0;
-    if (own.every(domain => other.includes(domain)) && other.length > own.length) {
-      if (!holdsInventory || fresh !== null && stale !== null && fresh >= stale) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
-      return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default-inventory-newer') };
-    }
-  }
-  return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default') };
+export async function readTrainingSnapshot(privateDirectory: string, explicitFile?: string): Promise<{ snapshot: Record<string, unknown>; used: SnapshotUsed }> {
+  const selection = await selectSnapshot(privateDirectory, trainingSnapshotDomains, explicitFile, { newestInventory: true });
+  const file = explicitFile !== undefined ? basename(explicitFile) : ['skland-covers', 'maa-missing', 'maa-unreadable'].includes(selection.chosen) ? snapshotFiles.skland : snapshotFiles.maa;
+  return { snapshot: selection.snapshot, used: { file, source: selection.source, readAt: selection.readAt, chosen: selection.chosen, lacking: selection.lacking } };
 }
 
 /** Reads only the selected snapshot and pinned public sources; no recognition, reports or account writes. */
 export async function queryCultivationGaps(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}): Promise<GapResult> {
   const request = object(input), settings = await readSettings(options.home);
   // Ticket 32 follow-on OB-9: a named snapshot is read as named; otherwise the one whole snapshot that covers what gaps need.
-  let snapshot: unknown, used: SnapshotUsed;
-  if (typeof request.snapshotFile === 'string') {
-    const file = resolve(request.snapshotFile);
-    try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('gaps-snapshot-unavailable'); }
-    used = usedOf(snapshot, file, 'named');
-  } else {
-    if (!settings.privateDirectory) throw new Error('gaps-snapshot-directory-required');
-    ({ snapshot, used } = await selectSnapshot(settings.privateDirectory, ['operators', 'skills', 'inventory', 'base']).catch(() => { throw new Error('gaps-snapshot-unavailable'); }));
-  }
+  const explicit = typeof request.snapshotFile === 'string' ? request.snapshotFile : undefined;
+  if (explicit === undefined && !settings.privateDirectory) throw new Error('gaps-snapshot-directory-required');
+  const { snapshot, used } = await readTrainingSnapshot(settings.privateDirectory ?? '', explicit).catch(() => { throw new Error('gaps-snapshot-unavailable'); });
   const result = calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
   result.snapshotUsed = used;
   return result;
@@ -568,7 +536,7 @@ export function formatCultivationGapsMarkdown(result: GapResult): string {
   const number = (value: number | null) => value === null ? '未知/待核' : String(value);
   const lines = ['# 培养材料缺口', `状态：${result.status}；当前选项：${result.selected}`,
     '以下是独立比较的覆盖建议，不进行加工、兑换或设备操作。先保留原始需求，按输入目标顺序分配；未穷举替代路线，不代表经济最优或所有方案的最小缺口。随机副产物未计入，当前干员心情、生产排队与即时可操作状态未核实。'];
-  if (result.snapshotUsed) lines.push(`快照：${cell(result.snapshotUsed.file)}（${cell(result.snapshotUsed.source ?? '?')}，读取时间 ${cell(result.snapshotUsed.readAt ?? '?')}）${result.snapshotUsed.selected === 'skland-covers-more' ? '；默认快照缺技能/基建，整份改用这一份，不合并' : ''}`);
+  if (result.snapshotUsed) lines.push(`快照：${cell(result.snapshotUsed.file)}。${cell(snapshotSourceLine(result.snapshotUsed))}`);
   if (result.issues.length) lines.push(`待核：${result.issues.map(cell).join('、')}`);
   if (Object.keys(result.stageCodes).length) lines.push('关卡条件可以一次问清：用户确认下面这些关卡都已通关时，在 progress 里写 confirmedStages:[这些关卡 ID]。');
   for (const [id, code] of Object.entries(result.stageCodes)) lines.push(`关卡标识：${cell(id)} → ${cell(code ?? '未知')}；条件 rank 保留公开原码，不推断星数。`);
@@ -597,27 +565,6 @@ export function formatCultivationGapsMarkdown(result: GapResult): string {
   return lines.join('\n') + '\n';
 }
 
-/**
- * Ticket 32 (owner, 2026-11-16: 「check required 要给我具体的，和有没有替代」): every reason the gap command stops on, with what
- * to verify and the alternatives. Printed as `{ok:false,status:"check-required",reason,check,alternatives}`; standard-input
- * rejections keep their own code, and an unlisted failure is `gaps-unclassified-failure` (no message text, which may hold paths).
- */
-export const gapChecks: Record<string, { check: string; alternatives: string[] }> = {
-  'gaps-action-invalid': { check: '动作只有 query，可选参数只有 --no-craft', alternatives: ['用 cultivation-gaps.ts query 并经标准输入传 JSON'] },
-  'gaps-input-invalid': { check: '输入必须是 JSON 对象', alternatives: ['按缺口接口的输入格式重新调用'] },
-  'gaps-snapshot-directory-required': { check: '设置里没有私有目录，也没有给 snapshotFile', alternatives: ['用 maa-setup 或偏好接口设置私有目录', '用 snapshotFile 指定快照文件'] },
-  'gaps-snapshot-unavailable': { check: '读不到账号快照或快照不是 JSON', alternatives: ['用 maa-account 导入或更新快照', '用 snapshotFile 指定快照文件'] },
-  'gaps-source-unavailable': { check: '读不到固定公开的建筑或关卡表', alternatives: ['稍后重试', '先用 operator-cost.ts 只查原始成本'] },
-  'cost-source-unavailable': { check: '读不到固定公开的干员或物品表', alternatives: ['稍后重试'] },
-  'settings-unreadable': { check: '设置文件读不了或格式不对', alternatives: ['用 maa-setup 或偏好接口修复设置', '交给 maa-doctor 检查'] },
-  'gaps-unclassified-failure': { check: '出现了没有分类的错误；为避免泄露路径，不输出原始信息', alternatives: ['运行 maa-doctor check 并把结果给用户', '重试一次同样的查询'] },
-};
-export function gapCheckRequired(code: string) {
-  const key = Object.hasOwn(gapChecks, code) ? code : Object.hasOwn(gapChecks, code.split(':')[0]!) ? code.split(':')[0]! : 'gaps-unclassified-failure';
-  const reason = key === 'gaps-unclassified-failure' ? key : code;
-  return { ok: false as const, status: 'check-required' as const, reason, check: gapChecks[key]!.check, alternatives: [...gapChecks[key]!.alternatives] };
-}
-
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
@@ -628,8 +575,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const result = await queryCultivationGaps(input);
     console.log(object(input).format === 'markdown' ? formatCultivationGapsMarkdown(result) : JSON.stringify(result));
   } catch (error) {
+    // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
     const stdin = stdinJsonCode(error);
-    const code = error instanceof Error && /^(gaps|cost|settings)-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'gaps-unclassified-failure';
-    console.error(JSON.stringify(stdin ? { error: stdin } : gapCheckRequired(code))); process.exitCode = 1;
+    console.error(JSON.stringify(stdin ? { error: stdin } : checkRequiredFor('cultivation-gaps', error))); process.exitCode = 1;
   }
 }

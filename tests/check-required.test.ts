@@ -22,17 +22,10 @@ const producerScripts: Record<CheckRequiredProducer, string> = {
   // Found by behaviour (over-blocking review, 2026-11-16): their catch-alls printed a reasonless code under another name.
   'base-plan': 'base-plan.ts', 'base-report': 'base-report.ts', 'base-apply': 'base-apply.ts', 'cultivation-report': 'cultivation-report.ts', 'operator-cost': 'operator-cost.ts',
   nga: 'nga.ts', bilibili: 'bilibili.ts', 'skland-community': 'skland-community.ts', doctor: 'doctor.ts',
+  // Ticket 32: the training fix adopted the module after the central merge (they were listed as "adopted after merge").
+  'training-plan': 'training-plan.ts', 'training-time': 'training-time.ts', 'cultivation-gaps': 'cultivation-gaps.ts',
 };
-/** The adopted-after-merge CLIs' reasonless catch-alls today, by behaviour (the training fix converts them on its branch). */
-const adoptedCatchAlls: Record<string, string> = { 'training-time.ts': 'training-query-failed', 'training-plan.ts': 'training-plan-check-required', 'cultivation-gaps.ts': 'gaps-input-invalid' };
-/** Generic codes the converted catch-alls used to print as `{ok:false, error}` (or `unexpected-failure`); now catalogue reasons. */
 const formerCatchAlls = ['plan-check-failed', 'base-report-failed', 'base-apply-check-failed', 'cultivation-report-failed', 'research-failed', 'check-could-not-complete'];
-/**
- * Owned by the parallel training fix (session training-chain-fix), which emits the same shape on its own branch. They adopt
- * this module after the central merge; until then they are listed, not converted, and not edited here.
- */
-const adoptedAfterMerge = ['training-plan.ts', 'training-time.ts', 'training-state.ts', 'cultivation-gaps.ts'];
-const adoptedConsumersAfterMerge = ['skills/maa-core/references/training.md'];
 /** `connection.reason` in setup's recheck record: "connection not tested until the MAA checks pass". Not a failure result. */
 const notAResult = { 'setup.ts': ['maa-check-required'] };
 
@@ -43,9 +36,11 @@ const consumers = [
   'skills/maa-account/references/import.md', 'skills/maa-account/references/skland.md', 'skills/maa-core/references/base-query.md',
   'skills/maa-core/references/credentials.md', 'skills/maa-core/references/preferences.md', 'skills/maa-setup/references/setup.md',
   'skills/maa-account/references/cultivation-report.md', 'skills/maa-core/references/advice-report.md', 'skills/maa-core/references/base-plan.md',
+  'skills/maa-core/references/training.md', 'skills/maa-account/references/gaps.md',
   'skills/maa-core/references/research.md', 'skills/maa-account/references/cost.md', 'skills/maa-daily/references/base-apply.md', 'skills/maa-doctor/references/checks.md',
 ];
-const retiredCodes = ['account-check-required', 'base-query-check-required', 'credential-check-required', 'preferences-check-required', 'setup-check-required'];
+const retiredCodes = ['account-check-required', 'base-query-check-required', 'credential-check-required', 'preferences-check-required', 'setup-check-required',
+  'training-plan-check-required'];
 
 test('the catalogue: stable kebab reasons, a check for each, and a stated absence of alternatives', () => {
   assert.ok(checkRequiredReasons.length > 0);
@@ -86,13 +81,12 @@ test('every producer maps only to catalogue reasons, every reason has a producer
   assert.equal(checkRequiredFor('stage-jobs', new Error('synthetic unclassified'), 'stage-jobs-prepare-outcome-unknown').reason, 'stage-jobs-prepare-outcome-unknown');
 });
 
-test('only the module builds the shape: every file that mentions check-required is the module, a listed producer, or adopted after merge', async () => {
+test('only the module builds the shape: every file that mentions check-required is the module or a listed producer', async () => {
   const files = (await readdir(scripts)).filter(file => file.endsWith('.ts'));
   for (const file of files) {
     const source = await readFile(join(scripts, file), 'utf8');
     const mentions = [...source.matchAll(/[a-z-]*check-required[a-z-]*/g)].map(match => match[0]).filter(word => !(notAResult as Record<string, string[]>)[file]?.includes(word));
     if (file === 'check-required.ts') continue;
-    if (adoptedAfterMerge.includes(file)) continue;
     const producer = Object.values(producerScripts).includes(file);
     if (producer) {
       assert.match(source, /from '\.\/check-required\.ts'|import\('\.\/check-required\.ts'\)/, `${file} must use the shared module`);
@@ -100,18 +94,13 @@ test('only the module builds the shape: every file that mentions check-required 
       for (const code of retiredCodes) assert.ok(!source.includes(`'${code}'`), `${file} still emits ${code}`);
     } else assert.deepEqual(mentions.filter(word => word !== 'check-required.ts'), [], `${file} mentions check-required but is not a listed producer`);
   }
-  for (const file of adoptedAfterMerge) assert.ok(files.includes(file), `${file} is listed as adopted after merge but does not exist`);
 });
 
-test('by behaviour: every CLI entry script reports its unclassified failures through the module, or is adopted after merge', async () => {
+test('by behaviour: every CLI entry script reports its unclassified failures through the module', async () => {
   const files = (await readdir(scripts)).filter(file => file.endsWith('.ts'));
   const entries: string[] = [];
   for (const file of files) if (/process\.argv\[1\]/.test(await readFile(join(scripts, file), 'utf8'))) entries.push(file);
-  assert.deepEqual(entries.filter(file => !Object.values(producerScripts).includes(file) && !adoptedAfterMerge.includes(file)).sort(), [], 'a CLI that is neither a producer nor adopted after merge');
-  for (const [file, code] of Object.entries(adoptedCatchAlls)) {
-    assert.ok(entries.includes(file) && adoptedAfterMerge.includes(file), file);
-    assert.ok((await readFile(join(scripts, file), 'utf8')).includes(`'${code}'`), `${file}: listed catch-all ${code} no longer present; update the list`);
-  }
+  assert.deepEqual(entries.filter(file => !Object.values(producerScripts).includes(file)).sort(), [], 'a CLI that is not a listed producer');
   for (const file of Object.values(producerScripts)) {
     const source = await readFile(join(scripts, file), 'utf8');
     assert.match(source, /checkRequiredFor\(/, `${file} must classify its catch-all through the module`);
@@ -271,9 +260,28 @@ test('by behaviour: the converted catch-alls report unreadable settings as check
     ['base-plan.ts', ['candidates'], { layout }, 1], ['base-report.ts', ['read'], {}, 1], ['base-apply.ts', ['apply'], {}, 1],
     ['cultivation-report.ts', ['read'], {}, 1], ['operator-cost.ts', ['query'], {}, 1],
     ['nga.ts', ['status'], '', 1], ['bilibili.ts', ['status'], '', 1], ['skland-community.ts', ['status'], '', 1], ['doctor.ts', ['check', '--json'], '', 2],
+    ['training-time.ts', ['query'], { name: '合成干员', skill: 1, target: 1 }, 1], ['training-plan.ts', ['list'], {}, 1], ['cultivation-gaps.ts', ['query'], { targets: [] }, 1],
   ];
   for (const [script, args, input, exit] of runs) {
     const run = cli(script, args, input, home);
     expectReason(run, 'settings-unreadable'); assert.equal(run.status, exit, `${script}: ${run.output}`);
   }
+});
+
+test('ticket 32: details carry only static codes and IDs beside the catalogue texts, and the predicate checks them', () => {
+  const issues = ['training:room-unverified', 'current.mastery.1:conflict', 'stage:stage_synthetic:unknown'];
+  const result = checkRequired('training-facts-required', { issues, stages: [{ rank: 2, assistants: [{ id: 'char_helper', issues: ['assistant:unavailable'] }] }] });
+  assert.deepEqual(Object.keys(result).sort(), ['alternatives', 'check', 'details', 'ok', 'reason', 'status']);
+  assert.ok(isCheckRequired(result)); assert.deepEqual((result.details as { issues: string[] }).issues, issues);
+  // A path, user text or an address never travels in details: the constructor drops what is not static, the predicate refuses it.
+  for (const leak of ['Z:' + String.fromCharCode(92) + 'synthetic' + String.fromCharCode(92) + 'folder', '/synthetic/folder', '用户原话', 'two words', 'https://example.invalid/x']) {
+    assert.equal(checkRequired('training-facts-required', { issues: [leak] }).details, undefined, leak);
+    assert.equal(isCheckRequired({ ...checkRequired('training-facts-required'), details: { issues: [leak] } }), false, leak);
+  }
+  assert.equal(isCheckRequired({ ...checkRequired('training-facts-required'), details: 'issues' }), false);
+  // A static `code:detail` keeps the catalogue reason and its detail.
+  const suffixed = checkRequiredFor('training-plan', new Error('report-not-approvable:needs-correction'));
+  assert.deepEqual([suffixed.reason, suffixed.details], ['report-not-approvable', { detail: 'needs-correction' }]);
+  assert.equal(checkRequiredFor('training-plan', new Error('synthetic unclassified')).reason, 'training-unclassified-failure');
+  assert.equal(checkRequiredFor('cultivation-gaps', new Error('gaps-source-unavailable:building')).reason, 'gaps-source-unavailable');
 });

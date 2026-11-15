@@ -84,3 +84,19 @@ FO3-1 修复：`calculateTraining` 有计划证据、查询写的档次恰为计
 | FO4-1（P3） | 快照领先计划一档（等于 refresh 目标）、`current` 按文档写成计划记录的完成时，refresh 报 `training-facts-required` 并记进 `startIssues`，规格和 training.md 要求报 target-changed、计划不变 | 接受，转后续工单 | 真实，有离线复现（FO2-1 起的回归，同属停下原因归错）；refresh 照样停下、开训门关着、不会花费，原因可从 `details.issues` 看出。本包已过第 3 轮，按维护者规则「第 3 轮后不开第 4 轮，未关的 P3 转后续工单，包照常合并」；第 4 轮是为 P2 授权的，P3 不再追加轮次。工单草稿（含复现和建议修法）交协调者编号、建镜像 |
 
 本包审查结束：没有未关闭的 P1、P2。
+
+## 全量检查补齐（单独的小包，审查 1 轮）
+
+冻结 `0e670fe` 跑全量离线检查失败 2 项，都是登记与清单：`docs/training-sources.md` 引用的两份 MAA 源码（`Interface/OperProgressTask.cpp`、`MiniGame/MaterialSynthesisTaskPlugin.cpp`）不在依赖注册表；本工单在 `training-plan.ts` 新增的两处比较不在比较清单。修复：注册表加 `mastery-training-crafting`（blob 取自 MAA v6.22.0 `901e01c` 的公开 API，两个支持版本相同），比较清单归类两行；随包记录重新生成后内容不变。独立审查第 1 轮 GO，没有发现：两行归类正确；三个 blob 与 v6.22.0 一致，v6.21.4 只有 `OperProgressProcessTask.cpp` 不同、差异与专精缺料无关，`sourceVerified` 两版有依据；`tickets ["24"]` 正确（32 记在 24 号工单下）。审查记录见共享笔记 `review-32-suitefix-round1.md`。冻结 `aae4ab5` 全量离线检查 1311 通过、0 失败、2 跳过，类型检查通过。
+
+## 合并后改用共用模块（第 5 轮复核）
+
+关卡作业修复（PR #105，squash `a6e306a`）合入 main，带来共用的 `selectSnapshot` 和 check-required 模块，一致性测试把本工单的文件列为「合并后再采用」。协调者转达的合并流程（维护者「同意」）要求：变基到新的 main 后改用共用模块，这次代码改动放进本包的审查。变基干净，没有冲突。
+
+改动：
+
+- 选快照：训练和缺口改用共用 `selectSnapshot`。FO1-1（安全类）的库存时间规则移进共用函数，做成选项 `newestInventory`：MAA 快照有仓库数量时，森空岛快照没有仓库（`maa-default`）或读取时间早于 MAA 的仓库扫描时间（`maa-inventory-newer`）就仍用 MAA 快照；只有训练和与它共用快照的缺口打开，其他调用方不变。计划和结果的 `snapshotUsed` 改用共用的说法：`chosen`（`explicit`、`maa-default`、`skland-covers`、`maa-inventory-newer` 等）和 `lacking`，保留 `file`；回复里的快照一行用共用的 `snapshotSourceLine`。新场景 `training-chain-skland-facts` 的期望随之改写。
+- check-required：训练的 63 个、缺口的 8 个原因码并入共用目录（与已有的三个合用一条），`training-plan`、`training-time`、`cultivation-gaps` 成为列出的生产方；`training-state.ts` 不再有自己的表，`cultivation-gaps.ts` 的表删掉；计划里各处停下（apply、close、reconcile）都经共用构造函数。共用结果加可选的 `details`：只放静态值（问题代码、ID、档次、版本号），构造函数只留整项静态的条目，谓词拒绝其他，因为维护者要具体的缺项、共用形状原先只许五个键；`code:detail` 形式的静态代码按代码归类、细节放 `details.detail`。五条文字为符合共用目录的静态文字规则改写（不含 `<…>` 占位、核对项不少于 8 个字）。一致性测试去掉「合并后再采用」，三个脚本列入生产方，`training.md`、`gaps.md` 列入使用方，`training-plan-check-required` 列入退役代码；新增 `details` 的测试和三个 CLI 设置读不了时的行为测试。
+- 文档：`training.md`、`gaps.md` 写明共用的选快照规则和 `reason`、`check`、`alternatives`、`details`；maa-core 的核对项一条补上 `details`；规格两张来源表各加一行。
+
+轮次授权：本包已在第 4 轮 GO；这次是合并带来的新代码改动，协调者要求放进本包审查。维护者 2026-11-11 原话「以后这种情况可以你自己授权，最好压缩复核轮次」（2026-11-14 重申），修复会话据此授权第 5 轮，只复核这次改动。

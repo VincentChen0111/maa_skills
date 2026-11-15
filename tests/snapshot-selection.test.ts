@@ -62,3 +62,27 @@ test('an explicit snapshotFile is read as it is, whatever the domains', async t 
   assert.equal(chosen.source, 'maa'); assert.equal(chosen.chosen, 'explicit');
   await assert.rejects(selectSnapshot(directory, ['operators'], join(directory, 'absent.json')), (error: unknown) => error instanceof SnapshotSelectionError && error.kind === 'missing');
 });
+
+test('ticket 32 FO1-1/FO2-4: with newestInventory a newer MAA depot scan is never traded for coverage; without it nothing changes', async t => {
+  // MAA depot scanned after the Skland read: the start gate would count an older inventory if the Skland file were read.
+  const scanned = { ...maa, readAt: '2026-11-12T01:00:00.000Z', items: { mat: 1 }, sourceTimes: { ...maa.sourceTimes, inventory: '2026-11-12T00:30:00.000Z' },
+    coverage: { ...maa.coverage, inventory: { status: 'complete' as const, issues: [] } } };
+  const older = { ...skland, readAt: '2026-11-12T00:00:00.000Z' }, newer = { ...skland, readAt: '2026-11-12T00:30:00.000Z' };
+  const needed = ['operators', 'skills', 'inventory'] as const;
+  const kept = await selectSnapshot(await world(t, { maa: scanned, skland: older }), needed, undefined, { newestInventory: true });
+  assert.deepEqual([kept.source, kept.chosen, kept.lacking], ['maa', 'maa-inventory-newer', ['skills']]);
+  // Same instant or later: the Skland read is at least as fresh, so coverage decides.
+  const fresh = await selectSnapshot(await world(t, { maa: scanned, skland: newer }), needed, undefined, { newestInventory: true });
+  assert.deepEqual([fresh.source, fresh.chosen], ['skland', 'skland-covers']);
+  // Without a scan time the MAA import time bounds it.
+  const unscanned = { ...scanned, sourceTimes: { ...scanned.sourceTimes, inventory: null } };
+  assert.equal((await selectSnapshot(await world(t, { maa: unscanned, skland: newer }), needed, undefined, { newestInventory: true })).chosen, 'maa-inventory-newer');
+  // FO2-4: an MAA snapshot that holds no counts has no inventory to protect.
+  const counted = { ...scanned, items: {}, coverage: { ...scanned.coverage, inventory: { status: 'missing', issues: [] } } };
+  assert.equal((await selectSnapshot(await world(t, { maa: counted, skland: older }), needed, undefined, { newestInventory: true })).chosen, 'skland-covers');
+  // A Skland read without its own inventory never replaces the MAA counts.
+  const noDepot = { ...newer, coverage: { ...newer.coverage, inventory: { status: 'unavailable', issues: [] } } };
+  assert.equal((await selectSnapshot(await world(t, { maa: scanned, skland: noDepot }), ['operators', 'skills'], undefined, { newestInventory: true })).chosen, 'maa-default');
+  // The option is opt-in: other callers keep the coverage rule.
+  assert.equal((await selectSnapshot(await world(t, { maa: scanned, skland: older }), needed)).chosen, 'skland-covers');
+});

@@ -1,6 +1,7 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
 import { queryBaseSkills, isBaseRoom } from './base-query.ts';
-import { calculateCultivationGaps, formatDecomposition, selectSnapshot, type GapTables, type GapResult, type GapPlan, type SnapshotUsed } from './cultivation-gaps.ts';
+import { calculateCultivationGaps, formatDecomposition, readTrainingSnapshot, type GapTables, type GapResult, type GapPlan, type SnapshotUsed } from './cultivation-gaps.ts';
+import { snapshotSourceLine } from './account-snapshot.ts';
 import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
@@ -9,7 +10,8 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
-import { staticCode, trainingCheckRequired, type TierPayment, type Spend } from './training-state.ts';
+import { type TierPayment, type Spend } from './training-state.ts';
+import { checkRequiredFor } from './check-required.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -325,12 +327,9 @@ export async function queryTraining(input: unknown, options: { home?: string; fe
   const request = object(input), settings = await readSettings(options.home);
   // Ticket 32: read failures carry static codes (never a path) so the CLI can say what to check.
   // Ticket 32 follow-on OB-9: a named snapshot is read as named; otherwise the one whole snapshot that covers what training needs.
-  let snapshot: unknown, snapshotUsed: SnapshotUsed;
-  if (typeof request.snapshotFile === 'string') {
-    try { snapshot = JSON.parse(await readFile(request.snapshotFile, 'utf8')); } catch { throw new Error('training-snapshot-unreadable'); }
-    const value = object(snapshot);
-    snapshotUsed = { file: basename(request.snapshotFile), source: typeof value.source === 'string' ? value.source : null, readAt: typeof value.readAt === 'string' ? value.readAt : null, selected: 'named' };
-  } else ({ snapshot, used: snapshotUsed } = await selectSnapshot(settings.privateDirectory, ['operators', 'skills', 'inventory', 'base']).catch(() => { throw new Error('training-snapshot-unreadable'); }));
+  const explicit = typeof request.snapshotFile === 'string' ? request.snapshotFile : undefined;
+  if (explicit === undefined && !settings.privateDirectory) throw new Error('training-snapshot-unreadable');
+  const { snapshot, used: snapshotUsed } = await readTrainingSnapshot(settings.privateDirectory ?? '', explicit).catch(() => { throw new Error('training-snapshot-unreadable'); });
   let tables: TrainingTables;
   if (typeof request.tablesFile === 'string') { try { tables = JSON.parse(await readFile(request.tablesFile, 'utf8')); } catch { throw new Error('training-tables-unreadable'); } }
   else {
@@ -362,8 +361,8 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
   if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (${result.inTrainingSource === 'snapshot' ? 'the Skland read shows it' : 'user-confirmed'}); its materials are already paid and not counted again.`
     : `M${result.inTrainingRank} 正在训练（${result.inTrainingSource === 'snapshot' ? '森空岛读取时训练室里正在练这个技能' : '用户确认'}），材料已付，不再计入。`);
   const used = result.snapshotUsed, room = result.trainingRoom;
-  if (used) lines.push('', en ? `Snapshot: ${used.file} (${used.source ?? '?'}, read ${used.readAt ?? '?'})${used.selected === 'skland-covers-more' ? '; chosen because it covers skills/base the default snapshot lacks' : ''}.`
-    : `快照：${used.file}（${used.source ?? '?'}，读取时间 ${used.readAt ?? '?'}）${used.selected === 'skland-covers-more' ? '；默认快照缺技能/基建，整份改用这一份' : ''}。`);
+  if (used) lines.push('', en ? `Snapshot: ${used.file} (${used.source ?? '?'}, read ${used.readAt ?? '?'}; choice: ${used.chosen}${used.lacking.length ? `; lacking ${used.lacking.join(', ')}` : ''}).`
+    : `快照：${used.file}。${snapshotSourceLine(used)}`);
   if (room) lines.push(en ? `Training room level ${room.level} (${room.source === 'snapshot' ? 'from the snapshot' : 'user-confirmed'}).` : `训练室等级 ${room.level}（${room.source === 'snapshot' ? '取自快照' : '用户确认'}）。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);
   // Ticket 32 R2-4: what the next start still lacks, down to base materials and the LMD gap (the start gate's tier).
@@ -398,7 +397,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   } catch (error) {
     // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
     const stdin = stdinJsonCode(error);
-    console.error(JSON.stringify(stdin ? { ok: false, error: stdin } : trainingCheckRequired(staticCode(error) ?? 'training-unclassified-failure')));
+    console.error(JSON.stringify(stdin ? { ok: false, error: stdin } : checkRequiredFor('training-time', error)));
     process.exitCode = 1;
   }
 }

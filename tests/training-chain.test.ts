@@ -9,6 +9,7 @@ import { calculateTraining, materialGate, formatTraining, gateSpend, paymentTake
 import { operatorCatalog } from '../skills/maa-core/scripts/operator-cost.ts';
 import { reconcileTraining, paidRanks, planPayments, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
+import { checkRequired, isCheckRequired } from '../skills/maa-core/scripts/check-required.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
 import { approvedTrainingReport } from './fixtures/training-report.ts';
 import { configFixture, plan as runtimePlan } from './fixtures/training-runtime.ts';
@@ -54,6 +55,7 @@ test('32 defect 1: the prepare CLI names the specific reason and the pending fac
   const output = JSON.parse(run.stderr);
   // Owner, 2026-11-16: 「check required 要给我具体的，和有没有替代」 — reason, what to check, and the alternatives.
   assert.deepEqual([output.ok, output.status, output.reason], [false, 'check-required', 'training-facts-required']);
+  assert.equal(isCheckRequired(output), true, 'the shared shape, static details included');
   assert.ok(output.check.length > 0); assert.ok(output.alternatives.length > 0);
   assert.ok(output.details.issues.includes('training:stage-1-pending'), run.stderr);
   const stage = output.details.stages.find((row: { rank: number }) => row.rank === 1);
@@ -258,7 +260,7 @@ test('32 defect 4: the user can close a stopped plan to free the training room; 
   a.action = { kind: 'start', dueAt: due.toISOString(), armedAt: now, timerIdentity: timer };
   Object.assign(w.config.Timers.List[0]!, timer); await writeFile(w.file, JSON.stringify(w.config)); await storePlan(w, a);
   const words = 'synthetic: 我已在游戏里核对，关闭这个计划';
-  assert.deepEqual(await closeTrainingPlan({ id: 'plan-a', reference: words }, { home: w.root }), { status: 'check-required', reason: 'training-timer-still-armed' });
+  assert.deepEqual(await closeTrainingPlan({ id: 'plan-a', reference: words }, { home: w.root }), checkRequired('training-timer-still-armed'));
   Object.assign(w.config.Timers.List[0]!, { IsEnabled: false }); await writeFile(w.file, JSON.stringify(w.config));
   await assert.rejects(closeTrainingPlan({ id: 'plan-a' }, { home: w.root }), /training-close-reference-required/);
   assert.equal((await closeTrainingPlan({ id: 'plan-a', reference: words }, { home: w.root })).status, 'complete');
@@ -289,7 +291,7 @@ test('32 R1-3/R1-4: a cleanup the writer refused before writing stays pending an
   assert.equal((await listTrainingPlans({ home: w.root }))[0]!.holdsTrainingRoom, true);
   const blocked = await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
   assert.deepEqual([blocked.status, blocked.reason], ['check-required', 'training-timer-cleanup-pending']);
-  assert.deepEqual(await closeTrainingPlan({ id: input.id, reference: 'synthetic: 关闭' }, { home: w.root }), { status: 'check-required', reason: 'training-timer-still-armed' });
+  assert.deepEqual(await closeTrainingPlan({ id: input.id, reference: 'synthetic: 关闭' }, { home: w.root }), checkRequired('training-timer-still-armed'));
   // The next re-entry (confirmed this time) disables the plan's own slot and the chain continues.
   const cleaned = await reconcileTrainingPlan({ id: input.id, logFile: join(w.maaDirectory, 'core.log'), host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
   assert.equal(cleaned.cleanup?.status, 'complete'); assert.equal(cleaned.plan.pendingCleanup, undefined);
@@ -658,7 +660,7 @@ test('32 FO1-2/FO1-6/FO1-8: a refusal keeps every reason; a room limit holds onl
   const plan = await prepareTrainingPlan({ query: { ...query, target: 3, facts: { ...f.request.facts, trainingRoomLevel: 2 } }, binding, currentTrainee: null, authorization }, { home: w.root });
   assert.deepEqual([plan.startIssues, plan.materialReady], [undefined, true]);
   // FO1-8: the plan records the snapshot and the room level it was prepared from, and the summary shows them.
-  assert.deepEqual([plan.snapshotUsed?.file, plan.snapshotUsed?.selected, plan.trainingRoom], ['snapshot.json', 'named', { level: 2, source: 'user-confirmed' }]);
+  assert.deepEqual([plan.snapshotUsed?.file, plan.snapshotUsed?.chosen, plan.trainingRoom], ['snapshot.json', 'explicit', { level: 2, source: 'user-confirmed' }]);
   // A room that cannot train the next tier holds it (level 1, M1 done, next is M2).
   const low = scanned(trainingFixture()); low.snapshot.items.mat = 20;
   await writeFile(w.snapshotFile, JSON.stringify(low.snapshot));

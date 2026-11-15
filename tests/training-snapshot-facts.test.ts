@@ -67,22 +67,22 @@ test('32 OB-9: without a named snapshot the query reads the Skland snapshot whol
   await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
   // Only the default exists: it is used, and the facts it lacks stay to confirm.
   const alone = await queryTraining(query, { home: root });
-  assert.deepEqual(alone.result.snapshotUsed, { file: 'account-snapshot.json', source: 'maa', readAt: maa.snapshot.readAt, selected: 'default' });
+  assert.deepEqual(alone.result.snapshotUsed, { file: 'account-snapshot.json', source: 'maa', readAt: maa.snapshot.readAt, chosen: 'maa-default', lacking: ['skills', 'base'] });
   assert.deepEqual([alone.result.currentRank, alone.result.status], [null, 'needs-input']);
   // The Skland snapshot covers skills and the base the MAA snapshot never has: it is read whole (its own inventory too).
   sk.snapshot.items.mat = 7; await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
   const chosen = await queryTraining(query, { home: root });
-  assert.deepEqual(chosen.result.snapshotUsed, { file: 'account-snapshot-skland.json', source: 'skland', readAt, selected: 'skland-covers-more' });
+  assert.deepEqual(chosen.result.snapshotUsed, { file: 'account-snapshot-skland.json', source: 'skland', readAt, chosen: 'skland-covers', lacking: ['skills', 'base'] });
   assert.deepEqual([chosen.result.currentRank, chosen.result.trainingRoom], [0, { level: 3, source: 'snapshot' }]);
   assert.equal(chosen.result.materials.comparison?.noCraft.materials.mat?.available, 7);
   // A Skland snapshot that lacks the inventory the default has is not a superset: the default stays.
   Object.assign(sk.snapshot.coverage, { inventory: { status: 'unavailable', issues: [] } }); Object.assign(maa.snapshot.coverage, { inventory: { status: 'complete' } });
   await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
   await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
-  assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.selected, 'default');
+  assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.chosen, 'maa-default');
   // A named snapshot is read as named.
   const named = await queryTraining({ ...query, snapshotFile: join(privateDirectory, 'account-snapshot-skland.json') }, { home: root });
-  assert.deepEqual([named.result.snapshotUsed?.file, named.result.snapshotUsed?.selected], ['account-snapshot-skland.json', 'named']);
+  assert.deepEqual([named.result.snapshotUsed?.file, named.result.snapshotUsed?.chosen], ['account-snapshot-skland.json', 'explicit']);
 });
 
 test('32 FO1-1: the Skland snapshot is not chosen over a default whose inventory is newer, whatever it covers', async t => {
@@ -97,11 +97,11 @@ test('32 FO1-1: the Skland snapshot is not chosen over a default whose inventory
   await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
   const query = { ...trainingFixture().request, target: 1, tablesFile };
   const older = await queryTraining(query, { home: root });
-  assert.deepEqual([older.result.snapshotUsed?.file, older.result.snapshotUsed?.selected], ['account-snapshot.json', 'default-inventory-newer']);
+  assert.deepEqual([older.result.snapshotUsed?.file, older.result.snapshotUsed?.chosen], ['account-snapshot.json', 'maa-inventory-newer']);
   // A default without a scan time is bounded by its import time: a Skland read after that import is newer.
   Object.assign(maa.snapshot, { sourceTimes: { operators: null, inventory: null } }); await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
   Object.assign(sk.snapshot, { readAt: '2026-11-12T02:00:00.000Z' }); await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
-  assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.selected, 'skland-covers-more');
+  assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.chosen, 'skland-covers');
 });
 
 test('32 FO2-4: a default snapshot without inventory does not outrank a complete Skland snapshot by its import time', async t => {
@@ -116,5 +116,5 @@ test('32 FO2-4: a default snapshot without inventory does not outrank a complete
   await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
   await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
   const chosen = await queryTraining({ ...trainingFixture().request, target: 1, tablesFile }, { home: root });
-  assert.equal(chosen.result.snapshotUsed?.selected, 'skland-covers-more');
+  assert.equal(chosen.result.snapshotUsed?.chosen, 'skland-covers');
 });

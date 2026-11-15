@@ -60,8 +60,8 @@ test('32 OB-9: without a named snapshot the gap query reads the Skland snapshot 
     `https://raw.githubusercontent.com/${source.repository}/${source.commit}/${source.file}`, (tables as Record<string, unknown>)[key]]));
   const fetcher: typeof fetch = async input => new Response(JSON.stringify(network[String(input)]));
   const chosen = await queryCultivationGaps({ targets: [gapGoal], progress }, { home: root, fetcher });
-  assert.deepEqual(chosen.snapshotUsed, { file: 'account-snapshot-skland.json', source: 'skland', readAt: '2026-11-12T00:00:00.000Z', selected: 'skland-covers-more' });
+  assert.deepEqual(chosen.snapshotUsed, { file: 'account-snapshot-skland.json', source: 'skland', readAt: '2026-11-12T00:00:00.000Z', chosen: 'skland-covers', lacking: ['skills', 'base'] });
   assert.equal(crafted(chosen), 1, 'the manufacture level came from the Skland snapshot it read');
   const named = await queryCultivationGaps({ targets: [gapGoal], progress, snapshotFile: join(privateDirectory, 'account-snapshot.json') }, { home: root, fetcher });
-  assert.deepEqual([named.snapshotUsed?.file, named.snapshotUsed?.selected, crafted(named)], ['account-snapshot.json', 'named', 0]);
+  assert.deepEqual([named.snapshotUsed?.file, named.snapshotUsed?.chosen, crafted(named)], ['account-snapshot.json', 'explicit', 0]);
 });
