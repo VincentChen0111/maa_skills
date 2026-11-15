@@ -16,11 +16,44 @@ const object = (value: unknown): ObjectValue => value !== null && typeof value =
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const integer = (value: unknown, min: number, max: number): value is number => Number.isSafeInteger(value) && Number(value) >= min && Number(value) <= max;
 const reductionPending = 'assistant:five-hour-reduction-pending:';
-/** Issues that still allow a speed estimate: availability (handled by selection) and a pending reduction (estimated without it). */
-const estimateKeepingIssue = (issue: string) => issue === 'assistant:unavailable' || issue === 'assistant:availability-unverified' || issue.startsWith(reductionPending);
+/** Ticket 32 follow-on OB-6: an extra the tool cannot verify. The assistant keeps its verified bonus as a lower bound. */
+const lowerBoundIssue = (issue: string) => issue.startsWith(reductionPending) || issue.startsWith('assistant:condition-unverified:') || issue.startsWith('assistant:branch-unverified:');
+/** Issues that still allow a speed estimate: availability (handled by selection) and unverified extras (estimated without them). */
+const estimateKeepingIssue = (issue: string) => issue === 'assistant:unavailable' || issue === 'assistant:availability-unverified' || lowerBoundIssue(issue);
 const professions: Record<string, string> = { PIONEER: '先锋', WARRIOR: '近卫', TANK: '重装', SNIPER: '狙击', CASTER: '术师', SUPPORT: '辅助', MEDIC: '医疗', SPECIAL: '特种' };
+const fiveHourText = '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）';
+export type TrainingTextContext = { rank: number; role: string | null; branch: string | null; reduction: boolean | null };
+export type TrainingTextEffect = { bonus: number; durationFactor: number; pending: 'five-hour-reduction-pending' | 'branch-unverified' | 'condition-unverified' | null };
+/**
+ * Ticket 32 follow-on OB-6 (recurrence rule): the one reading of a training-room skill text. Parsed forms give an exact
+ * bonus for this tier, trainee class and branch; a part the tool cannot verify (the five-hour reduction without its fact, an
+ * unknown branch, faction counts, 人间烟火, 武道 and any unparsed text) adds nothing and is returned as pending. Every such
+ * extra in the pinned table is a non-negative speed or a time reduction, so the result is a lower bound on the speed and the
+ * estimate an upper bound on the duration; the real countdown and completion callback still decide. The conformance test runs
+ * every pinned text through it.
+ */
+export function trainingTextEffect(text: string, context: TrainingTextContext): TrainingTextEffect {
+  const none: TrainingTextEffect = { bonus: 0, durationFactor: 1, pending: null };
+  if (text === fiveHourText) return context.reduction === null ? { ...none, pending: 'five-hour-reduction-pending' } : { ...none, durationFactor: context.reduction ? 0.5 : 1 };
+  if (/^进驻训练室协助(先锋|近卫|重装|狙击|术师|医疗|辅助|特种)干员训练专精技能至[1-3]级时，心情每小时消耗\+1$/.test(text)) return none;
+  const rankOnly = /^进驻训练室协助位时，如果本次训练专精技能至([1-3])级，专精技能训练速度\+(\d+)%$/.exec(text);
+  if (rankOnly) return { ...none, bonus: context.rank === Number(rankOnly[1]) ? Number(rankOnly[2]) / 100 : 0 };
+  const branchExtra = (names: string, percent: string): TrainingTextEffect => context.branch === null ? { ...none, pending: 'branch-unverified' }
+    : { ...none, bonus: names.split('或').includes(context.branch) ? Number(percent) / 100 : 0 };
+  const branchOnly = /^进驻训练室协助位时，如果训练位干员分支为([^，]+)，则专精技能训练速度额外\+(\d+)%$/.exec(text);
+  if (branchOnly) return branchExtra(branchOnly[1]!, branchOnly[2]!);
+  const match = /^进驻训练室协助位时，(.*?)干员的专精技能训练速度\+(\d+)%(?:，如果本次训练专精技能至([1-3])级，则训练速度额外\+(\d+)%|，如果训练位干员分支为([^，]+)，则训练速度额外\+(\d+)%)?(?:，心情每小时消耗\+1)?$/.exec(text);
+  if (!match) return { ...none, pending: 'condition-unverified' };
+  if (match[1] !== '' && !(context.role && match[1]!.split('与').includes(professions[context.role]!))) return none;
+  let bonus = Number(match[2]) / 100;
+  if (match[3] && context.rank === Number(match[3])) bonus += Number(match[4]) / 100;
+  if (!match[5]) return { ...none, bonus };
+  const extra = branchExtra(match[5], match[6]!);
+  return { ...extra, bonus: bonus + extra.bonus };
+}
 export type TrainingTables = GapTables & { skillNames: unknown };
-export type TrainingAssistant = { id: string; name: string; available: boolean | null; speedBonus: number | null; estimatedSeconds: number | null; conditions: string[]; issues: string[] };
+/** `speedBonus` is a lower bound (and `estimatedSeconds` an upper bound) when `lowerBound`: an extra is listed as pending in `issues`. */
+export type TrainingAssistant = { id: string; name: string; available: boolean | null; speedBonus: number | null; lowerBound: boolean; estimatedSeconds: number | null; conditions: string[]; issues: string[] };
 export type TrainingResult = { status: 'ok' | 'needs-input'; operator: { id: string; name: string } | null; skill: number | null; skillId: string | null;
   skillName: string | null; currentRank: number | null; targetRank: number | null; role: string | null; materials: GapResult; issues: string[];
   /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the time its inventory reflects, and the materials of the next tier to start. */
@@ -191,6 +224,10 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
   const available = facts.source === 'user-confirmed' && Array.isArray(facts.availableAssistants) && facts.availableAssistants.every(id => typeof id === 'string') ? facts.availableAssistants : null;
   const helpers = queryBaseSkills(snapshot, { ...tables, characters: catalog }, {});
+  // Ticket 32 follow-on OB-5: the trainee's branch is an immutable fact of the pinned tables (character subProfessionId →
+  // uniequip subProfDict name), never a user fact; without the table the branch extra stays pending.
+  const branchName = object(object(object(tables.modules).subProfDict)[String(char.subProfessionId)]).subProfessionName;
+  const branch = typeof branchName === 'string' && branchName.trim() ? branchName : null;
   const sourceWarnings = new Set(helpers.warnings);
   for (let rank = start + 1; rank <= targetRank; rank++) {
     const seconds = object(array(selectedSkill.levelUpCostCond)[rank - 1]).lvlUpTime;
@@ -205,35 +242,21 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
       if (sourceWarnings.has(`game-operator-incomplete:${helper.id}`) || helper.skills.some(row => sourceWarnings.has(`game-skill-incomplete:${row.id}`)
         || !isBaseRoom(row.room) || !row.name.trim() || !row.text.trim())) issues.push('assistant:source-incomplete');
       if (helper.ownership !== 'owned' || trainingSkills.some(row => row.status === 'unknown')) issues.push('assistant:skill-or-ownership-unknown');
+      // Ticket 32: an unknown five-hour fact (any tier after the next, or no confirmed prior assistance) estimates without the
+      // reduction and keeps it pending; real countdowns supersede the estimate. It never disqualifies the assistant.
+      const prior = object(facts.previousAssistance);
+      const reduction = rank !== start + 1 || facts.source !== 'user-confirmed' || !integer(prior.seconds, 0, 31 * 86400) || typeof prior.remainedTogether !== 'boolean'
+        || typeof prior.assistantId !== 'string' || typeof prior.traineeId !== 'string' ? null
+        : prior.seconds >= 18000 && prior.remainedTogether && prior.assistantId === helper.id && prior.traineeId === cost.operator!.id;
       for (const item of active) {
-        if (item.text === '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）') {
-          // Ticket 32: an unknown five-hour fact (any tier after the next, or no confirmed prior assistance) estimates
-          // without the reduction and keeps it pending; real countdowns supersede the estimate. It never disqualifies the assistant.
-          const prior = object(facts.previousAssistance);
-          if (rank !== start + 1 || facts.source !== 'user-confirmed' || !integer(prior.seconds, 0, 31 * 86400) || typeof prior.remainedTogether !== 'boolean'
-            || typeof prior.assistantId !== 'string' || typeof prior.traineeId !== 'string') issues.push(`${reductionPending}${item.id}`);
-          else if (prior.seconds >= 18000 && prior.remainedTogether && prior.assistantId === helper.id && prior.traineeId === cost.operator!.id) durationFactor = 0.5;
-          continue;
-        }
-        if (/^进驻训练室协助(先锋|近卫|重装|狙击|术师|医疗|辅助|特种)干员训练专精技能至[1-3]级时，心情每小时消耗\+1$/.test(item.text)) continue;
-        const rankOnly = /^进驻训练室协助位时，如果本次训练专精技能至([1-3])级，专精技能训练速度\+(\d+)%$/.exec(item.text);
-        if (rankOnly) { if (rank === Number(rankOnly[1])) bonus += Number(rankOnly[2]) / 100; continue; }
-        const match = /^进驻训练室协助位时，(.*?)干员的专精技能训练速度\+(\d+)%(?:，如果本次训练专精技能至([1-3])级，则训练速度额外\+(\d+)%|，如果训练位干员分支为([^，]+)，则训练速度额外\+(\d+)%)?(?:，心情每小时消耗\+1)?$/.exec(item.text);
-        if (!match) { issues.push(`assistant:condition-unverified:${item.id}`); continue; }
-        const classes = match[1]!.split('与');
-        if (match[1] === '' || result.role && classes.includes(professions[result.role]!)) {
-          bonus += Number(match[2]) / 100;
-          if (match[3] && rank === Number(match[3])) bonus += Number(match[4]) / 100;
-          if (match[5]) {
-            if (typeof facts.branchName !== 'string' || facts.source !== 'user-confirmed') issues.push(`assistant:branch-unverified:${item.id}`);
-            else if (match[5] === facts.branchName) bonus += Number(match[6]) / 100;
-          }
-        }
+        const effect = trainingTextEffect(item.text, { rank, role: result.role, branch, reduction });
+        bonus += effect.bonus; durationFactor *= effect.durationFactor;
+        if (effect.pending) issues.push(`assistant:${effect.pending}:${item.id}`);
       }
       const isAvailable = available === null ? null : available.includes(helper.id);
       if (isAvailable !== true) issues.push(isAvailable === false ? 'assistant:unavailable' : 'assistant:availability-unverified');
       const speedBonus = issues.some(issue => !estimateKeepingIssue(issue)) ? null : Math.round(bonus * 1e6) / 1e6;
-      assistants.push({ id: helper.id, name: helper.name, available: isAvailable, speedBonus,
+      assistants.push({ id: helper.id, name: helper.name, available: isAvailable, speedBonus, lowerBound: speedBonus !== null && issues.some(lowerBoundIssue),
         estimatedSeconds: baseSeconds !== null && speedBonus !== null ? Math.ceil(baseSeconds * durationFactor / (1 + speedBonus)) : null,
         conditions: active.map(item => item.text), issues });
     }
@@ -276,7 +299,7 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
   for (const stage of result.stages) {
     lines.push(`| M${stage.rank} | ${stage.recommendedAssistant ?? '?'} | ${stage.estimatedSeconds ?? '?'} |`);
     lines.push(`${en ? 'After verified start, attempt assistant' : '核实开训后尝试换助手'}: ${stage.afterStartAssistant ?? '?'}; ${en ? 'assignment and retained reduction remain unverified' : '实际就位及减时保留效果待核'}。`);
-    for (const helper of stage.assistants) lines.push(`- ${helper.name}: ${helper.speedBonus === null ? '?' : `${Math.round(helper.speedBonus * 10000) / 100}%`} / ${helper.estimatedSeconds ?? '?'}s; ${helper.conditions.join('；')}; ${helper.issues.join(', ')}`);
+    for (const helper of stage.assistants) lines.push(`- ${helper.name}: ${helper.speedBonus === null ? '?' : `${helper.lowerBound ? '≥' : ''}${Math.round(helper.speedBonus * 10000) / 100}%`} / ${helper.estimatedSeconds ?? '?'}s; ${helper.conditions.join('；')}; ${helper.issues.join(', ')}`);
   }
   // Ticket 32 R4-2: the other plans' tiers taken out of this stock, and how the user can lift it.
   if (result.reservedTiers.length) lines.push('', en ? `Tiers already paid after this inventory was read (by this plan or another) are taken out of it: ${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank} (${row.at})`).join(', ')}. A newer inventory read stops this.`

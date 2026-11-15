@@ -64,14 +64,18 @@ test('the installed query CLI reads synthetic files and renders the same compute
   const md = run('markdown'); assert.equal(md.status, 0, md.stderr); assert.match(md.stdout, /Training estimate/); assert.match(md.stdout, /2400/);
 });
 
-test('rank conditions add only for the actual rank and unresolved branch conditions stay unknown', () => {
+test('rank conditions add only for the actual rank; a branch condition reads the trainee branch from the tables and is a lower bound without them', () => {
   const { tables, snapshot, request } = trainingFixture();
   tables.building.buffs.synthetic_speed.description = '进驻训练室协助位时，近卫干员的专精技能训练速度+30%，如果本次训练专精技能至2级，则训练速度额外+45%';
   const result = calculateTraining(tables, snapshot, request);
   assert.deepEqual(result.stages.map(stage => stage.assistants.find(row => row.id === 'char_helper')?.speedBonus), [0.35, 0.8]);
   tables.building.buffs.synthetic_speed.description = '进驻训练室协助位时，近卫干员的专精技能训练速度+30%，如果训练位干员分支为合成分支，则训练速度额外+45%';
-  assert.equal(calculateTraining(tables, snapshot, request).stages[0]?.assistants.find(row => row.id === 'char_helper')?.speedBonus, null);
-  assert.equal(calculateTraining(tables, snapshot, { ...request, facts: { ...request.facts, branchName: '合成分支' } }).stages[0]?.assistants.find(row => row.id === 'char_helper')?.speedBonus, 0.8);
+  // Ticket 32 follow-on OB-5/OB-6: without the branch table the class part stays as a lower bound and the extra is pending.
+  const row = () => calculateTraining(tables, snapshot, request).stages[0]?.assistants.find(entry => entry.id === 'char_helper');
+  assert.deepEqual([row()?.speedBonus, row()?.lowerBound], [0.35, true]);
+  assert.ok(row()?.issues.some(issue => issue.startsWith('assistant:branch-unverified:')));
+  Object.assign(tables.modules, { subProfDict: { 'synthetic-branch': { subProfessionId: 'synthetic-branch', subProfessionName: '合成分支' } } });
+  assert.deepEqual([row()?.speedBonus, row()?.lowerBound], [0.8, false]);
 });
 
 test('mood clauses are retained without treating them as speed, and post-start recommendations exclude the prior-stage reduction', () => {
