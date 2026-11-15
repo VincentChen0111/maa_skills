@@ -143,7 +143,19 @@ function moduleCatalog(tablesValue: ObjectValue): ModuleCatalog {
     && ((entry as ObjectValue).typeName2 === null || typeof (entry as ObjectValue).typeName2 === 'string')) catalog[id] = { charId: (entry as ObjectValue).charId, typeName2: (entry as ObjectValue).typeName2 };
   return catalog;
 }
-type MatchContext = { facts: Map<string, OperatorFact>; modules: ModuleCatalog; usedModules: Set<string> };
+/**
+ * How many skills an operator has, by character ID: the report's saved subset (`skillCounts`), else the pinned character table's
+ * `skills` list. Absent means unknown.
+ */
+function skillCounts(tablesValue: ObjectValue): Record<string, number> {
+  const counts: Record<string, number> = {}, saved = tablesValue.skillCounts, characters = tablesValue.characters;
+  if (characters && typeof characters === 'object' && !Array.isArray(characters)) for (const [id, entry] of Object.entries(characters as ObjectValue))
+    if (entry && Array.isArray(entry.skills) && entry.skills.length >= 1 && entry.skills.length <= 3) counts[id] = entry.skills.length;
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) for (const [id, value] of Object.entries(saved as ObjectValue))
+    if (Number.isSafeInteger(value) && value >= 1 && value <= 3) counts[id] = value as number;
+  return counts;
+}
+type MatchContext = { facts: Map<string, OperatorFact>; modules: ModuleCatalog; usedModules: Set<string>; skillCounts: Record<string, number>; usedSkillCounts: Set<string> };
 type Observed = { value: number | null; from: 'snapshot' | 'user-confirmed' | null; conflict: boolean };
 /** The snapshot's value wins; a user-confirmed fact fills only an unknown one; a fact contradicting a known value is a conflict. */
 function observe(snapshotValue: unknown, confirmed: unknown): Observed {
@@ -223,7 +235,11 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue, context: Ma
           else {
             // skill 0/omitted: MAA keeps the default or last-used skill, so the mastery holds only if every skill has it. The
             // snapshot's skill list says how many skills there are; without one, the user's facts must name all three slots.
-            const slots = known ? Object.keys(known) : ['1', '2', '3'].every(key => fact?.mastery?.[key] !== undefined) ? ['1', '2', '3'] : [];
+            // The pinned character table says how many skills the operator has (two for most 4★ and 5★); without it, all three.
+            const count = typeof actual?.id === 'string' ? context.skillCounts[actual.id] : undefined;
+            if (count !== undefined) context.usedSkillCounts.add(actual!.id);
+            const every = Array.from({ length: count ?? 3 }, (_, index) => String(index + 1));
+            const slots = known ? Object.keys(known) : every.every(key => fact?.mastery?.[key] !== undefined) ? every : [];
             observed.mastery = Object.fromEntries(slots.map(key => [key, observe(known?.[key], fact?.mastery?.[key])]));
             const seen = Object.values(observed.mastery);
             if (seen.some(item => item.conflict)) mark('unknown', 'operator-fact-conflict:mastery');
@@ -372,7 +388,8 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
   const professions = new Map<string, Set<string>>(), usedNames = new Set<string>();
   for (const entry of Object.values(catalog)) if (entry && typeof entry.name === 'string' && typeof entry.profession === 'string') professions.set(entry.name, (professions.get(entry.name) ?? new Set()).add(entry.profession));
   // Optional module catalogue (pinned uniequip table): without it, a snapshot's module levels cannot be tied to a module type.
-  const context: MatchContext = { facts: operatorFacts(request), modules: moduleCatalog(object(tablesValue)), usedModules: new Set() };
+  const context: MatchContext = { facts: operatorFacts(request), modules: moduleCatalog(object(tablesValue)), usedModules: new Set(),
+    skillCounts: skillCounts(object(tablesValue)), usedSkillCounts: new Set() };
   if (!Array.isArray(coverage) || coverage.length !== request.stages.length || coverage.some((item, index) => item.stageId !== request.stages[index]!.stageId
     || !['online', 'offline'].includes(item.mode) || !Number.isInteger(item.pages) || item.pages < (item.mode === 'online' ? 1 : 0) || item.pages > 3
     || typeof item.truncated !== 'boolean' || item.mode === 'offline' && (item.pages !== 0 || item.truncated) || item.truncated && item.pages !== 3
@@ -455,7 +472,9 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       charactersSource: structuredClone(object(tablesValue).charactersSource ?? null),
       // Every module entry consulted for a snapshot operator, so preparation re-verifies module requirements identically.
       modules: Object.fromEntries([...context.usedModules].sort().map(id => [id, structuredClone(context.modules[id]!)])),
-      modulesSource: structuredClone(object(tablesValue).modulesSource ?? null) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
+      modulesSource: structuredClone(object(tablesValue).modulesSource ?? null),
+      // Skill counts consulted for a skill-0 mastery check, so preparation re-verifies it identically.
+      skillCounts: Object.fromEntries([...context.usedSkillCounts].sort().map(id => [id, context.skillCounts[id]!])) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
     batches: [...new Set(stages.map(stage => JSON.stringify([stage.map, stage.difficulty, stage.difficultyGroup])))].map(key => {
       const [map, difficulty, difficultyGroup] = JSON.parse(key) as string[];
       return { map: map!, difficulty: difficulty!, difficultyGroup: difficultyGroup!, stages: stages.filter(stage => stage.map === map && stage.difficulty === difficulty && stage.difficultyGroup === difficultyGroup).map(stage => stage.stageId) };
@@ -567,7 +586,7 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
     ['unknown-skill-level', '快照没有技能等级（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
     ['unknown-mastery', '快照没有这个技能的专精（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
     ['unknown-module', '读不到这种模组的等级：快照没有模组数据、模组表里找不到这种模组，或森空岛没返回；改用森空岛快照，或请用户确认后写进 operatorFacts 的 moduleTypes。'],
-    ['mastery-skill-unspecified', '作业没指定技能（skill 为 0），MAA 沿用默认或上次的技能；只有每个技能都达到这个专精才算满足。要核对，得用列出全部技能的森空岛快照，或请用户确认 1–3 三个技能各自的专精（operatorFacts）。'],
+    ['mastery-skill-unspecified', '作业没指定技能（skill 为 0），MAA 沿用默认或上次的技能；只有每个技能都达到这个专精才算满足。要核对，得用列出全部技能的森空岛快照，或请用户确认这位干员每个技能各自的专精（operatorFacts；技能数取自固定干员表，读不到时按三个技能）。'],
     ['module-level-unattributed', '作业写了模组等级却没写模组类型，MAA 不读模组等级，无从核对。'],
     ['operator-fact-conflict', '用户确认的事实与快照里已知的值不同，先请用户再核对，不覆盖快照。'],
     ['insufficient-mastery', '专精已知不够，这份作业不能准备。'],

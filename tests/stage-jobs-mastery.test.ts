@@ -61,6 +61,13 @@ test('skill 0 keeps MAA default skill: mastery holds only when every skill has i
   assert.equal(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 3, 2: 3, 3: 3 })).status, 'ready');
   assert.ok(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 1, 2: 0, 3: 2 })).reasons.includes('insufficient-mastery'));
   assert.ok(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 3, 2: 3 })).reasons.includes('mastery-skill-unspecified'));
+  // Review round 2 (P3-A): with the pinned character table, a two-skill operator needs facts for its two skills only.
+  const twoSkills = { ...tables, characters: { char_synthetic_a: { name: '合成甲', profession: 'WARRIOR', skills: [{}, {}] } } };
+  const two = row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 3, 2: 3 }), twoSkills);
+  assert.equal(two.status, 'ready', two.reasons.join());
+  const saved = matchStageJobs(stageSnapshot(), twoSkills, confirm({ 1: 3, 2: 3 }), [withOper(1, { name: '合成甲', requirements: { elite: 2, skill_level: 10 } })]);
+  assert.deepEqual(saved.tables.skillCounts, { char_synthetic_a: 2 });
+  assert.equal(matchStageJobs(saved.snapshot, saved.tables, saved.request, saved.jobs).hash, saved.hash, 'the saved subset re-verifies identically');
 });
 
 test('module requirements use MAA numbering (1-5 = X, Y, A, D, B) against the snapshot module of that type', () => {
