@@ -5,7 +5,8 @@ import { writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
-import { calculateTraining, materialGate, formatTraining } from '../skills/maa-core/scripts/training-time.ts';
+import { calculateTraining, materialGate, formatTraining, gateSpend, paymentTaken } from '../skills/maa-core/scripts/training-time.ts';
+import { operatorCatalog } from '../skills/maa-core/scripts/operator-cost.ts';
 import { reconcileTraining, paidRanks, planPayments, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
@@ -458,7 +459,7 @@ test('32 R4-1/R4-2: a tier another plan started under a crafting gate reserves w
   const a = await prepareTrainingPlan({ query: query('合成助手', ['char_synthetic', 'char_locked']), binding, currentTrainee: 'char_helper',
     authorization: { source: 'current-request', reference: '合成助手一技能专一' }, crafting: { reference: '缺的材料让 MAA 自动合成' } }, { home: w.root });
   assert.deepEqual([a.materialReady, a.craftingRequired], [true, true]);
-  assert.equal(a.spends?.['1']?.items.ore, 4); assert.equal(a.spends?.['1']?.items.mat ?? 0, 0); assert.equal(a.spends?.['1']?.lmd, 10);
+  assert.deepEqual(a.spends?.['1'], { items: { mat: 2, ore: 4 }, lmd: 10 }, 'gross use on the route (R6-1)');
   // A started on 11-10 (after the scan) and finished: MAA crafted mat x2 from ore x4 and paid them.
   const done = await readTrainingPlan(a.id, { home: w.root });
   Object.assign(done, { state: 'complete', materialReady: false, paidAt: { '1': '2026-11-10T00:05:01.000Z' }, target: { ...done.target, currentRank: 1 } }); delete done.action;
@@ -526,4 +527,75 @@ test('32 R5-2/R5-3: one owner says what a payment took out of an inventory: only
   const refreshed = await refreshTrainingMaterials({ id: own.id, query: query('合成助手', ['char_synthetic', 'char_locked'], 2, 1) }, { home: w.root });
   assert.equal(refreshed.materialReady, true, 'M1 (2) reserved, M2 (2) covered by the remaining 2');
   assert.deepEqual(refreshed.spends?.['2'], { items: { mat: 2 }, lmd: 0 }, 'M2 only, not M1 again');
+});
+
+test('32 R6-1/R6-2/R6-3: a crafting record covers every item the route used, intermediates included; a manual tier records nothing; the summary names whose tiers', async t => {
+  // A's gate on scan S0 (mat 0, ore 0, dust 30) crafts ore x4 from dust x12 and mat x2 from that ore.
+  const { w, query } = await craftWorld(t, { mat: 0, ore: 0, dust: 30 }, [{ id: 'ore', count: 4 }], '2026-11-09T00:00:00.000Z');
+  const a = await prepareTrainingPlan({ query: query('合成助手', ['char_synthetic', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成助手一技能专一' }, crafting: { reference: '缺的材料让 MAA 自动合成' } }, { home: w.root });
+  assert.deepEqual([a.materialReady, a.spends?.['1']?.items], [true, { mat: 2, ore: 4, dust: 12 }], 'gross use, not net');
+  // The user then got ore x4 and rescanned (S1) before A started, so A's start crafted mat from that ore. B (no crafting
+  // approval) needs ore x4 and reads S1: the ore is reserved.
+  const s1 = JSON.parse(await readFile(w.snapshotFile, 'utf8')); s1.items = { mat: 0, ore: 4, dust: 30 }; s1.sourceTimes.inventory = '2026-11-09T12:00:00.000Z';
+  await writeFile(w.snapshotFile, JSON.stringify(s1));
+  const done = await readTrainingPlan(a.id, { home: w.root });
+  Object.assign(done, { state: 'complete', materialReady: false, paidAt: { '1': '2026-11-10T00:05:01.000Z' }, target: { ...done.target, currentRank: 1 } }); delete done.action;
+  done.history.push({ at: '2026-11-10T00:05:10.000Z', kind: 'countdown-observed', rank: 1 }, { at: '2026-11-10T01:05:20.000Z', kind: 'completed', rank: 1 });
+  await storePlan(w, done);
+  const b = await prepareTrainingPlan({ query: query('合成干员', ['char_helper', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成干员一技能专一' } }, { home: w.root });
+  assert.equal(b.materialReady, false, 'A\'s start used the ore the newer scan shows');
+  // R6-3: the summary does not call the reserved tiers "other plans'".
+  const shown = await refreshTrainingPlan({ id: b.id, query: query('合成干员', ['char_helper', 'char_locked']) }, { home: w.root });
+  assert.match(shown.summary, /在这份库存读取之后已经付过料的档次/); assert.doesNotMatch(shown.summary, /别的计划在这份库存/);
+  // R6-2: a tier the user already started by hand records no spend, at prepare or at refresh.
+  for (const file of [a.id, b.id]) await rm(join(w.privateDirectory, 'training-plans', `${file}.json`));
+  const manual = await prepareTrainingPlan({ query: query('合成助手', ['char_synthetic', 'char_locked']), binding, currentTrainee: 'char_helper', manualTraining: true,
+    authorization: { source: 'current-request', reference: '一级我已经手动开了' }, crafting: { reference: '缺的材料让 MAA 自动合成' } }, { home: w.root });
+  assert.equal(manual.spends, undefined);
+  assert.equal((await refreshTrainingMaterials({ id: manual.id, query: query('合成助手', ['char_synthetic', 'char_locked']) }, { home: w.root })).spends?.['1'], undefined);
+});
+
+test('32 R6-1 conformance: for any gate scan S0 <= later inventory I <= start stock P, what is reserved never leaves more in I than MAA leaves at the start', () => {
+  // 合成助手 M1 costs mat x2; the workshop makes mat from ore x2 and ore from dust x3 (5 LMD each).
+  const f = trainingFixture();
+  const tier = (cost: { id: string; count: number }[], seconds: number) => ({ unlockCond: { phase: 'PHASE_2', level: 1 }, lvlUpTime: seconds, levelUpCost: cost.map(c => ({ ...c, type: 'MATERIAL' })) });
+  Object.assign(f.tables.characters.char_helper, { skills: [{ skillId: 'synthetic_skill', unlockCond: { phase: 'PHASE_0', level: 1 },
+    levelUpCostCond: [tier([{ id: 'mat', count: 2 }], 3600), tier([{ id: 'mat', count: 2 }], 7200), tier([{ id: 'mat', count: 3 }], 14400)] }] });
+  const formula = (id: string, input: string, count: number) => ({ formulaId: `recipe_${id}`, formulaType: 'F_EVOLVE', itemId: id, count: 1, goldCost: 5, apCost: 360000,
+    costs: [{ id: input, count, type: 'MATERIAL' }], requireRooms: [{ roomId: 'WORKSHOP', roomLevel: 3, roomCount: 1 }], requireStages: [] });
+  Object.assign(f.tables.building.workshopFormulas, { mat: formula('mat', 'ore', 2), ore: formula('ore', 'dust', 3) });
+  Object.assign(f.tables.items.items, { ore: { name: '合成原料' }, dust: { name: '合成粉末' } });
+  const ids = ['mat', 'ore', 'dust'] as const; type Stock = Record<(typeof ids)[number], number>;
+  const query = { name: '合成助手', skill: 1, target: 1, current: { source: 'user-confirmed', skillLevel: 7, mastery: { '1': 0 } },
+    facts: { source: 'user-confirmed', trainingRoomLevel: 3, availableAssistants: ['char_synthetic', 'char_locked'] }, progress: workshop };
+  /** MAA at the start: use the stock, craft the rest recursively; null when it cannot (no start, nothing paid). */
+  const maaTakes = (stock: Stock): Stock | null => {
+    const left = { ...stock }, taken: Stock = { mat: 0, ore: 0, dust: 0 };
+    const need = (id: 'mat' | 'ore' | 'dust', count: number): boolean => {
+      const own = Math.min(left[id], count); left[id] -= own; taken[id] += own; const rest = count - own;
+      if (!rest) return true; if (id === 'dust') return false;
+      return need(id === 'mat' ? 'ore' : 'dust', rest * (id === 'mat' ? 2 : 3));
+    };
+    return need('mat', 2) ? taken : null;
+  };
+  const catalog = operatorCatalog(f.tables as never);
+  let checked = 0;
+  for (const s0 of [[0, 0, 12], [0, 4, 0], [1, 2, 0], [0, 0, 30], [2, 0, 0], [0, 2, 6]] as const) {
+    const scan: Stock = { mat: s0[0], ore: s0[1], dust: s0[2] };
+    const result = calculateTraining(f.tables, { ...f.snapshot, items: { ...scan }, lmd: 1000 }, query);
+    const gate = materialGate(result.startMaterials, true); assert.notEqual(gate, 'short', JSON.stringify(scan));
+    const spent = gateSpend(result.startMaterials, gate as 'ready' | 'crafting')!;
+    const reserved = paymentTaken(catalog, { operatorId: 'char_helper', skill: 1, rank: 1, at: '2026-11-10T00:00:00.000Z', spent })!;
+    for (const addI of [[0, 0, 0], [2, 0, 0], [0, 4, 0], [0, 0, 6], [1, 2, 3]] as const) for (const addP of [[0, 0, 0], [2, 0, 0], [0, 4, 0], [0, 0, 6]] as const) {
+      const inventory: Stock = { mat: scan.mat + addI[0], ore: scan.ore + addI[1], dust: scan.dust + addI[2] };
+      const start: Stock = { mat: inventory.mat + addP[0], ore: inventory.ore + addP[1], dust: inventory.dust + addP[2] };
+      const taken = maaTakes(start); if (!taken) continue;
+      for (const id of ids) assert.ok(Math.max(0, inventory[id] - (reserved.items[id] ?? 0)) <= start[id] - taken[id],
+        `${id}: S0 ${JSON.stringify(scan)} I ${JSON.stringify(inventory)} P ${JSON.stringify(start)} reserved ${JSON.stringify(reserved)} taken ${JSON.stringify(taken)}`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 100, String(checked));
 });

@@ -98,10 +98,10 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     plan.materialReady = gate !== 'short';
     if (startFacts.length) plan.startIssues = startFacts; else delete plan.startIssues;
     // Ticket 32 R4-1/R4-2: what a start on this gate spends, and the other plans' tiers it reserved.
-    // A tier the user already started by hand was paid in the game, not on this gate: nothing is recorded for it.
-  const spend = gate === 'short' || request.manualTraining === true ? null : gateSpend(result.startMaterials, gate);
+    // A tier the user already started by hand was paid in the game, not on this gate: nothing is recorded for it (R6-2).
+    const spend = gate === 'short' || plan.manualTraining ? null : gateSpend(result.startMaterials, gate);
     plan.spends = { ...plan.spends }; if (spend) plan.spends[String(plan.rank)] = spend; else delete plan.spends[String(plan.rank)];
-    if (gate !== 'short' && !spend) plan.materialReady = false;
+    if (gate !== 'short' && !spend && !plan.manualTraining) plan.materialReady = false;
     plan.reservedTiers = result.reservedTiers;
     if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
@@ -140,8 +140,9 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
   const gate = inTraining === null ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
   const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
-  // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting).
-  const spend = gate === 'short' ? null : gateSpend(result.startMaterials, gate);
+  // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting). A tier the user
+  // already started by hand was paid in the game, not on this gate (R6-2): nothing is recorded for it.
+  const spend = gate === 'short' || request.manualTraining === true ? null : gateSpend(result.startMaterials, gate);
   const plan: TrainingPlan = { version: 1, id, authorization: { source: authorization.source as 'current-request' | 'approved-report', reference: authorization.reference },
     target: { operatorId: result.operator.id, name: result.operator.name, role: roleNames[result.role]!, skill: result.skill!, skillName: result.skillName, currentRank: result.currentRank, goal: result.targetRank },
     rank: Math.min(3, firstRank), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,

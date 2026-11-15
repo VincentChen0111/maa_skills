@@ -49,10 +49,14 @@ export function gateSpend(gaps: GapResult | null, gate: 'ready' | 'crafting'): S
   const plan = gate === 'crafting' ? gaps?.comparison?.craft : gaps?.comparison?.noCraft;
   if (!plan || plan.lmd.required === null || !Number.isSafeInteger(plan.lmd.required)) return null;
   const items: Record<string, number> = {};
+  // Ticket 32 R6-1: the gross use of every item on the route (taken for the tier plus used by crafting), intermediates the
+  // route crafts and uses included. MAA crafts against the stock at the start; whatever it finds there by then it uses instead of
+  // crafting, so the gross use bounds what the start can take of each item. A row the route never used (a material voucher
+  // whose count no snapshot carries, R5-1) is not a spend.
   for (const [id, row] of Object.entries(plan.ledger)) {
-    // Ticket 32 R5-1: a row the route never took from (a material voucher whose count no snapshot carries) is not a spend.
-    if (row.opening === null || row.closing === null) { if (row.allocated || row.consumed || row.voucher) return null; continue; }
-    if (row.opening - row.closing > 0) items[id] = row.opening - row.closing;
+    const used = row.allocated + row.consumed;
+    if (!Number.isSafeInteger(used) || used < 0) return null;
+    if (used > 0) items[id] = used;
   }
   return { items, lmd: plan.lmd.required };
 }
@@ -275,8 +279,8 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
     for (const helper of stage.assistants) lines.push(`- ${helper.name}: ${helper.speedBonus === null ? '?' : `${Math.round(helper.speedBonus * 10000) / 100}%`} / ${helper.estimatedSeconds ?? '?'}s; ${helper.conditions.join('；')}; ${helper.issues.join(', ')}`);
   }
   // Ticket 32 R4-2: the other plans' tiers taken out of this stock, and how the user can lift it.
-  if (result.reservedTiers.length) lines.push('', en ? `Tiers other plans paid after this inventory was read are taken out of it: ${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank} (${row.at})`).join(', ')}. A newer inventory read stops this.`
-    : `别的计划在这份库存读取之后付过料的档次已从库存里扣掉：${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank}（${row.at}）`).join('、')}；重新读取库存（扫描时间晚于这些付料）后就不再扣。`);
+  if (result.reservedTiers.length) lines.push('', en ? `Tiers already paid after this inventory was read (by this plan or another) are taken out of it: ${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank} (${row.at})`).join(', ')}. A newer inventory read stops this.`
+    : `在这份库存读取之后已经付过料的档次（本计划或别的计划）已从库存里扣掉：${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank}（${row.at}）`).join('、')}；重新读取库存（扫描时间晚于这些付料）后就不再扣。`);
   if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (user-confirmed); its materials are already paid and not counted again.`
     : `M${result.inTrainingRank} 正在训练（用户确认），材料已付，不再计入。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);
