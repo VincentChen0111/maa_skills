@@ -9,7 +9,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
-import { staticCode, trainingCheckRequired } from './training-state.ts';
+import { staticCode, trainingCheckRequired, type TierPayment } from './training-state.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -25,6 +25,8 @@ export type TrainingResult = { status: 'ok' | 'needs-input'; operator: { id: str
   skillName: string | null; currentRank: number | null; targetRank: number | null; role: string | null; materials: GapResult; issues: string[];
   /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the time its inventory reflects, and the materials of the next tier to start. */
   inTrainingRank: number | null; costFromRank: number | null; inventoryAt: string | null; startMaterials: GapResult | null;
+  /** Ticket 32 R3-2: other plans' tiers paid after the inventory time, whose cost was taken out of the stock before the gate. */
+  reservedTiers: TierPayment[];
   stages: { rank: number; baseSeconds: number | null; recommendedAssistant: string | null; afterStartAssistant: string | null; estimatedSeconds: number | null; assistants: TrainingAssistant[] }[];
   assumptions: string[] };
 /** Ticket 32: a plan's own evidence, passed only by training-plan (never from query JSON): its evidence-backed completed rank and when each rank was paid. */
@@ -46,7 +48,7 @@ export function materialGate(gaps: GapResult | null, crafting: boolean): 'ready'
 }
 
 /** Read-only. Missing facts stay unknown; estimates never claim a training has started. */
-export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown, evidence?: TrainingEvidence): TrainingResult {
+export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown, evidence?: TrainingEvidence, payments: TierPayment[] = []): TrainingResult {
   const request = object(input), snapshot = object(snapshotInput), facts = object(request.facts), current = object(request.current);
   const skill = integer(request.skill, 1, 3) ? request.skill : null, targetRank = integer(request.target, 1, 3) ? request.target : null;
   // Workshop and stage facts for crafting routes; training never spends vouchers, so voucher validity is not passed on.
@@ -55,20 +57,21 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   /** Shared costs to rank `to`; `from` re-bases this skill's current rank (a tier already paid in the snapshot). */
   const gaps = (to: number | null, from?: number, operatorId?: string) => {
     const key = String(skill);
-    let costSnapshot: unknown = snapshot, costCurrent: ObjectValue = current;
+    let costSnapshot: unknown = stock, costCurrent: ObjectValue = current;
     if (from !== undefined && operatorId) {
-      costSnapshot = { ...snapshot, operators: array(snapshot.operators).map(row => object(row).id === operatorId && object(object(row).mastery)[key] != null
+      costSnapshot = { ...stock, operators: array(stock.operators).map(row => object(row).id === operatorId && object(object(row).mastery)[key] != null
         ? { ...object(row), mastery: { ...object(object(row).mastery), [key]: from } } : row) };
       if (object(current.mastery)[key] !== undefined) costCurrent = { ...current, mastery: { ...object(current.mastery), [key]: from } };
     }
     return calculateCultivationGaps(tables, costSnapshot, { targets: [{ name: request.name, ...(request.operatorId === undefined ? {} : { operatorId: request.operatorId }),
       current: costCurrent, target: { mastery: { [key]: to } } }], ...progress, mode: 'no-craft' });
   };
+  let stock: ObjectValue = snapshot;
   const materials = gaps(targetRank);
   const cost = materials.costs[0];
   const result: TrainingResult = { status: 'needs-input', operator: cost?.operator ?? null, skill, skillId: null, skillName: null,
     currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []],
-    inTrainingRank: null, costFromRank: null, inventoryAt: null, startMaterials: null, stages: [],
+    inTrainingRank: null, costFromRank: null, inventoryAt: null, startMaterials: null, reservedTiers: [], stages: [],
     assumptions: ['Estimated duration = base seconds / (1 + assistant base bonus + applicable skill bonuses). This is a table/text inference, not live timing.',
       'Actual countdown and completion evidence supersede estimates; active skills do not prove assignment or condition activation.'] };
   const sharedIssues = result.issues.length;
@@ -107,7 +110,29 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
     if (integer(value, 1, 3) && value <= costFrom && !paidBefore(at)) costFrom = value - 1;
   }
   result.costFromRank = costFrom;
-  if (costFrom !== observed) {
+  // Ticket 32 R3-2: a tier another plan paid after the inventory time (an unknown inventory time included) is still in this
+  // stock; its cost is taken out before this plan's gate. A tier of this skill above the cost start is already counted here.
+  const latest = new Map<string, TierPayment>();
+  for (const payment of payments) {
+    if (!integer(payment.rank, 1, 3) || !integer(payment.skill, 1, 3) || typeof payment.operatorId !== 'string' || paidBefore(payment.at)) continue;
+    if (payment.operatorId === cost.operator.id && payment.skill === skill && payment.rank > costFrom) continue;
+    const key = `${payment.operatorId}:${payment.skill}:${payment.rank}`, known = latest.get(key);
+    if (!known || (time(payment.at) ?? '') > (time(known.at) ?? '')) latest.set(key, payment);
+  }
+  result.reservedTiers = [...latest.values()];
+  if (result.reservedTiers.length) {
+    const tiers = operatorCatalog(tables), items: Record<string, number> = {}; let lmd = 0;
+    for (const payment of result.reservedTiers) {
+      const row = object(array(object(array(object(tiers[payment.operatorId]).skills)[payment.skill - 1]).levelUpCostCond)[payment.rank - 1]);
+      const costs = array(row.levelUpCost).map(object);
+      if (!costs.length || costs.some(entry => typeof entry.id !== 'string' || !integer(entry.count, 1, 1e9))) { result.issues.push('training:reserved-cost-unknown'); continue; }
+      for (const entry of costs) if (entry.id === '4001') lmd += Number(entry.count); else items[entry.id as string] = (items[entry.id as string] ?? 0) + Number(entry.count);
+    }
+    const held = object(snapshot.items);
+    stock = { ...snapshot, items: Object.fromEntries(Object.entries(held).map(([id, count]) => [id, typeof count === 'number' && items[id] ? Math.max(0, count - items[id]!) : count])),
+      lmd: typeof snapshot.lmd === 'number' ? Math.max(0, snapshot.lmd - lmd) : snapshot.lmd };
+  }
+  if (costFrom !== observed || result.reservedTiers.length) {
     result.materials = gaps(targetRank, costFrom, cost.operator.id);
     result.issues.splice(0, sharedIssues, ...result.materials.issues, ...result.materials.costs[0]?.issues ?? []);
   }
@@ -185,7 +210,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
 
 export const trainingSources: Record<string, PublicJsonSource> = { ...craftingSources, skillNames: { ...operatorCostSources.characters!, file: 'zh_CN/gamedata/excel/skill_table.json' } };
 /** tablesFile is explicitly unverified offline input; public mode records actual fixed-source hashes. */
-export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch; evidence?: TrainingEvidence } = {}) {
+export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch; evidence?: TrainingEvidence; payments?: TierPayment[] } = {}) {
   const request = object(input), settings = await readSettings(options.home);
   // Ticket 32: read failures carry static codes (never a path) so the CLI can say what to check.
   let snapshot: unknown;
@@ -201,7 +226,7 @@ export async function queryTraining(input: unknown, options: { home?: string; fe
       sources: [...costs.sources ?? [], building.source, stages.source, skillNames.source] };
   }
   const { tablesFile: _tables, snapshotFile: _snapshot, format: _format, ...body } = request;
-  const result = calculateTraining(tables, snapshot, body, options.evidence);
+  const result = calculateTraining(tables, snapshot, body, options.evidence, options.payments);
   return { result, language: settings.language ?? 'zh-CN', source: request.tablesFile ? 'supplied-unverified' : 'fixed-public', sources: request.tablesFile ? [] : tables.sources ?? [] };
 }
 

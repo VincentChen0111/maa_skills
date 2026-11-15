@@ -11,6 +11,8 @@ export type TrainingPlan = {
   assistants: Record<string, string>; afterStartAssistants?: Record<string, string>; materialReady: boolean; manualTraining: boolean;
   /** Ticket 32 R2-3: facts the next start still needs (static codes); start stays closed until a refresh clears them. */
   startIssues?: string[];
+  /** Ticket 32 R3-2: the other plans' payments (`paymentKey`) the last material gate reserved; a new one makes the gate stale. */
+  paymentsSeen?: string[];
   action?: { kind: TrainingActionKind; dueAt: string; armedAt: string; operation?: string; timerIdentity?: unknown; completedAt?: string;
     native?: { process: string; taskId: number; chain: string; appendedAt: string; paramsHash: string; startedAt?: string } };
   preplacedAt?: string; confirmationAt?: string; startedAt?: string; latestObservationAt?: string; expectedCompleteAt?: string; assistantAttempted?: boolean;
@@ -128,10 +130,22 @@ export function paidRanks(plan: TrainingPlan): Record<string, string> {
   const paid: Record<string, string> = {};
   for (const entry of plan.history) if (['countdown-observed', 'external-training-observed'].includes(entry.kind)) paid[String(entry.rank)] ??= entry.at;
   Object.assign(paid, plan.paidAt);
-  // Ticket 32 R2-1: the one owner of when this plan's tiers were paid. A tier it completed without a recorded time is reported
-  // as paid at an unknown time, which the cost calculation counts as still in stock (conservative), whichever path advanced it.
-  for (const entry of plan.history) if (entry.kind === 'completed') paid[String(entry.rank)] ??= 'unknown';
+  // Ticket 32 R2-1: the one owner of when this plan's tiers were paid. A tier it completed without a recorded time was paid no
+  // later than its completion, so the completion time is the bound: an inventory read before it still holds that tier's
+  // materials and the cost calculation counts them (conservative), whichever path advanced it.
+  for (const entry of plan.history) if (entry.kind === 'completed') paid[String(entry.rank)] ??= entry.at;
   return paid;
+}
+export type TierPayment = { operatorId: string; skill: number; rank: number; at: string };
+export const paymentKey = (payment: TierPayment) => `${payment.operatorId}:${payment.skill}:${payment.rank}:${payment.at}`;
+/**
+ * Ticket 32 R3-2: the one owner of tier payments across plans. Every plan's payments (through `paidRanks`), except the plan
+ * asking; a closed or finished plan's payments still happened. The training estimate reserves those made after its inventory
+ * time, and a start never uses a gate that did not see all of them.
+ */
+export function planPayments(plans: TrainingPlan[], except: string | null): TierPayment[] {
+  return plans.filter(plan => plan.id !== except).flatMap(plan => Object.entries(paidRanks(plan))
+    .map(([rank, at]) => ({ operatorId: plan.target.operatorId, skill: plan.target.skill, rank: Number(rank), at })));
 }
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};

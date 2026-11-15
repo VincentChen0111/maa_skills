@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
 import { queryTraining, materialGate, formatTraining } from './training-time.ts';
-import { nextTrainingAction, reconcileTraining, paidRanks, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
+import { nextTrainingAction, reconcileTraining, paidRanks, planPayments, paymentKey, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
 import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
@@ -84,7 +84,10 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     if (plan.closed || plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
     if (object(request.query).inTraining !== undefined) throw new Error('training-in-training-refresh-unsupported');
     // Ticket 32: the plan's own completion and payment evidence reconciles a snapshot read before them (unattended re-entry).
-    const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) } });
+    // Ticket 32 R3-2: the other plans' payments are reserved too, and the gate records which ones it saw.
+    const payments = planPayments(await allPlans(options), plan.id);
+    const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
+    plan.paymentsSeen = payments.map(paymentKey);
     if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
       || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
     // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
@@ -114,7 +117,9 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     || Object.keys(authorization).some(key => !['source', 'reference'].includes(key))
     || crafting && (Object.keys(crafting).some(key => key !== 'reference') || typeof crafting.reference !== 'string' || !crafting.reference.trim())
     || request.currentTrainee !== null && typeof request.currentTrainee !== 'string' || request.manualTraining !== undefined && typeof request.manualTraining !== 'boolean') throw new Error('training-authorization-required');
-  const { result } = await queryTraining(request.query, options);
+  // Ticket 32 R3-2: every plan's payments made after the inventory time are reserved before this plan's gate.
+  const payments = planPayments(await allPlans(options), null);
+  const { result } = await queryTraining(request.query, { ...options, payments });
   if (result.status !== 'ok' || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
     throw new TrainingCheckError('training-facts-required', { issues: result.issues,
       stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
@@ -139,7 +144,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
     // hand, no later than this plan. Every later tier records its own countdown time.
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
-    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}) };
+    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey) };
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
   const config = await readMaaConfig(context.settings.maaDirectory);
@@ -246,12 +251,17 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     if (!action) return ['complete', 'satisfied'].includes(plan.state) ? { status: 'done', reason: 'training-goal-reached', versions: await drift() }
       : { status: 'check-required', reason: plan.action && !plan.action.native?.startedAt ? 'training-reconcile-before-apply' : 'training-plan-stopped', versions: await drift() };
     // Ticket 32: one training room, one plan. Another plan that armed MAA and is not finished or closed keeps it.
-    if ((await allPlans(options)).some(other => other.id !== plan.id && holdsTrainingRoom(other))) return { status: 'check-required', reason: 'training-other-plan-active', versions: await drift() };
+    const plans = await allPlans(options);
+    if (plans.some(other => other.id !== plan.id && holdsTrainingRoom(other))) return { status: 'check-required', reason: 'training-other-plan-active', versions: await drift() };
     // Ticket 32 (owner: 「龙门币缺口或者其他材料缺口是可以在进行中逐步补齐的，不能因此判断计划」): a shortage keeps the plan
     // waiting for this start; it is not an error. The next re-entry refreshes materials and starts once they are covered.
     // Ticket 32 R2-3: a missing fact is named; it does not wait as if materials were short.
     if (action.kind === 'start' && plan.startIssues?.length) return { status: 'check-required', reason: 'training-facts-required', details: { issues: plan.startIssues }, versions: await drift() };
     // Ticket 32 R2-2: the wait ends only through a refresh with the latest snapshot; another apply alone would wait again.
+    // Ticket 32 R3-2: a gate that did not see a payment another plan has recorded since is stale; nothing is armed on it.
+    if (action.kind === 'start' && plan.materialReady && planPayments(plans, plan.id).some(payment => !(plan.paymentsSeen ?? []).includes(paymentKey(payment)))) {
+      plan.materialReady = false; delete plan.craftingRequired; plan.history.push({ at: new Date().toISOString(), kind: 'materials-stale', rank: plan.rank }); await save(context.file, plan);
+    }
     if (action.kind === 'start' && !plan.materialReady) return { status: 'waiting', reason: 'training-materials-pending', next: 'refresh', rank: plan.rank, craftingAllowed: Boolean(plan.crafting), versions: await drift() };
     const config = await readMaaConfig(context.settings.maaDirectory);
     if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed', versions: await drift() };
@@ -361,7 +371,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       const { createMaaProcess } = await import('./maa-process.ts');
       if (process.argv[2] === 'apply') {
         const applied = object(await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory)));
-        if (applied.status === 'check-required') { printed = trainingCheckRequired(String(applied.reason), { ...object(applied.details), versions: applied.versions }); process.exitCode = 1; }
+        // Ticket 32 R3-1: only some stops carry details; every stop keeps its own reason.
+        if (applied.status === 'check-required') { printed = trainingCheckRequired(String(applied.reason), { ...applied.details && typeof applied.details === 'object' ? applied.details : {}, versions: applied.versions }); process.exitCode = 1; }
         else { result = applied; if (!['complete', 'waiting', 'done'].includes(String(applied.status))) process.exitCode = 1; }
       } else {
         const reconciled = await reconcileTrainingPlan(request, createMaaProcess(settings.maaDirectory));

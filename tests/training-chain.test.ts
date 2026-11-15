@@ -1,12 +1,12 @@
 // Ticket 32: unattended mastery chaining — tier after tier, and from one approved operator to the next.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
 import { calculateTraining, materialGate, formatTraining } from '../skills/maa-core/scripts/training-time.ts';
-import { reconcileTraining, paidRanks, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
+import { reconcileTraining, paidRanks, planPayments, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
 import { approvedTrainingReport } from './fixtures/training-report.ts';
@@ -296,7 +296,7 @@ test('32 R1-3/R1-4: a cleanup the writer refused before writing stays pending an
   assert.equal((await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root })).status, 'waiting');
 });
 
-test('32 R2-1: every tier the plan completed has a payment time, a manual tier is paid no later than the plan, and a missing time counts as still in stock', async t => {
+test('32 R2-1: every tier the plan completed has a payment time, a manual tier is paid no later than the plan, and a missing time is bounded by the completion', async t => {
   // Producers. prepare: a tier the user already started by hand was paid no later than the plan itself.
   const f = trainingFixture(); f.snapshot.items.mat = 2;
   // An MAA depot scanned before the user started M1 by hand (M1 costs 1, M2 costs 2; real stock after M1 is 1).
@@ -305,13 +305,15 @@ test('32 R2-1: every tier the plan completed has a payment time, a manual tier i
   const prepared = await prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', manualTraining: true,
     authorization: { source: 'current-request', reference: '一级我已经手动开了，接着练到二级' } }, { home: w.root });
   assert.deepEqual(prepared.paidAt, { '1': prepared.createdAt });
+  // That record's own payment would be reserved by every other plan (R3-2); the cases below are about one plan.
+  await rm(join(w.privateDirectory, 'training-plans', `${prepared.id}.json`));
   // reconcile: the R1-2 completion path keeps that time; a record without one reports the completed tier as paid at an unknown time.
   const manual = evidencePlan(); manual.manualTraining = true; manual.preplacementRequired = false; manual.target.goal = 2;
   manual.action = { kind: 'observe', dueAt: '2026-11-11T01:05:05.000Z', armedAt: manual.createdAt };
   const completed = nativeTask(manual, undefined, 5) + nativeLog('2026-11-11T01:05:20.000Z', 'SubTaskExtraInfo', { taskchain: 'Infrast', taskid: 5,
     what: 'InfrastTrainingCompleted', details: { operator: '合成干员', skill: '合成技能', level: 1 } });
   const forgot = reconcileTraining(manual, completed, '2026-11-11T01:06:00.000Z');
-  assert.deepEqual([forgot.rank, forgot.target.currentRank], [2, 1]); assert.deepEqual(paidRanks(forgot), { '1': 'unknown' });
+  assert.deepEqual([forgot.rank, forgot.target.currentRank], [2, 1]); assert.deepEqual(paidRanks(forgot), { '1': '2026-11-11T01:05:20.000Z' }, 'paid no later than its completion');
   const kept = reconcileTraining({ ...structuredClone(manual), paidAt: { '1': manual.createdAt } }, completed, '2026-11-11T01:06:00.000Z');
   assert.deepEqual(paidRanks(kept), { '1': manual.createdAt });
   // Consumer: refresh step 8 states the completed rank; the tier still in the older scan is counted either way (1 + 2 > 2).
@@ -363,4 +365,72 @@ test('32 R2-4: the training summary and the refresh output show the shortage dow
   const refreshed = await refreshTrainingPlan({ id: a.id, query: { ...f.request, target: 2, current: { ...f.request.current, mastery: { '1': 1 } }, progress: workshop,
     snapshotFile: w.snapshotFile, tablesFile: w.tablesFile } }, { home: w.root });
   assert.equal(refreshed.plan.materialReady, false); assert.match(refreshed.summary, /加工展开到基础材料/);
+});
+
+test('32 R3-1: the apply CLI prints each stop with its own reason, with or without details', async t => {
+  const f = scanned(trainingFixture()); const w = await world(t, f);
+  const apply = (id: string) => {
+    const run = spawnSync(process.execPath, ['--import', versionDoublePreload, resolve('skills/maa-core/scripts/training-plan.ts'), 'apply'], { encoding: 'utf8',
+      env: { ...process.env, MAA_SKILLS_HOME: w.root }, input: JSON.stringify({ id, host: 'codex', closedConfirmed: true }) });
+    return { status: run.status, output: JSON.parse(run.stdout) };
+  };
+  const closed = between({ '1': f.snapshot.readAt }); closed.id = 'plan-closed'; closed.closed = { at: '2026-11-12T00:00:00.000Z', reference: '关掉' }; await storePlan(w, closed);
+  const stop = apply(closed.id);
+  assert.deepEqual([stop.status, stop.output.status, stop.output.reason], [1, 'check-required', 'training-plan-closed']); assert.ok(stop.output.alternatives.length);
+  const facts = between({ '1': f.snapshot.readAt }); facts.id = 'plan-facts'; facts.startIssues = ['training:room-unverified']; await storePlan(w, facts);
+  const named = apply(facts.id);
+  assert.deepEqual([named.output.reason, named.output.details.issues], ['training-facts-required', ['training:room-unverified']]);
+});
+
+/** A finished plan for the other synthetic operator that paid its M1 at `at` (the fixture's operators share the same costs). */
+function paidElsewhere(at: string): TrainingPlan {
+  const a = runtimePlan(); a.id = 'plan-a'; a.target = { ...a.target, operatorId: 'char_helper', name: '合成助手' }; a.target.goal = 1; a.rank = 1; a.target.currentRank = 1;
+  a.state = 'complete'; a.preplacementRequired = false; delete a.action; a.paidAt = { '1': at };
+  a.history = [{ at, kind: 'arming-start', rank: 1 }, { at, kind: 'countdown-observed', rank: 1 }, { at: '2026-11-11T05:00:00.000Z', kind: 'completed', rank: 1 }];
+  return a;
+}
+
+test('32 R3-2: a payment any plan made after the inventory time is reserved before the next plan\'s gate, and a start never uses a gate older than one', async t => {
+  // An MAA depot scanned on 11-09 with mat 2 (M1 costs 1, M2 costs 2); the other operator's plan paid its M1 on 11-10: real stock 1.
+  const f = trainingFixture(); f.snapshot.items.mat = 2;
+  Object.assign(f.snapshot, { source: 'maa', readAt: '2026-11-12T00:00:00.000Z', sourceTimes: { operators: null, inventory: '2026-11-09T00:00:00.000Z' } });
+  const w = await world(t, f), query = { ...f.request, target: 1, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const authorization = { source: 'current-request', reference: '合成助手练完接着练合成干员一技能专一' };
+  // Consumer 1, prepare: the stale stock covers M1 (2 >= 1), but 1 of it is gone: still 1 >= 1, so tighten to mat 1 (real 0).
+  f.snapshot.items.mat = 1; await writeFile(w.snapshotFile, JSON.stringify(f.snapshot));
+  await storePlan(w, paidElsewhere('2026-11-10T00:05:01.000Z'));
+  const b = await prepareTrainingPlan({ query, binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.equal(b.materialReady, false, 'the other plan already spent the only mat');
+  // A payment before the scan is already out of the inventory and is not reserved twice.
+  await storePlan(w, paidElsewhere('2026-11-08T00:00:00.000Z'));
+  const fresh = await prepareTrainingPlan({ query, binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.equal(fresh.materialReady, true);
+  // Consumer 2, refresh of a waiting plan: the same reservation.
+  await storePlan(w, paidElsewhere('2026-11-10T00:05:01.000Z'));
+  assert.equal((await refreshTrainingMaterials({ id: fresh.id, query }, { home: w.root })).materialReady, false);
+  // Consumer 3, apply: a gate computed before another plan recorded a new payment is not used to start.
+  await storePlan(w, paidElsewhere('2026-11-08T00:00:00.000Z'));
+  const ready = await refreshTrainingMaterials({ id: fresh.id, query }, { home: w.root }); assert.equal(ready.materialReady, true);
+  const later = paidElsewhere('2026-11-08T00:00:00.000Z'); later.id = 'plan-later'; later.paidAt = { '1': '2026-11-12T03:00:00.000Z' }; await storePlan(w, later);
+  const record = await readTrainingPlan(fresh.id, { home: w.root }); record.preplacementRequired = false; record.state = 'preplaced'; record.preplacedAt = '2026-11-12T00:00:00.000Z'; await storePlan(w, record);
+  const before = await readFile(w.file, 'utf8');
+  const held = await applyTrainingPlan({ id: fresh.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([held.status, held.reason, (held as { next?: string }).next], ['waiting', 'training-materials-pending', 'refresh']);
+  assert.equal(await readFile(w.file, 'utf8'), before, 'nothing is armed');
+  assert.equal((await readTrainingPlan(fresh.id, { home: w.root })).materialReady, false);
+});
+
+test('32 R3-2: one owner lists every plan\'s payments, and every gate in the plan tool reads it', async () => {
+  const manual = runtimePlan(); manual.paidAt = { '1': '2026-11-10T00:00:00.000Z' };
+  const done = runtimePlan(); done.id = 'plan-done'; done.history = [{ at: '2026-11-11T05:00:00.000Z', kind: 'completed', rank: 2 }];
+  const counted = runtimePlan(); counted.id = 'plan-counted'; counted.history = [{ at: '2026-11-11T01:05:10.000Z', kind: 'countdown-observed', rank: 3 }];
+  // Producers: a recorded payment time, a completed tier without one (paid no later than its completion), a countdown observation.
+  assert.deepEqual(planPayments([manual, done, counted], manual.id).map(row => [row.operatorId, row.rank, row.at]),
+    [['char_synthetic', 2, '2026-11-11T05:00:00.000Z'], ['char_synthetic', 3, '2026-11-11T01:05:10.000Z']]);
+  assert.deepEqual(planPayments([manual], null).map(row => row.rank), [1]);
+  // Consumers: every estimate the plan tool runs passes the other plans' payments; the start path checks what its gate saw.
+  const text = await readFile(resolve('skills/maa-core/scripts/training-plan.ts'), 'utf8');
+  const queries = [...text.matchAll(/queryTraining\(([^;]*)\)/g)].map(match => match[1]!);
+  assert.ok(queries.length >= 2 && queries.every(call => call.includes('payments')), queries.join(' | '));
+  assert.match(text, /paymentsSeen/);
 });
