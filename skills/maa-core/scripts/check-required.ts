@@ -77,6 +77,8 @@ const groups = [
   { reasons: ['action-invalid', 'request-invalid', 'operation-invalid', 'wait-invalid', 'user-report-invalid', 'exit-code-invalid', 'decision-invalid',
     'progress-invalid', 'revision-required', 'stage-invalid', 'run-id-invalid', 'switch-key-invalid'],
   check: '请求不符合运行跟踪接口（动作、字段或取值不对），什么都没做。', alternatives: ['按 maa-daily 的运行跟踪接口（stage-run.md）改正请求后重发'] },
+  { reasons: ['reference-required', 'reason-required'], check: '请求少了必填的一项：start、progress 要用户这次的原话 reference，decide 要选这个决定的理由 reason；什么都没记。',
+    alternatives: ['补上 reference（用户原话）或 reason（决定的理由）后重发'] },
   { reasons: ['maa-directory-required'], check: '运行跟踪没有拿到 MAA 目录，不能读 MAA 日志。', alternatives: ['经 maa-setup 设置 MAA 目录后重试'] },
   { reasons: ['run-not-found', 'run-record-invalid', 'switch-record-invalid'], check: '找不到这条运行或换备选记录，或者记录读不了。',
     alternatives: ['用 read（不带 runId）查看最近一次运行', '记录损坏时交 maa-doctor 核对私有文件'] },
@@ -187,7 +189,7 @@ export const checkRequiredReasons = [...catalogue.keys()] as CheckRequiredReason
  * for anything unclassified. A producer that already throws catalogue reasons maps them to themselves.
  */
 const self = <T extends CheckRequiredReason>(...reasons: T[]) => Object.fromEntries(reasons.map(reason => [reason, reason])) as Record<T, T>;
-const stageRunOwn = ['action-invalid', 'request-invalid', 'operation-invalid', 'wait-invalid', 'user-report-invalid', 'exit-code-invalid', 'decision-invalid',
+const stageRunOwn = ['action-invalid', 'request-invalid', 'reference-required', 'reason-required', 'operation-invalid', 'wait-invalid', 'user-report-invalid', 'exit-code-invalid', 'decision-invalid',
   'progress-invalid', 'revision-required', 'stage-invalid', 'run-id-invalid', 'switch-key-invalid', 'maa-directory-unset', 'maa-directory-required', 'run-not-found',
   'run-record-invalid', 'switch-record-invalid', 'run-busy', 'batch-not-prepared', 'prepared-list-changed', 'job-file-changed', 'job-plan-invalid', 'job-list-too-large',
   'job-mixed-difficulty-batch', 'batch-may-have-run', 'batch-evidence-incomplete', 'batch-evidence-unavailable', 'untracked-chain', 'chain-without-start',

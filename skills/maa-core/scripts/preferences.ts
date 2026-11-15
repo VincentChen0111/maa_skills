@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
-import { checkRequiredFor } from './check-required.ts';
 import { randomUUID } from 'node:crypto';
 
 export type Settings = { language: string | null; languageAsked: boolean; privateDirectory: string; maaDirectory: string | null; server: 'CN' };
@@ -182,6 +181,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const code = stdinJsonCode(error) ?? (error instanceof InputError ? 'invalid-input'
       : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : null);
     const action = process.argv[2];
+    // Loaded only here: the evaluation runner imports this module to read settings and must not pull in the CLI's result catalogue.
+    const { checkRequiredFor } = await import('./check-required.ts');
     console.error(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('preferences', error,
       action === 'set' ? 'preferences-set-unconfirmed' : action === 'append' ? 'preferences-append-unconfirmed' : undefined)));
     process.exitCode = 1;

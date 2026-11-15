@@ -56,6 +56,11 @@ test('skill 0 keeps MAA default skill: mastery holds only when every skill has i
   assert.ok(row(sklandSnapshot({ mastery: { 1: 1, 2: 0, 3: 1 } }), { name: '合成甲', requirements: { elite: 2, skill_level: 9 } }).reasons.includes('insufficient-mastery'));
   const mixed = row(sklandSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } });
   assert.equal(mixed.status, 'unknown'); assert.ok(mixed.reasons.includes('mastery-skill-unspecified'));
+  // Review round 1 (P3-2): without a snapshot skill list, the user's facts settle it only when they name all three skills.
+  const confirm = (mastery: Record<string, number>) => ({ ...stageRequest, operatorFacts: [{ name: '合成甲', source: 'user-confirmed', reference: '合成用户原话', mastery }] }) as StageRequest;
+  assert.equal(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 3, 2: 3, 3: 3 })).status, 'ready');
+  assert.ok(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 1, 2: 0, 3: 2 })).reasons.includes('insufficient-mastery'));
+  assert.ok(row(stageSnapshot(), { name: '合成甲', requirements: { elite: 2, skill_level: 10 } }, confirm({ 1: 3, 2: 3 })).reasons.includes('mastery-skill-unspecified'));
 });
 
 test('module requirements use MAA numbering (1-5 = X, Y, A, D, B) against the snapshot module of that type', () => {

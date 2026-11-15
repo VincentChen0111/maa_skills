@@ -221,8 +221,10 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue, context: Ma
           const known = actual?.mastery && typeof actual.mastery === 'object' ? actual.mastery as ObjectValue : null;
           if (slot) { observed.mastery = { [slot]: observe(known?.[slot], fact?.mastery?.[slot]) }; checkObserved('mastery', rank, observed.mastery[slot]!); }
           else {
-            // skill 0/omitted: MAA keeps the default or last-used skill, so the mastery holds only if every skill has it.
-            observed.mastery = Object.fromEntries(Object.keys(known ?? {}).map(key => [key, observe(known![key], fact?.mastery?.[key])]));
+            // skill 0/omitted: MAA keeps the default or last-used skill, so the mastery holds only if every skill has it. The
+            // snapshot's skill list says how many skills there are; without one, the user's facts must name all three slots.
+            const slots = known ? Object.keys(known) : ['1', '2', '3'].every(key => fact?.mastery?.[key] !== undefined) ? ['1', '2', '3'] : [];
+            observed.mastery = Object.fromEntries(slots.map(key => [key, observe(known?.[key], fact?.mastery?.[key])]));
             const seen = Object.values(observed.mastery);
             if (seen.some(item => item.conflict)) mark('unknown', 'operator-fact-conflict:mastery');
             else if (seen.length && seen.every(item => item.value !== null && item.value >= rank)) { /* every skill qualifies */ }
@@ -565,7 +567,7 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
     ['unknown-skill-level', '快照没有技能等级（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
     ['unknown-mastery', '快照没有这个技能的专精（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
     ['unknown-module', '读不到这种模组的等级：快照没有模组数据、模组表里找不到这种模组，或森空岛没返回；改用森空岛快照，或请用户确认后写进 operatorFacts 的 moduleTypes。'],
-    ['mastery-skill-unspecified', '作业没指定技能（skill 为 0），MAA 沿用默认或上次的技能；只有每个技能都达到这个专精才算满足。'],
+    ['mastery-skill-unspecified', '作业没指定技能（skill 为 0），MAA 沿用默认或上次的技能；只有每个技能都达到这个专精才算满足。要核对，得用列出全部技能的森空岛快照，或请用户确认 1–3 三个技能各自的专精（operatorFacts）。'],
     ['module-level-unattributed', '作业写了模组等级却没写模组类型，MAA 不读模组等级，无从核对。'],
     ['operator-fact-conflict', '用户确认的事实与快照里已知的值不同，先请用户再核对，不覆盖快照。'],
     ['insufficient-mastery', '专精已知不够，这份作业不能准备。'],

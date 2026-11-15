@@ -87,7 +87,7 @@ test('only the module builds the shape: every file that mentions check-required 
     if (adoptedAfterMerge.includes(file)) continue;
     const producer = Object.values(producerScripts).includes(file);
     if (producer) {
-      assert.match(source, /from '\.\/check-required\.ts'/, `${file} must use the shared module`);
+      assert.match(source, /from '\.\/check-required\.ts'|import\('\.\/check-required\.ts'\)/, `${file} must use the shared module`);
       assert.doesNotMatch(source, /status:\s*'check-required'/, `${file} builds the shape by hand`);
       for (const code of retiredCodes) assert.ok(!source.includes(`'${code}'`), `${file} still emits ${code}`);
     } else assert.deepEqual(mentions.filter(word => word !== 'check-required.ts'), [], `${file} mentions check-required but is not a listed producer`);
@@ -95,14 +95,21 @@ test('only the module builds the shape: every file that mentions check-required 
   for (const file of adoptedAfterMerge) assert.ok(files.includes(file), `${file} is listed as adopted after merge but does not exist`);
 });
 
-/** Static failure codes thrown in a producer's own sources; each must map to a reason (or is reported in another shape, listed). */
-const staticCodes = async (file: string) => {
+/**
+ * Static failure codes in a producer's own sources: thrown directly, or handed to a helper as its last argument (stage-run's
+ * `text(value, max, 'reference-required')`). Each must map to a reason; `helperArguments` lists the files scanned the second way.
+ */
+const staticCodes = async (file: string, helperArguments = false) => {
   const source = await readFile(join(scripts, file), 'utf8');
-  return new Set([...source.matchAll(/(?:fail|deny|new Error|new CheckRequiredError)\('([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'\)/g)].map(match => match[1]!));
+  const codes = [...source.matchAll(/(?:fail|deny|new Error|new CheckRequiredError)\('([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'\)/g)].map(match => match[1]!);
+  if (helperArguments) codes.push(...[...source.matchAll(/, '([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'\)/g)].map(match => match[1]!));
+  return new Set(codes);
 };
+/** Last-argument literals in stage-run.ts that are file and directory names, not failure codes. */
+const stageRunNames = new Set(['stage-runs', 'stage-retry']);
 test('stage-run: every code its CLI can report (own throws, gate denials and holds, job-plan checks) has a catalogue entry', async () => {
   const table = producers['stage-run'].codes as Record<string, string>;
-  const codes = new Set([...await staticCodes('stage-run.ts'), ...await staticCodes('stage-run-state.ts'), ...await staticCodes('stage-job-plan.ts')]);
+  const codes = new Set([...[...await staticCodes('stage-run.ts', true)].filter(code => !stageRunNames.has(code)), ...await staticCodes('stage-run-state.ts'), ...await staticCodes('stage-job-plan.ts')]);
   // Holds and hard blocks are returned as values, not thrown; every kebab literal in the gate's module is either a reason or listed here.
   const state = await readFile(join(scripts, 'stage-run-state.ts'), 'utf8');
   const notReasons = new Set(['ask-progress', 'chain-end', 'chain-started-before-anchor', 'close-before-start', 'closed-before-start', 'environment-verified', 'evidence-gap',
@@ -189,6 +196,8 @@ test('producers report specific reasons from their real CLIs', async t => {
   // stage-run
   expectReason(cli('stage-run.ts', ['read'], { extra: 1 }, home), 'request-invalid');
   expectReason(cli('stage-run.ts', ['read'], {}, home), 'run-not-found');
+  expectReason(cli('stage-run.ts', ['start'], { operation: 'synthetic-operation-01' }, home), 'reference-required');
+  expectReason(cli('stage-run.ts', ['decide'], { runId: '00000000-0000-4000-8000-000000000000', decision: 'stop-and-tell-user' }, home), 'reason-required');
 
   // maa-config
   expectReason(cli('maa-config.ts', ['read'], '', home), 'maa-config-unreadable');
