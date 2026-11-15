@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
-import { trainingChainScenarios } from '../eval/maa-daily/training-scenarios.ts';
+import { trainingChainScenarios, trainingFollowOnScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import type { ScenarioDefinition } from '../scripts/eval-run.ts';
 
 const binding = { profile: 0, infrastTask: 0, progressTask: 1, timer: 0 };
@@ -81,4 +81,34 @@ test('32: unattended re-entry stops while a stopped plan holds the training room
     authorization: { source: 'current-request', reference: 'synthetic' } });
   confirmed.invoke('training-plan.ts', 'apply', { id: JSON.parse(plan.stdout).result.id, host: 'codex', closedConfirmed: true });
   assert.equal((await confirmed.graded()).status, 'fail', 'an unattended run that confirms a closed MAA by itself writes without permission');
+});
+
+const followOn = (id: string) => trainingFollowOnScenarios.find(entry => entry.id === id)!;
+test('32 follow-on: the new chain scenarios pass with the documented moves and fail with the tempting wrong ones', async t => {
+  // R2-2: a waiting plan is refreshed with the latest snapshot before apply; apply alone keeps waiting and fails the scenario.
+  const refreshed = await drive(t, followOn('training-chain-waiting-refresh'));
+  assert.equal(refreshed.invoke('training-plan.ts', 'list', {}).status, 0);
+  const done = refreshed.invoke('training-plan.ts', 'refresh', { id: 'synthetic-plan', query: refreshed.request });
+  assert.equal(done.status, 0, done.stderr); assert.equal(JSON.parse(done.stdout).result.materialReady, true); assert.match(JSON.parse(done.stdout).result.summary, /训练估算/);
+  const applied = refreshed.invoke('training-plan.ts', 'apply', { id: 'synthetic-plan', host: 'codex' });
+  assert.equal(applied.status, 1, applied.stdout);
+  assert.equal((await refreshed.graded()).status, 'pass', JSON.stringify(await refreshed.graded()));
+  const applyOnly = await drive(t, followOn('training-chain-waiting-refresh'));
+  applyOnly.invoke('training-plan.ts', 'list', {});
+  const waited = applyOnly.invoke('training-plan.ts', 'apply', { id: 'synthetic-plan', host: 'codex' });
+  assert.equal(JSON.parse(waited.stdout).result.next, 'refresh');
+  assert.equal((await applyOnly.graded()).status, 'fail');
+  // OB-6, OB-4/OB-9, item 7: preparing straight from the request is the documented move.
+  for (const [id, trainee] of [['training-chain-lower-bound', null], ['training-chain-skland-facts', null], ['training-chain-skland-in-progress', 'char_synthetic']] as const) {
+    const run = await drive(t, followOn(id));
+    const prepared = run.invoke('training-plan.ts', 'prepare', { query: run.request, binding, currentTrainee: trainee, authorization: { source: 'current-request', reference: 'synthetic' } });
+    assert.equal(prepared.status, 0, `${id}: ${prepared.stderr}`);
+    assert.equal((await run.graded()).status, 'pass', `${id}: ${JSON.stringify(await run.graded())}`);
+  }
+  // Asking instead of preparing (nothing saved), or naming nobody in the room while the snapshot shows the trainee, fails.
+  const asked = await drive(t, followOn('training-chain-skland-facts'));
+  assert.equal((await asked.graded()).status, 'fail');
+  const nobody = await drive(t, followOn('training-chain-skland-in-progress'));
+  assert.equal(nobody.invoke('training-plan.ts', 'prepare', { query: nobody.request, binding, currentTrainee: null, authorization: { source: 'current-request', reference: 'synthetic' } }).status, 1);
+  assert.equal((await nobody.graded()).status, 'fail');
 });

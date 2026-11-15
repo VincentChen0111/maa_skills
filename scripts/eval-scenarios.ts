@@ -17,7 +17,7 @@ import { stageScenarios } from '../eval/maa-daily/stage-scenarios.ts';
 import { stageRunScenarios } from '../eval/maa-daily/stage-run-scenarios.ts';
 import { stageAlternateScenarios } from '../eval/maa-daily/stage-alternate-scenarios.ts';
 import { baseApplyScenarios } from '../eval/maa-daily/base-apply-scenarios.ts';
-import { trainingScenarios, trainingChainScenarios } from '../eval/maa-daily/training-scenarios.ts';
+import { trainingScenarios, trainingChainScenarios, trainingFollowOnScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
 import { setupDownloadScenarios, setupScenarios } from '../eval/maa-setup/scenarios.ts';
@@ -39,7 +39,7 @@ const groups: { group: string; subject?: string; companions: string[]; scenarios
   { group: 'maa-doctor', subject: 'maa-doctor', companions: ['maa-core'], scenarios: doctorScenarios },
   { group: 'maa-account', subject: 'maa-account', companions: ['maa-core'], scenarios: [...accountScenarios, ...baseScenarios, ...costScenarios, ...gapScenarios, ...researchScenarios,
     ...sklandScenarios, ...communityScenarios, ...reportScenarios, ...baseReportScenarios] },
-  { group: 'maa-daily', subject: 'maa-daily', companions: ['maa-core'], scenarios: [...dailyScenarios, ...stageScenarios, ...trainingScenarios, ...trainingChainScenarios, ...stageRunScenarios,
+  { group: 'maa-daily', subject: 'maa-daily', companions: ['maa-core'], scenarios: [...dailyScenarios, ...stageScenarios, ...trainingScenarios, ...trainingChainScenarios, ...trainingFollowOnScenarios, ...stageRunScenarios,
     ...stageAlternateScenarios, ...baseApplyScenarios] },
   // Cross-skill scenarios name their operating skills; each is installed under its own name next to maa-core.
   { group: 'cross-skill', companions: ['maa-core'], scenarios: crossSkillScenarios },

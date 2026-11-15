@@ -405,3 +405,24 @@ test('26 H4 round 1: a generated file may declare field types, judged structural
     assert.equal(grade({ ...policy, generatedFiles: [{ ...directory, fieldTypes } as never] }, evidence(archived)).status, 'fail', `directory ${JSON.stringify(fieldTypes)}`);
   }
 });
+
+test('32 follow-on: a record the product rewrites at one exact path is granted only as a rewrite holding its declared fields', () => {
+  const file = 'private/training-plans/synthetic-plan.json';
+  const record = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + '\n').toString('base64');
+  const before = record({ id: 'synthetic-plan', rank: 2, materialReady: false }), after = record({ id: 'synthetic-plan', rank: 2, materialReady: true, history: [{ at: 'x' }] });
+  const policy: Policy = { allowedKeys: ['$file'], forbiddenKeys: [], grants: [], downloadGrants: [], secrets: [], expectedCalls: [], expectedChanges: [],
+    reportRequired: false, skipReview: false, lockFiles: [], generatedFiles: [{ file, rewrites: true, fields: { id: 'synthetic-plan', rank: 2 } }] };
+  const evidence = (...changes: Evidence['changes']): Evidence => ({ transcript: { completed: true, calls: [], outputs: [] }, events: [], reports: [], reviews: [], changes });
+  assert.equal(grade(policy, evidence({ file, key: '$file', before, after })).status, 'pass', 'rewritten with its fixed fields');
+  assert.ok(grade(policy, evidence()).failed.includes('expected-behavior'), 'required unless optional');
+  assert.equal(grade({ ...policy, generatedFiles: [{ file, rewrites: true, optional: true }] }, evidence()).status, 'pass');
+  for (const [name, change] of [
+    ['created instead', { file, key: '$file', before: undefined, after }],
+    ['deleted', { file, key: '$file', before, after: undefined }],
+    ['other fixed field', { file, key: '$file', before, after: record({ id: 'synthetic-plan', rank: 3 }) }],
+    ['another file', { file: 'private/training-plans/other.json', key: '$file', before, after }],
+  ] as const) assert.equal(grade(policy, evidence(change)).status, 'fail', name);
+  assert.equal(grade({ ...policy, generatedFiles: [{ file, rewrites: 'yes' } as never] }, evidence({ file, key: '$file', before, after })).status, 'fail', 'non-boolean flag');
+  // Without the flag the same path is a new file only, as before.
+  assert.equal(grade({ ...policy, generatedFiles: [{ file, fields: { id: 'synthetic-plan' } }] }, evidence({ file, key: '$file', before, after })).status, 'fail');
+});

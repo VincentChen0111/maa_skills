@@ -27,7 +27,7 @@ import { stageScenarios } from '../eval/maa-daily/stage-scenarios.ts';
 import { stageRunScenarios } from '../eval/maa-daily/stage-run-scenarios.ts';
 import { stageAlternateScenarios } from '../eval/maa-daily/stage-alternate-scenarios.ts';
 import { baseApplyScenarios } from '../eval/maa-daily/base-apply-scenarios.ts';
-import { trainingScenarios, trainingChainScenarios } from '../eval/maa-daily/training-scenarios.ts';
+import { trainingScenarios, trainingChainScenarios, trainingFollowOnScenarios } from '../eval/maa-daily/training-scenarios.ts';
 import { doctorScenarios } from '../eval/maa-doctor/scenarios.ts';
 import { helpScenarios } from '../eval/maa-help/scenarios.ts';
 import { setupDownloadScenarios, setupScenarios } from '../eval/maa-setup/scenarios.ts';
@@ -63,7 +63,7 @@ async function files(directory: string): Promise<string[]> {
 test('every eval scenario is reachable by id and group, once, with its skill and the companions it needs', async () => {
   const catalog = scenarioCatalog();
   const ids = catalog.map(entryId);
-  const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios, trainingChainScenarios,
+  const all = [accountScenarios, baseScenarios, costScenarios, gapScenarios, researchScenarios, coreScenarios, dailyScenarios, stageScenarios, trainingScenarios, trainingChainScenarios, trainingFollowOnScenarios,
     stageRunScenarios, sklandScenarios, communityScenarios, reportScenarios, baseReportScenarios, stageAlternateScenarios, baseApplyScenarios, doctorScenarios, helpScenarios, setupScenarios,
     setupDownloadScenarios, crossSkillScenarios].flat().map((scenario) => scenario.id);
   assert.deepEqual([...ids].sort(), [...all].sort());

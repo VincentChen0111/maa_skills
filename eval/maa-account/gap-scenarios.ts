@@ -17,6 +17,8 @@ const confirmed = '我确认加工站有一间3级房间，stage_synthetic 的�
 const shared = gapSnapshot(); shared.lmd = 209;
 // Ticket 32 (owner, 2026-11-16): gaps go down to base materials; LMD is short and unlocks are unconfirmed, yet the decomposition still comes back.
 const broke = gapSnapshot(); broke.lmd = 0;
+// Ticket 32 follow-on item 8: the user settles every reported stage in one answer; the ore covers the craft once they count.
+const stocked = gapSnapshot(); Object.assign(stocked.items, { ore: 4 });
 export const gapScenarios: ScenarioDefinition[] = [
   { ...base, id: 'account-gaps-voucher-craft', prompt: `使用 maa-account。按已有合成快照查询合成干员到精英1等级1的加工与材料券缺口。${confirmed}调用共享缺口query，说明凭证换下级料后加工的顺序、原始需求、已有/加工/凭证覆盖、费用和仍缺；同时展示不加工对照。只读，不兑换、不操作设备、不保存文件。`,
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': gapSnapshot() } },
@@ -28,4 +30,6 @@ export const gapScenarios: ScenarioDefinition[] = [
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': shared } },
   { ...base, id: 'account-gaps-base-materials', prompt: '使用 maa-account。按已有合成快照查询合成干员到精英1等级1还缺什么。上级材料的缺口我知道了，真正卡我的是基础材料：告诉我缺的基础材料和龙门币，再告诉我材料券怎么用。我现在没空回答问题，加工站和关卡情况你没法确认的就先按假设算并标出来。本次只读，不改快照。',
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': broke } },
+  { ...base, id: 'account-gaps-confirm-stages', prompt: '使用 maa-account。按已有合成快照查询合成干员到精英1等级1的加工缺口。我的加工站有一间3级房间；配方要求的关卡我全都通关了——你查出来要哪些关卡，就按这些都通关算，不用再问我。本次只读，不改快照。',
+    jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': stocked } },
 ];

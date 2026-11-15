@@ -17,11 +17,14 @@ test('gap scenarios exercise real product queries on synthetic FS/network withou
     });
     assert.equal(invoke('preferences', { currentLanguage: 'zh-CN' }).status, 0);
     const shared = scenario.id.endsWith('shared-stock'), unknown = scenario.id.endsWith('unknown-progress') || scenario.id.endsWith('base-materials'), noCraft = scenario.id.endsWith('no-craft');
-    const query = invoke('cultivation-gaps', { targets: shared ? [gapGoal, { ...gapGoal, name: '合成二号' }] : [gapGoal], progress: unknown ? undefined : gapProgress }, noCraft ? ['--no-craft'] : []);
+    // Ticket 32 follow-on item 8: one confirmation over exactly the reported stage IDs.
+    const stagesConfirmed = scenario.id.endsWith('confirm-stages');
+    const query = invoke('cultivation-gaps', { targets: shared ? [gapGoal, { ...gapGoal, name: '合成二号' }] : [gapGoal], progress: unknown ? undefined : stagesConfirmed ? { source: 'user-confirmed', rooms: { WORKSHOP: [3] }, confirmedStages: ['stage_synthetic'] } : gapProgress }, noCraft ? ['--no-craft'] : []);
     assert.equal(query.status, 0, query.stderr); const result = JSON.parse(query.stdout);
     assert.equal(result.stageCodes.stage_synthetic, 'SYN-1');
     if (unknown) { assert.equal(result.status, 'partial'); assert.equal(result.comparison.craft.materials.mat.remaining, null); }
     else if (shared) { assert.equal(result.comparison.craft.materials.mat.crafted, 1); assert.equal(result.comparison.craft.lmd.required, 209); }
+    else if (stagesConfirmed) { assert.equal(result.comparison.craft.materials.mat.remaining, 0); assert.ok(!JSON.stringify(result.comparison.craft.blocked).includes('stage:stage_synthetic')); }
     else if (noCraft) { assert.equal(result.selected, 'no-craft'); assert.equal(result.comparison.noCraft.materials.mat.remaining, 2); }
     else { assert.equal(result.comparison.craft.materials.mat.remaining, 0); assert.equal(result.comparison.craft.voucherAllocations[0].count, 4); }
     // Ticket 32: with no LMD and no confirmed unlocks the shortage still decomposes to base materials, with labelled assumptions.
