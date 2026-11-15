@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { checkRequired } from '../skills/maa-core/scripts/check-required.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -146,7 +147,7 @@ test('occupied and failed atomic writes preserve the previous private snapshot',
   if (process.platform === 'win32') {
     await chmod(target, 0o444);
     try {
-      await assert.rejects(importMaaSnapshot({ callbackFile: input }, root), /EPERM|EACCES/);
+      await assert.rejects(importMaaSnapshot({ callbackFile: input }, root), /account-save-failed/);
       assert.equal(await readFile(target, 'utf8'), 'previous-snapshot');
       assert.deepEqual((await readdir(root)).sort(), ['account-snapshot.json', 'source.json']);
     } finally { await chmod(target, 0o600); }
@@ -171,7 +172,7 @@ test('configured MAA data is read without modifying it and missing source files 
 
 // Ticket 26 (D2): a refusal names its known static cause instead of the generic code, which evaluation runs showed models
 // treating as a state to route around; only causes that could carry a path or system text stay generic.
-test('CLI refusals name the known cause; an unreadable file stays account-check-required without its path', async (t) => {
+test('CLI refusals name the known cause; an unreadable file is a specific check-required result without its path', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'maa-account-codes-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home'); await mkdir(home);
@@ -184,11 +185,11 @@ test('CLI refusals name the known cause; an unreadable file stays account-check-
     ['import', '{}', 'maa-directory-required'],
     ['inspect', '{"maaDirectory":"elsewhere"}', 'invalid-request'],
     ['inspect', '{"format":"html"}', 'invalid-format'],
-    ['import', JSON.stringify({ callbackFile: missing }), 'account-check-required'],
+    ['import', JSON.stringify({ callbackFile: missing }), 'account-input-unreadable'],
   ] as const) {
     const result = run(action, input);
     assert.equal(result.status, 1, `${action} ${input}`);
-    assert.deepEqual(JSON.parse(result.stderr), { ok: false, error }, `${action} ${input}`);
+    assert.deepEqual(JSON.parse(result.stderr), error === 'account-input-unreadable' ? checkRequired(error) : { ok: false, error }, `${action} ${input}`);
     assert.equal(result.stdout, '');
     assert.doesNotMatch(result.stderr, /missing-synthetic|ENOENT|[A-Z]:\\|\//);
   }

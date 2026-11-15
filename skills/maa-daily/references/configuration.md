@@ -104,6 +104,8 @@ MAA 保存时可能省略 `IsEnabled: null`。仅这个字段的省略与 null �
 
 ## 事务与失败
 
+事务之外的失败（设置不可读、没有 MAA 目录、请求字段不对、配置读不了、基建排班或作业续接走错入口）输出 `{ok:false, status:"check-required", reason, check, alternatives}`，例如 `maa-config-unreadable`、`base-apply-route-required`；把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。写入开始后的未分类失败是 `maa-config-write-outcome-unknown`：结果不确定，不重放，先 `read` 核对再交 maa-doctor。
+
 写入锁在目标 MAA 的 `config/.maa-skills.lock`，跨宿主共享；记录 skill、host、PID、时间、操作编号和阶段。每个事务由一个进程持锁。活跃锁返回 busy，遗留或损坏锁返回 unknown，均不删除。结果未知时保留锁、备份及临时证据，等待 doctor/人工核对。
 
 本次停机预算 120 秒，包括正常关停最多 30 秒、重开最多 60 秒和文件操作余量；每个阶段重新核对。整个区间避开所有每日/单次定时前 2 分钟至触发分钟结束，使用 MAA 所在电脑本地时区；修改后的新定时也检查。超预算或未能证明窗口安全时报告实际阶段，不声明完成。

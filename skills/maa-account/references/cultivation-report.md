@@ -48,3 +48,5 @@
 - `evidence`：每条资料的作者、发布时间、来源链接和楼层、读取时间、可信度和局限；作者或日期未知就写未知。
 
 Markdown 模板是中文，按设置语言转述。正文分「事实」（工具计算、快照、原文摘录）和「推断」（你的理由、假设、总体推断），帖子和作业标题只放在引用块里。报告只是建议，不加工、不兑换、不写 MAA 配置、不操作设备。
+
+`stage-jobs.ts stages` 失败时输出 `{ok:false, status:"check-required", reason, check, alternatives}`：把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户，见 maa-core 调用方约定的「核对项」。

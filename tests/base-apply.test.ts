@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { checkRequired } from '../skills/maa-core/scripts/check-required.ts';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -304,7 +305,7 @@ test('the base grant is only reachable through base-apply: the writer CLI refuse
     env: { ...process.env, MAA_SKILLS_HOME: h.home }, encoding: 'utf8', windowsHide: true,
     input: JSON.stringify({ host: 'claude', expectedRevision: (await inspectConfiguration(h.maa)).revision, closedConfirmed: true,
       authorization: { source: 'approved-report', reference: h.reference, basePlan: grant }, changes }) });
-  assert.equal(cli.status, 1); assert.deepEqual(JSON.parse(cli.stdout), { ok: false, status: 'check-required' });
+  assert.equal(cli.status, 1); assert.deepEqual(JSON.parse(cli.stdout), checkRequired('base-apply-route-required'));
   const forged = await executeConfigWrite({ maaDirectory: h.maa, privateDirectory: h.home, host: 'claude', closedConfirmed: true, expectedRevision: (await inspectConfiguration(h.maa)).revision,
     authorization: { source: 'approved-report', reference: h.reference, basePlan: { ...grant, sha256: 'f'.repeat(64) } }, changes }, fakeMaa().maa);
   assert.equal(forged.status, 'rejected');

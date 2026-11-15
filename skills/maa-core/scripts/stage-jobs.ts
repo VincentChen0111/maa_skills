@@ -8,13 +8,31 @@ import { compareVersionStamp, readVersionStamp } from './maa-version.ts';
 import { approvedJobList, approvedJobFile, approvedJobSourceFile, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { readPublicJson } from './public-data.ts';
 import { readSettings } from './preferences.ts';
+import { CheckRequiredError, checkRequiredFor, type CheckRequiredReason } from './check-required.ts';
+import { snapshotFiles } from './account-snapshot.ts';
 
 type ObjectValue = Record<string, any>;
 // 'support' (需借助战): every slot but one is verified and the one left has no owned member; MAA may borrow it.
 type Status = 'ready' | 'support' | 'blocked' | 'unknown';
+/**
+ * MAA copilot `requirements.module` in v6.21.4 and v6.22.0 (AsstBattleDef.h, BattleFormationTask.cpp): -1 or absent is no
+ * requirement, 0 asks auto-formation to pick "no module", 1-5 are the module types χ, Y, α, Δ, β. The game data names those
+ * types by `typeName2` X, Y, A, D, B (MAA's OperBoxDataConfig.cpp maps the same letters). `module_level` is not read by MAA.
+ */
+export const moduleTypes = ['X', 'Y', 'A', 'D', 'B'] as const;
+export type ModuleType = (typeof moduleTypes)[number];
+/**
+ * Facts the user confirmed for one operator, in the account snapshot's own units: `skillLevel` 1-7, `mastery` per skill slot
+ * "1"-"3" (0-3), `moduleTypes` per module type letter (0 = not unlocked, 1-3 = its level). They fill only what the snapshot
+ * does not know; a fact that contradicts a known snapshot value leaves that requirement 待核.
+ */
+export type OperatorFact = { name: string; source: 'user-confirmed'; reference: string; skillLevel?: number; mastery?: Record<string, number>;
+  moduleTypes?: Partial<Record<ModuleType, number>> };
 export type StageRequest = { stages: { stageId: string; code: string; difficulty: 'normal' | 'raid'; loops: number }[];
   completions?: Record<string, 'PASS' | 'COMPLETE'>; completionEvidence?: string; maaVersion: string;
-  documentChecks?: { jobId: number; contentHash: string; satisfied: boolean; reference: string }[] };
+  documentChecks?: { jobId: number; contentHash: string; satisfied: boolean; reference: string }[]; operatorFacts?: OperatorFact[] };
+/** Module ID -> its operator and type letter, from the pinned uniequip table (or an offline `modules` map of the same shape). */
+type ModuleCatalog = Record<string, { charId: string; typeName2: string | null }>;
 type SourceRecord = { url: string; readAt: string; sha256?: string };
 /** Rating counts as the copilot site's query summary reports them; the summary is fresher than the cached detail view. */
 export type JobRating = { like: number; dislike: number; notEnoughRating: boolean; ratingLevel?: number; ratingRatio?: number; source: SourceRecord };
@@ -23,7 +41,9 @@ export type CandidateRating = { flag: 'ok' | 'low' | 'not-enough' | 'unknown'; l
   likeRatio?: number; requiredRatio?: number; ratingLevel?: number | null; ratingRatio?: number | null; source?: SourceRecord | null };
 type SearchCoverage = { stageId: string; mode: 'online' | 'offline'; pages: number; truncated: boolean; ids: number[] };
 type SearchOutcome = 'offline' | 'empty' | 'found' | 'same-map-unproven' | 'fallback-suspected' | 'insufficient' | 'unresolved' | 'other-stages';
-const blockingReasons = ['map-mismatch', 'stage-same-map-unproven', 'stage-name-unresolved', 'difficulty-mismatch', 'difficulty-unstated-normal-only', 'full-job-required', 'unsupported-job-type'];
+// job-group-name-duplicate: MAA's auto-formation refuses a job whose group names repeat (BattleFormationParseFailed), so it never starts.
+const blockingReasons = ['map-mismatch', 'stage-same-map-unproven', 'stage-name-unresolved', 'difficulty-mismatch', 'difficulty-unstated-normal-only', 'full-job-required', 'unsupported-job-type',
+  'job-group-name-duplicate', 'job-operators-invalid'];
 export type StageReport = ReturnType<typeof matchStageJobs>;
 export type StageApproval = { reportHash: string; reference: string; map: string; selections: { stageId: string; primary: number; alternates: number[]; loops: number; supportJobs?: number[] }[] };
 const object = (value: unknown): ObjectValue => {
@@ -93,47 +113,152 @@ function effectiveRequirements(oper: ObjectValue): ObjectValue {
   else if (oper.skill === 1 && required.elite === -1) required.elite = 0;
   return required;
 }
-function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
-  const rows: { group: string; name: string; skill: unknown; required: ObjectValue; effectiveRequired: ObjectValue; actual: ObjectValue | null; status: Status; reasons: string[] }[] = [];
-  const groups: { name: string; rows: typeof rows }[] = [];
+/** User-confirmed operator facts, validated once; a malformed entry refuses the whole request (it is the user's own scope). */
+function operatorFacts(request: StageRequest): Map<string, OperatorFact> {
+  const facts = new Map<string, OperatorFact>(), raw = request.operatorFacts as unknown;
+  if (raw === undefined) return facts;
+  const invalid = () => { throw new CheckRequiredError('stage-jobs-operator-facts-invalid'); };
+  const level = (value: unknown, min: number, max: number) => Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
+  const map = (value: unknown, keys: readonly string[], max: number) => {
+    if (value === undefined) return true;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.keys(value).length) return false;
+    return Object.entries(value).every(([key, item]) => keys.includes(key) && level(item, 0, max));
+  };
+  if (!Array.isArray(raw) || raw.length > 200) invalid();
+  for (const entry of raw as unknown[]) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) invalid();
+    const fact = entry as ObjectValue;
+    if (Object.keys(fact).some(key => !['name', 'source', 'reference', 'skillLevel', 'mastery', 'moduleTypes'].includes(key)) || fact.source !== 'user-confirmed'
+      || typeof fact.name !== 'string' || !fact.name.trim() || fact.name.length > 96 || typeof fact.reference !== 'string' || !fact.reference.trim() || fact.reference.length > 2048
+      || fact.skillLevel !== undefined && !level(fact.skillLevel, 1, 7) || !map(fact.mastery, ['1', '2', '3'], 3) || !map(fact.moduleTypes, moduleTypes, 3)
+      || fact.skillLevel === undefined && fact.mastery === undefined && fact.moduleTypes === undefined || facts.has(fact.name)) invalid();
+    facts.set(fact.name, fact as OperatorFact);
+  }
+  return facts;
+}
+function moduleCatalog(tablesValue: ObjectValue): ModuleCatalog {
+  const raw = tablesValue.modules, catalog: ModuleCatalog = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return catalog;
+  for (const [id, entry] of Object.entries(raw)) if (entry && typeof entry === 'object' && typeof (entry as ObjectValue).charId === 'string'
+    && ((entry as ObjectValue).typeName2 === null || typeof (entry as ObjectValue).typeName2 === 'string')) catalog[id] = { charId: (entry as ObjectValue).charId, typeName2: (entry as ObjectValue).typeName2 };
+  return catalog;
+}
+type MatchContext = { facts: Map<string, OperatorFact>; modules: ModuleCatalog; usedModules: Set<string> };
+type Observed = { value: number | null; from: 'snapshot' | 'user-confirmed' | null; conflict: boolean };
+/** The snapshot's value wins; a user-confirmed fact fills only an unknown one; a fact contradicting a known value is a conflict. */
+function observe(snapshotValue: unknown, confirmed: unknown): Observed {
+  if (Number.isSafeInteger(snapshotValue)) return { value: snapshotValue as number, from: 'snapshot', conflict: confirmed !== undefined && confirmed !== snapshotValue };
+  return Number.isSafeInteger(confirmed) ? { value: confirmed as number, from: 'user-confirmed', conflict: false } : { value: null, from: null, conflict: false };
+}
+/** A module type's level from the snapshot: the operator's one module of that type in the catalogue, else unknown. */
+function snapshotModuleLevel(actual: ObjectValue | null, type: ModuleType, context: MatchContext): number | null {
+  if (!actual || typeof actual.id !== 'string') return null;
+  const ids = Object.keys(context.modules).filter(id => context.modules[id]!.charId === actual.id);
+  for (const id of ids) context.usedModules.add(id);
+  const typed = ids.filter(id => context.modules[id]!.typeName2 === type);
+  const value = typed.length === 1 && actual.modules && typeof actual.modules === 'object' ? actual.modules[typed[0]!] : null;
+  return Number.isSafeInteger(value) ? value : null;
+}
+/**
+ * The names MAA's auto-formation keys groups by (CopilotConfig.cpp, BattleFormationTask.cpp, v6.21.4 and v6.22.0): a single
+ * `opers` entry is a group named after the operator, `groups` keep their own names, and a group with no members is skipped.
+ * Any repeat makes MAA report BattleFormationParseFailed and stop before the battle.
+ */
+function formationNamesRepeat(content: ObjectValue): boolean {
+  const names = [...(content.opers ?? []).map((oper: ObjectValue) => oper?.name),
+    ...(content.groups ?? []).filter((group: ObjectValue) => Array.isArray(group?.opers) && group.opers.length).map((group: ObjectValue) => group?.name)];
+  return new Set(names).size !== names.length;
+}
+function matchOperators(snapshot: ObjectValue, content: ObjectValue, context: MatchContext) {
+  const rows: { group: string; name: string; skill: unknown; required: ObjectValue; effectiveRequired: ObjectValue; actual: ObjectValue | null; status: Status; reasons: string[];
+    observed: { skillLevel?: Observed; mastery?: Record<string, Observed>; module?: { type: ModuleType | null; level: Observed } } }[] = [];
+  const groups: { name: string; rows: typeof rows; index: number; opers: unknown[] }[] = [];
   if (!Array.isArray(content.opers ?? []) || !Array.isArray(content.groups ?? [])) throw new Error('job-operators-invalid');
-  const entries = [...(content.opers ?? []).map((oper: unknown, index: number) => ({ name: `operator-${index}`, opers: [oper] })), ...(content.groups ?? [])];
-  const names = new Set<string>(), notOwned = new Set<(typeof rows)[number]>();
+  if (formationNamesRepeat(content)) throw new Error('job-group-name-duplicate');
+  const fixedCount = (content.opers ?? []).length;
+  // Single operators are slots named after the operator, as in MAA; an empty group is skipped by MAA's formation and fills no slot.
+  const entries: { name: string; opers: unknown[]; index: number }[] = [...(content.opers ?? []).map((oper: unknown, index: number) => ({ name: text(object(oper).name), opers: [oper], index })),
+    ...(content.groups ?? []).map((group: unknown, index: number) => ({ name: text(object(group).name), opers: object(group).opers, index: fixedCount + index }))];
+  const notOwned = new Set<(typeof rows)[number]>();
   // Absence proves "not owned" only when the snapshot carries a usable ownership list.
   const ownershipListed = Array.isArray(snapshot.operators) && ['complete', 'partial'].includes(snapshot.coverage?.operators?.status)
     && !(Array.isArray(snapshot.coverage?.operators?.issues) && snapshot.coverage.operators.issues.includes('empty-recognition'));
+  const emptyGroups: string[] = [];
   for (const entry of entries) {
-    const group = object(entry); const name = text(group.name);
-    if (names.has(name) || !Array.isArray(group.opers) || !group.opers.length) throw new Error('job-group-invalid'); names.add(name);
-    const groupRows = group.opers.map((raw: unknown) => {
+    const name = entry.name;
+    if (!Array.isArray(entry.opers)) throw new Error('job-operators-invalid');
+    if (!entry.opers.length) { emptyGroups.push(name); continue; }
+    const groupRows = entry.opers.map((raw: unknown) => {
       const oper = object(raw), original = object(oper.requirements ?? {}), required = effectiveRequirements(oper), operName = text(oper.name);
       const matches = Array.isArray(snapshot.operators) ? snapshot.operators.filter((item: ObjectValue) => item.name === operName) : [];
       const actual = matches.length === 1 && ['complete', 'partial'].includes(snapshot.coverage?.operators?.status) ? object(matches[0]) : null;
-      const reasons: string[] = [], checks: Status[] = [];
-      const check = (field: string, expected: unknown, observed: unknown) => {
+      const fact = context.facts.get(operName);
+      const reasons: string[] = [], checks: Status[] = [], observed: (typeof rows)[number]['observed'] = {};
+      const mark = (state: Status, reason: string) => { checks.push(state); reasons.push(reason); };
+      const check = (field: string, expected: unknown, value: unknown) => {
         if (expected === undefined || expected === -1) return;
-        if (!Number.isSafeInteger(expected) || Number(expected) < 0) { checks.push('unknown'); reasons.push(`invalid-${field}`); return; }
-        if (!Number.isSafeInteger(observed)) { checks.push('unknown'); reasons.push(`unknown-${field}`); }
-        else if (Number(observed) < Number(expected)) { checks.push('blocked'); reasons.push(`insufficient-${field}`); }
+        if (!Number.isSafeInteger(expected) || Number(expected) < 0) { mark('unknown', `invalid-${field}`); return; }
+        if (!Number.isSafeInteger(value)) mark('unknown', `unknown-${field}`);
+        else if (Number(value) < Number(expected)) mark('blocked', `insufficient-${field}`);
       };
-      if (!actual) { checks.push('unknown'); reasons.push('ownership-unobserved-or-ambiguous'); }
+      const checkObserved = (field: string, expected: number, seen: Observed) => {
+        if (seen.conflict) mark('unknown', `operator-fact-conflict:${field}`); else check(field, expected, seen.value);
+      };
+      if (!actual) mark('unknown', 'ownership-unobserved-or-ambiguous');
       // MAA v6.21.4 treats a missing requirements object as "no requirement"; no grounded default exists, so it stays 待核.
-      if (oper.requirements === undefined || oper.requirements === null || !Object.keys(original).length) { checks.push('unknown'); reasons.push('requirements-unstated'); }
+      if (oper.requirements === undefined || oper.requirements === null || !Object.keys(original).length) mark('unknown', 'requirements-unstated');
       check('elite', required.elite === undefined || required.elite === -1 ? 0 : required.elite, actual?.elite);
       // Level thresholds apply at the required elite stage, not after a higher promotion.
       if (!(Number.isSafeInteger(required.elite) && required.elite >= 0 && Number.isSafeInteger(actual?.elite) && actual!.elite > required.elite)) check('level', required.level, actual?.level);
       check('potential', required.potentiality ?? required.potential, actual?.potential);
-      // AccountSnapshot currently has no per-skill mastery contract. A scalar cannot prove S2/S3 mastery.
-      check('skill-level', required.skill_level, required.skill_level > 7 ? null : actual?.skillLevel);
+      // skill_level 1-7 is the skill level shared by all skills; 8/9/10 is mastery 1/2/3 of the job's `skill` (AsstBattleDef.h).
+      const skillLevel = required.skill_level;
+      if (skillLevel !== undefined && skillLevel !== -1) {
+        if (!Number.isSafeInteger(skillLevel) || skillLevel < 1 || skillLevel > 10) mark('unknown', 'invalid-skill-level');
+        else if (skillLevel <= 7) { observed.skillLevel = observe(actual?.skillLevel, fact?.skillLevel); checkObserved('skill-level', skillLevel, observed.skillLevel); }
+        else {
+          const rank = skillLevel - 7, slot = Number.isInteger(oper.skill) && oper.skill >= 1 && oper.skill <= 3 ? String(oper.skill) : null;
+          const known = actual?.mastery && typeof actual.mastery === 'object' ? actual.mastery as ObjectValue : null;
+          if (slot) { observed.mastery = { [slot]: observe(known?.[slot], fact?.mastery?.[slot]) }; checkObserved('mastery', rank, observed.mastery[slot]!); }
+          else {
+            // skill 0/omitted: MAA keeps the default or last-used skill, so the mastery holds only if every skill has it.
+            observed.mastery = Object.fromEntries(Object.keys(known ?? {}).map(key => [key, observe(known![key], fact?.mastery?.[key])]));
+            const seen = Object.values(observed.mastery);
+            if (seen.some(item => item.conflict)) mark('unknown', 'operator-fact-conflict:mastery');
+            else if (seen.length && seen.every(item => item.value !== null && item.value >= rank)) { /* every skill qualifies */ }
+            else if (seen.length && seen.every(item => item.value !== null && item.value < rank)) mark('blocked', 'insufficient-mastery');
+            else mark('unknown', 'mastery-skill-unspecified');
+          }
+        }
+      }
       if (Number.isInteger(oper.skill) && oper.skill >= 2 && oper.skill <= 3) check('skill-unlock', oper.skill - 1, actual?.elite);
-      for (const key of ['module', 'module_level']) if (required[key] !== undefined && required[key] !== -1) { checks.push('unknown'); reasons.push(`unknown-${key}`); }
-      if (oper.skill !== undefined && (!Number.isInteger(oper.skill) || oper.skill < 0 || oper.skill > 3)) { checks.push('unknown'); reasons.push('invalid-skill'); }
-      if (oper.role !== undefined) { checks.push('unknown'); reasons.push('role-unverified'); }
-      for (const key of Object.keys(required)) if (!['elite', 'level', 'potential', 'potentiality', 'skill_level', 'module', 'module_level'].includes(key)) { checks.push('unknown'); reasons.push(`unknown-requirement:${key}`); }
-      const row = { group: name, name: operName, skill: oper.skill ?? 0, required: structuredClone(original), effectiveRequired: required, actual, status: status(checks), reasons };
+      const module = required.module, moduleLevel = required.module_level;
+      if (module !== undefined && module !== -1) {
+        if (!Number.isSafeInteger(module) || module < 0 || module > 5) mark('unknown', 'invalid-module');
+        else if (module === 0) {
+          // "No module" is picked on the operator's branch page; only an unlocked module proves that page exists.
+          const levels = moduleTypes.map(type => observe(snapshotModuleLevel(actual, type, context), fact?.moduleTypes?.[type]));
+          observed.module = { type: null, level: levels.find(item => item.value !== null && item.value >= 1) ?? { value: null, from: null, conflict: false } };
+          if (levels.some(item => item.conflict)) mark('unknown', 'operator-fact-conflict:module');
+          else if (observed.module.level.value === null) mark('unknown', 'unknown-module');
+        } else {
+          const type = moduleTypes[module - 1]!, needed = Number.isSafeInteger(moduleLevel) && moduleLevel >= 1 && moduleLevel <= 3 ? moduleLevel : 1;
+          observed.module = { type, level: observe(snapshotModuleLevel(actual, type, context), fact?.moduleTypes?.[type]) };
+          checkObserved('module', needed, observed.module.level);
+        }
+      }
+      if (moduleLevel !== undefined && moduleLevel !== -1 && moduleLevel !== 0) {
+        if (!Number.isSafeInteger(moduleLevel) || moduleLevel < 1 || moduleLevel > 3) mark('unknown', 'invalid-module_level');
+        // MAA does not read module_level; without a module type it names no module to check.
+        else if (!(Number.isSafeInteger(module) && module >= 1 && module <= 5)) mark('unknown', 'module-level-unattributed');
+      }
+      if (oper.skill !== undefined && (!Number.isInteger(oper.skill) || oper.skill < 0 || oper.skill > 3)) mark('unknown', 'invalid-skill');
+      if (oper.role !== undefined) mark('unknown', 'role-unverified');
+      for (const key of Object.keys(required)) if (!['elite', 'level', 'potential', 'potentiality', 'skill_level', 'module', 'module_level'].includes(key)) mark('unknown', `unknown-requirement:${key}`);
+      const row = { group: name, name: operName, skill: oper.skill ?? 0, required: structuredClone(original), effectiveRequired: required, actual, status: status(checks), reasons, observed };
       rows.push(row); if (ownershipListed && !matches.length) notOwned.add(row); return row;
     });
-    groups.push({ name, rows: groupRows });
+    groups.push({ name, rows: groupRows, index: entry.index, opers: entry.opers });
   }
   // Bipartite matching prevents reusing one owned operator in several required slots.
   const assign = (allowUnknown: boolean, slots = groups): Record<string, string> | null => {
@@ -160,21 +285,21 @@ function matchOperators(snapshot: ObjectValue, content: ObjectValue) {
   let execution: ObjectValue | null = null;
   if (chosen) {
     execution = structuredClone(content);
-    const normalized = (index: number, rowIndex: number) => {
-      const oper = structuredClone(object(entries[index].opers[rowIndex])), row = groups[index]!.rows[rowIndex]!;
+    const normalized = (group: (typeof groups)[number], rowIndex: number) => {
+      const oper = structuredClone(object(group.opers[rowIndex])), row = group.rows[rowIndex]!;
       if (digest(row.required) !== digest(row.effectiveRequired)) oper.requirements = structuredClone(row.effectiveRequired);
       return oper;
     };
-    // Verified slots keep only their assigned member; the borrowed slot keeps all of its (unowned) members.
-    const selected = groups.map((group, index) => group === supportSlot && !assignment ? group.rows.map((_, rowIndex) => normalized(index, rowIndex))
-      : [normalized(index, group.rows.findIndex(row => row.name === chosen[group.name] && row.status === 'ready'))]);
-    const fixedCount = (content.opers ?? []).length;
-    if (content.opers !== undefined) execution.opers = selected.slice(0, fixedCount).map(opers => opers[0]);
-    if (content.groups !== undefined) execution.groups = content.groups.map((group: ObjectValue, index: number) => ({ ...structuredClone(group), opers: selected[fixedCount + index] }));
+    // Verified slots keep only their assigned member; the borrowed slot keeps all of its (unowned) members. Empty groups stay as written.
+    const selected = new Map(groups.map(group => [group.index, group === supportSlot && !assignment ? group.rows.map((_, rowIndex) => normalized(group, rowIndex))
+      : [normalized(group, group.rows.findIndex(row => row.name === chosen[group.name] && row.status === 'ready'))]]));
+    if (content.opers !== undefined) execution.opers = content.opers.map((_: unknown, index: number) => selected.get(index)![0]);
+    if (content.groups !== undefined) execution.groups = content.groups.map((group: ObjectValue, index: number) => selected.has(fixedCount + index)
+      ? { ...structuredClone(group), opers: selected.get(fixedCount + index) } : structuredClone(group));
   }
   const support = !assignment && supportAssignment && supportSlot ? { slot: supportSlot.name, members: supportSlot.rows.map(row => ({ name: row.name, skill: row.skill,
     required: structuredClone(row.required), effectiveRequired: structuredClone(row.effectiveRequired) })) } : null;
-  return { requirements: rows, assignment: chosen ?? {}, execution, support,
+  return { requirements: rows, assignment: chosen ?? {}, execution, support, emptyGroups,
     status: assignment ? 'ready' as Status : support ? 'support' as Status : assign(true) ? 'unknown' as Status : 'blocked' as Status };
 }
 
@@ -244,6 +369,8 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
   const rawCatalog = object(tablesValue).characters, catalog: ObjectValue = rawCatalog && typeof rawCatalog === 'object' && !Array.isArray(rawCatalog) ? rawCatalog : {};
   const professions = new Map<string, Set<string>>(), usedNames = new Set<string>();
   for (const entry of Object.values(catalog)) if (entry && typeof entry.name === 'string' && typeof entry.profession === 'string') professions.set(entry.name, (professions.get(entry.name) ?? new Set()).add(entry.profession));
+  // Optional module catalogue (pinned uniequip table): without it, a snapshot's module levels cannot be tied to a module type.
+  const context: MatchContext = { facts: operatorFacts(request), modules: moduleCatalog(object(tablesValue)), usedModules: new Set() };
   if (!Array.isArray(coverage) || coverage.length !== request.stages.length || coverage.some((item, index) => item.stageId !== request.stages[index]!.stageId
     || !['online', 'offline'].includes(item.mode) || !Number.isInteger(item.pages) || item.pages < (item.mode === 'online' ? 1 : 0) || item.pages > 3
     || typeof item.truncated !== 'boolean' || item.mode === 'offline' && (item.pages !== 0 || item.truncated) || item.truncated && item.pages !== 3
@@ -252,6 +379,7 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
   const seen = new Set<string>();
   const stages = request.stages.map(selected => {
     if (seen.has(selected.stageId)) throw new Error('duplicate-stage'); seen.add(selected.stageId);
+    if (!selected || typeof selected !== 'object' || !Object.hasOwn(tables, selected.stageId) || !tables[selected.stageId] || typeof tables[selected.stageId] !== 'object') throw new Error('stage-identity-mismatch');
     const stage = object(tables[selected.stageId]);
     if (stage.stageId !== selected.stageId || stage.code !== selected.code || !['normal', 'raid'].includes(selected.difficulty)
       || stage.difficulty !== (selected.difficulty === 'normal' ? 'NORMAL' : 'FOUR_STAR')) throw new Error('stage-identity-mismatch');
@@ -275,8 +403,17 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       else if (declared === 0 && flag === 2) reasons.push('difficulty-unstated-normal-only');
       if (!Array.isArray(content.actions) || !content.actions.length) reasons.push('full-job-required');
       if (content.type !== undefined && content.type !== 'Copilot') reasons.push('unsupported-job-type');
-      const operators = matchOperators(snapshot, content), actionNames = scanActionNames(content, professions, usedNames);
+      // A job whose operator list MAA cannot use is one blocked candidate, never a failure of the whole query.
+      let operators: ReturnType<typeof matchOperators>;
+      try { operators = matchOperators(snapshot, content, context); }
+      catch (error) {
+        reasons.push(error instanceof Error && error.message === 'job-group-name-duplicate' ? 'job-group-name-duplicate' : 'job-operators-invalid');
+        operators = { requirements: [], assignment: {}, execution: null, support: null, emptyGroups: [], status: 'blocked' };
+      }
+      const actionNames = scanActionNames(content, professions, usedNames);
       const checks: Status[] = [...prerequisiteChecks.map(check => check.status), operators.status, versionMet(request.maaVersion, content.minimum_required) ? 'ready' : 'unknown'];
+      // MAA's formation skips a group with no members; the battle may still name it, so the job stays 待核.
+      if (operators.emptyGroups.length) { checks.push('unknown'); reasons.push('job-group-empty'); }
       if (actionNames.undeclared.length) { checks.push('unknown'); reasons.push('action-operator-undeclared'); }
       if (actionNames.unrecognized.length) { checks.push('unknown'); reasons.push('action-name-unrecognized'); }
       if (!versionMet(request.maaVersion, content.minimum_required)) reasons.push('version-unverified');
@@ -307,11 +444,16 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       supportCandidates: ranked('support').map(candidate => candidate.id), searchResult: { outcome, returned: returned.length, belonging, sameMap, unresolved } };
   });
   const result = { version: 1 as const, authorization: 'none' as const, request: structuredClone(request), search: structuredClone(coverage), snapshotHash: digest(snapshot), snapshotReadAt: snapshot.readAt ?? null,
+    // 'skland': its read time is not the in-game data time, and how far Skland lags behind the game has not been measured.
+    snapshotSource: snapshot.source === 'maa' || snapshot.source === 'skland' ? snapshot.source as 'maa' | 'skland' : null,
     // Requested stages plus every table entry a job's stage_name resolved to, so preparation re-resolves identically.
     tables: { stages: Object.fromEntries([...request.stages.map(stage => stage.stageId), ...[...usedStages].filter(key => !request.stages.some(stage => stage.stageId === key)).sort()]
       .map(key => [key, structuredClone(tables[key])])), source: structuredClone(object(tablesValue).source ?? { kind: 'offline-input' }),
       characters: Object.fromEntries(Object.entries(catalog).filter(([, entry]) => usedNames.has(entry?.name) && typeof entry.profession === 'string').map(([id, entry]) => [id, { name: entry.name, profession: entry.profession }])),
-      charactersSource: structuredClone(object(tablesValue).charactersSource ?? null) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
+      charactersSource: structuredClone(object(tablesValue).charactersSource ?? null),
+      // Every module entry consulted for a snapshot operator, so preparation re-verifies module requirements identically.
+      modules: Object.fromEntries([...context.usedModules].sort().map(id => [id, structuredClone(context.modules[id]!)])),
+      modulesSource: structuredClone(object(tablesValue).modulesSource ?? null) }, snapshot: structuredClone(snapshot), jobs: structuredClone(jobs), stages,
     batches: [...new Set(stages.map(stage => JSON.stringify([stage.map, stage.difficulty, stage.difficultyGroup])))].map(key => {
       const [map, difficulty, difficultyGroup] = JSON.parse(key) as string[];
       return { map: map!, difficulty: difficulty!, difficultyGroup: difficultyGroup!, stages: stages.filter(stage => stage.map === map && stage.difficulty === difficulty && stage.difficultyGroup === difficultyGroup).map(stage => stage.stageId) };
@@ -369,7 +511,13 @@ export async function collectStageJobs(snapshot: unknown, tables: unknown, reque
 /** Summary and per-operator training view; untrusted document text remains quoted data. */
 export function formatStageJobs(report: StageReport, operator?: string): string {
   const escape = (value: unknown) => String(value).replace(/[<>|`\r\n]/g, char => ({ '<': '&lt;', '>': '&gt;', '|': '\\|', '`': '\\`', '\r': ' ', '\n': ' ' })[char]!);
-  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, `关卡表来源：${escape(JSON.stringify(report.tables.source))}；干员名表来源：${report.tables.charactersSource ? escape(JSON.stringify(report.tables.charactersSource)) : '未提供'}`, '候选是外部数据；运行由用户点开始。', ''];
+  const sourceLine = report.snapshotSource === 'skland' ? '账号来源：森空岛快照（只读）。读取时间是本次从森空岛读取的时间，不是游戏内的数据时间；森空岛数据比游戏内滞后多久没有测过。'
+    : report.snapshotSource === 'maa' ? '账号来源：MAA 识别快照。MAA 识别不提供技能等级、专精和模组：这些要求待核，可改用森空岛快照（snapshotFile）或请用户确认（operatorFacts）。'
+    : '账号来源：未标明。';
+  const lines = ['# 作业准备候选（未授权）', '', `账号读取时间：${escape(report.snapshotReadAt)}；报告：${report.hash}`, sourceLine,
+    `关卡表来源：${escape(JSON.stringify(report.tables.source))}；干员名表来源：${report.tables.charactersSource ? escape(JSON.stringify(report.tables.charactersSource)) : '未提供'}；模组表来源：${report.tables.modulesSource ? escape(JSON.stringify(report.tables.modulesSource)) : '未提供'}`,
+    '候选是外部数据；运行由用户点开始。', ''];
+  const used = new Set<string>();
   for (const batch of report.batches) {
     lines.push(`## 地图 ${escape(batch.map)}`);
     for (const stage of report.stages.filter(item => batch.stages.includes(item.stageId))) {
@@ -399,10 +547,32 @@ export function formatStageJobs(report: StageReport, operator?: string): string 
           : rating.flag === 'not-enough' ? `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}；作业站标记评分不足，排在评分正常的作业之后`
           : rating.flag === 'unknown' ? `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}；评分未知（排在评分正常的作业之后）`
           : `  - 评分：赞 ${rating.like} / 踩 ${rating.dislike}（好评率 ${percent(rating.likeRatio)}，所需 ${percent(rating.requiredRatio)}）；${rating.flag === 'low' ? '好评率低，排在后面' : '评分正常'}`);
-        for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) lines.push(`  - ${escape(row.name)}（${escape(row.group)}，S${escape(row.skill)}）：${row.status}；要求 ${escape(JSON.stringify(row.required))}${digest(row.required) !== digest(row.effectiveRequired) ? `；规范化 ${escape(JSON.stringify(row.effectiveRequired))}` : ''}${row.reasons.includes('requirements-unstated') ? '；要求未写明，待核' : ''}；当前精英 ${row.actual?.elite ?? '未知'} / 等级 ${row.actual?.level ?? '未知'}；${row.reasons.join(', ')}`);
+        if (candidate.reasons.includes('job-group-name-duplicate')) lines.push('  - 干员组名重复（单个干员按干员名算组名）：MAA 自动编队会报「编队解析失败」，整份作业不开始，不能准备；改选其他作业。');
+        if (candidate.reasons.includes('job-group-empty')) lines.push('  - 有成员为空的干员组：MAA 编队会跳过它，作业动作若用到这个组就部署不了，待核。');
+        if (candidate.reasons.includes('job-operators-invalid')) lines.push('  - 干员列表的格式不对，MAA 无法使用，不能准备。');
+        for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) {
+          const seen = (item: Observed | undefined) => item?.value === null || item === undefined ? '未知' : `${item.value}${item.from === 'user-confirmed' ? '（用户确认）' : ''}`;
+          const skills = [row.observed.skillLevel ? `技能等级 ${seen(row.observed.skillLevel)}` : '',
+            ...Object.entries(row.observed.mastery ?? {}).map(([slot, item]) => `${slot} 技能专精 ${seen(item)}`),
+            row.observed.module ? `${row.observed.module.type ? `${row.observed.module.type} 模组等级` : '已解锁模组'} ${seen(row.observed.module.level)}` : ''].filter(Boolean).join(' / ');
+          for (const reason of row.reasons) used.add(reason.split(':')[0]!);
+          lines.push(`  - ${escape(row.name)}（${escape(row.group)}，S${escape(row.skill)}）：${row.status}；要求 ${escape(JSON.stringify(row.required))}${digest(row.required) !== digest(row.effectiveRequired) ? `；规范化 ${escape(JSON.stringify(row.effectiveRequired))}` : ''}${row.reasons.includes('requirements-unstated') ? '；要求未写明，待核' : ''}；当前精英 ${row.actual?.elite ?? '未知'} / 等级 ${row.actual?.level ?? '未知'}${skills ? ` / ${skills}` : ''}；${row.reasons.join(', ')}`);
+        }
       }
     }
   }
+  const legend: [string, string][] = [
+    ['unknown-skill-level', '快照没有技能等级（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
+    ['unknown-mastery', '快照没有这个技能的专精（MAA 识别不提供）：改用森空岛快照，或请用户确认后写进 operatorFacts。'],
+    ['unknown-module', '读不到这种模组的等级：快照没有模组数据、模组表里找不到这种模组，或森空岛没返回；改用森空岛快照，或请用户确认后写进 operatorFacts 的 moduleTypes。'],
+    ['mastery-skill-unspecified', '作业没指定技能（skill 为 0），MAA 沿用默认或上次的技能；只有每个技能都达到这个专精才算满足。'],
+    ['module-level-unattributed', '作业写了模组等级却没写模组类型，MAA 不读模组等级，无从核对。'],
+    ['operator-fact-conflict', '用户确认的事实与快照里已知的值不同，先请用户再核对，不覆盖快照。'],
+    ['insufficient-mastery', '专精已知不够，这份作业不能准备。'],
+    ['insufficient-module', '这种模组未解锁或等级已知不够，这份作业不能准备；MAA 自动编队选不到这个模组时也会跳过该干员。'],
+  ];
+  const explained = legend.filter(([reason]) => used.has(reason));
+  if (explained.length) lines.push('', '## 原因说明', ...explained.map(([reason, words]) => `- ${reason}：${words}`));
   return lines.join('\n') + '\n';
 }
 
@@ -414,9 +584,11 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
   const { hash: reportHash, versions: generatedVersions, ...displayed } = report as StageReport & { versions?: unknown };
   // A report that no longer re-verifies (tampered, or produced by an older matcher structure) cannot bind an approval.
   let verified: StageReport;
-  try { verified = matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search); } catch { throw new Error('approval-mismatch'); }
-  if (digest(displayed) !== reportHash || verified.hash !== report.hash || approval.reportHash !== report.hash || digest(input.snapshot) !== report.snapshotHash
-    || !approval.reference?.trim() || !Array.isArray(approval.selections) || !approval.selections.length || !Number.isInteger(input.profile) || input.profile < 0) throw new Error('approval-mismatch');
+  try { verified = matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search); } catch { throw new CheckRequiredError('stage-jobs-report-stale'); }
+  if (digest(displayed) !== reportHash || verified.hash !== report.hash) throw new CheckRequiredError('stage-jobs-report-stale');
+  if (digest(input.snapshot) !== report.snapshotHash) throw new CheckRequiredError('stage-jobs-snapshot-changed');
+  if (approval.reportHash !== report.hash || !approval.reference?.trim() || !Array.isArray(approval.selections) || !approval.selections.length
+    || !Number.isInteger(input.profile) || input.profile < 0) throw new Error('approval-mismatch');
   const seen = new Set<string>();
   const plan: ApprovedJobPlan = { reportHash: report.hash, map: approval.map, entries: approval.selections.map(selection => {
     const stage = verified.stages.find(stage => stage.stageId === selection.stageId);
@@ -426,16 +598,26 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
     if (new Set(ids).size !== ids.length) throw new Error('approval-mismatch');
     // 需借助战 jobs need the user's explicit naming; naming anything else as borrowed is a mismatch, not a widening.
     if (!Array.isArray(supportJobs) || new Set(supportJobs).size !== supportJobs.length
-      || supportJobs.some(id => !ids.includes(id) || stage.candidates.find(candidate => candidate.id === id)?.status !== 'support')) throw new Error('approval-mismatch');
+      || supportJobs.some(id => !ids.includes(id) || stage.candidates.find(candidate => candidate.id === id)?.status !== 'support')) throw new CheckRequiredError('stage-jobs-support-not-named');
     const selectedJobs = ids.map(id => {
       const candidate = stage.candidates.find(candidate => candidate.id === id);
-      if (!candidate || !candidate.execution || !(candidate.status === 'ready' || candidate.status === 'support' && supportJobs.includes(id))) throw new Error('approval-requires-ready-candidate');
+      if (!candidate) throw new Error('approval-mismatch');
+      if (candidate.status === 'support' && !supportJobs.includes(id)) throw new CheckRequiredError('stage-jobs-support-not-named');
+      if (!candidate.execution || !(candidate.status === 'ready' || candidate.status === 'support')) throw new Error('approval-requires-ready-candidate');
       return { id, hash: candidate.execution.hash, sourceHash: candidate.hash, source: candidate.source,
         ...(candidate.support ? { support: { slot: candidate.support.slot, members: candidate.support.members.map(member => member.name) } } : {}) };
     });
     return { stageId: stage.stageId, code: stage.code, difficulty: stage.difficulty, difficultyGroup: stage.difficultyGroup, loops: selection.loops, primary: selectedJobs[0]!, alternates: selectedJobs.slice(1) };
   }) };
   const list = approvedJobList(plan, input.privateDirectory);
+  // From the first job file on, only a known conflict keeps its reason: anything else may have left files or a transaction behind.
+  try { return await writeApprovedJobs(input, report, verified, plan, list, generatedVersions, maa); }
+  catch (error) { throw error instanceof Error && error.message === 'job-file-conflict' ? error : new CheckRequiredError('stage-jobs-prepare-outcome-unknown'); }
+}
+
+async function writeApprovedJobs(input: Parameters<typeof prepareStageJobs>[0], report: StageReport, verified: StageReport, plan: ApprovedJobPlan,
+  list: ReturnType<typeof approvedJobList>, generatedVersions: unknown, maa: MaaProcess) {
+  const approval = input.approval;
   for (const entry of plan.entries) for (const selected of [entry.primary, ...entry.alternates]) {
     const candidate = verified.stages.find(stage => stage.stageId === entry.stageId)!.candidates.find(job => job.id === selected.id)!;
     for (const [file, content] of [[approvedJobFile(input.privateDirectory, report.hash, selected.id), candidate.execution!.content], [approvedJobSourceFile(input.privateDirectory, report.hash, selected.id), candidate.content]] as const) {
@@ -443,7 +625,10 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
       await mkdir(dirname(file), { recursive: true });
       let handle;
       try { handle = await open(file, 'wx', 0o600); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await readFile(file, 'utf8') !== bytes) throw new Error('job-file-conflict'); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (await readFile(file, 'utf8') !== bytes) throw new Error('job-file-conflict');
+      }
       if (handle) try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     }
   }
@@ -455,14 +640,30 @@ export async function prepareStageJobs(input: { report: StageReport; approval: S
 
 export const stageTableSource = { repository: 'Kengxxiao/ArknightsGameData', commit: '6f63c14e27b847ef74b53b00fe51fc322b3cd7ff', file: 'zh_CN/gamedata/excel/stage_table.json' };
 export const characterTableSource = { ...stageTableSource, file: 'zh_CN/gamedata/excel/character_table.json' };
-/** The read-only entry's stage tables; the cultivation report reuses it for job-site evidence. Offline files may carry an optional characters map; online queries also read the pinned character table, degrading to unclassified names. */
+/** The same pinned uniequip table the cost query reads; only each module's operator and type letter are kept. */
+export const moduleTableSource = { ...stageTableSource, file: 'zh_CN/gamedata/excel/uniequip_table.json' };
+function moduleEntries(table: unknown): ModuleCatalog {
+  const equips = table && typeof table === 'object' ? (table as ObjectValue).equipDict : null, catalog: ModuleCatalog = {};
+  if (equips && typeof equips === 'object') for (const [id, entry] of Object.entries(equips as ObjectValue))
+    if (entry && typeof entry.charId === 'string' && (entry.typeName2 === null || entry.typeName2 === undefined || typeof entry.typeName2 === 'string')) catalog[id] = { charId: entry.charId, typeName2: entry.typeName2 ?? null };
+  return catalog;
+}
+/**
+ * The read-only entry's stage tables; the cultivation report reuses it for job-site evidence. Offline files may carry optional
+ * characters and modules maps; online queries also read the pinned character and uniequip tables, degrading to unclassified
+ * names and unknown module levels when either cannot be read.
+ */
 export async function loadStageTables(file?: unknown, withCharacters = false, fetcher: typeof fetch = fetch) {
   if (file !== undefined) {
-    const tables = object(JSON.parse(await readFile(text(file), 'utf8')));
-    return { ...tables, source: { kind: 'offline-input' }, ...(tables.characters !== undefined ? { charactersSource: { kind: 'offline-input' } } : {}) };
+    let tables: ObjectValue;
+    try { tables = object(JSON.parse(await readFile(text(file), 'utf8'))); } catch { throw new CheckRequiredError('stage-jobs-input-file-unreadable'); }
+    return { ...tables, source: { kind: 'offline-input' }, ...(tables.characters !== undefined ? { charactersSource: { kind: 'offline-input' } } : {}),
+      ...(tables.modules !== undefined ? { modulesSource: { kind: 'offline-input' } } : {}) };
   }
-  const [result, characters] = await Promise.all([readPublicJson(stageTableSource, fetcher), withCharacters ? readPublicJson(characterTableSource, fetcher).catch(() => null) : null]);
-  return { ...object(result.value), source: result.source, ...(withCharacters ? characters ? { characters: characters.value, charactersSource: characters.source } : { charactersSource: { kind: 'unavailable' } } : {}) };
+  const [result, characters, modules] = await Promise.all([readPublicJson(stageTableSource, fetcher), withCharacters ? readPublicJson(characterTableSource, fetcher).catch(() => null) : null,
+    withCharacters ? readPublicJson(moduleTableSource, fetcher).catch(() => null) : null]);
+  return { ...object(result.value), source: result.source, ...(withCharacters ? characters ? { characters: characters.value, charactersSource: characters.source } : { charactersSource: { kind: 'unavailable' } } : {}),
+    ...(withCharacters ? modules ? { modules: moduleEntries(modules.value), modulesSource: modules.source } : { modulesSource: { kind: 'unavailable' } } : {}) };
 }
 export function findStages(tables: unknown, codes: string[]) {
   if (!Array.isArray(codes) || !codes.length || codes.length > 100 || codes.some(code => typeof code !== 'string' || !code.trim())) throw new Error('stage-code-required');
@@ -475,19 +676,33 @@ export function findStages(tables: unknown, codes: string[]) {
 }
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
+  const action = process.argv[2];
   try {
-    if (process.argv.length !== 3 || !['stages', 'query', 'prepare'].includes(process.argv[2]!)) throw new Error('action-invalid');
-    const input = object(await readStdinJson({ maxBytes: 1024 * 1024 })), settings = await readSettings();
-    if (process.argv[2] === 'stages') {
+    if (process.argv.length !== 3 || !['stages', 'query', 'prepare'].includes(action!)) throw new Error('action-invalid');
+    const input = object(await readStdinJson({ maxBytes: 1024 * 1024 }));
+    let settings: Awaited<ReturnType<typeof readSettings>>;
+    try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
+    /** A private JSON file the request names or implies: missing and unreadable are reported separately, without the path. */
+    const readJson = async (file: string, missing: CheckRequiredReason, unreadable: CheckRequiredReason) => {
+      let raw: string;
+      try { raw = await readFile(file, 'utf8'); } catch (error) { throw new CheckRequiredError((error as NodeJS.ErrnoException).code === 'ENOENT' ? missing : unreadable); }
+      try { return object(JSON.parse(raw.replace(/^﻿/, ''))); } catch { throw new CheckRequiredError(unreadable); }
+    };
+    // query and prepare read the MAA recognition snapshot unless `snapshotFile` names another (e.g. account-snapshot-skland.json).
+    const snapshotPath = (fallback: string) => input.snapshotFile === undefined ? join(settings.privateDirectory, fallback) : resolve(text(input.snapshotFile));
+    if (action === 'stages') {
       if (Object.keys(input).some(key => !['codes', 'tablesFile'].includes(key))) throw new Error('request-invalid');
       const tables = await loadStageTables(input.tablesFile);
       console.log(JSON.stringify({ ok: true, stages: findStages(tables, input.codes), tablesOrigin: input.tablesFile ? 'offline-input' : stageTableSource }));
-    } else if (process.argv[2] === 'query') {
-      const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
-      if (Object.keys(input).some(key => !['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'].includes(key))
-        || input.format !== undefined && !['json', 'markdown'].includes(input.format) || input.saveReport !== undefined && typeof input.saveReport !== 'boolean') throw new Error('request-invalid');
+    } else if (action === 'query') {
+      if (Object.keys(input).some(key => !['request', 'tablesFile', 'jobsFile', 'snapshotFile', 'operator', 'format', 'saveReport'].includes(key))
+        || input.format !== undefined && !['json', 'markdown'].includes(input.format) || input.saveReport !== undefined && typeof input.saveReport !== 'boolean'
+        || !input.request || typeof input.request !== 'object' || Array.isArray(input.request)) throw new Error('request-invalid');
+      const snapshot = await readJson(snapshotPath(snapshotFiles.maa), 'stage-jobs-snapshot-missing', 'stage-jobs-snapshot-unreadable');
       const tables = await loadStageTables(input.tablesFile, true);
-      const matched = input.jobsFile ? matchStageJobs(snapshot, tables, input.request, JSON.parse(await readFile(text(input.jobsFile), 'utf8'))) : await collectStageJobs(snapshot, tables, input.request);
+      const jobs = input.jobsFile === undefined ? undefined : await readFile(text(input.jobsFile), 'utf8').then(raw => JSON.parse(raw.replace(/^﻿/, '')) as Job[],
+        () => { throw new CheckRequiredError('stage-jobs-input-file-unreadable'); }).catch(error => { throw error instanceof CheckRequiredError ? error : new CheckRequiredError('stage-jobs-input-file-unreadable'); });
+      const matched = jobs ? matchStageJobs(snapshot, tables, input.request, jobs) : await collectStageJobs(snapshot, tables, input.request);
       // The MAA and record versions read now travel with the report; prepare reports any difference.
       const report = { ...matched, versions: await readVersionStamp(settings.maaDirectory) };
       if (input.saveReport) {
@@ -498,19 +713,24 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
       console.log(input.format === 'markdown' ? formatStageJobs(report, input.operator === undefined ? undefined : text(input.operator)) : JSON.stringify({ ok: true, report, tablesOrigin: input.tablesFile ? 'offline-input' : stageTableSource }));
     } else {
-      const snapshot = JSON.parse(await readFile(join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
-      if (Object.keys(input).some(key => !['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed'].includes(key)) || !settings.maaDirectory) throw new Error('request-invalid');
+      if (Object.keys(input).some(key => !['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed', 'snapshotFile'].includes(key))) throw new Error('request-invalid');
+      if (!settings.maaDirectory) throw new Error('maa-directory-unset');
       const hash = text(input.approval?.reportHash); if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('approval-invalid');
-      const report = JSON.parse(await readFile(join(settings.privateDirectory, 'stage-jobs', 'reports', `${hash}.json`), 'utf8'));
+      const report = await readJson(join(settings.privateDirectory, 'stage-jobs', 'reports', `${hash}.json`), 'stage-jobs-report-missing', 'stage-jobs-report-stale');
+      // Without snapshotFile, prepare reads the same kind of snapshot the report was built from.
+      const snapshot = await readJson(snapshotPath(report.snapshotSource === 'skland' ? snapshotFiles.skland : snapshotFiles.maa), 'stage-jobs-snapshot-changed', 'stage-jobs-snapshot-changed');
+      const { snapshotFile: _snapshotFile, ...request } = input;
       const { createMaaProcess } = await import('./maa-process.ts');
       let processBoundary: MaaProcess | undefined; const get = () => processBoundary ??= createMaaProcess(settings.maaDirectory!);
-      const result = await prepareStageJobs({ ...input, report, snapshot, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as Parameters<typeof prepareStageJobs>[0],
+      const result = await prepareStageJobs({ ...request, report, snapshot, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as Parameters<typeof prepareStageJobs>[0],
         { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
       console.log(JSON.stringify({ ok: result.status === 'complete', ...result })); if (result.status !== 'complete') process.exitCode = 1;
     }
   } catch (error) {
     // Ticket 26: a request refused while reading standard input reached neither MAA nor a file, so it is a plain rejection.
     const refused = stdinJsonCode(error);
-    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : { ok: false, status: 'check-required' })); process.exitCode = 1;
+    // Everything else says why and what to check (owner trial item 10); an unclassified failure of prepare is an unknown outcome.
+    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused }
+      : checkRequiredFor('stage-jobs', error, action === 'prepare' ? 'stage-jobs-prepare-outcome-unknown' : undefined))); process.exitCode = 1;
   }
 }

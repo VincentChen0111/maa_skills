@@ -2,6 +2,7 @@ import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { randomUUID } from 'node:crypto';
 import { readSettings, settingsHome } from './preferences.ts';
 import { inspectCredentials } from './credentials.ts';
@@ -217,7 +218,9 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   } catch (error) {
     const safe = new Set(['request-invalid', 'set-preferences-first', 'node-24-required', 'windows-required', 'maa-directory-unset', 'candidate-input-invalid', 'too-many-adb-candidates', 'too-many-connection-candidates', 'cn-client-required']);
     // Download reasons are fixed codes chosen by setup-download.ts; no path, address or response text.
-    const reason = stdinJsonCode(error) ?? (error instanceof DownloadError || error instanceof Error && safe.has(error.message) ? (error as Error).message : 'setup-check-required');
-    emit({ status: reason === 'setup-check-required' ? 'unexpected-failure' : 'rejected', reason }); process.exitCode = reason === 'setup-check-required' ? 2 : 1;
+    const reason = stdinJsonCode(error) ?? (error instanceof DownloadError || error instanceof Error && safe.has(error.message) ? (error as Error).message : null);
+    // Known refusals stay rejected (exit 1); anything else says what to check (owner trial item 10) and keeps exit 2.
+    if (reason) { emit({ status: 'rejected', reason }); process.exitCode = 1; }
+    else { emit(checkRequiredFor('setup', error)); process.exitCode = 2; }
   }
 }

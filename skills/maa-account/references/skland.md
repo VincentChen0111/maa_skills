@@ -40,7 +40,7 @@
 | `account-busy` | 另一个快照写入正在进行，本次没有保存 | 保留锁，稍后再试，不删除锁 |
 | `snapshot-missing` | `compare` 缺少一边的快照，`missing` 列出 `maa` 或 `skland` | 先按对应流程建立那份快照 |
 | `input-encoding-lossy`、`input-json-invalid` | 标准输入可能已经丢字（Windows PowerShell 管道），或不是 JSON；什么都没做 | 非 ASCII 字符和 `?` 改成 `\uXXXX` 转义后重发 |
-| `account-check-required` | 设置不可读、请求不合法或其他失败 | 先核对，不自动重放 |
+| `status: "check-required"` | 设置不可读（`settings-unreadable`）、请求不合法（`skland-request-invalid`）、比较的快照读不了（`skland-snapshot-unreadable`）、快照没能保存（`account-save-failed`）或其他未分类的失败（`skland-read-failed`）；输出 `{ok:false, status:"check-required", reason, check, alternatives}` | 把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户；不自动重放 |
 
 ## 快照内容
 

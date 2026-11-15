@@ -3,7 +3,14 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { randomUUID } from 'node:crypto';
-import { readSettings, settingsHome, startup } from './preferences.ts';
+import { readSettings as readSettingsFile, settingsHome, startup } from './preferences.ts';
+import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
+/** Settings that exist but cannot be read are refused by their own code, not as an unclassified failure. */
+const readSettings = (home?: string) => readSettingsFile(home).catch(() => { throw new Error('settings-unreadable'); });
+/** A recognition file or MAA cache that cannot be read is reported as such, without its path or the system message. */
+const readInput = (path: string) => readFile(path, 'utf8').catch(error => {
+  throw Object.assign(new CheckRequiredError('account-input-unreadable'), { code: (error as NodeJS.ErrnoException).code });
+});
 // Adapted from nhyo/dsh-maa-cli src/operators/{depot,operator-box}.js
 // at cdeaa8fac12bdc1db5b4ea5c33fca358dc6cf43b. Copyright (c) 2026 nhyo.
 // Installed MIT license: ../LICENSE. Source details: THIRD_PARTY_NOTICES.md in the repository.
@@ -128,12 +135,12 @@ export async function inspectMaaSnapshot(value: unknown, home = settingsHome()):
     input.operBoxFile = join(maaDirectory, 'data/OperBoxData.json');
   }
   let text: string;
-  if (input.callbackFile) text = await readFile(input.callbackFile, 'utf8');
+  if (input.callbackFile) text = await readInput(input.callbackFile);
   else {
     const data: Record<string, unknown> = {};
     for (const [key, path] of [['depot', input.depotFile], ['operBox', input.operBoxFile]] as const) if (path) {
       let raw: string;
-      try { raw = await readFile(path, 'utf8'); }
+      try { raw = await readInput(path); }
       catch (error) { if (configured && (error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
       try { data[key] = JSON.parse(raw.replace(/^\uFEFF/, '')); } catch { data[key] = null; }
     }
@@ -151,17 +158,19 @@ export async function importMaaSnapshot(value: unknown, home = settingsHome()): 
  */
 export async function saveAccountSnapshot(privateDirectory: string, fileName: (typeof snapshotFiles)[keyof typeof snapshotFiles],
   produce: () => Promise<AccountSnapshot>): Promise<AccountSnapshot> {
-  await mkdir(privateDirectory, { recursive: true });
+  // A writing step that fails is a save failure; a held lock (EEXIST) stays busy, and errors of produce() keep their own code.
+  const saving = <T>(step: Promise<T>) => step.catch(error => { throw (error as NodeJS.ErrnoException).code === 'EEXIST' ? error : new CheckRequiredError('account-save-failed'); });
+  await saving(mkdir(privateDirectory, { recursive: true }));
   const lockFile = join(privateDirectory, '.account-snapshot.lock');
-  const lock = await open(lockFile, 'wx', 0o600);
+  const lock = await saving(open(lockFile, 'wx', 0o600));
   const temporary = join(privateDirectory, `.account-snapshot-${randomUUID()}.tmp`);
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    await saving(lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })));
     const snapshot = await produce();
-    const file = await open(temporary, 'wx', 0o600);
-    try { await file.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`); await file.sync(); }
+    const file = await saving(open(temporary, 'wx', 0o600));
+    try { await saving(file.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`)); await saving(file.sync()); }
     finally { await file.close(); }
-    await rename(temporary, join(privateDirectory, fileName));
+    await saving(rename(temporary, join(privateDirectory, fileName)));
     return snapshot;
   } finally {
     try { await unlink(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -195,10 +204,11 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd, summary }));
   } catch (error) {
     // Ticket 26: the static codes this script throws are reported as they are, so a refusal says why. Anything else (a file
-    // that cannot be read, a failed save) stays account-check-required and prints no path or system message.
-    const code = stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy'
-      : error instanceof Error && accountErrorCodes.has(error.message) ? error.message : 'account-check-required');
-    console.error(JSON.stringify({ ok: false, error: code }));
+    // that cannot be read, a failed save, an unclassified failure) is a specific check-required result (owner trial item 10)
+    // that prints no path or system message.
+    const code = stdinJsonCode(error) ?? (error instanceof CheckRequiredError ? null : (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy'
+      : error instanceof Error && accountErrorCodes.has(error.message) ? error.message : null);
+    console.error(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('account-snapshot', error)));
     process.exitCode = 1;
   }
 }

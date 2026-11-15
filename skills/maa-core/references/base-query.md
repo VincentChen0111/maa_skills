@@ -21,7 +21,7 @@ Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\u
 
 交叉核对只比较名称、房间、精英与等级阈值、条件全文。`differences` 列出仅在游戏表／交叉表出现的条目，`issues` 列出缺失或歧义；这些差异不覆盖主表。交叉表未提供或联网失败时如实标明未核。`warnings` 中缺字段、缺干员和未知持有都要带入回复。
 
-查询失败退出码为 1，成功为 0；错误只输出稳定类别，不打印路径、原始快照、网络响应或调用栈。失败先核对输入和待核项，不把未返回结果当作无技能。
+查询失败退出码为 1，成功为 0；错误只输出稳定类别，不打印路径、原始快照、网络响应或调用栈。已知的拒绝是 `{ok:false, error}`（例如 `base-snapshot-invalid`）；找不到快照、`tablesFile` 读不了、设置不可读或未分类的失败输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`base-snapshot-missing`、`base-tables-file-unreadable`、`settings-unreadable`、`base-query-failed`），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。失败先核对输入和待核项，不把未返回结果当作无技能。
 
 ## 固定资料来源
 

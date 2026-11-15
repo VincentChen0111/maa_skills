@@ -176,3 +176,22 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 - 单文件：`stage-identity` 5/5、`stage-jobs-matching` 11/11、`stage-jobs` 6/6、`stage-jobs-regressions` 11/11、`stage-scenarios` 1/1、`stage-demo` 1/1。
 - 在 `b550495` 上完整运行一次 `node scripts/check.ts`（`.tmp/29/r2-check.txt`）：399 项，396 通过、2 失败、1 跳过。两项失败都在本分支没有改过的 `tests/maa-process.test.ts`：「Windows launches and normally closes a temporary GUI …」报 `maa-start-timeout`，「the native Windows observer handles a nonexistent selected process …」报 `maa-process-command-failed`。
 - 该入口遇到测试失败就停下，所以另外直接运行了 tracker、privacy、metadata 的导出函数和 `scripts/eval-selftest.ts`：都没有错误，7 rules / 14 samples。
+
+## 试用 9：专精、模组和组名（2026-11-16，工单 26 试用修复）
+
+起因见 [来源核对](stage-jobs-sources.md)「试用 9」。候选 `f51ba18` 上：`stage-jobs.ts` 把所有专精要求（`skill_level` 大于 7）和所有 `module`、`module_level` 要求一律记待核，不看快照；`query`、`prepare` 只读 MAA 识别快照 `account-snapshot.json`，没有 `snapshotFile`，森空岛快照里的逐技能专精和模组从来用不上；也没有用户确认事实的入口。
+
+改动：
+
+- `query` 接受 `snapshotFile`（与成本、缺口、基建、训练工具同一个约定）；报告记 `snapshotSource`，Markdown 写明来源，森空岛快照带「读取时间不是游戏内的数据时间、滞后未测」的说明。`prepare` 不传 `snapshotFile` 时读报告用的那一类快照。
+- 专精、技能等级、模组按 MAA 的语义核对快照里的真实数据；模组类型的对应取自固定公开模组表（在线查询另读 `uniequip_table.json`，读不到时模组待核），报告保存用到的条目，准备时重算结果相同。
+- `request.operatorFacts`：用户确认的技能等级、专精和模组（按类型字母），`source: "user-confirmed"`、带原话；只补快照未知的项，与快照已知值不同时该项待核（`operator-fact-conflict`）。
+- 已知不够记 blocked，满足记 ready，只有真的未知才待核；Markdown 逐项写出读到的值和来源，末尾解释用到的待核原因。
+- 组名按 MAA 的方式核对，重名只挡那一份候选；干员列表格式不对也只挡那一份；空组待核。
+- 失败输出改为共享的 check-required 结果（见 [check-required 验证](check-required-verification.md)）。
+
+测试先行：`tests/stage-jobs-mastery.test.ts` 的 7 项在候选 `f51ba18` 的导出副本上运行（`git archive` 到会话临时目录，只换进这一个测试文件）全部失败（0/7），在本包上全部通过（7/7）。原有测试里 6 处断言随行为改变而改写：准备时的笼统 `approval-mismatch` 改为具体原因（`stage-jobs-report-stale`、`stage-jobs-snapshot-changed`、`stage-jobs-support-not-named`），单个干员的组名从 `operator-<序号>` 改为干员名（与 MAA 一致）。
+
+评测场景（新增，`eval/maa-daily/stage-scenarios.ts`）：`daily-stage-prepare-skland-mastery`（有森空岛快照时核对专精和模组并准备）、`daily-stage-prepare-user-confirmed`（只有 MAA 快照时用用户确认的事实准备）、`daily-stage-mastery-insufficient`（森空岛快照证明专精不够，不准备、不写文件）、`daily-stage-snapshot-alternative`（没有 MAA 快照时，按 check-required 给出的其他办法改用森空岛快照）。`tests/stage-scenarios.test.ts` 用已安装的 CLI 逐个走正确做法并评分通过。
+
+兼容：旧报告的结构与新匹配不同，`prepare` 报 `stage-jobs-report-stale`，要重新查询和批准。

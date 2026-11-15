@@ -2,7 +2,7 @@
 
 脚本只有相邻 `maa-core/scripts/setup.ts` 一份实现。Node 24，Windows GUI MAA；游戏客户端接受国服 `Official`／`Bilibili`，客户端字段来自当前配置 `Gui.RuntimeSettings.ClientType`，不能只凭设置中的 CN 推断。没有该字段时请用户在 MAA 界面检查，不默认通过。设置由偏好脚本读取；所有输入是标准输入 JSON，不把用户路径或原话拼进 shell 命令。Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（中文路径也一样）；管道加在开头的 BOM 由脚本去掉，返回 `input-encoding-lossy` 时什么都没做，改成转义后重发。
 
-`node <本目录>/../../maa-core/scripts/setup.ts <动作> --json`。省略 `--json` 输出缩进 JSON，内容同为白名单。退出码 0 正常（版本提醒不阻断），1 有错误／需选择／未满足写入条件，2 意外失败需核对；具体看 `status`、`reason`、`checks`，不把退出码当游戏任务结果。
+`node <本目录>/../../maa-core/scripts/setup.ts <动作> --json`。省略 `--json` 输出缩进 JSON，内容同为白名单。退出码 0 正常（版本提醒不阻断），1 有错误／需选择／未满足写入条件，2 意外失败需核对；具体看 `status`、`reason`、`checks`，不把退出码当游戏任务结果。退出码 2 时输出 `{ok:false, status:"check-required", reason, check, alternatives}`：`setup-files-unwritable`（私有目录或下载位置写不进）、`settings-unreadable` 或 `setup-failed`（未分类）；把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户，见 maa-core 调用方约定的「核对项」。
 
 | 动作 | 输入 | 完成条件 |
 | --- | --- | --- |

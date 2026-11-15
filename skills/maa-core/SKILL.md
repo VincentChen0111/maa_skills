@@ -36,6 +36,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 | `scripts/advice-report.ts`、`scripts/cultivation-report.ts` | 建议报告的保存、默认独立审查（两个宿主共用一份审查说明模板）、明确跳过、改正与逐项批准；培养报告复用共享缺口计算和调研资料 | [建议报告接口](references/advice-report.md)、[培养报告接口](../maa-account/references/cultivation-report.md) |
 | `scripts/base-plan.ts`、`scripts/base-report.ts` | 基建排班的生成与检查（六条规则、MAA 干员名表、15 项验收门、数据新鲜度），只在私有目录写排班文件；基建报告复用基建技能查询和建议报告协议 | [排班生成与检查接口](references/base-plan.md)、[基建报告接口](../maa-account/references/base-report.md) |
 | `scripts/base-apply.ts`、`scripts/base-config.ts` | 应用已批准的基建排班：重新核对批准、数据新鲜度和全部验收门，经唯一配置事务写所选基建任务并安装排班副本 | [基建排班应用](../maa-daily/references/base-apply.md) |
+| `scripts/check-required.ts` | 各脚本 check-required 结果的唯一所有者：一种形状、原因码目录（每个原因要核对什么、有哪些其他办法），以及各脚本的失败怎样归到原因 | 本页「调用方的约定」的「核对项」 |
 | `scripts/stdin-json.ts` | 各脚本读标准输入 JSON 的唯一入口：去掉管道加在开头的 BOM，可能已经丢字的输入拒绝（`input-encoding-lossy`），各脚本的大小上限不变 | 本页「调用方的约定」 |
 
 调用方的约定：
@@ -46,6 +47,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 - Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「中」写成 `\u4e2d`，`?` 写成 `\u003f`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`：脚本见到 BOM 和 `?` 同时出现时返回 `input-encoding-lossy`，什么都没做，改成转义后重发。有些控制台（例如中文 Windows 默认的代码页 936）的管道不加 BOM，这时丢掉的字察觉不到，换成的 `?` 会原样存下；所以非 ASCII 字符一律转义，不要靠 `input-encoding-lossy` 发现丢字。没有自己代码的脚本在标准输入不是 JSON 时返回 `input-json-invalid`，超过上限时返回 `input-too-large`。
 - 不在用户的当前目录写临时输入文件或脚本。确实无法避免时放在系统临时目录，用完删除。
 - 脚本以错误码退出时，如实告诉用户错误码和它的含义。不改为导入脚本的内部函数，不改设置目录、私有目录或 home 参数（包括 `MAA_SKILLS_HOME`），不换一条写入路径重试。
+- 核对项：脚本返回 `status: "check-required"` 时，结果固定带三项：`reason`（稳定的原因码）、`check`（要核对什么）、`alternatives`（其他办法；空数组表示没有，`check` 末尾会写「没有替代办法。」）。三项都告诉用户：原因码及其意思、要核对什么、有哪些其他办法，或者明确说没有；不要只说「需要核对」。替代办法由用户选，其中要用户批准或确认的照样先问；`check` 写着结果不确定的，先按它核对，不重试、不重放。
 - maa-core 本身不受理写快照或改配置的请求：账号快照交 maa-account，MAA 配置交 maa-daily。
 - 不直接改 MAA 配置：MAA 自己的配置文件不用编辑器、`apply_patch`、命令或自己写的脚本去改。MAA 配置只在用户批准后经共享配置写入器改（`scripts/maa-config.ts` 的配置事务，说明见 maa-daily 的配置事务接口；setup 的连接写入和 doctor 的恢复也经它）。抽卡任何形式都拒绝，「免费」抽卡也一样，偏好怎么写都不能放开。
 - 偏好和已批准的报告条目不能代替理智药、碎石（用源石恢复理智）和临期药的当次批准；这三项只在用户当次批准后经共享配置写入器写入，由 `scripts/consumption-grant.ts` 的同一谓词判定。抽卡、礼包、付费、登录、碎石以外的源石用途和设备操作，任何偏好或批准都不能授权。

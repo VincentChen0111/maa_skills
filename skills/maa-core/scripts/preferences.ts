@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { randomUUID } from 'node:crypto';
 
 export type Settings = { language: string | null; languageAsked: boolean; privateDirectory: string; maaDirectory: string | null; server: 'CN' };
@@ -50,7 +51,8 @@ export async function readSettings(home = settingsHome()): Promise<Settings> {
   try { return { ...defaults, ...patch(JSON.parse(await readFile(join(home, 'config.json'), 'utf8'))) }; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaults;
-    throw error instanceof InputError ? new Error('settings-unreadable') : error;
+    // A file that is not JSON, or JSON that is not valid settings, is unreadable settings; other failures keep their own error.
+    throw error instanceof InputError || error instanceof SyntaxError ? new Error('settings-unreadable') : error;
   }
 }
 
@@ -175,9 +177,13 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     } else if (process.argv[2] === 'append') { await appendPreference(input); console.log(JSON.stringify({ ok: true, appended: true })); }
     else throw new InputError('unknown-action');
   } catch (error) {
+    // Known refusals keep their codes. Anything else says what to check (owner trial item 10): read is read-only, while a set
+    // or append that failed may or may not have taken effect, so it is never reported as "nothing changed".
     const code = stdinJsonCode(error) ?? (error instanceof InputError ? 'invalid-input'
-      : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : 'preferences-check-required');
-    console.error(JSON.stringify({ ok: false, error: code }));
+      : error instanceof Error && error.message === 'preferences-busy' ? 'preferences-busy' : null);
+    const action = process.argv[2];
+    console.error(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('preferences', error,
+      action === 'set' ? 'preferences-set-unconfirmed' : action === 'append' ? 'preferences-append-unconfirmed' : undefined)));
     process.exitCode = 1;
   }
 }
