@@ -9,7 +9,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
-import { staticCode, trainingCheckRequired, type TierPayment } from './training-state.ts';
+import { staticCode, trainingCheckRequired, type TierPayment, type Spend } from './training-state.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -40,6 +40,24 @@ const covered = (plan: GapPlan) => rowsOf(plan).every(row => row.remaining === 0
  * materials and LMD (fees included) reserved; MAA's OperProgress crafts missing mastery materials itself (training-sources).
  * MAA never exchanges vouchers, so no route that uses one counts.
  */
+/**
+ * Ticket 32 R4-1: what a start under this gate takes out of the stock, from the route the gate chose (`ready`: the no-craft
+ * plan; `crafting`: the craft plan, inputs consumed by crafting and the fees included). Stored on the plan for that tier and
+ * reserved by every later gate whose inventory predates the payment.
+ */
+export function gateSpend(gaps: GapResult | null, gate: 'ready' | 'crafting'): Spend | null {
+  const plan = gate === 'crafting' ? gaps?.comparison?.craft : gaps?.comparison?.noCraft;
+  if (!plan || plan.lmd.required === null || !Number.isSafeInteger(plan.lmd.required)) return null;
+  const items: Record<string, number> = {};
+  for (const [id, row] of Object.entries(plan.ledger)) {
+    if (row.opening === null || row.closing === null) return null;
+    if (row.opening - row.closing > 0) items[id] = row.opening - row.closing;
+  }
+  return { items, lmd: plan.lmd.required };
+}
+const validSpend = (spend: unknown): spend is Spend => !!spend && typeof spend === 'object' && integer((spend as Spend).lmd, 0, 1e12)
+  && !!(spend as Spend).items && typeof (spend as Spend).items === 'object' && Object.values((spend as Spend).items).every(count => integer(count, 0, 1e12));
+
 export function materialGate(gaps: GapResult | null, crafting: boolean): 'ready' | 'crafting' | 'short' {
   const comparison = gaps?.comparison;
   if (!comparison) return 'short';
@@ -123,6 +141,13 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   if (result.reservedTiers.length) {
     const tiers = operatorCatalog(tables), items: Record<string, number> = {}; let lmd = 0;
     for (const payment of result.reservedTiers) {
+      // Ticket 32 R4-1: what that start's gate recorded it spends (crafting inputs and fees included); a tier paid outside a gate
+      // (by hand in the game, which never crafts) spends its finished materials.
+      if (payment.spent !== undefined) {
+        if (!validSpend(payment.spent)) { result.issues.push('training:reserved-cost-unknown'); continue; }
+        for (const [id, count] of Object.entries(payment.spent.items)) items[id] = (items[id] ?? 0) + count;
+        lmd += payment.spent.lmd; continue;
+      }
       const row = object(array(object(array(object(tiers[payment.operatorId]).skills)[payment.skill - 1]).levelUpCostCond)[payment.rank - 1]);
       const costs = array(row.levelUpCost).map(object);
       if (!costs.length || costs.some(entry => typeof entry.id !== 'string' || !integer(entry.count, 1, 1e9))) { result.issues.push('training:reserved-cost-unknown'); continue; }
@@ -240,6 +265,9 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
     lines.push(`${en ? 'After verified start, attempt assistant' : '核实开训后尝试换助手'}: ${stage.afterStartAssistant ?? '?'}; ${en ? 'assignment and retained reduction remain unverified' : '实际就位及减时保留效果待核'}。`);
     for (const helper of stage.assistants) lines.push(`- ${helper.name}: ${helper.speedBonus === null ? '?' : `${Math.round(helper.speedBonus * 10000) / 100}%`} / ${helper.estimatedSeconds ?? '?'}s; ${helper.conditions.join('；')}; ${helper.issues.join(', ')}`);
   }
+  // Ticket 32 R4-2: the other plans' tiers taken out of this stock, and how the user can lift it.
+  if (result.reservedTiers.length) lines.push('', en ? `Tiers other plans paid after this inventory was read are taken out of it: ${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank} (${row.at})`).join(', ')}. A newer inventory read stops this.`
+    : `别的计划在这份库存读取之后付过料的档次已从库存里扣掉：${result.reservedTiers.map(row => `${row.operatorId} S${row.skill} M${row.rank}（${row.at}）`).join('、')}；重新读取库存（扫描时间晚于这些付料）后就不再扣。`);
   if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (user-confirmed); its materials are already paid and not counted again.`
     : `M${result.inTrainingRank} 正在训练（用户确认），材料已付，不再计入。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);

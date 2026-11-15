@@ -434,3 +434,46 @@ test('32 R3-2: one owner lists every plan\'s payments, and every gate in the pla
   assert.ok(queries.length >= 2 && queries.every(call => call.includes('payments')), queries.join(' | '));
   assert.match(text, /paymentsSeen/);
 });
+
+test('32 R4-1/R4-2: a tier another plan started under a crafting gate reserves what that gate spent, raw inputs and fees included, and the reservation is shown', async t => {
+  const f = trainingFixture();
+  // 合成助手 M1 costs mat x2; 合成干员 M1 costs ore x4. The workshop makes mat from ore x2 and ore from dust x3.
+  const tier = (cost: { id: string; count: number }[], seconds: number) => ({ unlockCond: { phase: 'PHASE_2', level: 1 }, lvlUpTime: seconds, levelUpCost: cost.map(c => ({ ...c, type: 'MATERIAL' })) });
+  const skills = (m1: { id: string; count: number }[]) => [{ skillId: 'synthetic_skill', unlockCond: { phase: 'PHASE_0', level: 1 },
+    levelUpCostCond: [tier(m1, 3600), tier([{ id: 'mat', count: 2 }], 7200), tier([{ id: 'mat', count: 3 }], 14400)] }];
+  Object.assign(f.tables.characters.char_helper, { skills: skills([{ id: 'mat', count: 2 }]) });
+  Object.assign(f.tables.characters.char_synthetic, { skills: skills([{ id: 'ore', count: 4 }]) });
+  const formula = (id: string, input: string, count: number) => ({ formulaId: `recipe_${id}`, formulaType: 'F_EVOLVE', itemId: id, count: 1, goldCost: 5, apCost: 360000,
+    costs: [{ id: input, count, type: 'MATERIAL' }], requireRooms: [{ roomId: 'WORKSHOP', roomLevel: 3, roomCount: 1 }], requireStages: [] });
+  Object.assign(f.tables.building.workshopFormulas, { mat: formula('mat', 'ore', 2), ore: formula('ore', 'dust', 3) });
+  Object.assign(f.tables.items.items, { ore: { name: '合成原料' }, dust: { name: '合成粉末' } });
+  // The depot scan the chain keeps using (11-09): mat 0, ore 4, dust 30.
+  Object.assign(f.snapshot, { items: { mat: 0, ore: 4, dust: 30 }, lmd: 1000, source: 'maa', readAt: '2026-11-12T00:00:00.000Z',
+    sourceTimes: { operators: null, inventory: '2026-11-09T00:00:00.000Z' } });
+  const w = await world(t, f);
+  const facts = (assistants: string[]) => ({ source: 'user-confirmed', trainingRoomLevel: 3, availableAssistants: assistants });
+  const query = (name: string, assistants: string[]) => ({ name, skill: 1, target: 1, current: { source: 'user-confirmed', skillLevel: 7, mastery: { '1': 0 } }, facts: facts(assistants),
+    progress: workshop, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile });
+  // Plan A has the user's crafting approval: its gate is 'crafting' and records that the start spends ore x4 (and the fees).
+  const a = await prepareTrainingPlan({ query: query('合成助手', ['char_synthetic', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成助手一技能专一' }, crafting: { reference: '缺的材料让 MAA 自动合成' } }, { home: w.root });
+  assert.deepEqual([a.materialReady, a.craftingRequired], [true, true]);
+  assert.equal(a.spends?.['1']?.items.ore, 4); assert.equal(a.spends?.['1']?.items.mat ?? 0, 0); assert.equal(a.spends?.['1']?.lmd, 10);
+  // A started on 11-10 (after the scan) and finished: MAA crafted mat x2 from ore x4 and paid them.
+  const done = await readTrainingPlan(a.id, { home: w.root });
+  Object.assign(done, { state: 'complete', materialReady: false, paidAt: { '1': '2026-11-10T00:05:01.000Z' }, target: { ...done.target, currentRank: 1 } }); delete done.action;
+  done.history.push({ at: '2026-11-10T00:05:10.000Z', kind: 'countdown-observed', rank: 1 }, { at: '2026-11-10T01:05:20.000Z', kind: 'completed', rank: 1 });
+  await storePlan(w, done);
+  assert.deepEqual(planPayments([done], null).map(row => row.spent), [a.spends!['1']]);
+  // Plan B, without crafting approval, needs ore x4 directly: the old scan still shows it, but A's crafting used it up.
+  const b = await prepareTrainingPlan({ query: query('合成干员', ['char_helper', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成干员一技能专一' } }, { home: w.root });
+  assert.equal(b.materialReady, false, 'the ore went into A\'s crafting');
+  assert.deepEqual(b.reservedTiers?.map(row => [row.operatorId, row.skill, row.rank]), [['char_helper', 1, 1]]);
+  // R4-2: the summary names the reservation and how to lift it.
+  const refreshed = await refreshTrainingPlan({ id: b.id, query: query('合成干员', ['char_helper', 'char_locked']) }, { home: w.root });
+  assert.match(refreshed.summary, /别的计划.*已从库存里扣掉/); assert.match(refreshed.summary, /char_helper/);
+  // A payment without a gate record (a tier the user paid by hand) still reserves the tier's finished cost.
+  delete done.spends; await storePlan(w, done);
+  assert.deepEqual(planPayments([done], null).map(row => row.spent), [undefined]);
+});

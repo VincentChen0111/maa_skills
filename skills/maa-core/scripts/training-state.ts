@@ -13,6 +13,13 @@ export type TrainingPlan = {
   startIssues?: string[];
   /** Ticket 32 R3-2: the other plans' payments (`paymentKey`) the last material gate reserved; a new one makes the gate stale. */
   paymentsSeen?: string[];
+  /**
+   * Ticket 32 R4-1: per tier, what the last open start gate said the start spends (the route MAA follows: finished materials, or
+   * with the user's crafting approval the crafting inputs and fees). The one record of what a payment actually spent.
+   */
+  spends?: Record<string, Spend>;
+  /** Ticket 32 R4-2: the other plans' tiers the last gate took out of the stock. */
+  reservedTiers?: TierPayment[];
   action?: { kind: TrainingActionKind; dueAt: string; armedAt: string; operation?: string; timerIdentity?: unknown; completedAt?: string;
     native?: { process: string; taskId: number; chain: string; appendedAt: string; paramsHash: string; startedAt?: string } };
   preplacedAt?: string; confirmationAt?: string; startedAt?: string; latestObservationAt?: string; expectedCompleteAt?: string; assistantAttempted?: boolean;
@@ -136,7 +143,9 @@ export function paidRanks(plan: TrainingPlan): Record<string, string> {
   for (const entry of plan.history) if (entry.kind === 'completed') paid[String(entry.rank)] ??= entry.at;
   return paid;
 }
-export type TierPayment = { operatorId: string; skill: number; rank: number; at: string };
+/** Ticket 32 R4-1: what a tier's start takes out of the stock: finished materials, or with crafting the inputs and fees. */
+export type Spend = { items: Record<string, number>; lmd: number };
+export type TierPayment = { operatorId: string; skill: number; rank: number; at: string; spent?: Spend };
 export const paymentKey = (payment: TierPayment) => `${payment.operatorId}:${payment.skill}:${payment.rank}:${payment.at}`;
 /**
  * Ticket 32 R3-2: the one owner of tier payments across plans. Every plan's payments (through `paidRanks`), except the plan
@@ -145,7 +154,7 @@ export const paymentKey = (payment: TierPayment) => `${payment.operatorId}:${pay
  */
 export function planPayments(plans: TrainingPlan[], except: string | null): TierPayment[] {
   return plans.filter(plan => plan.id !== except).flatMap(plan => Object.entries(paidRanks(plan))
-    .map(([rank, at]) => ({ operatorId: plan.target.operatorId, skill: plan.target.skill, rank: Number(rank), at })));
+    .map(([rank, at]) => ({ operatorId: plan.target.operatorId, skill: plan.target.skill, rank: Number(rank), at, ...(plan.spends?.[rank] ? { spent: plan.spends[rank] } : {}) })));
 }
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};

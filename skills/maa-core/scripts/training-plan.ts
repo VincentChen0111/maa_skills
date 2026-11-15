@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining, materialGate, formatTraining } from './training-time.ts';
+import { queryTraining, materialGate, formatTraining, gateSpend } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, paidRanks, planPayments, paymentKey, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
@@ -96,6 +96,11 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     const gate = !startFacts.length && result.status === 'ok' ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
     plan.materialReady = gate !== 'short';
     if (startFacts.length) plan.startIssues = startFacts; else delete plan.startIssues;
+    // Ticket 32 R4-1/R4-2: what a start on this gate spends, and the other plans' tiers it reserved.
+    const spend = gate === 'short' ? null : gateSpend(result.startMaterials, gate);
+    plan.spends = { ...plan.spends }; if (spend) plan.spends[String(plan.rank)] = spend; else delete plan.spends[String(plan.rank)];
+    if (gate !== 'short' && !spend) plan.materialReady = false;
+    plan.reservedTiers = result.reservedTiers;
     if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
@@ -133,6 +138,8 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
   const gate = inTraining === null ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
   const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
+  // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting).
+  const spend = gate === 'short' ? null : gateSpend(result.startMaterials, gate);
   const plan: TrainingPlan = { version: 1, id, authorization: { source: authorization.source as 'current-request' | 'approved-report', reference: authorization.reference },
     target: { operatorId: result.operator.id, name: result.operator.name, role: roleNames[result.role]!, skill: result.skill!, skillName: result.skillName, currentRank: result.currentRank, goal: result.targetRank },
     rank: Math.min(3, firstRank), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
@@ -144,7 +151,9 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
     // hand, no later than this plan. Every later tier records its own countdown time.
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
-    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey) };
+    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey),
+    ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers };
+  if (gate !== 'short' && !spend) { plan.materialReady = false; delete plan.craftingRequired; }
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
   const config = await readMaaConfig(context.settings.maaDirectory);
@@ -346,7 +355,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
-    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [],
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [], reservedTiers: plan.reservedTiers ?? [],
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
