@@ -195,3 +195,21 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 评测场景（新增，`eval/maa-daily/stage-scenarios.ts`）：`daily-stage-prepare-skland-mastery`（有森空岛快照时核对专精和模组并准备）、`daily-stage-prepare-user-confirmed`（只有 MAA 快照时用用户确认的事实准备）、`daily-stage-mastery-insufficient`（森空岛快照证明专精不够，不准备、不写文件）、`daily-stage-snapshot-alternative`（没有 MAA 快照时，按 check-required 给出的其他办法改用森空岛快照）。`tests/stage-scenarios.test.ts` 用已安装的 CLI 逐个走正确做法并评分通过。
 
 兼容：旧报告的结构与新匹配不同，`prepare` 报 `stage-jobs-report-stale`，要重新查询和批准。
+
+## 过度阻挡跟进（2026-11-16，协调者接受的过度阻挡审查）
+
+起因：维护者试用里，作业 110140 的组名「天有四时1」与单个干员重名，整关查询失败，TL-S-4 的 14 份候选都看不到，多关一起查也失败（OB-1）；TL-S 每份候选都卡在前置，原因里只写了 `document-conditions-unverified`，流程也不问用户（OB-2）；请求传了 `maaVersion: ''`，写了最低版本的作业都待核，同一次调用其实读到了已安装的 6.22.0（OB-3）；维护者说「我核实了，都是满足的。直接开始。」，没有入口能用这句话；查询默认只读 MAA 识别快照，它没有专精和模组（OB-9）。
+
+改动：
+
+- 候选逐份核对：内容 MAA 用不了的作业记 blocked（`job-content-invalid:<代码>`），在线读到的内容解析不了时保留原文、同样只挡这一份；同一关、同一批的其他候选照常核对。
+- 前置：没核实的前置写成 `prerequisite-unverified:<前置 stageId>:<要求>`，用户说的状态不够写成 `prerequisite-unmet:…`；报告的前置带关卡代号，前置关卡的表条目随报告保存；接口说明要求把所有前置合成一个问题只问一次。
+- MAA 版本：请求没写时用已安装 MAA 的版本补上，报告记 `maaVersionSource`。
+- 整份作业一次确认：`request.jobConfirmations`，覆盖范围与例外见规格「默认值及其来源」；候选的 `confirmable` 说明确认一次能否变成 ready，Markdown 给出问法所需的作业号和原文指纹。
+- 快照：`query` 没传 `snapshotFile` 时经 `selectSnapshot` 整份读一份（要干员和技能），报告记 `snapshotSelection`（在指纹外，和 `versions` 一样），Markdown 的来源行由同一函数生成。成本、培养报告、基建技能查询也改用这条规则。
+
+测试先行：`tests/stage-jobs-overblocking.test.ts` 8 项、`tests/snapshot-selection.test.ts` 5 项和 `tests/operator-cost.test.ts` 新增的 1 项先写，在改动前失败（缺导出或断言不成立），改动后全部通过。原有断言随行为改写：`job-group-name-duplicate` 改为 `job-content-invalid:job-group-name-duplicate`（`tests/stage-jobs-mastery.test.ts`）；场景测试里有两份快照时不再先得到待核（`tests/stage-scenarios.test.ts`）。
+
+评测场景：改了 2 个——`daily-stage-prepare-skland-mastery`（有两份快照时查询自己读森空岛快照）、`daily-stage-snapshot-alternative`（改成一份快照都没有：只剩森空岛快照时已经能直接读；期望的查询退出码改为 1）；新增 3 个——`daily-stage-job-content-invalid`（OB-1）、`daily-stage-prerequisite-question`（OB-2）、`daily-stage-job-confirmed`（整份作业确认后准备）。OB-3 没有场景：评测的合成 MAA 目录里没有带版本信息的 MAA.exe，已安装版本读不出来，只能由单元测试覆盖。
+
+兼容：旧报告的结构与新匹配不同（前置多了关卡代号），`prepare` 报 `stage-jobs-report-stale`，要重新查询和批准。

@@ -39,6 +39,14 @@
 
 新增场景 `daily-stage-snapshot-alternative`：没有 MAA 识别快照时，查询返回 `stage-jobs-snapshot-missing`，其他办法之一是改用森空岛快照；用户允许直接用只读的其他办法，模型应当照办并查询成功。评分不看措辞，看查询是否成功、是否没有写任何文件。试用 9、10 两项的前后比较记在下面「评测前后」一节。
 
+## 过度阻挡跟进：按行为枚举（2026-11-16）
+
+过度阻挡审查指出：只按字符串 `check-required` 找生产方会漏掉形状相同、名字不同的笼统失败（例如 `training-time.ts` 的 `training-query-failed`）。本包按行为重新枚举：`skills/maa-core/scripts` 下每个命令行入口（用 `process.argv[1]` 判断自己是不是入口的脚本）要么是登记的生产方、经 `checkRequiredFor` 报告兜底失败，要么是合并后再采用的训练修复脚本；后者的现有笼统代码逐个列在测试里（`training-query-failed`、`training-plan-check-required`、`gaps-input-invalid`），代码变了测试就提醒更新。
+
+新登记 9 个生产方：`base-plan`、`base-report`、`base-apply`、`cultivation-report`、`operator-cost`、`nga`、`bilibili`、`skland-community`、`doctor`。它们带固定代码的拒绝保持原样（与试用 10 的 `base-query` 同一边界）；读不了设置和未分类的失败改为 check-required，退出码不变（社区调研的意外失败、诊断的失败仍是 2）。基建应用的 `apply` 和诊断的 `repair` 未分类失败是「结果不确定、不重试」。基建应用检查结果里的 `base-apply-check-failed` 仍是结果内的拒绝原因，接口说明的拒绝原因表补了它的含义和做法。
+
+测试：一致性测试新增「按行为枚举」一项，并在临时 home 里把设置文件写坏，逐个运行 9 个入口，都报 `settings-unreadable`，退出码与原来相同；诊断的两个原有测试从 `unexpected-failure` 改为 check-required 的 `check-could-not-complete`。使用方新增 6 份接口说明（建议报告、排班、社区调研、成本、基建应用、诊断检查）。
+
 ## 评测前后
 
 未运行（运行后在这里记批次、载荷、模型和逐场景结论）。

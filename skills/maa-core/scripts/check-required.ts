@@ -174,6 +174,26 @@ const groups = [
     alternatives: ['确认私有目录的路径不是文件、有写权限后重试', '经 maa-setup 换一个私有目录'] },
   { reasons: ['setup-failed'], check: '接入流程遇到未分类的错误。check、downloads 只读；prepare、apply、download 等动作可能已经做了一部分。',
     alternatives: ['重新运行 setup.ts check --json 看当前状态，再按结果继续', '运行 maa-doctor 的检查'] },
+  // Over-blocking review (2026-11-16): the remaining reasonless catch-alls, found by behaviour rather than by name. Known
+  // refusals of these CLIs keep their own codes; settings that cannot be read and anything unclassified come here.
+  { reasons: ['plan-check-failed'], check: '排班工具遇到未分类的错误，结果不确定；generate 可能没有写完排班文件。',
+    alternatives: ['重新运行同一个请求', '运行 maa-doctor 的检查，核对私有文件'] },
+  { reasons: ['base-report-failed'], check: '基建报告工具遇到未分类的错误；draft、review、approve 等写记录的动作可能只写了一部分。',
+    alternatives: ['先用 read 看这份报告现在的状态再决定', '运行 maa-doctor 的检查，核对私有文件'] },
+  { reasons: ['base-apply-check-failed'], check: '核对排班能否应用时遇到未分类的错误，没有核对完；什么都没写。',
+    alternatives: ['重新运行 check', '运行 maa-doctor 的检查'] },
+  { reasons: ['base-apply-outcome-unknown'], check: '应用排班时遇到未分类的错误，MAA 配置可能已经改了一部分，结果不确定；不要重试，也不要重放。',
+    alternatives: ['交给 maa-doctor 先检查，按检查结果处理', '用 maa-config.ts read 看当前配置后再决定'] },
+  { reasons: ['cultivation-report-failed'], check: '培养报告工具遇到未分类的错误；draft、review、approve 等写记录的动作可能只写了一部分。',
+    alternatives: ['先用 read 看这份报告现在的状态再决定', '运行 maa-doctor 的检查，核对私有文件'] },
+  { reasons: ['operator-cost-failed'], check: '成本查询遇到未分类的错误，没有结果；什么都没写。',
+    alternatives: ['核对干员名和目标的写法后重新查询', '稍后重试'] },
+  { reasons: ['research-failed'], check: '社区调研读取遇到未分类的错误，没有结果；缓存和限速记录可能已经更新。',
+    alternatives: ['稍后重试', '运行这个来源的 status，看是否已因风控停止'] },
+  { reasons: ['check-could-not-complete'], check: '诊断（check 或 analyze）遇到未分类的错误，没有完成；没有修复任何东西。',
+    alternatives: ['重新运行同一个诊断', '把原因码告诉用户，由用户决定是否请维护者看'] },
+  { reasons: ['doctor-repair-outcome-unknown'], check: '修复时遇到未分类的错误，修复可能已经做了一部分，结果不确定；不要重试。',
+    alternatives: ['先运行 check 看现在的状态，再按结果决定'] },
 ] as const satisfies readonly Group[];
 
 export type CheckRequiredReason = (typeof groups)[number]['reasons'][number];
@@ -231,6 +251,16 @@ export const producers = {
   preferences: { fallback: 'preferences-read-failed', codes: self('settings-unreadable', 'preferences-set-unconfirmed', 'preferences-append-unconfirmed') },
   setup: { fallback: 'setup-failed', codes: { ENOTDIR: 'setup-files-unwritable', EEXIST: 'setup-files-unwritable', EACCES: 'setup-files-unwritable',
     EPERM: 'setup-files-unwritable', ...self('settings-unreadable', 'setup-files-unwritable') } },
+  // Their known refusals keep their own codes ({ok:false, error}); only what reaches these catch-alls is classified here.
+  'base-plan': { fallback: 'plan-check-failed', codes: self('settings-unreadable') },
+  'base-report': { fallback: 'base-report-failed', codes: self('settings-unreadable') },
+  'base-apply': { fallback: 'base-apply-check-failed', codes: self('settings-unreadable', 'base-apply-outcome-unknown') },
+  'cultivation-report': { fallback: 'cultivation-report-failed', codes: self('settings-unreadable') },
+  'operator-cost': { fallback: 'operator-cost-failed', codes: self('settings-unreadable') },
+  nga: { fallback: 'research-failed', codes: self('settings-unreadable') },
+  bilibili: { fallback: 'research-failed', codes: self('settings-unreadable') },
+  'skland-community': { fallback: 'research-failed', codes: self('settings-unreadable') },
+  doctor: { fallback: 'check-could-not-complete', codes: self('settings-unreadable', 'doctor-repair-outcome-unknown') },
 } as const satisfies Record<string, { fallback: CheckRequiredReason; codes: Record<string, CheckRequiredReason> }>;
 export type CheckRequiredProducer = keyof typeof producers;
 

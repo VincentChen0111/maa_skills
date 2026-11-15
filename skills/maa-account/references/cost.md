@@ -22,6 +22,6 @@
 
 `mastery` 的键为技能槽位 `"1"` 至 `"3"`，值为 0–3；`modules` 的键为公开数据里的模组 ID，值为 0–3。`skillLevel` 支持普通技能 1–7。目标不能低于已知当前值；新专精需要已知或本次目标技能 7 级，并满足公开资料的精英/等级前置。技能目标、非零专精或模组目标即使与当前等级相等，也要核对前置；已声称拥有的等级须与当前精英/等级一致，已有专精还要求当前普通技能为 7，不能用未来培养目标掩盖当前事实冲突。模组须属于该干员且有各级成本。缺失成本、非法级别、无法识别干员、未认识的目标字段均返回待核，不自动修正。
 
-无 `format` 或 `format: "json"` 输出结构化结果；`format: "markdown"` 输出相同结果的 Markdown。退出 0 表示完成查询，仍须检查 `status`。不可读快照、主源网络失败、非法命令/JSON 退出 1，输出脱敏错误码；不打印原快照、私人路径或额外字段。读取时间是实际获取时间，不是上游更新时间。
+无 `format` 或 `format: "json"` 输出结构化结果；`format: "markdown"` 输出相同结果的 Markdown。退出 0 表示完成查询，仍须检查 `status`。不可读快照、主源网络失败、非法命令/JSON 退出 1，输出脱敏错误码；设置读不了或未分类的失败同样退出 1，标准错误输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`settings-unreadable`、`operator-cost-failed`），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户；不打印原快照、私人路径或额外字段。读取时间是实际获取时间，不是上游更新时间。
 
 其他项目可导入 `queryOperatorCost(input, { home?, fetcher? })`；纯计算 `calculateOperatorCost(tables, snapshot, request)`、渲染 `formatOperatorCostMarkdown(result)` 和 `loadOperatorCostTables(fetcher?)` 共用同一份实现。`fetcher` 只为网络边界注入；调用者自行提供合成测试数据。来源固定版本由 `operatorCostSources` 声明，运行时返回实际内容 SHA-256，不随 skill 打包游戏数据。具体来源核对与算法依据见仓库的 `docs/operator-cost-sources.md`。

@@ -19,7 +19,14 @@ const scripts = join(root, 'skills', 'maa-core', 'scripts');
 const producerScripts: Record<CheckRequiredProducer, string> = {
   'stage-jobs': 'stage-jobs.ts', 'stage-run': 'stage-run.ts', 'maa-config': 'maa-config.ts', 'account-snapshot': 'account-snapshot.ts',
   'skland-account': 'skland-account.ts', 'base-query': 'base-query.ts', credentials: 'credentials.ts', preferences: 'preferences.ts', setup: 'setup.ts',
+  // Found by behaviour (over-blocking review, 2026-11-16): their catch-alls printed a reasonless code under another name.
+  'base-plan': 'base-plan.ts', 'base-report': 'base-report.ts', 'base-apply': 'base-apply.ts', 'cultivation-report': 'cultivation-report.ts', 'operator-cost': 'operator-cost.ts',
+  nga: 'nga.ts', bilibili: 'bilibili.ts', 'skland-community': 'skland-community.ts', doctor: 'doctor.ts',
 };
+/** The adopted-after-merge CLIs' reasonless catch-alls today, by behaviour (the training fix converts them on its branch). */
+const adoptedCatchAlls: Record<string, string> = { 'training-time.ts': 'training-query-failed', 'training-plan.ts': 'training-plan-check-required', 'cultivation-gaps.ts': 'gaps-input-invalid' };
+/** Generic codes the converted catch-alls used to print as `{ok:false, error}` (or `unexpected-failure`); now catalogue reasons. */
+const formerCatchAlls = ['plan-check-failed', 'base-report-failed', 'base-apply-check-failed', 'cultivation-report-failed', 'research-failed', 'check-could-not-complete'];
 /**
  * Owned by the parallel training fix (session training-chain-fix), which emits the same shape on its own branch. They adopt
  * this module after the central merge; until then they are listed, not converted, and not edited here.
@@ -35,7 +42,8 @@ const consumers = [
   'skills/maa-daily/references/stage-jobs.md', 'skills/maa-daily/references/stage-run.md', 'skills/maa-daily/references/configuration.md',
   'skills/maa-account/references/import.md', 'skills/maa-account/references/skland.md', 'skills/maa-core/references/base-query.md',
   'skills/maa-core/references/credentials.md', 'skills/maa-core/references/preferences.md', 'skills/maa-setup/references/setup.md',
-  'skills/maa-account/references/cultivation-report.md',
+  'skills/maa-account/references/cultivation-report.md', 'skills/maa-core/references/advice-report.md', 'skills/maa-core/references/base-plan.md',
+  'skills/maa-core/references/research.md', 'skills/maa-account/references/cost.md', 'skills/maa-daily/references/base-apply.md', 'skills/maa-doctor/references/checks.md',
 ];
 const retiredCodes = ['account-check-required', 'base-query-check-required', 'credential-check-required', 'preferences-check-required', 'setup-check-required'];
 
@@ -93,6 +101,25 @@ test('only the module builds the shape: every file that mentions check-required 
     } else assert.deepEqual(mentions.filter(word => word !== 'check-required.ts'), [], `${file} mentions check-required but is not a listed producer`);
   }
   for (const file of adoptedAfterMerge) assert.ok(files.includes(file), `${file} is listed as adopted after merge but does not exist`);
+});
+
+test('by behaviour: every CLI entry script reports its unclassified failures through the module, or is adopted after merge', async () => {
+  const files = (await readdir(scripts)).filter(file => file.endsWith('.ts'));
+  const entries: string[] = [];
+  for (const file of files) if (/process\.argv\[1\]/.test(await readFile(join(scripts, file), 'utf8'))) entries.push(file);
+  assert.deepEqual(entries.filter(file => !Object.values(producerScripts).includes(file) && !adoptedAfterMerge.includes(file)).sort(), [], 'a CLI that is neither a producer nor adopted after merge');
+  for (const [file, code] of Object.entries(adoptedCatchAlls)) {
+    assert.ok(entries.includes(file) && adoptedAfterMerge.includes(file), file);
+    assert.ok((await readFile(join(scripts, file), 'utf8')).includes(`'${code}'`), `${file}: listed catch-all ${code} no longer present; update the list`);
+  }
+  for (const file of Object.values(producerScripts)) {
+    const source = await readFile(join(scripts, file), 'utf8');
+    assert.match(source, /checkRequiredFor\(/, `${file} must classify its catch-all through the module`);
+    // A former generic code may remain only as a catalogue reason, never as a value printed by hand.
+    // base-apply keeps base-apply-check-failed as a documented reason inside its own check result (base-apply.md 拒绝原因).
+    for (const code of formerCatchAlls.filter(code => !(file === 'base-apply.ts' && code === 'base-apply-check-failed'))) assert.doesNotMatch(source, new RegExp(`(?:\\?\\?|:|,)\\s*'${code}'`), `${file} still prints ${code} by hand`);
+    assert.doesNotMatch(source, /'unexpected-failure'/, `${file} still prints unexpected-failure`);
+  }
 });
 
 /**
@@ -233,4 +260,20 @@ test('setup reports a private directory it cannot write as specific, keeping its
   expectReason(run, 'setup-files-unwritable');
   assert.equal(run.status, 2);
   assert.doesNotMatch(run.output, /EPERM|ENOTDIR|EEXIST|synthetic blocked/);
+});
+
+test('by behaviour: the converted catch-alls report unreadable settings as check-required from their real CLIs, keeping their exit codes', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'maa-check-required-catch-')); t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(join(home, 'config.json'), '{ not json');
+  const layout = [{ type: 'control', level: 1 }];
+  // Each request is valid as far as the CLI reads before its settings, so the failure is the settings file and nothing else.
+  const runs: [string, string[], unknown, number][] = [
+    ['base-plan.ts', ['candidates'], { layout }, 1], ['base-report.ts', ['read'], {}, 1], ['base-apply.ts', ['apply'], {}, 1],
+    ['cultivation-report.ts', ['read'], {}, 1], ['operator-cost.ts', ['query'], {}, 1],
+    ['nga.ts', ['status'], '', 1], ['bilibili.ts', ['status'], '', 1], ['skland-community.ts', ['status'], '', 1], ['doctor.ts', ['check', '--json'], '', 2],
+  ];
+  for (const [script, args, input, exit] of runs) {
+    const run = cli(script, args, input, home);
+    expectReason(run, 'settings-unreadable'); assert.equal(run.status, exit, `${script}: ${run.output}`);
+  }
 });

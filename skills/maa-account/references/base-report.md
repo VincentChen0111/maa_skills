@@ -21,7 +21,7 @@
 - 方案和报告的文字（`title`、`summary`、`assumptions`、`reasons` 等，完整清单见排班接口）里不写「最优」「最佳」「最好」「最强」「最高效」「optimal」「optimum」「best」，否定句也不写（例如「本方案不声称最优」）：第 15 项验收门见到这些词就不通过，报告停在不可应用。要说明局限时，写做了哪些检查、没有和其他排法比较过。
 - 给用户看报告只用 `read` 的输出（`format: "markdown"`），不另存副本：当前目录、工作区和私有目录里都不另写报告文件。需要给文件位置时，指向脚本在私有目录 `reports/base/<reportHash>/` 下写出的文件。
 
-退出码与错误代码同建议报告接口；本入口另有 `base-action-invalid`、`base-input-invalid`、`base-plan-not-applicable` 和排班工具的 `plan-*`。
+退出码与错误代码同建议报告接口；本入口另有 `base-action-invalid`、`base-input-invalid`、`base-plan-not-applicable` 和排班工具的 `plan-*`；未分类的失败是 check-required 的 `base-report-failed`。
 
 ## 边界
 

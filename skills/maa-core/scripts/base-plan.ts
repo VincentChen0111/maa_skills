@@ -11,6 +11,7 @@ import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { baseGameSource, queryBaseSkills } from './base-query.ts';
 import { readPublicJson } from './public-data.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { inline } from './research.ts';
 
 type ObjectValue = Record<string, unknown>;
@@ -1116,7 +1117,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         : JSON.stringify({ ok: true, rooms }));
     }
   } catch (error) {
-    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(plan|base|public-data)-[a-z0-9-]+$/.test(error.message) ? error.message : 'plan-check-failed');
-    process.stdout.write(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
+    // Known refusals keep their codes; settings that cannot be read and anything unclassified say what to check (item 10).
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(plan|base|public-data)-[a-z0-9-]+$/.test(error.message) ? error.message : null);
+    process.stdout.write(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('base-plan', error))); process.exitCode = 1;
   }
 }

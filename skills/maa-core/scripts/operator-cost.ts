@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readPublicJson, type PublicJsonResult, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { selectSnapshot, snapshotSourceLine, SnapshotSelectionError, type SnapshotDomain, type SnapshotSelection } from './account-snapshot.ts';
 
 type ObjectValue = Record<string, unknown>;
@@ -284,5 +285,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     if (process.argv[2] !== 'query') throw new Error('cost-action-invalid');
     const input = await readStdinJson({ maxBytes: null, invalidCode: 'cost-input-invalid' }); const result = await queryOperatorCost(input);
     console.log(object(input).format === 'markdown' ? formatOperatorCostMarkdown(result) : JSON.stringify(result));
-  } catch (error) { const code = stdinJsonCode(error) ?? (error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'cost-input-invalid'); console.error(JSON.stringify({ error: code })); process.exitCode = 1; }
+  } catch (error) {
+    // Known refusals keep their codes; settings that cannot be read and anything unclassified say what to check (item 10),
+    // instead of being reported as an invalid request.
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : null);
+    console.error(JSON.stringify(code ? { error: code } : checkRequiredFor('operator-cost', error))); process.exitCode = 1;
+  }
 }

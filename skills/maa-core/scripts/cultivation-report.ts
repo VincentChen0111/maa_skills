@@ -12,6 +12,7 @@ import { collectStageJobs, loadStageTables, type StageRequest } from './stage-jo
 import { inline, inert, citationLink, type ResearchItem } from './research.ts';
 import type { ResearchTransport } from './research-transport.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { selectSnapshot, SnapshotSelectionError, type SnapshotDomain } from './account-snapshot.ts';
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
@@ -425,7 +426,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
     }
   } catch (error) {
-    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|cultivation|gaps|cost)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'cultivation-report-failed');
-    console.log(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
+    // Known refusals keep their codes; settings that cannot be read and anything unclassified say what to check (item 10).
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|cultivation|gaps|cost)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : null);
+    console.log(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('cultivation-report', error))); process.exitCode = 1;
   }
 }
