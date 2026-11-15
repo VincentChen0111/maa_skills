@@ -125,7 +125,7 @@ test('stage-run: every code its CLI can report (own throws, gate denials and hol
 test('stage-jobs: every static code its CLI can hit has a catalogue entry', async () => {
   const table = producers['stage-jobs'].codes as Record<string, string>;
   // Job content problems are per-candidate reasons inside the report, never a failure of the whole query.
-  const perCandidate = new Set(['job-operators-invalid', 'job-group-name-duplicate']);
+  const perCandidate = new Set(['job-operators-invalid', 'job-group-name-duplicate', 'content-not-object']); // reported as job-content-invalid:<code> (OB-1)
   const codes = new Set([...await staticCodes('stage-jobs.ts'), ...await staticCodes('stage-job-plan.ts')]);
   codes.delete('job-file-changed'); // read only by stage-run
   assert.deepEqual([...codes].filter(code => !perCandidate.has(code) && !Object.hasOwn(table, code)).sort(), []);

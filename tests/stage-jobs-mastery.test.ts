@@ -122,7 +122,7 @@ test('duplicate group names, as MAA counts them, block that one candidate and le
   const stage = first(stageSnapshot(), [sameAsOperator, twoGroups, operatorTwice, emptyGroup, stageJob(5)]);
   for (const id of [1, 2, 3]) {
     const candidate = stage.candidates.find(item => item.id === id)!;
-    assert.equal(candidate.status, 'blocked'); assert.ok(candidate.reasons.includes('job-group-name-duplicate'), String(id));
+    assert.equal(candidate.status, 'blocked'); assert.ok(candidate.reasons.includes('job-content-invalid:job-group-name-duplicate'), String(id));
   }
   const empty = stage.candidates.find(item => item.id === 4)!;
   assert.equal(empty.status, 'unknown'); assert.ok(empty.reasons.includes('job-group-empty'));
