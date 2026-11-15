@@ -33,7 +33,9 @@ export type Decomposition = { short: Record<string, number>; fromStock: Record<s
   assumptions: string[]; pending: { item: string; issues: string[] }[];
   vouchers: { id: string; countKnown: boolean; validity: 'confirmed-valid' | 'confirmed-expired' | 'unknown'; choices: { item: string; short: number }[] }[] };
 export type GapResult = { status: 'ok' | 'partial' | 'needs-input'; issues: string[]; costs: CostResult[]; raw: Cost | null;
-  selected: 'craft' | 'no-craft'; inputSources: { inventory: Record<string, 'snapshot' | 'user-confirmed' | 'unknown'>; progress: 'user-confirmed' | 'unknown' };
+  selected: 'craft' | 'no-craft'; inputSources: { inventory: Record<string, 'snapshot' | 'user-confirmed' | 'unknown'>; progress: 'user-confirmed' | 'unknown'; rooms: Record<string, 'user-confirmed' | 'snapshot'> };
+  /** Ticket 32 follow-on OB-9: the one whole snapshot read (set by the query; null for a direct calculation). */
+  snapshotUsed: SnapshotUsed | null;
   policy: { allocation: 'raw-reservation-then-input-order'; search: 'deterministic-not-exhaustive'; remaining: 'selected-route-not-global-minimum'; execution: 'suggestion-only'; byproducts: 'excluded' };
   stageCodes: Record<string, string | null>;
   comparison: { craft: GapPlan; noCraft: GapPlan } | null };
@@ -44,7 +46,7 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   const targets = Array.isArray(request.targets) ? request.targets : [];
   const costs = targets.map(target => calculateOperatorCost(tables, snapshot, { ...object(target), mode: 'raw' }));
   const result: GapResult = { status: 'needs-input', issues: [], costs, raw: null, comparison: null,
-    selected: request.mode === 'no-craft' ? 'no-craft' : 'craft', inputSources: { inventory: {}, progress: 'unknown' }, stageCodes: {},
+    selected: request.mode === 'no-craft' ? 'no-craft' : 'craft', inputSources: { inventory: {}, progress: 'unknown', rooms: {} }, stageCodes: {}, snapshotUsed: null,
     policy: { allocation: 'raw-reservation-then-input-order', search: 'deterministic-not-exhaustive', remaining: 'selected-route-not-global-minimum', execution: 'suggestion-only', byproducts: 'excluded' } };
   if (Object.keys(request).some(key => !['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'].includes(key)) ||
     targets.some(target => Object.keys(object(target)).some(key => !['name', 'operatorId', 'target', 'current'].includes(key)))) {
@@ -54,7 +56,7 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   const shape = (value: ObjectValue, allowed: string[]) => Object.keys(value).every(key => allowed.includes(key));
   if (request.mode !== undefined && !['craft', 'no-craft'].includes(String(request.mode)) ||
     request.format !== undefined && !['json', 'markdown'].includes(String(request.format)) ||
-    request.progress !== undefined && (progress !== request.progress || progress.source !== 'user-confirmed' || !shape(progress, ['source', 'rooms', 'stageRanks', 'voucherValidity'])) ||
+    request.progress !== undefined && (progress !== request.progress || progress.source !== 'user-confirmed' || !shape(progress, ['source', 'rooms', 'stageRanks', 'voucherValidity', 'confirmedStages'])) ||
     request.inventory !== undefined && (inventory !== request.inventory || inventory.source !== 'user-confirmed' || !shape(inventory, ['source', 'items', 'lmd']))) {
     result.issues.push('request:invalid-confirmation-or-option'); return result;
   }
@@ -64,10 +66,29 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
       (key === 'rooms' ? !Array.isArray(field) || field.some(level => !integer(level) || level > 3) :
         key === 'stageRanks' ? !integer(field) || field > 2 : typeof field !== 'boolean'))) result.issues.push(`progress:${key}:invalid`);
   }
+  // Ticket 32 follow-on item 8: one user confirmation over exactly the stage IDs the tool reported (`stage:<id>:unknown`,
+  // `stageCodes`). Each must be a stage some pinned recipe requires; nothing else is accepted.
+  if (progress.confirmedStages !== undefined) {
+    const required = new Set([...Object.values(object(object(tables.building).workshopFormulas)), ...Object.values(object(object(tables.building).manufactFormulas))]
+      .flatMap(recipe => Array.isArray(object(recipe).requireStages) ? object(recipe).requireStages as unknown[] : []).map(stage => object(stage).stageId));
+    if (!Array.isArray(progress.confirmedStages) || !progress.confirmedStages.length || progress.confirmedStages.some(id => !identifier(id) || !required.has(id)))
+      result.issues.push('progress:confirmedStages:invalid');
+  }
   if (inventory.items !== undefined && (object(inventory.items) !== inventory.items || Object.entries(object(inventory.items)).some(([id, count]) => !identifier(id) || id === '4001' || !integer(count))) ||
     inventory.lmd !== undefined && !integer(inventory.lmd)) result.issues.push('inventory:invalid');
   if (result.issues.length) return result;
   result.inputSources.progress = progress.source === 'user-confirmed' ? 'user-confirmed' : 'unknown';
+  // Ticket 32 follow-on OB-7: room levels the snapshot's complete base read holds (manufacture, power, ...) stand in for rooms
+  // the user did not confirm; a confirmed level overrides. The workshop has no snapshot source and stays the user's.
+  const snapshotRooms: Record<string, number[]> = {};
+  if (object(object(snapshot.coverage).base).status === 'complete') for (const room of Array.isArray(object(snapshot.base).rooms) ? object(snapshot.base).rooms as unknown[] : []) {
+    const value = object(room), id = snapshotRoomIds[String(value.type)];
+    if (id && integer(value.level) && value.level >= 1) (snapshotRooms[id] ??= []).push(value.level);
+  }
+  const userRooms = progress.source === 'user-confirmed' ? object(progress.rooms) : {};
+  for (const id of Object.keys(snapshotRooms)) result.inputSources.rooms[id] = 'snapshot';
+  for (const id of Object.keys(userRooms)) result.inputSources.rooms[id] = 'user-confirmed';
+  const conditions = { ...progress, snapshotRooms };
   if (!costs.length || costs.some(cost => !cost.total)) { result.issues.push('targets:incomplete'); return result; }
   if (new Set(costs.map(cost => cost.operator!.id)).size !== costs.length) { result.issues.push('targets:duplicate-operator-combine-goals'); return result; }
   const raw: Cost = { materials: {}, lmd: 0, exp: 0 };
@@ -110,14 +131,14 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   for (const [id, value] of Object.entries(plan.materials)) plan.ledger[id] = { opening: value.available, allocated: value.existing ?? 0,
     consumed: 0, crafted: 0, voucher: 0, closing: value.available === null ? null : value.available - value.existing! };
   const craft = structuredClone(plan);
-  applyCrafting(craft, tables, request.progress, known);
+  applyCrafting(craft, tables, conditions, known);
   applyVouchers(plan, tables, request.progress, known);
   applyVouchers(craft, tables, request.progress, known);
-  applyCrafting(craft, tables, request.progress, known, true);
+  applyCrafting(craft, tables, conditions, known, true);
   craft.blocked = craft.blocked.filter(block => knownGap(craft.materials[block.item]!) !== 0);
   for (const block of craft.blocked) if (block.issues.some(issue => /unknown|invalid|ambiguous|cycle|overflow/.test(issue))) craft.materials[block.item]!.remaining = null;
   allocateTargets(plan, costs); allocateTargets(craft, costs);
-  craft.decomposition = decompose(craft, tables, request.progress, known);
+  craft.decomposition = decompose(craft, tables, conditions, known);
   result.raw = raw; result.comparison = { craft, noCraft: plan };
   result.status = [craft, plan].some(p => [...Object.values(p.materials), p.lmd, p.exp].some(row => row.remaining === null)) ? 'partial' : 'ok';
   return result;
@@ -226,21 +247,30 @@ function indexRecipes(tables: GapTables): Map<string, (Recipe | null)[]> {
   }
   return recipes;
 }
-/** The one recipe-condition predicate: room and stage unlocks against user-confirmed progress (`:unknown`, `:insufficient` or invalid). */
+const snapshotRoomIds: Record<string, string> = { manufacture: 'MANUFACTURE', power: 'POWER', trading: 'TRADING', control: 'CONTROL', dormitory: 'DORMITORY',
+  meeting: 'MEETING', hire: 'HIRE', training: 'TRAINING' };
+/**
+ * The one recipe-condition predicate: room and stage unlocks against user-confirmed progress (`:unknown`, `:insufficient` or
+ * invalid). Ticket 32 follow-on: a room the user did not confirm uses the snapshot's levels (OB-7); a stage the user confirmed
+ * in one answer over the reported list (`confirmedStages`, item 8) counts as cleared.
+ */
 function recipeConditions(recipe: Recipe, progressInput: unknown): string[] {
-  const progress = object(progressInput), rooms = object(progress.rooms), stageRanks = object(progress.stageRanks);
+  const progress = object(progressInput), stageRanks = object(progress.stageRanks), snapshotRooms = object(progress.snapshotRooms);
+  const rooms = { ...snapshotRooms, ...progress.source === 'user-confirmed' ? object(progress.rooms) : {} };
+  const confirmedStages = progress.source === 'user-confirmed' && Array.isArray(progress.confirmedStages) ? progress.confirmedStages : [];
   const issues: string[] = [];
   for (const value of recipe.rooms) {
     const room = object(value);
     if (!identifier(room.roomId) || !integer(room.roomLevel) || room.roomLevel < 1 || room.roomLevel > 3 || !integer(room.roomCount) || room.roomCount < 1) { issues.push('recipe:room-condition-invalid'); continue; }
     const available = rooms[room.roomId];
-    if (progress.source !== 'user-confirmed' || !Array.isArray(available) || !available.every(integer)) issues.push(`room:${room.roomId}:unknown`);
+    if (!Array.isArray(available) || !available.every(integer)) issues.push(`room:${room.roomId}:unknown`);
     else if (available.filter(level => level >= Number(room.roomLevel)).length < room.roomCount) issues.push(`room:${room.roomId}:insufficient`);
   }
   for (const value of recipe.stages) {
     const stage = object(value);
     if (!identifier(stage.stageId) || !integer(stage.rank) || stage.rank > 2) { issues.push('recipe:stage-condition-invalid'); continue; }
     const rank = stageRanks[stage.stageId];
+    if (progress.source === 'user-confirmed' && !integer(rank) && confirmedStages.includes(stage.stageId)) continue;
     if (progress.source !== 'user-confirmed' || !integer(rank)) issues.push(`stage:${stage.stageId}:unknown`);
     else if (rank < stage.rank) issues.push(`stage:${stage.stageId}:insufficient`);
   }
@@ -467,8 +497,8 @@ export async function selectSnapshot(privateDirectory: string, needed: SnapshotD
   const read = async (name: string) => { try { return { ok: true as const, value: JSON.parse((await readFile(join(privateDirectory, name), 'utf8')).replace(/^\uFEFF/, '')) as unknown }; }
     catch (error) { return { ok: false as const, missing: (error as NodeJS.ErrnoException).code === 'ENOENT' }; } };
   const [fallback, skland] = [await read(snapshotFiles.maa), await read(snapshotFiles.skland)];
-  if (!fallback.ok && !fallback.missing) throw new Error('snapshot-unreadable');
-  if (!fallback.ok) { if (skland.ok) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') }; throw new Error('snapshot-unavailable'); }
+  if (!fallback.ok && !fallback.missing) throw new Error('gaps-snapshot-unavailable');
+  if (!fallback.ok) { if (skland.ok) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') }; throw new Error('gaps-snapshot-unavailable'); }
   if (skland.ok) {
     const own = needed.filter(domain => snapshotCovers(fallback.value, domain)), other = needed.filter(domain => snapshotCovers(skland.value, domain));
     if (own.every(domain => other.includes(domain)) && other.length > own.length) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
@@ -479,11 +509,19 @@ export async function selectSnapshot(privateDirectory: string, needed: SnapshotD
 /** Reads only the selected snapshot and pinned public sources; no recognition, reports or account writes. */
 export async function queryCultivationGaps(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}): Promise<GapResult> {
   const request = object(input), settings = await readSettings(options.home);
-  const file = typeof request.snapshotFile === 'string' ? resolve(request.snapshotFile) : settings.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null;
-  if (!file) throw new Error('gaps-snapshot-directory-required');
-  let snapshot: unknown;
-  try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('gaps-snapshot-unavailable'); }
-  return calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
+  // Ticket 32 follow-on OB-9: a named snapshot is read as named; otherwise the one whole snapshot that covers what gaps need.
+  let snapshot: unknown, used: SnapshotUsed;
+  if (typeof request.snapshotFile === 'string') {
+    const file = resolve(request.snapshotFile);
+    try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('gaps-snapshot-unavailable'); }
+    used = usedOf(snapshot, file, 'named');
+  } else {
+    if (!settings.privateDirectory) throw new Error('gaps-snapshot-directory-required');
+    ({ snapshot, used } = await selectSnapshot(settings.privateDirectory, ['operators', 'skills', 'inventory', 'base']).catch(() => { throw new Error('gaps-snapshot-unavailable'); }));
+  }
+  const result = calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
+  result.snapshotUsed = used;
+  return result;
 }
 
 const cell = (value: unknown) => String(value).replace(/[\r\n|]/g, ' ');
@@ -519,7 +557,9 @@ export function formatCultivationGapsMarkdown(result: GapResult): string {
   const number = (value: number | null) => value === null ? '未知/待核' : String(value);
   const lines = ['# 培养材料缺口', `状态：${result.status}；当前选项：${result.selected}`,
     '以下是独立比较的覆盖建议，不进行加工、兑换或设备操作。先保留原始需求，按输入目标顺序分配；未穷举替代路线，不代表经济最优或所有方案的最小缺口。随机副产物未计入，当前干员心情、生产排队与即时可操作状态未核实。'];
+  if (result.snapshotUsed) lines.push(`快照：${cell(result.snapshotUsed.file)}（${cell(result.snapshotUsed.source ?? '?')}，读取时间 ${cell(result.snapshotUsed.readAt ?? '?')}）${result.snapshotUsed.selected === 'skland-covers-more' ? '；默认快照缺技能/基建，整份改用这一份，不合并' : ''}`);
   if (result.issues.length) lines.push(`待核：${result.issues.map(cell).join('、')}`);
+  if (Object.keys(result.stageCodes).length) lines.push('关卡条件可以一次问清：用户确认下面这些关卡都已通关时，在 progress 里写 confirmedStages:[这些关卡 ID]。');
   for (const [id, code] of Object.entries(result.stageCodes)) lines.push(`关卡标识：${cell(id)} → ${cell(code ?? '未知')}；条件 rank 保留公开原码，不推断星数。`);
   for (const cost of result.costs) lines.push('', formatOperatorCostMarkdown(cost));
   if (result.comparison) for (const [mode, plan] of Object.entries(result.comparison)) {
