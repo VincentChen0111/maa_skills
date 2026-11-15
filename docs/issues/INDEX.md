@@ -122,7 +122,7 @@
 | 60 | [07](07-setup-existing-environment.md)、[10](10-doctor-checks-referral.md)、[25](25-maa-version-verification.md) |
 | 61 | [02](02-repository-workflow.md) |
 | 62 | [03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md)、[31](31-before-after-evaluation-process.md) |
-| 63 | [02](02-repository-workflow.md)、[03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md) |
+| 63 | [02](02-repository-workflow.md)、[03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md)、[31](31-before-after-evaluation-process.md) |
 | 64 | [02](02-repository-workflow.md) |
 | 65 | [26](26-v0-1-0-release-validation.md) |
 | 66 | [04](04-install-help-preferences.md)、[26](26-v0-1-0-release-validation.md) |

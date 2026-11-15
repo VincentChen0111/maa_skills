@@ -20,8 +20,8 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
 
 - 发布把最终候选和 11 个历史载荷比较：`ddd0ca8`、`1d7fec0`、`370ed68`、`6c582e7`、`ac03ba8`、`788ac13`、`3ff4555`、`fc633d6`、`ac89050`、`6f95f27`、`f1ec4ed`。两侧都在同一个冻结的框架里，用发布时的评分器评分。
 - 每个宿主有 33 对比较不了：
-  - 32 对的原因是评分契约晚于「前」载荷，不论模型怎样做，「前」都失败；
-  - 1 对是 `daily-unknown` 在 `ddd0ca8` 上：场景要 maa-doctor 同伴，而这个载荷早于 06，入口以 `payload-skill-missing` 拒绝。
+  - 发布记录把其中 32 对记为评分契约晚于「前」载荷：不论模型怎样做，「前」都失败。按现在的框架，其中 `daily-close-failure`、`daily-restart-failure` 在 `ddd0ca8` 上的两对，26 H4 第 1 轮起也装 maa-doctor 同伴，入口就以 `payload-skill-missing` 拒绝（发布记录「前后载荷」表 `ddd0ca8` 那一行）。所以只因契约的是 30 对；
+  - 另 1 对是 `daily-unknown` 在 `ddd0ca8` 上：场景要 maa-doctor 同伴，而这个载荷早于 06，入口以 `payload-skill-missing` 拒绝。入口拒绝的合计 3 对。
 - 另有 3 对有条件未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上，「前」交给 doctor 核对时，只因为旧格式的 doctor 记录才挂 `authorization`。
 - 三种契约：
   - 30 的预览与差异指纹；
@@ -87,6 +87,7 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
 - **分类规则**：
   - 判断一项是不是行为项，要问：这一项换到任何一个有这个功能的载荷上，意思都不变吗？变就是契约项。
   - 行为项可以读产品 CLI 请求里的字段，但只能读写入器第一版（05）起没有变过的字段，例如 `closedConfirmed`。以后要改这样的字段，按契约变更处理，把读它的检查拆开。
+  - 场景期望的产品 CLI 动作也要分类。出现在 `expectedInvocations` 里的每个（文件、动作），要么登记在 `eval/contracts.ts` 的某个契约下，要么列在注册表的稳定动作清单里，并注明从哪张票起就有。新加的动作在 main 上一定还没有，所以只能登记为契约；30 的 `preview` 就是这一类。
 - **契约注册表**，分两个文件：
   - `eval/contracts.ts` 列出每个契约的 id、它管的产品记录路径（或路径模式）和 CLI 动作或字段、引入它的工单。它在评分器的导入闭包里，改它会改变场景指纹。
   - `eval/contract-versions.json` 只记每个契约的版本号和改过它的工单。评分器不导入它，所以只升版本号不改变运行器指纹和场景指纹。
@@ -138,7 +139,8 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
   - 输出新增 `contracts: { before, after, changed }`；`changed` 里每项有 id、两侧版本，以及「后」侧版本表记的工单。
   - `scenarios[]` 每条新增两个字段：
     - `excludedContracts`：这个场景适用、在变更集里的契约项；
-    - `contractBeforeFailures`：版本两边相同、只在「前」侧不通过的契约项。
+    - `contractBeforeFailures`：版本两边相同、只在「前」侧不通过的契约项；
+    - `behaviorBeforeFailures`：只在「前」侧不通过、「后」通过的行为项。
   - `passToFail` 按可比项计算。
   - 退出码仍然来自同一个判定，帮助文字同步更新。
 
@@ -163,12 +165,13 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
   - 宿主、CLI 版本、模型、认证方式都相同；
   - 它含本 PR 比较集里的全部场景。
   - 条件由 `batchIncomparability` 和下面的有效性核对检查，不靠人工判断。本 PR 改了定义的场景，`compareRuns` 照旧以 `scenario-identity-differs` 拒绝，这些场景重跑「前」。
-- **合并时仍然有效**：合并前用一条不调用模型的命令核对四件事：
-  - 当前合并基点的载荷摘要，等于「前」批次清单里的 `payload.digest`；
+- **合并时仍然有效**：合并前用一条不调用模型的命令，对照 main 当前的提交核对五件事：
+  - main 当前提交的载荷摘要，等于「前」批次清单里的 `payload.digest`；
   - PR 头的载荷摘要，等于「后」批次清单里的；
   - PR 头的运行器指纹，等于两批清单里的 `fingerprint.runner`；
   - 在 PR 头的检出里，两批各自重算 `payloadFingerprint(selectScenarios(<该批清单的 scenarios>, <该批的载荷>))`，等于该批清单的 `fingerprint.payload`。这一项查得出只改了场景定义的框架变动。
-  - main 在此期间只动了载荷和框架以外的文件时，结果仍然有效；否则变基后重跑需要重跑的部分。
+  - 从合并基点到 main 当前提交，框架文件逐字节相同。框架文件包括 `runnerSources`、`scenarioHashSources` 列出的文件，以及 `tests/eval-comparability.test.ts` 枚举的场景模块导入闭包。
+  - 第一件和第五件一起保证：squash 合并的结果，载荷就是 PR 头的载荷，框架就是 PR 头的框架；PR 没有变基时也一样。main 在此期间改了载荷或框架，结果就不是 `current`，要变基后重跑需要重跑的部分。main 只动了这两类以外的文件时，结果仍然有效。
 - **记录**：每个 PR 的评测记录写进该票的验证记录，内容包括比较集、只跑「后」的场景、各批次目录名、`compare` 结论、契约变更集，以及第 3 步的人工核实。
 - 真模型运行仍然只在本机、用专用登录目录（[AGENTS.md](../../AGENTS.md)）。
 
@@ -191,8 +194,10 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
 - 这个 PR 的「后」侧运行，就是新契约版本的第一批记录（重建基线）。不另外跑。
 - **核对**：
   - 评测记录里 `compare` 的 `contracts.changed`，要等于工单「契约变更」一节，人工核实第 3 步核这一点；
-  - `contractBeforeFailures` 里的每一项，记录要逐项说明：要么证据显示 main 那次运行里模型自己漏了这一步（写出位置），要么是没声明的契约变更；
-  - 后一种要补上版本号和工单声明，再重新运行 `compare`。只改版本表不改变指纹，批次不用重跑。
+  - `contractBeforeFailures` 和 `behaviorBeforeFailures` 里的每一项，记录要逐项说明属于哪一种：本 PR 有意改进的行为（工单里写明）；证据显示 main 那次运行里模型自己做错了（写出位置）；没声明的契约变更。
+  - 没声明的契约变更，按契约有没有登记分两种：
+    - 已经登记的，补上版本号和工单声明，再重新运行 `compare`。只改版本表不改变指纹，批次不用重跑；
+    - 没有登记的，要在 `eval/contracts.ts` 登记。这会改变运行器指纹，比较要重跑。分类一致性测试在评测之前就拦下没登记的动作和路径，所以只有测试漏掉时才走到这一步。
 
 ### 六、第 3 步人工核实的改动
 
@@ -201,7 +206,7 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
 - **第 1 步**：每个 PR 核实自己的「后」侧和只跑「后」的运行，发布核实「后」和基线批次。和现在一样，只核完成且机器评分通过的运行。
 - **第 3 步「场景指纹与可比」**：
   - 现有三条照旧；
-  - 加第四条：`compare` 输出的 `contracts.changed` 等于工单声明，这一份的 `excludedContracts` 是它的子集。
+  - 加第四条：`compare` 输出的 `contracts.changed` 等于工单声明，这一份的 `excludedContracts` 是它的子集；这一份在 `contractBeforeFailures`、`behaviorBeforeFailures` 里的每一项，记录里都有「五」要求的说明。
   - 删去「`compare` 的子集里不能有「未验证的比较」表里的配对」：这张表不再存在。
 - **第 3 步「无「前」（只建基线）」**：只用于新增场景，以及「前」载荷做不了的场景。「无「前」（比较未验证）」这一类取消。
 - **记录格式**：「指纹配对」一列追加「契约项只核「后」：<id>（v<前>→v<后>）」，或「无」。
@@ -246,7 +251,8 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
   - 契约检查都指向 `eval/contracts.ts` 里的 id；
   - 注册表里每个 id 都有检查在用；
   - `eval/contract-versions.json` 和注册表的 id 集合相同，每个版本是正整数。
-  - 新增没有标签的检查、或注册表外的产品记录路径，测试失败。
+  - 场景目录里每个期望调用的（文件、动作），都登记在某个契约下，或在稳定动作清单里；
+  - 新增没有标签的检查、注册表外的产品记录路径，或两处都没登记的期望动作，测试失败。
 - [ ] **不连坐，对每个契约各一条**：取 HEAD 载荷上正确做法的证据（宿主替身驱动），只改这个契约的一处细节，断言全部行为项仍然通过，不通过的只有这个契约的项。至少覆盖这几处：
   - 去掉待执行记录的 `versions`；
   - 去掉 `preview` 调用和 `diffFingerprint`；
@@ -273,18 +279,18 @@ Blocked by: [26: v0.1.0 发布验收](26-v0-1-0-release-validation.md)
   - 没有 `items` 的记录 → `incomparable`，原因 `grade-items-missing:<边>`；
   - 两边的项不同 → `grade-items-differ:<场景>`；
   - 现有比较测试的其余断言照旧通过。
-- [ ] **`compare` 的输出**：用合成批次目录测试 `contracts`、`excludedContracts`、`contractBeforeFailures`、按可比项算的 `passToFail`。「前」载荷的提交读不到版本表时，整体 `incomparable`，原因 `contract-versions-unreadable:before`；提交里没有版本表时算全部为 0，不算读不到。
+- [ ] **`compare` 的输出**：用合成批次目录测试 `contracts`、`excludedContracts`、`contractBeforeFailures`、`behaviorBeforeFailures`、按可比项算的 `passToFail`。「前」载荷的提交读不到版本表时，整体 `incomparable`，原因 `contract-versions-unreadable:before`；提交里没有版本表时算全部为 0，不算读不到。
 - [ ] **受影响场景命令**：不调用模型，输出比较、只跑「后」、不跑三类和各自理由。用合成载荷目录测试：
   - 只改 maa-account 的一个文件，比较类正好是装 maa-account 的场景；
   - 改 maa-core 的一个文件，比较类正好是装 maa-core 的场景；
   - 新增或改了定义、装入文件不变的场景，落在只跑「后」；
   - 豁免表里的改动，不产生比较类。
   - 测试里的场景数从目录算出，不写死。
-- [ ] **合并时有效性命令**：不调用模型，按「三」的四件事输出 `current` 或静态原因。测试覆盖每一件对不上的情况，以及 main 只动了载荷和框架以外文件时仍是 `current`。
-- [ ] **历史回放，一次性，写进验证记录**：按 26 记录里「当前评分器下「前」载荷能不能通过」的离线做法，用新评分器重做 32 对和 3 对有条件的配对，结论要求：
+- [ ] **合并时有效性命令**：不调用模型，按「三」的五件事对照 main 当前的提交，输出 `current` 或静态原因。测试覆盖每一件对不上的情况，包括反方向：PR 没有变基，而 main 在合并基点之后改了载荷，或改了框架文件，结果都不是 `current`。main 只动了这两类以外的文件时仍是 `current`。
+- [ ] **历史回放，一次性，写进验证记录**：按 26 记录里「当前评分器下「前」载荷能不能通过」的离线做法，用新评分器重做只因契约的 30 对和 3 对有条件的配对，结论要求：
   - 正确做法的驱动在这些「前」载荷上，行为项全部通过；
   - 不通过的只有契约项，而且都能对上 25、30、10/25/08 这三种契约；
-  - `daily-unknown` 在 `ddd0ca8` 上仍由入口拒绝（载荷缺同伴，不是契约问题），写明它不在本票范围内：以后发布只和上一个标签比，v0.1.0 已经有 maa-doctor。
+  - `ddd0ca8` 上的 `daily-unknown`、`daily-close-failure`、`daily-restart-failure` 三对仍由入口拒绝（载荷缺 maa-doctor 同伴，不是契约问题），写明它们不在本票范围内：以后发布只和上一个标签比，v0.1.0 已经有 maa-doctor。
   - 这一条不进 CI：CI 是浅克隆，没有历史载荷。
 - [ ] **文档和规格**：
   - [行为评测](../evaluation.md) 写明逐 PR 流程、发布流程、豁免表、契约注册表、改契约的 PR 怎么做、第 3 步人工核实的通用流程，以及「七」的用量估算方法；
