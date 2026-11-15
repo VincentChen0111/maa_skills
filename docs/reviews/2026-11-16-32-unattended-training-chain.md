@@ -33,3 +33,35 @@
 - check-required 要具体：「check required 要给我具体的，和有没有替代」；形状 `{ok:false,status:"check-required",reason,check,alternatives}`，全仓库共用谓词由另一修复会话负责，本包只让自己改到的命令输出这个形状。
 
 第 2 轮审查覆盖第 1 轮的修复和这些追加。
+
+## 第 2 轮
+
+范围 `56a95f9..fbc8873`（第 1 轮修复与范围追加）。结论 NO-GO：P1 1，P2 1，P3 2。审查员重跑了第 1 轮的三个复现脚本，结果都已修好；另写了两个新复现（R2-1、R1-3 恢复路径），只读检出、没有改动；逐个运行相关测试文件全部通过。
+
+审查员核对过、没有问题的：R1-1 对计划自己开训和进行中的档次已修好；R1-2、R1-4 已修好；R1-3 待清理会保留到停用成功，找不到槽仍开着却丢掉待清理的路径；基础材料展开不进开训门、凭证仍不算、CLI 只输出静态文本和 ID、写入器回报未知照旧转 doctor；展开的算术（保留库存不重复用、批次余量复用、环与溢出、龙门币缺口）正确。
+
+修复会话逐条复核：
+
+| 编号 | 发现 | 结论 | 理由 |
+| --- | --- | --- | --- |
+| R2-1（P1） | 用户手动已开训的计划（`manualTraining`，没有 `inTraining`；也是 `inTraining` 因库存时间被拒时的退路），首次观察就看到完成时，R1-2 的推进路径不记付料时间；第 8 步 refresh 写已完成档次，MAA 快照没有专精，起点变成 1，这一档的材料还在较早的仓库扫描里却被当成库存，开训门判够，MAA 自动加工却没有加工批准 | 接受 | 有离线复现（库存 2，专一 1、专二 2，实际只剩 1，开训门判 ready）；「先扫仓库、后手动开训、再让 agent 接着练」是常见顺序；涉及未经批准的消耗，属安全类。这是 R1-1 同类缺陷（档次付料时间）第二次出现，按复发规则改成一个谓词一个负责处：付料时间只由 `paidRanks` 给出，计划完成过却没有付料时间的档次一律报为未知时间、照常计入；手动已开训的档次准备时记计划创建时间为付料时间（付料不会晚于这一刻）。一致性测试逐个列出生产者（prepare 的手动、进行中、普通三种，reconcile 的倒计时和完成推进）和消费者（refresh 的成本起点） |
+| R2-2（P2） | 拿到 `waiting` 的计划从不回到 refresh：`preplaced` 的计划文档写 apply，每次重新进入都再 `waiting`；refresh 只在刚完成一档后才写，用户把材料刷够后 `materialReady` 仍是 false，链永远不开训 | 接受 | 真实缺陷：与规格「每次重新进入用最新库存再核」矛盾，材料补齐后无人值守链停住，没有提示 |
+| R2-3（P3） | refresh 结果缺事实（`needs-input`）时开训门按缺料处理，apply 一直报 `training-materials-pending`，不说缺哪条事实 | 接受 | 真实缺陷：例如训练室等级不再确认时，用户和 agent 会去刷材料而不是补事实，链一直等 |
+| R2-4（P3） | training.md 要求训练回复说清基础材料、龙门币缺口和材料券建议，但 `formatTraining`（也是 JSON 的 `summary`）和 refresh/apply 的 `waiting` 都没有这些 | 接受 | 真实缺陷：文档承诺的输出工具不给，agent 只能自己翻 JSON 或读实现 |
+
+非缺陷说明的复核（审查员列为非缺陷，修复会话同意不修，除最后一条）：
+
+- 在 `dueAt` 之后 60 秒内、档次已推进时 reconcile 不清理（`training-plan.ts` 看的是 `plan.action` 而不是 `original.action`）：拒绝，时间窗口只有 60 秒，属于维护者说的「time window 差几秒」一类；漏掉的是观察用的单次槽，下一次 apply 会改写同一个槽。
+- 计划自己开训的档次缺倒计时就一直观察：拒绝，不花费、不重放，只是一直等，重新进入时可见。
+- 材料券建议按成品缺口排序、不看能否用库存加工：拒绝，属建议排序的优劣，不是故障。
+- gaps.md 没写新的失败形状：顺手修正（与 R2-4 同类的文档缺口，成本很低）。
+
+修复：
+
+- R2-1：`training-state.ts` 的 `paidRanks` 是付料时间的唯一来源，`history` 里每个 `completed` 档次没有时间就记 `unknown`，成本计算把它当作还在库存里；`prepare` 对 `manualTraining` 记 `paidAt[第一档] = createdAt`。测试 `32 R2-1`。
+- R2-2：`apply` 的 `waiting` 带 `next:"refresh"`；training.md 无人值守第 2 步改为 `materialReady` 为 false 的 `pending`/`preplaced` 计划先 refresh 再 apply；规格同步。测试 `32 R2-2/R2-3`。
+- R2-3：refresh 把这一档开训还缺的事实（`training:` 开头的问题）记进计划的 `startIssues`，以 `training-facts-required` 停下并在 `details.issues` 列出；`apply` 遇到 `startIssues` 以同一代码停下；补齐后 refresh 清空。同一测试。
+- R2-4：`formatTraining` 写出下一次开训还缺的成品、现有库存能否靠加工补齐（需用户批准加工），以及开启加工后还缺时的「加工展开到基础材料」；refresh 的输出带同一个 `summary`。测试 `32 R2-4`。
+- 评测：R2-2 改了 agent 在重新进入时的做法，应加「先 refresh 再 apply」的场景；现有评测策略只能放行新建的计划记录，refresh 改写已有记录（带生成的时间）无法表达。这个场景与评测框架的扩展放进后续包，届时框架重新冻结一次。
+
+第 3 轮审查覆盖这些修复。

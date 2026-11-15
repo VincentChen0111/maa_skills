@@ -1,6 +1,6 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
 import { queryBaseSkills, isBaseRoom } from './base-query.ts';
-import { calculateCultivationGaps, type GapTables, type GapResult, type GapPlan } from './cultivation-gaps.ts';
+import { calculateCultivationGaps, formatDecomposition, type GapTables, type GapResult, type GapPlan } from './cultivation-gaps.ts';
 import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
@@ -218,6 +218,18 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
   if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (user-confirmed); its materials are already paid and not counted again.`
     : `M${result.inTrainingRank} 正在训练（用户确认），材料已付，不再计入。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);
+  // Ticket 32 R2-4: what the next start still lacks, down to base materials and the LMD gap (the start gate's tier).
+  const gate = result.startMaterials ?? result.materials, decomposition = gate.comparison?.craft.decomposition, noCraft = gate.comparison?.noCraft;
+  const missing = noCraft ? Object.entries(noCraft.materials).filter(([, row]) => row.remaining !== 0).map(([id, row]) => `${id} × ${row.remaining ?? '?'}`) : [];
+  if (noCraft && noCraft.lmd.remaining !== 0) missing.push(`${en ? 'LMD' : '龙门币'} × ${noCraft.lmd.remaining ?? '?'}`);
+  const tier = result.currentRank === null ? null : (result.inTrainingRank ?? result.currentRank) + 1;
+  if (missing.length) {
+    lines.push('', `${en ? 'The next start' : '下一次开训'}${tier === null ? '' : `（M${tier}）`}${en ? ' still lacks' : '还缺'}: ${missing.join(en ? ', ' : '、')}`);
+    if (materialGate(gate, true) === 'crafting') lines.push(en ? 'Crafting from current stock covers it; MAA crafts it at the start only with the user\'s own crafting approval.'
+      : '按现有库存加工可以补齐；只有用户亲口批准加工，开训时才让 MAA 自动合成。');
+  }
+  if (decomposition &&(Object.keys(decomposition.short).length || decomposition.steps.length || decomposition.pending.length || (decomposition.lmdGap ?? 1) > 0))
+    lines.push('', ...formatDecomposition(decomposition, gate.stageCodes));
   return lines.join('\n');
 }
 

@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
-import { calculateTraining, materialGate } from '../skills/maa-core/scripts/training-time.ts';
-import { reconcileTraining, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
+import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
+import { calculateTraining, materialGate, formatTraining } from '../skills/maa-core/scripts/training-time.ts';
+import { reconcileTraining, paidRanks, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
 import { approvedTrainingReport } from './fixtures/training-report.ts';
@@ -294,4 +294,73 @@ test('32 R1-3/R1-4: a cleanup the writer refused before writing stays pending an
   assert.equal(cleaned.cleanup?.status, 'complete'); assert.equal(cleaned.plan.pendingCleanup, undefined);
   assert.equal(cleaned.plan.issues.includes('training:timer-cleanup-pending'), false); assert.equal(JSON.parse(await readFile(w.file, 'utf8')).Timers.List[0].IsEnabled, false);
   assert.equal((await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root })).status, 'waiting');
+});
+
+test('32 R2-1: every tier the plan completed has a payment time, a manual tier is paid no later than the plan, and a missing time counts as still in stock', async t => {
+  // Producers. prepare: a tier the user already started by hand was paid no later than the plan itself.
+  const f = trainingFixture(); f.snapshot.items.mat = 2;
+  // An MAA depot scanned before the user started M1 by hand (M1 costs 1, M2 costs 2; real stock after M1 is 1).
+  Object.assign(f.snapshot, { source: 'maa', readAt: '2026-11-12T00:00:00.000Z', sourceTimes: { operators: null, inventory: '2026-11-09T00:00:00.000Z' } });
+  const w = await world(t, f), query = { ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const prepared = await prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', manualTraining: true,
+    authorization: { source: 'current-request', reference: '一级我已经手动开了，接着练到二级' } }, { home: w.root });
+  assert.deepEqual(prepared.paidAt, { '1': prepared.createdAt });
+  // reconcile: the R1-2 completion path keeps that time; a record without one reports the completed tier as paid at an unknown time.
+  const manual = evidencePlan(); manual.manualTraining = true; manual.preplacementRequired = false; manual.target.goal = 2;
+  manual.action = { kind: 'observe', dueAt: '2026-11-11T01:05:05.000Z', armedAt: manual.createdAt };
+  const completed = nativeTask(manual, undefined, 5) + nativeLog('2026-11-11T01:05:20.000Z', 'SubTaskExtraInfo', { taskchain: 'Infrast', taskid: 5,
+    what: 'InfrastTrainingCompleted', details: { operator: '合成干员', skill: '合成技能', level: 1 } });
+  const forgot = reconcileTraining(manual, completed, '2026-11-11T01:06:00.000Z');
+  assert.deepEqual([forgot.rank, forgot.target.currentRank], [2, 1]); assert.deepEqual(paidRanks(forgot), { '1': 'unknown' });
+  const kept = reconcileTraining({ ...structuredClone(manual), paidAt: { '1': manual.createdAt } }, completed, '2026-11-11T01:06:00.000Z');
+  assert.deepEqual(paidRanks(kept), { '1': manual.createdAt });
+  // Consumer: refresh step 8 states the completed rank; the tier still in the older scan is counted either way (1 + 2 > 2).
+  const stated = { ...query, current: { ...f.request.current, mastery: { '1': 1 } } };
+  const refresh = async (input: TrainingPlan) => { await storePlan(w, input); return refreshTrainingMaterials({ id: input.id, query: stated }, { home: w.root }); };
+  assert.equal((await refresh(between(undefined))).materialReady, false, 'no payment time recorded');
+  assert.equal((await refresh(between({ '1': manual.createdAt }))).materialReady, false, 'paid by hand before the plan, after the scan');
+  Object.assign(f.snapshot, { sourceTimes: { operators: null, inventory: '2026-11-11T12:00:00.000Z' } }); await writeFile(w.snapshotFile, JSON.stringify(f.snapshot));
+  assert.equal((await refresh(between({ '1': manual.createdAt }))).materialReady, true, 'scanned after the plan: only M2 counts');
+});
+
+test('32 R2-2/R2-3: a waiting plan says to refresh; a refresh that lacks a fact the next start needs names it and keeps the start closed', async t => {
+  const f = scanned(trainingFixture()); f.snapshot.items.mat = 2;
+  const w = await world(t, f), query = { ...f.request, target: 2, current: { ...f.request.current, mastery: { '1': 1 } }, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const a = between({ '1': f.snapshot.readAt }); await storePlan(w, a);
+  // Waiting for materials: the result says the next step is a refresh with the latest snapshot, not another apply.
+  const waiting = await applyTrainingPlan({ id: a.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([waiting.status, waiting.reason, (waiting as { next?: string }).next], ['waiting', 'training-materials-pending', 'refresh']);
+  // The room level is no longer confirmed: refresh names the fact, records it, and apply says to check it instead of "materials pending".
+  const unconfirmed = { ...query, facts: { source: 'user-confirmed', availableAssistants: ['char_helper', 'char_locked'] } };
+  await assert.rejects(refreshTrainingMaterials({ id: a.id, query: unconfirmed }, { home: w.root }),
+    (error: Error & { details?: { issues?: string[] } }) => error.message === 'training-facts-required' && Boolean(error.details?.issues?.includes('training:room-unverified')));
+  const record = await readTrainingPlan(a.id, { home: w.root });
+  const named = ['training:room-unverified', 'training:room-rank-unavailable'];
+  assert.deepEqual([record.materialReady, record.startIssues], [false, named]);
+  const facts = await applyTrainingPlan({ id: a.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([facts.status, facts.reason, (facts as { details?: unknown }).details], ['check-required', 'training-facts-required', { issues: named }]);
+  // With the fact back, refresh clears it and the start opens once materials are covered.
+  const ready = await refreshTrainingMaterials({ id: a.id, query }, { home: w.root });
+  assert.deepEqual([ready.materialReady, ready.startIssues], [true, undefined]);
+});
+
+test('32 R2-4: the training summary and the refresh output show the shortage down to base materials and the LMD gap', async t => {
+  const f = craftable(scanned(trainingFixture()));
+  const query = { ...f.request, target: 1, progress: workshop };
+  // Crafting from stock covers it: the summary names the finished shortage and that crafting needs the user's approval.
+  const covered = formatTraining(calculateTraining(f.tables, f.snapshot, query));
+  assert.match(covered, /下一次开训（M1）还缺: mat × 1/); assert.match(covered, /按现有库存加工可以补齐/); assert.doesNotMatch(covered, /加工展开到基础材料/);
+  // Nothing to craft from: the breakdown names the base material still to get and the LMD gap.
+  const bare = structuredClone(f); Object.assign(bare.snapshot.items, { ore: 0 });
+  const summary = formatTraining(calculateTraining(bare.tables, bare.snapshot, query));
+  assert.match(summary, /加工展开到基础材料/); assert.match(summary, /还要获取的基础材料：ore × 2/); assert.match(summary, /龙门币缺口/);
+  // Nothing short: no breakdown section.
+  const enough = scanned(trainingFixture()); enough.snapshot.items.mat = 20;
+  assert.doesNotMatch(formatTraining(calculateTraining(enough.tables, enough.snapshot, { ...enough.request, target: 1 })), /加工展开到基础材料/);
+  // The refresh that keeps a plan waiting reports the same breakdown.
+  Object.assign(f.snapshot.items, { ore: 0 }); const w = await world(t, f);
+  const a = between({ '1': f.snapshot.readAt }); await storePlan(w, a);
+  const refreshed = await refreshTrainingPlan({ id: a.id, query: { ...f.request, target: 2, current: { ...f.request.current, mastery: { '1': 1 } }, progress: workshop,
+    snapshotFile: w.snapshotFile, tablesFile: w.tablesFile } }, { home: w.root });
+  assert.equal(refreshed.plan.materialReady, false); assert.match(refreshed.summary, /加工展开到基础材料/);
 });

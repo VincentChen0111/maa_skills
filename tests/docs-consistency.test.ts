@@ -297,7 +297,7 @@ const commandCalls: Record<string, Record<string, string[]>> = {
   'operator-cost.ts': { query: ['queryOperatorCost'] },
   'cultivation-gaps.ts': { query: ['queryCultivationGaps'] },
   'training-time.ts': { query: ['queryTraining'] },
-  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingMaterials'], list: ['listTrainingPlans'], close: ['closeTrainingPlan'],
+  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingPlan'], list: ['listTrainingPlans'], close: ['closeTrainingPlan'],
     apply: ['applyTrainingPlan'], reconcile: ['reconcileTrainingPlan'] },
   'base-query.ts': { query: ['queryBaseSkills', 'queryPublicBaseSkills'] },
   'credentials.ts': { check: ['inspectCredentials'], input: ['runInput'] },

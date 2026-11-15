@@ -9,6 +9,8 @@ export type TrainingPlan = {
   preplacementRequired: boolean; binding: { profile: number; infrastTask: number; progressTask: number; timer: number };
   configurationBinding?: { profile: string; queue: unknown[]; timer: ReturnType<typeof import('./training-config.ts').trainingTimerIdentity> };
   assistants: Record<string, string>; afterStartAssistants?: Record<string, string>; materialReady: boolean; manualTraining: boolean;
+  /** Ticket 32 R2-3: facts the next start still needs (static codes); start stays closed until a refresh clears them. */
+  startIssues?: string[];
   action?: { kind: TrainingActionKind; dueAt: string; armedAt: string; operation?: string; timerIdentity?: unknown; completedAt?: string;
     native?: { process: string; taskId: number; chain: string; appendedAt: string; paramsHash: string; startedAt?: string } };
   preplacedAt?: string; confirmationAt?: string; startedAt?: string; latestObservationAt?: string; expectedCompleteAt?: string; assistantAttempted?: boolean;
@@ -40,7 +42,7 @@ export const trainingChecks: Record<string, { check: string; alternatives: strin
   'training-timer-ownership-changed': { check: '单次槽已被改动或重新启用，不再属于这个计划，没有去动它', alternatives: ['请用户在 GUI 核对这个槽并按需停用', '核对后再次 reconcile'] },
   'training-timer-cleanup-pending': { check: '上次重新进入时没能停用这个计划自己的单次槽（MAA 忙、没开或写入锁被占，什么都没改），槽还开着', alternatives: ['MAA 开着且空闲时再 reconcile 一次，停用成功后再继续', '请用户在 GUI 停用这个槽后再 reconcile'] },
   'training-timer-still-armed': { check: '这个计划自己的单次槽还开着，关闭计划会留下会触发的定时', alternatives: ['先 reconcile，让过期的自有槽停用', '请用户在 GUI 停用这个槽后再 close'] },
-  'training-facts-required': { check: '查询缺少用户事实：按 details.issues 和 details.stages 里各助手的 issues 补齐（训练室等级、可用助手、分支等）', alternatives: ['补齐用户确认的事实后重新 prepare', '把目标先设为下一档，只准备下一档', '用户也可以在游戏里手动开训'] },
+  'training-facts-required': { check: '查询缺少用户事实：按 details.issues（以及 prepare 时 details.stages 里各助手的 issues）补齐训练室等级、可用助手等；refresh/apply 报这个时，计划的 startIssues 就是这一档开训还缺的事实', alternatives: ['补齐用户确认的事实后重新 prepare，或对已有计划带着事实重新 refresh', '把目标先设为下一档，只准备下一档', '用户也可以在游戏里手动开训'] },
   'training-authorization-required': { check: '授权或请求字段不完整：来源、用户原话或报告引用、currentTrainee、加工批准原话', alternatives: ['带上用户原话或已批准的报告条目引用重新 prepare'] },
   'training-approval-scope-mismatch': { check: '已批准的报告条目不是这名干员或这个技能，或批准的档次低于目标', alternatives: ['把目标降到条目批准的档次', '请用户当次明确交办（current-request）', '请 maa-account 出新报告并由用户批准'] },
   'report-reference-invalid': { check: '报告引用格式不对，应为 cultivation/<reportHash>#S<n>', alternatives: ['用 cultivation-report.ts read 的批准记录取引用', '请用户当次明确交办'] },
@@ -125,7 +127,11 @@ export function holdsTrainingRoom(plan: TrainingPlan): boolean {
 export function paidRanks(plan: TrainingPlan): Record<string, string> {
   const paid: Record<string, string> = {};
   for (const entry of plan.history) if (['countdown-observed', 'external-training-observed'].includes(entry.kind)) paid[String(entry.rank)] ??= entry.at;
-  return { ...paid, ...plan.paidAt };
+  Object.assign(paid, plan.paidAt);
+  // Ticket 32 R2-1: the one owner of when this plan's tiers were paid. A tier it completed without a recorded time is reported
+  // as paid at an unknown time, which the cost calculation counts as still in stock (conservative), whichever path advanced it.
+  for (const entry of plan.history) if (entry.kind === 'completed') paid[String(entry.rank)] ??= 'unknown';
+  return paid;
 }
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};

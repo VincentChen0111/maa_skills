@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining, materialGate } from './training-time.ts';
+import { queryTraining, materialGate, formatTraining } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, paidRanks, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
@@ -75,24 +75,33 @@ export async function readTrainingPlan(id: string, options: Options = {}): Promi
 }
 
 /** Recomputes the next rank with current inventory. It cannot broaden the authorized target. */
-export async function refreshTrainingMaterials(input: unknown, options: Options = {}) {
+export async function refreshTrainingMaterials(input: unknown, options: Options = {}) { return (await refreshTrainingPlan(input, options)).plan; }
+
+/** Ticket 32 R2-4: the refreshed plan with the estimate summary, which names what the next start still lacks down to base materials. */
+export async function refreshTrainingPlan(input: unknown, options: Options = {}): Promise<{ plan: TrainingPlan; summary: string }> {
   const request = object(input);
   return withPlan(request.id, options, async (plan, context) => {
     if (plan.closed || plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
     if (object(request.query).inTraining !== undefined) throw new Error('training-in-training-refresh-unsupported');
     // Ticket 32: the plan's own completion and payment evidence reconciles a snapshot read before them (unattended re-entry).
-    const { result } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) } });
+    const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) } });
     if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
       || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
-    const gate = result.status === 'ok' ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
+    // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
+    // only a shortage or an unknown count in the materials is a material wait.
+    const startFacts = result.issues.filter(issue => issue.startsWith('training:'));
+    const gate = !startFacts.length && result.status === 'ok' ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
     plan.materialReady = gate !== 'short';
+    if (startFacts.length) plan.startIssues = startFacts; else delete plan.startIssues;
     if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
     const after = stage?.assistants.find(row => row.id === stage.afterStartAssistant);
     if (after) { plan.afterStartAssistants ??= {}; plan.afterStartAssistants[String(plan.rank)] = after.name; }
-    plan.history.push({ at: new Date().toISOString(), kind: gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
-    await save(context.file, plan); return plan;
+    plan.history.push({ at: new Date().toISOString(), kind: startFacts.length ? 'start-facts-pending' : gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
+    await save(context.file, plan);
+    if (startFacts.length) throw new TrainingCheckError('training-facts-required', { issues: startFacts });
+    return { plan, summary: formatTraining(result, language) };
   });
 }
 
@@ -127,7 +136,9 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
     materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
     history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
-    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : {}),
+    // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
+    // hand, no later than this plan. Every later tier records its own countdown time.
+    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
     ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}) };
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
@@ -238,7 +249,10 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     if ((await allPlans(options)).some(other => other.id !== plan.id && holdsTrainingRoom(other))) return { status: 'check-required', reason: 'training-other-plan-active', versions: await drift() };
     // Ticket 32 (owner: 「龙门币缺口或者其他材料缺口是可以在进行中逐步补齐的，不能因此判断计划」): a shortage keeps the plan
     // waiting for this start; it is not an error. The next re-entry refreshes materials and starts once they are covered.
-    if (action.kind === 'start' && !plan.materialReady) return { status: 'waiting', reason: 'training-materials-pending', rank: plan.rank, craftingAllowed: Boolean(plan.crafting), versions: await drift() };
+    // Ticket 32 R2-3: a missing fact is named; it does not wait as if materials were short.
+    if (action.kind === 'start' && plan.startIssues?.length) return { status: 'check-required', reason: 'training-facts-required', details: { issues: plan.startIssues }, versions: await drift() };
+    // Ticket 32 R2-2: the wait ends only through a refresh with the latest snapshot; another apply alone would wait again.
+    if (action.kind === 'start' && !plan.materialReady) return { status: 'waiting', reason: 'training-materials-pending', next: 'refresh', rank: plan.rank, craftingAllowed: Boolean(plan.crafting), versions: await drift() };
     const config = await readMaaConfig(context.settings.maaDirectory);
     if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed', versions: await drift() };
     const grant = grantFor(plan, action), prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
@@ -322,7 +336,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
-    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup),
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [],
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
@@ -334,7 +348,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown, printed: unknown;
     if (process.argv[2] === 'prepare') result = summarizeTrainingPlan(await prepareTrainingPlan(request));
     else if (process.argv[2] === 'read') result = summarizeTrainingPlan(await readTrainingPlan(String(request.id)));
-    else if (process.argv[2] === 'refresh') result = summarizeTrainingPlan(await refreshTrainingMaterials(request));
+    else if (process.argv[2] === 'refresh') { const refreshed = await refreshTrainingPlan(request); result = { ...summarizeTrainingPlan(refreshed.plan), summary: refreshed.summary }; }
     else if (process.argv[2] === 'list') {
       if (Object.keys(request).length) throw new Error('training-request-invalid');
       result = await listTrainingPlans();
@@ -347,7 +361,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       const { createMaaProcess } = await import('./maa-process.ts');
       if (process.argv[2] === 'apply') {
         const applied = object(await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory)));
-        if (applied.status === 'check-required') { printed = trainingCheckRequired(String(applied.reason), { versions: applied.versions }); process.exitCode = 1; }
+        if (applied.status === 'check-required') { printed = trainingCheckRequired(String(applied.reason), { ...object(applied.details), versions: applied.versions }); process.exitCode = 1; }
         else { result = applied; if (!['complete', 'waiting', 'done'].includes(String(applied.status))) process.exitCode = 1; }
       } else {
         const reconciled = await reconcileTrainingPlan(request, createMaaProcess(settings.maaDirectory));

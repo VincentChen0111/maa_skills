@@ -28,7 +28,7 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 {"targets":[{"name":"合成干员","target":{"elite":1,"level":1}}],"progress":{"source":"user-confirmed","rooms":{"WORKSHOP":[3]},"stageRanks":{"stage_synthetic":2},"voucherValidity":{"premium_material_voucher_perm":true}},"format":"markdown"}
 ```
 
-`format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1，输出脱敏错误码。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
+`format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1：标准输入本身不合格时输出 `{ok:false,error:<代码>}`；其余输出 `{ok:false,status:"check-required",reason:<稳定代码>,check:<要核对什么>,alternatives:[<替代做法>]}`，按 `check` 核对并把替代做法告诉用户，不输出路径或原始系统信息。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
 
 共享导出：`calculateCultivationGaps(tables, snapshot, input)`、`queryCultivationGaps(input, {home?, fetcher?})`、`formatCultivationGapsMarkdown(result)`。`fetcher` 只注入网络边界；测试用真实临时文件及合成数据。配方来源由 `craftingSources` 固定，成本来源沿用 `operatorCostSources`；不随 skill 打包游戏表。来源细节在仓库 `docs/crafting-sources.md`。
 
