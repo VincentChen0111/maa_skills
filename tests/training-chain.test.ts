@@ -4,17 +4,19 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, readTrainingPlan, listTrainingPlans, closeTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
+import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
 import { calculateTraining, materialGate } from '../skills/maa-core/scripts/training-time.ts';
 import { reconcileTraining, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
 import { approvedTrainingReport } from './fixtures/training-report.ts';
 import { configFixture, plan as runtimePlan } from './fixtures/training-runtime.ts';
-import { plan as evidencePlan, nativeTask, confirmation, countdown } from './fixtures/training-evidence.ts';
+import { plan as evidencePlan, nativeTask, confirmation, countdown, log as nativeLog } from './fixtures/training-evidence.ts';
 import { versionDoublePreload } from './fixtures/maa-version-guard.ts';
 
 type Fixture = ReturnType<typeof trainingFixture>;
+/** The synthetic MAA snapshot with a depot scan time equal to its read time (R1-1: the cut-off is the inventory time). */
+const scanned = (f: Fixture) => { Object.assign(f.snapshot, { sourceTimes: { operators: null, inventory: f.snapshot.readAt } }); return f; };
 const binding = { profile: 0, infrastTask: 0, progressTask: 1, timer: 0 };
 const fiveHour = '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）';
 /** The trial's shape: the only available assistant carries nothing but the five-hour condition. */
@@ -49,9 +51,11 @@ test('32 defect 1: the prepare CLI names the specific reason and the pending fac
       authorization: { source: 'current-request', reference: 'synthetic request' } }) });
   assert.equal(run.status, 1); assert.equal(run.stdout, '');
   const output = JSON.parse(run.stderr);
-  assert.equal(output.ok, false); assert.equal(output.error, 'training-facts-required');
-  assert.ok(output.issues.includes('training:stage-1-pending'), run.stderr);
-  const stage = output.stages.find((row: { rank: number }) => row.rank === 1);
+  // Owner, 2026-11-16: 「check required 要给我具体的，和有没有替代」 — reason, what to check, and the alternatives.
+  assert.deepEqual([output.ok, output.status, output.reason], [false, 'check-required', 'training-facts-required']);
+  assert.ok(output.check.length > 0); assert.ok(output.alternatives.length > 0);
+  assert.ok(output.details.issues.includes('training:stage-1-pending'), run.stderr);
+  const stage = output.details.stages.find((row: { rank: number }) => row.rank === 1);
   assert.ok(stage.assistants.find((row: { id: string; issues: string[] }) => row.id === 'char_helper').issues.includes('assistant:unavailable'), run.stderr);
 });
 
@@ -67,7 +71,7 @@ function between(paidAt: Record<string, string> | undefined): TrainingPlan {
 }
 
 test('32 defect 3: a user-confirmed in-training tier is paid in the snapshot and is not counted again', () => {
-  const f = trainingFixture(), query = { ...f.request, target: 3 };
+  const f = scanned(trainingFixture()), query = { ...f.request, target: 3 };
   assert.equal(calculateTraining(f.tables, f.snapshot, query).materials.raw?.materials.mat, 6);
   const paid = calculateTraining(f.tables, f.snapshot, { ...query, inTraining: { source: 'user-confirmed', rank: 1 } });
   assert.equal(paid.status, 'ok', JSON.stringify(paid.issues));
@@ -82,7 +86,7 @@ test('32 defect 3: a user-confirmed in-training tier is paid in the snapshot and
 });
 
 test('32 defect 3: a plan started from the in-training tier only observes that tier and never starts or pays it again', async t => {
-  const f = trainingFixture(), w = await world(t, f);
+  const f = scanned(trainingFixture()), w = await world(t, f);
   const query = { ...f.request, target: 3, inTraining: { source: 'user-confirmed', rank: 1 }, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
   const authorization = { source: 'current-request', reference: 'synthetic: S1 M1 is training now, continue to M3' };
   await assert.rejects(prepareTrainingPlan({ query, binding, currentTrainee: null, authorization }, { home: w.root }), /training-in-training-trainee-conflict/);
@@ -98,7 +102,7 @@ test('32 defect 3: a plan started from the in-training tier only observes that t
 });
 
 test('32 defect 3: between tiers, a snapshot older than the real completion is reconciled with the plan evidence instead of refusing or double counting', async t => {
-  const f = trainingFixture(); f.snapshot.items.mat = 2;
+  const f = scanned(trainingFixture()); f.snapshot.items.mat = 2;
   const w = await world(t, f), stale = { ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
   const refresh = async (input: TrainingPlan, query: unknown = stale) => { await storePlan(w, input); return refreshTrainingMaterials({ id: input.id, query }, { home: w.root }); };
   // M1 was paid before the snapshot was read (its materials are already gone from it): only M2 is needed.
@@ -111,6 +115,43 @@ test('32 defect 3: between tiers, a snapshot older than the real completion is r
   await assert.rejects(refresh(between({ '1': f.snapshot.readAt }), { ...stale, current: { ...f.request.current, mastery: { '1': 2 } } }), /target-changed/);
   // The in-training fact belongs to preparation only.
   await assert.rejects(refresh(between({ '1': f.snapshot.readAt }), { ...stale, current: { ...f.request.current, mastery: { '1': 1 } }, inTraining: { source: 'user-confirmed', rank: 2 } }), /training-in-training-refresh-unsupported/);
+});
+
+test('32 R1-1: the cut-off is the inventory scan time, and a tier the plan paid after it is counted even when the stated rank is newer', async t => {
+  const f = trainingFixture(); f.snapshot.items.mat = 2;
+  // An MAA snapshot imported after M1 was paid, from a depot scanned before it: readAt is not the inventory time.
+  Object.assign(f.snapshot, { source: 'maa', readAt: '2026-11-12T00:00:00.000Z', sourceTimes: { operators: null, inventory: '2026-11-10T00:00:00.000Z' } });
+  const w = await world(t, f), query = { ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const refresh = async (input: TrainingPlan, body: unknown = query) => { await storePlan(w, input); return refreshTrainingMaterials({ id: input.id, query: body }, { home: w.root }); };
+  assert.equal((await refresh(between({ '1': '2026-11-11T00:00:00.000Z' }))).materialReady, false, 'scanned before M1 was paid: M1 + M2 = 3 > 2');
+  // The completed rank stated in `current` does not hide a tier the plan paid after the scan.
+  assert.equal((await refresh(between({ '1': '2026-11-11T00:00:00.000Z' }), { ...query, current: { ...f.request.current, mastery: { '1': 1 } } })).materialReady, false);
+  // No inventory time at all: every tier the plan paid is counted.
+  Object.assign(f.snapshot, { sourceTimes: { operators: null, inventory: null } }); await writeFile(w.snapshotFile, JSON.stringify(f.snapshot));
+  assert.equal((await refresh(between({ '1': '2026-11-01T00:00:00.000Z' }))).materialReady, false);
+  // Scanned after M1 was paid: only M2 counts.
+  Object.assign(f.snapshot, { sourceTimes: { operators: null, inventory: '2026-11-11T12:00:00.000Z' } }); await writeFile(w.snapshotFile, JSON.stringify(f.snapshot));
+  assert.equal((await refresh(between({ '1': '2026-11-11T00:00:00.000Z' }))).materialReady, true);
+  // The in-training fact needs an inventory time it can vouch against.
+  Object.assign(f.snapshot, { sourceTimes: { operators: null, inventory: null } });
+  const unknown = calculateTraining(f.tables, f.snapshot, { ...f.request, target: 3, inTraining: { source: 'user-confirmed', rank: 1 } });
+  assert.ok(unknown.issues.includes('training:in-training-inventory-time-unknown'), JSON.stringify(unknown.issues));
+});
+
+test('32 R1-2: an in-training tier that already finished before the first observation still advances the plan', () => {
+  const manual = evidencePlan(); manual.manualTraining = true; manual.preplacementRequired = false; manual.target.goal = 2;
+  manual.action = { kind: 'observe', dueAt: '2026-11-11T01:05:05.000Z', armedAt: manual.createdAt };
+  const completed = (operator = '合成干员') => nativeLog('2026-11-11T01:05:20.000Z', 'SubTaskExtraInfo', { taskchain: 'Infrast', taskid: 5, what: 'InfrastTrainingCompleted',
+    details: { operator, skill: '合成技能', level: 1 } });
+  const advanced = reconcileTraining(manual, nativeTask(manual, undefined, 5) + completed(), '2026-11-11T01:06:00.000Z');
+  assert.deepEqual([advanced.rank, advanced.state, advanced.target.currentRank, advanced.manualTraining], [2, 'pending', 1, false]);
+  assert.ok(advanced.history.some(entry => entry.kind === 'completed' && entry.rank === 1));
+  // Another operator's completion, or a completion outside this plan's own native run, does not count.
+  assert.equal(reconcileTraining(manual, nativeTask(manual, undefined, 5) + completed('合成助手'), '2026-11-11T01:06:00.000Z').rank, 1);
+  assert.equal(reconcileTraining(manual, completed(), '2026-11-11T01:06:00.000Z').rank, 1);
+  // A plan that started the tier itself still needs its own start evidence first.
+  const own = structuredClone(manual); own.manualTraining = false;
+  assert.equal(reconcileTraining(own, nativeTask(own, undefined, 5) + completed(), '2026-11-11T01:06:00.000Z').rank, 1);
 });
 
 test('32 defect 3: the plan records when each tier it started was paid, and keeps a confirmed earlier payment', () => {
@@ -140,8 +181,10 @@ test('32 defect 2: with the user\'s crafting approval, a shortage the workshop c
   const authorization = { source: 'current-request', reference: 'synthetic: train S1 to M1' }, crafting = { reference: 'synthetic: 缺的材料让 MAA 自动合成' };
   const plain = await prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', authorization }, { home: w.root });
   assert.equal(plain.materialReady, false);
-  const refused = await applyTrainingPlan({ id: plain.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
-  assert.deepEqual([refused.status, refused.reason], ['check-required', 'training-facts-or-materials-required']);
+  // Owner, 2026-11-16: a shortage keeps the plan waiting for its start; it is not an error and writes nothing.
+  const before = await readFile(w.file, 'utf8');
+  const waiting = await applyTrainingPlan({ id: plain.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([waiting.status, waiting.reason], ['waiting', 'training-materials-pending']); assert.equal(await readFile(w.file, 'utf8'), before);
   await assert.rejects(prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', authorization, crafting: { reference: ' ' } }, { home: w.root }), /training-authorization-required/);
   // Unknown workshop facts leave the recipe condition unknown, and the crafting fee needs LMD beyond the reserved costs.
   assert.equal((await prepareTrainingPlan({ query: { ...query, progress: undefined }, binding, currentTrainee: 'char_synthetic', authorization, crafting }, { home: w.root })).materialReady, false);
@@ -221,4 +264,34 @@ test('32 defect 4: the user can close a stopped plan to free the training room; 
   const record = await readTrainingPlan('plan-a', { home: w.root });
   assert.equal(record.closed?.reference, words); assert.equal(record.state, 'unknown');
   assert.deepEqual((await listTrainingPlans({ home: w.root })).map(row => [row.id, row.holdsTrainingRoom, row.closed]), [['plan-a', false, true]]);
+});
+
+test('32 R1-3/R1-4: a cleanup the writer refused before writing stays pending and is retried; the plan keeps the room and cannot be closed meanwhile', async t => {
+  const f = trainingFixture(), w = await world(t, f);
+  const input = runtimePlan(); input.state = 'started'; input.target.goal = 2; input.preplacementRequired = false;
+  input.createdAt = new Date(Date.now() - 3600000).toISOString(); input.startedAt = input.createdAt;
+  input.history = [{ at: input.createdAt, kind: 'arming-start', rank: 1 }];
+  const due = new Date(Date.now() - 600000); due.setUTCSeconds(0, 0);
+  const timer = { Id: 0, IsEnabled: null, Config: 'synthetic', Hour: due.getHours(), Minute: due.getMinutes() };
+  w.config.Configurations.synthetic.TaskQueue[0]!.Filename = 'synthetic-training.json';
+  input.configurationBinding = { profile: 'synthetic', queue: structuredClone(w.config.Configurations.synthetic.TaskQueue), timer };
+  input.action = { kind: 'observe', dueAt: due.toISOString(), armedAt: input.createdAt, timerIdentity: timer };
+  Object.assign(w.config.Timers.List[0]!, timer); await writeFile(w.file, JSON.stringify(w.config)); await storePlan(w, input);
+  // The observation ran and saw the tier finish: the plan advances to M2, but MAA is closed and nobody confirmed it.
+  const ran = new Date(due.getTime() + 30000).toISOString();
+  await writeFile(join(w.maaDirectory, 'core.log'), nativeTask(input, due.toISOString(), 5) + nativeLog(ran, 'SubTaskExtraInfo', { taskchain: 'Infrast', taskid: 5,
+    what: 'InfrastTrainingCompleted', details: { operator: '合成干员', skill: '合成技能', level: 1 } }));
+  const refused = await reconcileTrainingPlan({ id: input.id, logFile: join(w.maaDirectory, 'core.log'), host: 'codex' }, w.maa, { home: w.root });
+  assert.equal(refused.cleanup?.status, 'rejected');
+  assert.deepEqual([refused.plan.rank, refused.plan.state], [2, 'pending']); assert.ok(refused.plan.pendingCleanup);
+  assert.ok(refused.plan.issues.includes('training:timer-cleanup-pending')); assert.equal(JSON.parse(await readFile(w.file, 'utf8')).Timers.List[0].IsEnabled, null);
+  assert.equal((await listTrainingPlans({ home: w.root }))[0]!.holdsTrainingRoom, true);
+  const blocked = await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([blocked.status, blocked.reason], ['check-required', 'training-timer-cleanup-pending']);
+  assert.deepEqual(await closeTrainingPlan({ id: input.id, reference: 'synthetic: 关闭' }, { home: w.root }), { status: 'check-required', reason: 'training-timer-still-armed' });
+  // The next re-entry (confirmed this time) disables the plan's own slot and the chain continues.
+  const cleaned = await reconcileTrainingPlan({ id: input.id, logFile: join(w.maaDirectory, 'core.log'), host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.equal(cleaned.cleanup?.status, 'complete'); assert.equal(cleaned.plan.pendingCleanup, undefined);
+  assert.equal(cleaned.plan.issues.includes('training:timer-cleanup-pending'), false); assert.equal(JSON.parse(await readFile(w.file, 'utf8')).Timers.List[0].IsEnabled, false);
+  assert.equal((await applyTrainingPlan({ id: input.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root })).status, 'waiting');
 });

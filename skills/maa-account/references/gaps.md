@@ -31,3 +31,12 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 `format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1，输出脱敏错误码。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
 
 共享导出：`calculateCultivationGaps(tables, snapshot, input)`、`queryCultivationGaps(input, {home?, fetcher?})`、`formatCultivationGapsMarkdown(result)`。`fetcher` 只注入网络边界；测试用真实临时文件及合成数据。配方来源由 `craftingSources` 固定，成本来源沿用 `operatorCostSources`；不随 skill 打包游戏表。来源细节在仓库 `docs/crafting-sources.md`。
+
+## 展开到基础材料（工单 32）
+
+维护者 2026-11-16：缺口要说到基础材料，龙门币和其他缺口都是推进中逐步补齐的，不能据此判断计划。`comparison.craft.decomposition` 把开启加工方案里还缺的成品（含覆盖路线因条件未确认而没算进去的部分）按现有库存逐级拆到基础材料：
+
+- `short` 是还要获取的基础材料（刷关或其他途径），`fromStock` 是加工能用上的现有库存，`steps` 是建议的加工，`craftingLmd` 是补齐缺口还要的加工费，`lmdGap` 是龙门币总缺口（直接需求加全部加工费减库存，库存未知时为 null）。龙门币不够不会让展开停下，单列为缺口。
+- 配方条件没确认时照样展开，`assumptions` 列出所依据的假设（`stage:<关卡ID>:unknown`、`room:WORKSHOP:unknown`、`inventory:<物品>:assumed-zero`）。回复时把这些标成假设，或者用一个问题一次问清（关卡用返回的公开关卡代码，例如「这些关卡你都通关了吗：…；加工站几级？」），不要逐个追问，也不要因此不给展开。用户确认后再把事实放进 `progress` 重新计算。已确认未解锁的配方（`pending`）按成品获取。
+- `vouchers` 是不依赖数量的材料券建议：每种券能兑换的缺口按缺得多的排序。回复时先问用户各券数量和是否有效；用户不回答，就按这个顺序给建议（例如「有这种券的话，优先换 X」），不编造数量，也不把券算进已核覆盖。
+- 回复里说清还缺什么（成品、基础材料、龙门币），并说明可以在推进中逐步补齐；不要说计划不可行、不能计算或要调整顺序，除非用户问的就是顺序。展开只是建议，不加工、不兑换。

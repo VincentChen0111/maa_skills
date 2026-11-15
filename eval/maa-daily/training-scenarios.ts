@@ -45,6 +45,8 @@ const fiveHour = trainingFixture();
 Object.assign(fiveHour.tables.building.buffs, { synthetic_reduce: { buffName: '合成时长条件', roomType: 'TRAINING',
   description: '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）' } });
 fiveHour.tables.building.chars.char_helper.buffChar = [{ buffData: [{ buffId: 'synthetic_reduce', cond: { phase: 'PHASE_0', level: 1 } }] }];
+// R1-1: the in-training fact needs the time the inventory reflects; this MAA snapshot's depot scan equals its read time.
+const scannedData = trainingFixture(); Object.assign(scannedData.snapshot, { sourceTimes: { operators: null, inventory: scannedData.snapshot.readAt } });
 const craft = trainingFixture();
 Object.assign(craft.tables.building.workshopFormulas, { synthetic: { formulaId: 'recipe_mat', formulaType: 'F_EVOLVE', itemId: 'mat', count: 1, goldCost: 5, apCost: 360000,
   costs: [{ id: 'ore', count: 2, type: 'MATERIAL' }], requireRooms: [{ roomId: 'WORKSHOP', roomLevel: 3, roomCount: 1 }], requireStages: [] } });
@@ -73,7 +75,7 @@ export const trainingChainScenarios: ScenarioDefinition[] = [
       ...created({ version: 1, rank: 1, state: 'pending', target: { ...synthetic, goal: 3 }, assistants: { '1': '合成助手', '2': '合成助手', '3': '合成助手' } }) } },
   { id: 'training-chain-in-progress', commands: chainCommands, jsonFiles: chainFiles,
     prompt: `使用 maa-daily。合成干员一技能的专一现在正在训练室里训练（我确认：是我之前自己开的，材料已经扣了，账号快照是专一开训之后读的）。我批准接着练到专三（原话：「专一练完接着练专二、专三」）。按训练接口从这个进行中的档次续接，准备训练计划：查询输入在 training-request.json，${binding}。${prepareOnly}`,
-    jsonInputs: world(data, { ...request, target: 3 }),
+    jsonInputs: world(scannedData, { ...request, target: 3 }),
     policy: { ...policy, expectedInvocations: [preferencesRead, invoked('prepare')], forbiddenInvocations: forbidden('apply'),
       ...created({ rank: 1, state: 'pending', target: { ...synthetic, goal: 3 }, manualTraining: true, preplacementRequired: false, materialReady: false, paidAt: { '1': data.snapshot.readAt } }) } },
   { id: 'training-chain-crafting', commands: chainCommands, jsonFiles: chainFiles,

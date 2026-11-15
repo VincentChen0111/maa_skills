@@ -9,6 +9,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { staticCode, trainingCheckRequired } from './training-state.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -22,8 +23,8 @@ export type TrainingTables = GapTables & { skillNames: unknown };
 export type TrainingAssistant = { id: string; name: string; available: boolean | null; speedBonus: number | null; estimatedSeconds: number | null; conditions: string[]; issues: string[] };
 export type TrainingResult = { status: 'ok' | 'needs-input'; operator: { id: string; name: string } | null; skill: number | null; skillId: string | null;
   skillName: string | null; currentRank: number | null; targetRank: number | null; role: string | null; materials: GapResult; issues: string[];
-  /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the snapshot's read time, and the materials of the next tier to start. */
-  inTrainingRank: number | null; costFromRank: number | null; snapshotReadAt: string | null; startMaterials: GapResult | null;
+  /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the time its inventory reflects, and the materials of the next tier to start. */
+  inTrainingRank: number | null; costFromRank: number | null; inventoryAt: string | null; startMaterials: GapResult | null;
   stages: { rank: number; baseSeconds: number | null; recommendedAssistant: string | null; afterStartAssistant: string | null; estimatedSeconds: number | null; assistants: TrainingAssistant[] }[];
   assumptions: string[] };
 /** Ticket 32: a plan's own evidence, passed only by training-plan (never from query JSON): its evidence-backed completed rank and when each rank was paid. */
@@ -67,7 +68,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const cost = materials.costs[0];
   const result: TrainingResult = { status: 'needs-input', operator: cost?.operator ?? null, skill, skillId: null, skillName: null,
     currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []],
-    inTrainingRank: null, costFromRank: null, snapshotReadAt: null, startMaterials: null, stages: [],
+    inTrainingRank: null, costFromRank: null, inventoryAt: null, startMaterials: null, stages: [],
     assumptions: ['Estimated duration = base seconds / (1 + assistant base bonus + applicable skill bonuses). This is a table/text inference, not live timing.',
       'Actual countdown and completion evidence supersede estimates; active skills do not prove assignment or condition activation.'] };
   const sharedIssues = result.issues.length;
@@ -76,25 +77,34 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const operator = array(snapshot.operators).map(object).find(row => row.id === cost.operator!.id)!;
   const observed = object(operator.mastery)[String(skill)] ?? object(current.mastery)[String(skill)];
   if (!integer(observed, 0, 3)) { result.issues.push('training:current-rank-unknown'); return result; }
-  const readAt = typeof snapshot.readAt === 'string' && Number.isFinite(Date.parse(snapshot.readAt)) ? snapshot.readAt : null;
-  result.snapshotReadAt = readAt;
+  // Ticket 32 R1-1: the time the inventory reflects. Skland reads the live account, so its read time; an MAA import's read
+  // time is only the import, its depot scan time is `sourceTimes.inventory`, and without one the inventory time is unknown.
+  const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+  const inventoryAt = snapshot.source === 'skland' ? time(snapshot.readAt) : snapshot.source === 'maa' ? time(object(snapshot.sourceTimes).inventory) : null;
+  result.inventoryAt = inventoryAt;
   // A plan's real completion evidence outranks an older snapshot; a snapshot ahead of it stays as read (the caller stops on the mismatch).
   const start = evidence && integer(evidence.completedRank, 0, 3) && evidence.completedRank > observed ? evidence.completedRank : observed;
   result.currentRank = start;
-  // The user confirms the next rank is training now and its materials were already taken from this snapshot's inventory.
+  // The user confirms the next rank is training now and its materials were already taken from the inventory this snapshot reflects.
   if (request.inTraining !== undefined) {
     const fact = object(request.inTraining);
-    if (evidence || !readAt || Object.keys(fact).some(key => !['source', 'rank'].includes(key)) || fact.source !== 'user-confirmed' || fact.rank !== start + 1 || start + 1 > targetRank)
+    if (evidence || Object.keys(fact).some(key => !['source', 'rank'].includes(key)) || fact.source !== 'user-confirmed' || fact.rank !== start + 1 || start + 1 > targetRank)
       result.issues.push('training:in-training-invalid');
+    else if (!inventoryAt) result.issues.push('training:in-training-inventory-time-unknown');
     else result.inTrainingRank = start + 1;
   }
-  // A tier paid at or before the snapshot was read is already gone from its inventory, so it is not counted again;
-  // a tier paid later (or at an unknown time) still has its materials in that inventory and is counted.
-  const paid: Record<string, string> = { ...evidence?.paidAt ?? {}, ...(result.inTrainingRank !== null ? { [String(result.inTrainingRank)]: readAt! } : {}) };
+  // A tier paid at or before the inventory time is already gone from it and is not counted again. A tier this plan paid
+  // after it, or when the inventory time is unknown, still has its materials in it and is counted, whatever rank was stated.
+  const paidBefore = (at: unknown) => inventoryAt !== null && time(at) !== null && Date.parse(at as string) <= Date.parse(inventoryAt);
+  const paid: Record<string, string> = { ...evidence?.paidAt ?? {}, ...(result.inTrainingRank !== null ? { [String(result.inTrainingRank)]: inventoryAt! } : {}) };
   let costFrom = observed;
-  if (readAt) for (const [rank, at] of Object.entries(paid)) {
+  for (const [rank, at] of Object.entries(paid)) {
     const value = Number(rank);
-    if (integer(value, 1, 3) && value > costFrom && value <= targetRank && typeof at === 'string' && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.parse(readAt)) costFrom = value;
+    if (integer(value, 1, 3) && value > costFrom && value <= targetRank && paidBefore(at)) costFrom = value;
+  }
+  for (const [rank, at] of Object.entries(evidence?.paidAt ?? {})) {
+    const value = Number(rank);
+    if (integer(value, 1, 3) && value <= costFrom && !paidBefore(at)) costFrom = value - 1;
   }
   result.costFromRank = costFrom;
   if (costFrom !== observed) {
@@ -177,12 +187,16 @@ export const trainingSources: Record<string, PublicJsonSource> = { ...craftingSo
 /** tablesFile is explicitly unverified offline input; public mode records actual fixed-source hashes. */
 export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch; evidence?: TrainingEvidence } = {}) {
   const request = object(input), settings = await readSettings(options.home);
-  const snapshot = JSON.parse(await readFile(typeof request.snapshotFile === 'string' ? request.snapshotFile : join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
+  // Ticket 32: read failures carry static codes (never a path) so the CLI can say what to check.
+  let snapshot: unknown;
+  try { snapshot = JSON.parse(await readFile(typeof request.snapshotFile === 'string' ? request.snapshotFile : join(settings.privateDirectory, 'account-snapshot.json'), 'utf8')); }
+  catch { throw new Error('training-snapshot-unreadable'); }
   let tables: TrainingTables;
-  if (typeof request.tablesFile === 'string') tables = JSON.parse(await readFile(request.tablesFile, 'utf8'));
+  if (typeof request.tablesFile === 'string') { try { tables = JSON.parse(await readFile(request.tablesFile, 'utf8')); } catch { throw new Error('training-tables-unreadable'); } }
   else {
     const [costs, building, stages, skillNames] = await Promise.all([loadOperatorCostTables(options.fetcher),
-      readPublicJson(trainingSources.building!, options.fetcher), readPublicJson(trainingSources.stages!, options.fetcher), readPublicJson(trainingSources.skillNames!, options.fetcher)]);
+      readPublicJson(trainingSources.building!, options.fetcher), readPublicJson(trainingSources.stages!, options.fetcher), readPublicJson(trainingSources.skillNames!, options.fetcher)])
+      .catch(() => { throw new Error('training-tables-unavailable'); });
     tables = { ...costs, building: building.value, stages: stages.value, skillNames: skillNames.value,
       sources: [...costs.sources ?? [], building.source, stages.source, skillNames.source] };
   }
@@ -210,10 +224,15 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   try {
-    if (process.argv.length !== 3 || process.argv[2] !== 'query') throw new Error();
+    if (process.argv.length !== 3 || process.argv[2] !== 'query') throw new Error('training-action-invalid');
     const request = object(await readStdinJson({ maxBytes: 1024 * 1024 }));
-    if (request.format !== undefined && !['json', 'markdown'].includes(String(request.format))) throw new Error();
+    if (request.format !== undefined && !['json', 'markdown'].includes(String(request.format))) throw new Error('training-request-invalid');
     const output = await queryTraining(request), summary = formatTraining(output.result, output.language);
     console.log(request.format === 'markdown' ? summary : JSON.stringify({ ok: true, ...output, summary }));
-  } catch (error) { console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? 'training-query-failed' })); process.exitCode = 1; }
+  } catch (error) {
+    // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
+    const stdin = stdinJsonCode(error);
+    console.error(JSON.stringify(stdin ? { ok: false, error: stdin } : trainingCheckRequired(staticCode(error) ?? 'training-unclassified-failure')));
+    process.exitCode = 1;
+  }
 }

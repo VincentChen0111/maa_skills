@@ -16,7 +16,7 @@ test('gap scenarios exercise real product queries on synthetic FS/network withou
       cwd: fixture.workspace, env: fixture.env, input: JSON.stringify(input), encoding: 'utf8',
     });
     assert.equal(invoke('preferences', { currentLanguage: 'zh-CN' }).status, 0);
-    const shared = scenario.id.endsWith('shared-stock'), unknown = scenario.id.endsWith('unknown-progress'), noCraft = scenario.id.endsWith('no-craft');
+    const shared = scenario.id.endsWith('shared-stock'), unknown = scenario.id.endsWith('unknown-progress') || scenario.id.endsWith('base-materials'), noCraft = scenario.id.endsWith('no-craft');
     const query = invoke('cultivation-gaps', { targets: shared ? [gapGoal, { ...gapGoal, name: '合成二号' }] : [gapGoal], progress: unknown ? undefined : gapProgress }, noCraft ? ['--no-craft'] : []);
     assert.equal(query.status, 0, query.stderr); const result = JSON.parse(query.stdout);
     assert.equal(result.stageCodes.stage_synthetic, 'SYN-1');
@@ -24,6 +24,12 @@ test('gap scenarios exercise real product queries on synthetic FS/network withou
     else if (shared) { assert.equal(result.comparison.craft.materials.mat.crafted, 1); assert.equal(result.comparison.craft.lmd.required, 209); }
     else if (noCraft) { assert.equal(result.selected, 'no-craft'); assert.equal(result.comparison.noCraft.materials.mat.remaining, 2); }
     else { assert.equal(result.comparison.craft.materials.mat.remaining, 0); assert.equal(result.comparison.craft.voucherAllocations[0].count, 4); }
+    // Ticket 32: with no LMD and no confirmed unlocks the shortage still decomposes to base materials, with labelled assumptions.
+    if (scenario.id.endsWith('base-materials')) {
+      const decomposition = result.comparison.craft.decomposition;
+      assert.deepEqual(decomposition.short, { ore: 4 }); assert.equal(decomposition.lmdGap, result.comparison.craft.lmd.required + 10);
+      assert.deepEqual(decomposition.assumptions, ['room:WORKSHOP:unknown', 'stage:stage_synthetic:unknown']); assert.equal(decomposition.vouchers[0].choices[0].item, 'ore');
+    }
     // This is offline seam validation, not a real-model baseline or a forged terminal model event.
     const evidence = await collectEvidence(fixture, { completed: false, calls: [], outputs: [] });
     assert.deepEqual(evidence.changes, []); assert.equal(evidence.events.filter(event => event.kind === 'invocation').length, 2);

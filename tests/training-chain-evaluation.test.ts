@@ -43,7 +43,7 @@ test('32: the prepare-only chain scenarios pass with the documented inputs', asy
     const { invoke, request, graded } = await drive(t, scenario(id));
     const prepared = invoke('training-plan.ts', 'prepare', { ...body(request), binding });
     assert.equal(prepared.status, 0, `${id}: ${prepared.stderr}`);
-    const result = await graded(); assert.equal(result.status, 'pass', `${id}: ${JSON.stringify(result.checks ?? result)}`);
+    const result = await graded(); assert.equal(result.status, 'pass', `${id}: ${JSON.stringify(result)}`);
   }
   // The tempting shortcuts: no in-training fact, or no crafting approval, leave the wrong record and fail.
   const plain = await drive(t, scenario('training-chain-in-progress'));

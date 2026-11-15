@@ -103,4 +103,11 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 - `tests/training-chain-evaluation.test.ts`：5 个新评测场景按接口正确驱动时评为通过，诱人的错误做法（不带进行中事实、不带加工批准、占用时仍准备、无人时自行确认 MAA 已关闭）评为失败。
 - 既有训练测试改动：`tests/training-time.test.ts` 五小时条件未知时由「估算为空」改为「按不减时估算、减时待核」（维护者要求的行为变化）；`tests/training-plan.test.ts` 的 27 号用例改用真实批准的培养报告条目。
 
+第 1 轮审查后的修复与范围追加（同样只用真实临时目录）：
+
+- `tests/training-chain.test.ts` 增加 R1-1（库存时间分界、计划付过料的档次往回计）、R1-2（首次观察已完成即推进）、R1-3/R1-4（写入前被拒的清理保留并重试、占着训练室、不能关闭）。
+- `tests/cultivation-decomposition.test.ts`：缺口展开到基础材料，龙门币不够、配方条件未确认都不阻止展开，假设标出，已确认未解锁按成品获取，批量余量与未知库存按最坏情况标注，材料券建议不依赖数量。
+- `tests/training-checks.test.ts`：训练和缺口命令每个停下的原因都有核对项和替代做法（枚举脚本里抛出和返回的全部代码及直接依赖的代码），缺口命令输出这个形状。
+- 既有测试改动：`tests/cultivation-report.test.ts` 的覆盖句改为「已覆盖到第 k 步…可以在推进中逐步补齐」并要求出现基础材料一节；`tests/gap-scenarios.test.ts` 增加新场景的分支。
+
 未验证：真实 MAA 上的自动加工与无人值守连续执行；Codex 心跳自动化本身；五小时减时的实际效果仍以真实倒计时为准。模型评测前后结果见本节后续记录。

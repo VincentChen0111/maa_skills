@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
 import { queryTraining, materialGate } from './training-time.ts';
-import { nextTrainingAction, reconcileTraining, paidRanks, holdsTrainingRoom, type TrainingPlan } from './training-state.ts';
+import { nextTrainingAction, reconcileTraining, paidRanks, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
 import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
@@ -18,8 +18,6 @@ export class TrainingCheckError extends Error {
   readonly details: Record<string, unknown>;
   constructor(code: string, details: Record<string, unknown>) { super(code); this.details = details; }
 }
-/** Ticket 32: only fixed lowercase codes (optionally one `:detail`) reach the CLI output; anything else stays generic. */
-const staticCode = (error: unknown) => error instanceof Error && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]+)*)?$/.test(error.message) ? error.message : undefined;
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 const object = (value: unknown): Record<string, unknown> => {
@@ -63,8 +61,15 @@ async function withPlan<T>(id: unknown, options: Options, action: (plan: Trainin
   finally { await lock.close(); await unlink(lockFile); }
 }
 
+/** Ticket 32: MAA's GUI configuration, read with a static failure code (never the path). */
+async function readMaaConfig(maaDirectory: string) {
+  try { return JSON.parse(await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')); } catch { throw new Error('maa-config-unreadable'); }
+}
+
 export async function readTrainingPlan(id: string, options: Options = {}): Promise<TrainingPlan> {
-  const { file } = await location(id, options), plan = JSON.parse(await readFile(file, 'utf8'));
+  const { file } = await location(id, options);
+  const text = await readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => { throw new Error(error.code === 'ENOENT' ? 'training-plan-not-found' : 'training-plan-invalid'); });
+  let plan: TrainingPlan; try { plan = JSON.parse(text); } catch { throw new Error('training-plan-invalid'); }
   if (plan.version !== 1 || plan.id !== id || !Array.isArray(plan.history) || !Array.isArray(plan.consumed) || !plan.binding || !plan.target) throw new Error('training-plan-invalid');
   return plan;
 }
@@ -122,11 +127,11 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
     materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
     history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
-    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.snapshotReadAt! } } : {}),
+    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : {}),
     ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}) };
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
-  const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+  const config = await readMaaConfig(context.settings.maaDirectory);
   plan.configurationBinding = bindConfiguration(config, plan);
   plan.versions = await readVersionStamp(context.settings.maaDirectory, options.versionReader ?? readMaaVersion);
   if (plan.state !== 'satisfied') buildTrainingChanges(config, grantFor(plan, { kind: 'preplace', dueAt: new Date(Math.ceil((Date.now() + 3600000) / 60000) * 60000).toISOString() }), context.settings.privateDirectory);
@@ -176,11 +181,12 @@ export async function closeTrainingPlan(input: unknown, options: Options = {}) {
   if (Object.keys(request).some(key => !['id', 'reference'].includes(key)) || typeof request.reference !== 'string' || !request.reference.trim()) throw new Error('training-close-reference-required');
   return withPlan(request.id, options, async (plan, context) => {
     if (plan.closed) return { status: 'complete' as const, plan: summarizeTrainingPlan(plan) };
-    if (plan.action?.timerIdentity && !plan.action.completedAt) {
+    // Ticket 32 R1-4: every one-shot this plan armed (in flight, finished, or awaiting cleanup) must be disabled first.
+    const timers = [plan.action?.timerIdentity, plan.pendingCleanup?.timerIdentity].filter(value => value !== undefined);
+    if (timers.length) {
       if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
-      const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
-      const current = trainingTimerIdentity(config.Timers?.List?.[plan.binding.timer]), expected = trainingTimerIdentity(plan.action.timerIdentity);
-      if (sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null }) && current.IsEnabled !== false)
+      const current = trainingTimerIdentity((await readMaaConfig(context.settings.maaDirectory)).Timers?.List?.[plan.binding.timer]);
+      if (current.IsEnabled !== false && timers.some(timer => sameConfigValue({ ...current, IsEnabled: null }, { ...trainingTimerIdentity(timer), IsEnabled: null })))
         return { status: 'check-required' as const, reason: 'training-timer-still-armed' };
     }
     const at = new Date().toISOString();
@@ -222,11 +228,18 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     const drift = async () => compareVersionStamp(plan.versions, await versionStampOf(maaDirectory, maa));
     if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply', versions: await drift() };
     if (plan.closed) return { status: 'check-required', reason: 'training-plan-closed', versions: await drift() };
+    // Ticket 32 R1-3: the plan's own earlier one-shot is still armed; it must be disabled before the slot is reused.
+    if (plan.pendingCleanup) return { status: 'check-required', reason: 'training-timer-cleanup-pending', versions: await drift() };
+    const action = nextTrainingAction(plan, new Date().toISOString());
+    // Ticket 32: a finished plan is done, not an error; a plan with nothing safe to schedule says why it stopped.
+    if (!action) return ['complete', 'satisfied'].includes(plan.state) ? { status: 'done', reason: 'training-goal-reached', versions: await drift() }
+      : { status: 'check-required', reason: plan.action && !plan.action.native?.startedAt ? 'training-reconcile-before-apply' : 'training-plan-stopped', versions: await drift() };
     // Ticket 32: one training room, one plan. Another plan that armed MAA and is not finished or closed keeps it.
     if ((await allPlans(options)).some(other => other.id !== plan.id && holdsTrainingRoom(other))) return { status: 'check-required', reason: 'training-other-plan-active', versions: await drift() };
-    const action = nextTrainingAction(plan, new Date().toISOString());
-    if (!action || action.kind === 'start' && !plan.materialReady) return { status: 'check-required', reason: 'training-facts-or-materials-required', versions: await drift() };
-    const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+    // Ticket 32 (owner: 「龙门币缺口或者其他材料缺口是可以在进行中逐步补齐的，不能因此判断计划」): a shortage keeps the plan
+    // waiting for this start; it is not an error. The next re-entry refreshes materials and starts once they are covered.
+    if (action.kind === 'start' && !plan.materialReady) return { status: 'waiting', reason: 'training-materials-pending', rank: plan.rank, craftingAllowed: Boolean(plan.crafting), versions: await drift() };
+    const config = await readMaaConfig(context.settings.maaDirectory);
     if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed', versions: await drift() };
     const grant = grantFor(plan, action), prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
     const intended = structuredClone(config);
@@ -271,15 +284,18 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
     let cleanup: { status: string; reason?: string | null } | undefined;
     const expired = action && Date.parse(action.dueAt) + 60000 < Date.parse(observedAt);
     const terminal = ['failed', 'complete', 'satisfied'].includes(plan.state);
-    if (action?.timerIdentity && (expired || terminal || plan.action?.completedAt)) {
-      const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+    // The plan's own one-shot to disable: the current action's once it expired, finished or the plan ended, or one an
+    // earlier re-entry could not disable yet (ticket 32 R1-3: the writer refused before writing; nothing was changed).
+    const owned = action?.timerIdentity && (expired || terminal || plan.action?.completedAt) ? { timerIdentity: action.timerIdentity, dueAt: action.dueAt } : original.pendingCleanup;
+    if (owned) {
+      const config = await readMaaConfig(context.settings.maaDirectory);
       const current = trainingTimerIdentity(config.Timers?.List?.[plan.binding.timer]);
-      const expected = trainingTimerIdentity(action.timerIdentity);
+      const expected = trainingTimerIdentity(owned.timerIdentity);
       if (!sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null }) || current.IsEnabled === true) {
         cleanup = { status: 'check-required', reason: 'training-timer-ownership-changed' };
       } else if (current.IsEnabled === false) cleanup = { status: 'complete', reason: 'training-timer-already-disabled' };
       else {
-        const grant = grantFor(original, { kind: 'disable', dueAt: action.dueAt }, current);
+        const grant = grantFor(original, { kind: 'disable', dueAt: owned.dueAt }, current);
         const prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
         await save(context.file, plan);
         cleanup = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
@@ -287,12 +303,14 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
           expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision,
           authorization: { ...trainingAuthorization(plan, request, grant) }, changes: prepared.changes }, maa);
       }
-      if (cleanup?.status !== 'complete') { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
+      if (cleanup?.status === 'complete') { delete plan.pendingCleanup; plan.issues = plan.issues.filter(issue => issue !== 'training:timer-cleanup-pending'); }
+      else if (cleanup?.status === 'rejected' || cleanup?.status === 'busy') { plan.pendingCleanup = owned; plan.issues.push('training:timer-cleanup-pending'); }
+      else { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
     }
     if (expired && !plan.action?.completedAt && plan.rank === original.rank && !terminal) {
       plan.state = 'unknown'; plan.issues.push('training:execution-unproven-no-replay');
     }
-    const actualBinding = bindConfiguration(JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8')), original);
+    const actualBinding = bindConfiguration(await readMaaConfig(context.settings.maaDirectory), original);
     const observedOriginal = { ...original, confirmationAt: plan.confirmationAt ?? original.confirmationAt,
       action: plan.rank === original.rank ? plan.action : { ...original.action!, completedAt: observedAt } };
     if (matchesBinding(observedOriginal, actualBinding, true)) plan.configurationBinding = actualBinding;
@@ -304,7 +322,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
-    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed),
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup),
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
@@ -313,7 +331,7 @@ const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolv
 if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   try {
     if (process.argv.length !== 3) throw new Error('training-action-invalid');
-    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown;
+    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown, printed: unknown;
     if (process.argv[2] === 'prepare') result = summarizeTrainingPlan(await prepareTrainingPlan(request));
     else if (process.argv[2] === 'read') result = summarizeTrainingPlan(await readTrainingPlan(String(request.id)));
     else if (process.argv[2] === 'refresh') result = summarizeTrainingPlan(await refreshTrainingMaterials(request));
@@ -321,25 +339,29 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       if (Object.keys(request).length) throw new Error('training-request-invalid');
       result = await listTrainingPlans();
     } else if (process.argv[2] === 'close') {
-      result = await closeTrainingPlan(request);
-      if (object(result).status !== 'complete') process.exitCode = 1;
+      const closed = await closeTrainingPlan(request);
+      if (closed.status === 'check-required') { printed = trainingCheckRequired(closed.reason); process.exitCode = 1; } else result = closed;
     }
     else if (['apply', 'reconcile'].includes(process.argv[2]!)) {
       const settings = await readSettings(); if (!settings.maaDirectory) throw new Error('maa-directory-unset');
       const { createMaaProcess } = await import('./maa-process.ts');
       if (process.argv[2] === 'apply') {
-        result = await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory));
-        if (object(result).status !== 'complete') process.exitCode = 1;
+        const applied = object(await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory)));
+        if (applied.status === 'check-required') { printed = trainingCheckRequired(String(applied.reason), { versions: applied.versions }); process.exitCode = 1; }
+        else { result = applied; if (!['complete', 'waiting', 'done'].includes(String(applied.status))) process.exitCode = 1; }
       } else {
         const reconciled = await reconcileTrainingPlan(request, createMaaProcess(settings.maaDirectory));
         result = { ...reconciled, plan: summarizeTrainingPlan(reconciled.plan) };
+        if (reconciled.cleanup?.status === 'check-required') printed = trainingCheckRequired(String(reconciled.cleanup.reason), object(result));
         if (reconciled.cleanup && reconciled.cleanup.status !== 'complete') process.exitCode = 1;
       }
     } else throw new Error('training-action-invalid');
-    console.log(JSON.stringify({ ok: process.exitCode !== 1, result }));
+    console.log(JSON.stringify(printed ?? { ok: process.exitCode !== 1, result }));
   } catch (error) {
-    console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? staticCode(error) ?? 'training-plan-check-required',
-      ...(error instanceof TrainingCheckError ? error.details : {}) }));
+    // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
+    const stdin = stdinJsonCode(error);
+    console.error(JSON.stringify(stdin ? { ok: false, error: stdin }
+      : trainingCheckRequired(staticCode(error) ?? 'training-unclassified-failure', error instanceof TrainingCheckError ? error.details : undefined)));
     process.exitCode = 1;
   }
 }
