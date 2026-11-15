@@ -42,6 +42,7 @@
 | 28 | [行为评测可运行化与登录预检](28-runnable-evaluation-auth-preflight.md) | [#45](https://github.com/VincentChen0111/maa_skills/issues/45) | 03 | 进行中 |
 | 29 | [指定关卡作业匹配改进](29-stage-job-matching-improvements.md) | [#46](https://github.com/VincentChen0111/maa_skills/issues/46) | 15 | 已完成 |
 | 30 | [配置写入器加固：投影指纹与差异核对](30-config-writer-projection-diff.md) | [#47](https://github.com/VincentChen0111/maa_skills/issues/47) | 05 | 已完成 |
+| 31 | [v0.2.0 起的前后评测：逐 PR 比较，行为项与契约项分开评分](31-before-after-evaluation-process.md) | [#102](https://github.com/VincentChen0111/maa_skills/issues/102) | 26 | 未开始 |
 
 <!-- tracker:end -->
 
@@ -50,6 +51,8 @@
 2026-11-13 按维护者当日的决定及其设计默认值新增 27（来源见规格「默认值及其来源」），并修订 10、16、17、25、26 的验收条件。同日新增 28、29、30，并在未开始的 09、10、12、16、17、22、23、25、26 里补充验收条件和参考说明。GitHub Issue：27 为 #44，28 为 #45，29 为 #46，30 为 #47。GitHub 上的镜像（四张新票的正文、26 对 27 和 28 的阻塞关系、上述九张票修改后的正文）随引入这些改动的 PR 一起同步。
 
 28、29、30 和这批补充来自对同类公开项目的对照。维护者 2026-11-13 同意把这些建议写进工单，原话：「各家分析和项目建议没什么问题」「都没问题，更改」。各条的具体写法是设计默认值，不是维护者原话；其中新增的限制登记在规格「默认值及其来源」。评测怎样登录，维护者同日已经决定：用 Claude 和 ChatGPT 的套餐登录，不用 API key，原话：「我可以用claude/gpt plan subscription吗？api太贵了」；协调者答复两家官方文档都支持这种用法之后，维护者确认写进工单。随之定下的设计默认值和依据的官方文档见 [28](28-runnable-evaluation-auth-preflight.md) 的「决定」，其中的限制登记在规格两张来源表。
+
+2026-11-16 新增 31，是设计票：v0.1.0 的发布比较里有 33 对前后比较不了，维护者看过之后问「这次没关系，但以后怎么处理好？」。31 写明 v0.2.0 起的做法：逐 PR 比较前后、发布只和上一个标签比较、评分项分成行为项和契约项。具体写法是设计默认值，维护者确认之前 triage 状态为 `needs-triage`；它等 26 完成后才能开始。GitHub Issue 为 #102。
 
 ## 用户故事覆盖
 
@@ -118,7 +121,7 @@
 | 59 | [25](25-maa-version-verification.md)、[26](26-v0-1-0-release-validation.md) |
 | 60 | [07](07-setup-existing-environment.md)、[10](10-doctor-checks-referral.md)、[25](25-maa-version-verification.md) |
 | 61 | [02](02-repository-workflow.md) |
-| 62 | [03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md) |
+| 62 | [03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md)、[31](31-before-after-evaluation-process.md) |
 | 63 | [02](02-repository-workflow.md)、[03](03-cross-host-evaluation.md)、[26](26-v0-1-0-release-validation.md)、[28](28-runnable-evaluation-auth-preflight.md) |
 | 64 | [02](02-repository-workflow.md) |
 | 65 | [26](26-v0-1-0-release-validation.md) |
