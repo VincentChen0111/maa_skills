@@ -172,3 +172,23 @@ test('OB-9 and OB-3 through the CLI: without snapshotFile the query reads the Sk
   const markdown = run('markdown'); assert.equal(markdown.status, 0, markdown.stdout + markdown.stderr);
   assert.match(markdown.stdout, /整份改读森空岛快照，两份不合并/); assert.match(markdown.stdout, /不是游戏内的数据时间/);
 });
+
+test('review round 1 (F2): with prerequisites still open, confirmable says whether their answer plus one job confirmation makes the job ready', () => {
+  const tables = { stages: { ...stageTables.stages, synthetic_00: { stageId: 'synthetic_00', code: 'SYN-0', levelId: 'Obt/Synthetic/level_synthetic_00', zoneId: 'synthetic_map', difficulty: 'NORMAL', unlockCondition: [] } } };
+  const { completions: _completions, completionEvidence: _evidence, ...bare } = stageRequest;
+  const job = withContent(141, { opers: [{ name: '合成甲' }], doc: { title: '合成作业', details: '开局先放合成甲' } });
+  // The trial's TL-S shape: prerequisites unverified and row-level unknowns. One question can cover both.
+  const open = matchStageJobs(snapshot, tables, bare, [job]);
+  const candidate = open.stages[0]!.candidates[0]!;
+  assert.equal(candidate.status, 'unknown'); assert.equal(candidate.confirmable, true);
+  assert.match(formatStageJobs(open), /前置也没核实：把前置和这份作业的确认放进同一个问题/);
+  // A prerequisite known unmet keeps the job out of reach: nothing to ask about it.
+  const raid = matchStageJobs(snapshot, tables, { ...bare, stages: [{ stageId: 'synthetic_01#f#', code: 'SYN-1', difficulty: 'raid', loops: 1 }],
+    completions: { synthetic_01: 'PASS' }, completionEvidence: '用户：SYN-1 打过但没三星' }, [withContent(142, { opers: [{ name: '合成甲' }] }, 3)]).stages[0]!.candidates[0]!;
+  assert.equal(raid.status, 'blocked'); assert.equal(raid.confirmable, false);
+  // Answered prerequisites plus the confirmation: ready, and the saved report re-verifies.
+  const answered = matchStageJobs(snapshot, tables, { ...bare, completions: { synthetic_00: 'PASS' }, completionEvidence: '用户：SYN-0 打过了，作业也核实过',
+    jobConfirmations: [{ jobId: 141, contentHash: candidate.hash, source: 'user-confirmed', reference: said }] }, [job]);
+  assert.equal(answered.stages[0]!.candidates[0]!.status, 'ready');
+  assert.equal(matchStageJobs(open.snapshot, open.tables, open.request, open.jobs, open.search).hash, open.hash);
+});

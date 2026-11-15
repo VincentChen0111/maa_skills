@@ -458,7 +458,8 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
     }) : [{ stageId: selected.stageId, code: selected.code as string | null, required: 'unknown', actual: null, status: 'unknown' as Status }];
     // OB-1 (over-blocking review, 2026-11-16): one job's content error is that candidate's own blocked state, never a failure
     // of the stage or the batch. `confirmed`: the user confirmed this job's content once (jobConfirmations).
-    const evaluate = (job: Job, confirmed: boolean) => {
+    // `answered`: treat prerequisites still unverified as answered (only for `confirmable`; a known-unmet one stays blocked).
+    const evaluate = (job: Job, confirmed: boolean, answered = false) => {
       if (!job.content || typeof job.content !== 'object' || Array.isArray(job.content)) throw new Error('content-not-object');
       const content = job.content, reasons: string[] = [];
       const stageMatch = identify(content.stage_name);
@@ -471,9 +472,10 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
       if (content.type !== undefined && content.type !== 'Copilot') reasons.push('unsupported-job-type');
       const operators = matchOperators(snapshot, content, context, confirmed);
       const actionNames = scanActionNames(content, professions, usedNames), versionReady = versionMet(request.maaVersion, content.minimum_required);
-      const checks: Status[] = [...prerequisiteChecks.map(check => check.status), operators.status, versionReady ? 'ready' : 'unknown'];
+      const open = (check: (typeof prerequisiteChecks)[number]) => answered && check.status === 'unknown';
+      const checks: Status[] = [...prerequisiteChecks.map(check => open(check) ? 'ready' : check.status), operators.status, versionReady ? 'ready' : 'unknown'];
       // OB-2: every prerequisite that is not verified or not met is named, so the agent can ask the user about all of them once.
-      for (const check of prerequisiteChecks) if (check.status !== 'ready') reasons.push(`${check.status === 'blocked' ? 'prerequisite-unmet' : 'prerequisite-unverified'}:${check.stageId}:${check.required}`);
+      for (const check of prerequisiteChecks) if (check.status !== 'ready' && !open(check)) reasons.push(`${check.status === 'blocked' ? 'prerequisite-unmet' : 'prerequisite-unverified'}:${check.stageId}:${check.required}`);
       // MAA's formation skips a group with no members; the battle may still name it, so the job stays 待核.
       if (operators.emptyGroups.length) { checks.push('unknown'); reasons.push('job-group-empty'); }
       // Action names and the document's notes are what the user checks against the job text; a job confirmation covers them.
@@ -497,8 +499,9 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
         const candidate = evaluate(job, applies);
         if (confirmation && !applies) candidate.reasons.push('job-confirmation-content-changed');
         if (applies) candidate.confirmation = { reference: confirmation!.reference };
-        // Whether one confirmation of this job would make it ready: the agent asks the user only then.
-        else if (candidate.status === 'unknown') candidate.confirmable = evaluate(job, true).status === 'ready';
+        // Whether one confirmation of this job (with the answer to any prerequisite still unverified) would make it ready: the
+        // agent asks the user only then, and asks both in the same question.
+        else if (candidate.status === 'unknown') candidate.confirmable = evaluate(job, true, true).status === 'ready';
         return candidate;
       } catch (error) {
         const code = error instanceof Error && /^[a-z][a-z0-9-]{0,63}$/.test(error.message) ? error.message : 'unreadable', content = job.content as unknown;
@@ -650,7 +653,7 @@ export function formatStageJobs(report: StageReport & { snapshotSelection?: Pick
           lines.push(`  - 作业内容不合法（${escape(code)}）：${contentInvalid[code] ?? 'MAA 用不了这份作业的干员列表或格式；'}不能准备，改选其他作业。`);
         }
         if (candidate.confirmation) lines.push(`  - 用户确认（整份作业一次）：${escape(candidate.confirmation.reference)}`);
-        else if (candidate.confirmable) lines.push(`  - 其余待核项只有用户能核对：用户核实后对这份作业确认一次即可准备（jobConfirmations：jobId ${candidate.id}、原文指纹 ${candidate.hash}、用户原话）。`);
+        else if (candidate.confirmable) lines.push(`  - 其余待核项只有用户能核对：用户核实后对这份作业确认一次即可准备（jobConfirmations：jobId ${candidate.id}、原文指纹 ${candidate.hash}、用户原话）${candidate.reasons.some(reason => reason.startsWith('prerequisite-unverified:')) ? '；前置也没核实：把前置和这份作业的确认放进同一个问题' : ''}。`);
         if (candidate.reasons.includes('job-group-empty')) lines.push('  - 有成员为空的干员组：MAA 编队会跳过它，作业动作若用到这个组就部署不了，待核。');
         for (const row of candidate.requirements.filter(row => !operator || row.name === operator)) {
           const seen = (item: Observed | undefined) => item?.value === null || item === undefined ? '未知' : `${item.value}${item.from === 'user-confirmed' ? '（用户确认）' : ''}`;
