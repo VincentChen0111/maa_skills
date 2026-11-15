@@ -49,4 +49,8 @@
 
 ## 评测前后
 
-未运行（运行后在这里记批次、载荷、模型和逐场景结论）。
+2026-11-16 在本机运行，覆盖试用 9、10（包 1）和过度阻挡跟进（包 2）。同一份冻结的评测框架（`git archive 13c7312`，两批运行器相同，`compare` 认可可比），Codex CLI 0.167.0-alpha.3.2，模型 `gpt-6.1-sol`，套餐登录，逐个串行。载荷：前 `f51ba18`（发布候选），后 `58b3fdf`（两个包最后一次改 `skills/` 的提交；之后只改了审查记录）。
+
+54 个场景：关卡作业 19 个（含本分支新增的 7 个：包 1 的 `daily-stage-prepare-skland-mastery`、`daily-stage-prepare-user-confirmed`、`daily-stage-mastery-insufficient`、`daily-stage-snapshot-alternative`，包 2 的 `daily-stage-job-content-invalid`、`daily-stage-prerequisite-question`、`daily-stage-job-confirmed`），关卡运行与换备选 10 个，maa-core 3 个，daily 3 个，account 4 个，setup 1 个，doctor 2 个，以及这次改了快照选择或兜底失败的工具各自的场景：成本 2、培养报告 2、社区调研 3、基建技能查询 1、基建报告 1、排班 1、基建应用 2。
+
+结果：前 50/54，后 54/54；`compare` 总体 pass，没有由通过变失败的场景。由失败变通过的 4 个都是本分支新增或改过的场景（`daily-stage-prepare-skland-mastery`、`daily-stage-prepare-user-confirmed`、`daily-stage-snapshot-alternative`、`daily-stage-job-confirmed`），前一侧没有这些功能。`daily-stage-job-content-invalid`、`daily-stage-prerequisite-question` 两边都通过：评分看调用和不写文件，前一侧也满足；具体的原因码和单独挡掉坏作业由单元测试覆盖。OB-3（读已安装 MAA 的版本）没有场景：评测的合成 MAA 目录里没有带版本信息的 MAA.exe。
