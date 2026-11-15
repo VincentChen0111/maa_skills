@@ -108,9 +108,14 @@ export type Policy = {
    */
   approvals?: string[][];
 };
-export type GeneratedDirectoryFiles = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
+/**
+ * 26 H4 round 1: a field judged by its JSON type alone (present, and of that type), for a record whose values are generated during
+ * the run (a doctor record holding the lock and backup a runtime-unknown write left), where no literal can grant it.
+ */
+export type GeneratedFieldType = 'number' | 'string' | 'boolean' | 'array' | 'object';
+export type GeneratedDirectoryFiles = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] };
 /** 26 H3: one new JSON file at exactly this relative path; required unless `optional`. */
-export type GeneratedExactFile = { file: string; optional?: boolean; fields?: Record<string, unknown>; utcFields?: string[] };
+export type GeneratedExactFile = { file: string; optional?: boolean; fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] };
 export type GeneratedFile = GeneratedDirectoryFiles | GeneratedExactFile;
 export type EvidenceEvent = {
   kind: 'lock-acquired' | 'lock-released' | 'lock-retained' | 'write' | 'download' | 'invocation';
@@ -157,13 +162,25 @@ const uuidFile = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 /** A relative path of non-empty segments, none `.` or `..`, without wildcard, drive or backslash characters. */
 const relativePath = (value: unknown): value is string =>
   typeof value === 'string' && value.split('/').every(part => !!part && part !== '.' && part !== '..' && !/[\\:*?\[\]\0]/.test(part));
-/** Whether a generated file's content is a JSON object holding the declared fixed fields and in-window UTC fields. */
-function holdsFields(spec: { fields?: Record<string, unknown>; utcFields?: string[] }, change: Change, window: ExecutionWindow | undefined): boolean {
+const fieldTypeHolds: Record<GeneratedFieldType, (value: unknown) => boolean> = {
+  number: value => typeof value === 'number' && Number.isFinite(value),
+  string: value => typeof value === 'string',
+  boolean: value => typeof value === 'boolean',
+  array: value => Array.isArray(value),
+  object: value => !!value && typeof value === 'object' && !Array.isArray(value),
+};
+/** 26 H4 round 1: a field-type declaration is absent, or a map of non-empty field names to a type `GeneratedFieldType` names. */
+const validFieldTypes = (types: unknown): boolean => types === undefined || !!types && typeof types === 'object' && !Array.isArray(types) &&
+  Object.entries(types).every(([key, type]) => key.length > 0 && typeof type === 'string' && Object.hasOwn(fieldTypeHolds, type));
+/** Whether a generated file's content is a JSON object holding the declared fixed fields, typed fields and in-window UTC fields. */
+function holdsFields(spec: { fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] }, change: Change,
+  window: ExecutionWindow | undefined): boolean {
   try {
     const value: unknown = JSON.parse(Buffer.from(String(change.after), 'base64').toString('utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const fields = value as Record<string, unknown>;
     return Object.entries(spec.fields ?? {}).every(([key, expected]) => isDeepStrictEqual(fields[key], expected)) &&
+      Object.entries(spec.fieldTypes ?? {}).every(([key, type]) => Object.hasOwn(fields, key) && fieldTypeHolds[type](fields[key])) &&
       (spec.utcFields ?? []).every(key => matchesGenerated({ file: change.file, key }, change.file, key, fields[key], window));
   } catch { return false; }
 }
@@ -171,7 +188,8 @@ function holdsFields(spec: { fields?: Record<string, unknown>; utcFields?: strin
  * Exactly the declared number of new JSON files under each directory, each holding the declared fixed fields and in-window
  * UTC fields. 26 H3: or one new JSON file at one exact path (`file`: no directory-wide allowance, no other name), holding
  * its declared fields; required unless `optional: true`. Any other change at that path (replaced, deleted, other content)
- * is not granted and makes the declaration unmet.
+ * is not granted and makes the declaration unmet. 26 H4 round 1: either form may also declare `fieldTypes`, fields judged
+ * by JSON type alone; a malformed declaration grants nothing.
  */
 function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { valid: boolean; grants: Grant[] } {
   const grants: Grant[] = [];
@@ -181,7 +199,7 @@ function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { vali
     if (spec && typeof spec === 'object' && Object.hasOwn(spec, 'file')) {
       const exact = spec as GeneratedExactFile & Record<string, unknown>;
       if (!relativePath(exact.file) || !exact.file.endsWith('.json') || exactPaths.has(exact.file) || ['directory', 'count', 'nested'].some(key => Object.hasOwn(exact, key)) ||
-        exact.optional !== undefined && typeof exact.optional !== 'boolean') { valid = false; continue; }
+        exact.optional !== undefined && typeof exact.optional !== 'boolean' || !validFieldTypes(exact.fieldTypes)) { valid = false; continue; }
       exactPaths.add(exact.file);
       const matching = evidence.changes.filter(change => change.key === '$file' && change.file === exact.file);
       const accepted = matching.filter(change => change.before === undefined && holdsFields(exact, change, evidence.executionWindow));
@@ -190,7 +208,7 @@ function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { vali
       continue;
     }
     const directory = spec as GeneratedDirectoryFiles;
-    if (!directory || !relativePath(directory.directory) || !Number.isSafeInteger(directory.count) || directory.count < 1) { valid = false; continue; }
+    if (!directory || !relativePath(directory.directory) || !Number.isSafeInteger(directory.count) || directory.count < 1 || !validFieldTypes(directory.fieldTypes)) { valid = false; continue; }
     const matching = evidence.changes.filter(change => change.key === '$file' && change.before === undefined && change.file.startsWith(directory.directory + '/') &&
       (directory.nested ? change.file.endsWith('.json') : uuidFile.test(change.file.slice(directory.directory.length + 1))));
     const accepted = matching.filter(change => holdsFields(directory, change, evidence.executionWindow));
