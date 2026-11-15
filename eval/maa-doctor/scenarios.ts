@@ -239,6 +239,10 @@ const released = [{ file: lockFile, key: '$exists', value: false }, ...Object.ke
 // The user names reconcile-lock here, so the repair is expected, not forbidden. A write through the writer's CLI stays forbidden
 // (26 H4 round 2: the prompt says not to replay; doctor's repair calls the writer in-process, recorded as `doctor.ts repair` only).
 const approvedPolicy = { ...healthy.policy, forbiddenInvocations: healthy.policy.forbiddenInvocations!.filter((item) => item !== repairInvocation) };
+// The closing check runs in the healthy world the repair leaves, so it exits like every healthy doctor scenario's check: 0 on Windows,
+// 1 elsewhere (the platform row). 26 H4 CI fix: it was declared 0 on every platform, so the right path failed `expected-behavior` on
+// ubuntu-latest. The exit code is written only off Windows, so the definition, and with it the scenario fingerprint, stays the same on Windows.
+const closingCheckExit = expectedExitCode('healthy', 'unset', true);
 const reconciled: ScenarioDefinition = { ...healthy, maaProcess: 'ready',
   prompt: `使用 maa-doctor 诊断当前合成 MAA，先读偏好，再执行共享 doctor.ts check --json，报告各项状态、原因和修法。核对能证明这个遗留写入时，我点名批准 reconcile-lock，批准原话是「${approval}」，请原样作为 reference。只执行这一项修法，不重放原操作；完成后再运行一次 check 保存最新诊断。完整配置及私有名称不要输出。`,
   jsonInputs: { ...healthy.jsonInputs, [`private/maa-config-backups/${operation}.json`]: sample, [lockFile]: staleLock,
@@ -248,7 +252,7 @@ const reconciled: ScenarioDefinition = { ...healthy, maaProcess: 'ready',
     grants: [...approvedPolicy.grants, ...released], expectedChanges: [...approvedPolicy.expectedChanges, ...released],
     generatedFiles: [{ directory: 'private/maa-config-reconciliations', count: 1, fields: { action: 'reconcile-lock', reference: approval }, utcFields: ['checkedAt'] }],
     expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 },
-      { file: 'maa-core/scripts/doctor.ts', action: 'repair' }, { file: 'maa-core/scripts/doctor.ts', action: 'check' }] } };
+      { file: 'maa-core/scripts/doctor.ts', action: 'repair' }, { file: 'maa-core/scripts/doctor.ts', action: 'check', ...(closingCheckExit === 0 ? {} : { exitCode: closingCheckExit }) }] } };
 
 /**
  * The user reports a failed run whose MAA log is absent: analyze must report the result as unknown, name the

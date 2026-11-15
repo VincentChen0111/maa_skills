@@ -1061,6 +1061,23 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node --test tests/docs-consistency.test.ts` | 11 项通过（文档改完后跑） |
 | `node scripts/privacy.ts` | `ok: true`、无发现 |
 
+**CI 修复（2026-11-15，PR #100 合并后 ubuntu-latest 的离线检查失败）。**失败的是 `tests/doctor-handoff.test.ts` 的「maa-doctor scenarios fail expected-behavior on a replay through the shared writer…」：`doctor-reconcile-approved` 的正确路径（Codex、Claude）和去掉禁止后的重放（Codex）都是 7/8、挂 `expected-behavior`。根因：这个场景收尾的那次 `doctor.ts check` 期望退出码写死为 0（省略 `exitCode`）；Windows 以外工单 10 的平台检查（`platform`、`windows-required`）是错误行，健康世界的 check 也退出 1，所以收尾 check 退出 1，`expectedInvocations` 缺一条，`expected-behavior` 失败。同一场景授予的最近记录（`latestRecordGrants`）和其余 doctor 场景的退出码（`expectedExitCode`）本来就随平台变，只有这一条漏了；`tests/doctor-scenarios.test.ts` 里这个场景的 CLI 测试又标了「只在 Windows 上跑」，所以 Windows 本机和那个测试都看不出来。与时钟、并发、HOME/TEMP 无关：本机复现时只让 skill 脚本进程和测试进程里求值场景的那一刻看到 `process.platform` 为 `linux`（本地预加载脚本，不入库），单跑这个测试就得到和 CI 一字不差的三条失败；同一预加载下逐条看调用，`check` 1、`repair` 0（`complete`）、收尾 `check` 1。修法：`eval/maa-doctor/scenarios.ts` 收尾 check 的退出码取 `expectedExitCode('healthy', 'unset', true)`，只在它不是 0 时写出 `exitCode`，所以 Windows 上整份场景定义逐字节不变（`doctor-reconcile-approved` 定义 JSON 的 SHA-256 改前改后都是 `ab5e62a4…`，整个目录的定义也不变），场景指纹和载荷指纹不变，不用重跑；禁止调用（写入器 CLI）和其余评分规则都没动。`tests/doctor-scenarios.test.ts` 的那项测试去掉 Windows 限制，退出码改从场景读取，并核对收尾 check 的退出码等于场景授予的最近记录里的 `exitCode`，以后 ubuntu-latest 也跑它。真实评测：真实运行在 Windows 上，收尾 check 退出 0，与场景一致，不会这样失败；只有在 Windows 以外跑真实评测才会同样失败，这次一起修好。只看到了 ubuntu-latest 的日志；windows-latest 那一格是否失败、为什么失败没有日志，未验证（本机 Windows 上改动前后这个测试都通过）。
+
+| 命令 | 结果 |
+| --- | --- |
+| 模拟 Linux（预加载）下 `node tests/doctor-handoff.test.ts`，改动前 | 失败，三条与 CI 相同 |
+| 模拟 Linux 下 `node tests/doctor-scenarios.test.ts`，只改测试、场景未改 | 先红：收尾 check 的期望 0 不等于授予的 `exitCode` 1；其余 doctor 场景经 CLI 的测试在模拟 Linux 下通过（与 CI 一致） |
+| `npm run typecheck` | 退出 0 |
+| 模拟 Linux 下 `node tests/doctor-scenarios.test.ts`、`node tests/doctor-handoff.test.ts`，改动后 | 23 项、7 项通过 |
+| `node --test tests/doctor-handoff.test.ts`，连续单独三次 | 每次 7 项通过 |
+| `node --test tests/doctor-repair.test.ts` | 3 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 23 项通过（那项测试在 Windows 上照常运行） |
+| `node --test tests/base-apply-scenarios.test.ts` | 2 项通过 |
+| `node --test tests/daily-evaluation.test.ts` | 10 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 11 项通过（文档改完后跑） |
+| `node scripts/privacy.ts` | `ok: true`、无发现 |
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
