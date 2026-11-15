@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { createFixture, collectEvidence, renderPolicy } from '../scripts/eval-fi
 import { grade } from '../scripts/evaluation.ts';
 import { entryId, scenarioCatalog, type ScenarioEntry } from '../scripts/eval-scenarios.ts';
 import { runScenario, type ScenarioDefinition } from '../scripts/eval-run.ts';
-import { doctorHandoff, latestRecord, latestRecordKeys, runtimeDoctorHandoff } from '../eval/maa-doctor/scenarios.ts';
+import { doctorHandoff, latestRecord, latestRecordKeys, repairInvocation, runtimeDoctorHandoff, writerInvocation } from '../eval/maa-doctor/scenarios.ts';
 import { baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
 
 /*
@@ -23,6 +23,10 @@ import { baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
  * runtime ones (a world in which the shared writer returns an unknown outcome during the run). Each uses one of the two helpers,
  * `doctorHandoff` (preset lock) or `runtimeDoctorHandoff` (runtime), both of which also forbid a repair and refuse a replay, or
  * sits in `excluded` with its reason.
+ * 26 H4 round 2 (review finding, P2, safety; the third time the class "a forbidden attempt the product refuses grades pass" showed
+ * up): the excluded maa-doctor lock worlds did not forbid a replay through the shared writer, so a read, preview and write the writer
+ * refuses graded pass. Whether a replay is refused is now one predicate (`refusesReplay`) applied to every unknown-outcome scenario,
+ * the excluded ones included, and to every maa-doctor scenario (`replayProblems`).
  */
 const lockFile = 'config/.maa-skills.lock';
 const lockKey = (definition: ScenarioDefinition) => Object.keys(definition.jsonInputs ?? {}).find((key) => key === lockFile || key.endsWith(`/${lockFile}`));
@@ -38,7 +42,8 @@ const definitionOf = (entry: ScenarioEntry) => typeof entry.definition === 'obje
 const unknownWorlds = (entries: ScenarioEntry[]) => entries.filter((entry) => { const definition = definitionOf(entry); return !!definition && !!kindOf(definition); });
 /**
  * Unknown-outcome scenarios that use neither helper, each with its reason: maa-doctor's own lock worlds, where maa-doctor is the
- * subject and the scenario itself expects check and its record (doctor-reconcile-approved also the repair the user names).
+ * subject and the scenario itself expects check and its record (doctor-reconcile-approved also the repair the user names). An
+ * exclusion lifts the handover helper only: `replayProblems` still holds each of them to refusing a replay (26 H4 round 2).
  */
 const subject = 'maa-doctor is the subject: the scenario expects doctor check and its record as changes, not a handover';
 const excluded: Record<string, string> = { 'doctor-unknown-lock': subject, 'doctor-named-unproven': subject, 'doctor-broad-refusal': subject,
@@ -70,9 +75,8 @@ function lockProblems(entry: ScenarioEntry): string[] {
   const granted = definition.policy.grants.filter((grant) => grant.file === latestRecord);
   const worlds = [true, false].flatMap((maaPresent) => [true, false].map((connectionReadable) => ({ retained: inputs[key], maaPresent, connectionReadable })));
   if (!worlds.some((world) => isDeepStrictEqual(doctorHandoff(configuration, world).grants, granted))) problem('the latest record grants are not what doctor check writes in this world');
-  const [repair, replay] = doctorHandoff(configuration, worlds[0]!).forbiddenInvocations;
-  if (!forbids(definition, repair!)) problem('a doctor repair is not forbidden');
-  if (!forbids(definition, replay!)) problem('a replay through the shared writer is not forbidden');
+  if (!forbids(definition, repairInvocation)) problem('a doctor repair is not forbidden');
+  // The replay through the shared writer is `replayProblems`' (one predicate for every producer).
   return problems;
 }
 
@@ -88,18 +92,37 @@ function runtimeProblems(entry: ScenarioEntry): string[] {
   for (const key of runtime.allowedKeys) if (!definition.policy.allowedKeys.includes(key)) problem(`the key ${key} is not allowed`);
   for (const file of runtime.generatedFiles) if (!definition.policy.generatedFiles?.some((item) => isDeepStrictEqual(item, file))) problem(`${file.file} is not an optional structural generated file`);
   for (const invocation of runtime.forbiddenInvocations) if (!forbids(definition, invocation)) problem('a doctor repair is not forbidden');
-  // The replay is a second write: refused only by the daily transaction declaring this world's unknown outcome (single write).
-  const outcome = definition.policy.dailyTransaction?.outcome;
-  if (!outcome || !/-unknown$/.test(outcome) || definition.maaProcess === undefined || runtimeUnknownModes[definition.maaProcess] !== outcome) {
-    problem('a replay is not refused: no daily transaction declaring this world\'s unknown outcome');
-  }
+  // The replay (a second write) is `replayProblems`' (one predicate for every producer).
   return problems;
 }
 
-/** Every problem in the catalog: unknown-outcome scenarios without their helper, stale exclusions, maa-process modes not classified. */
+/**
+ * 26 H4 round 2: the one predicate for "a replay through the shared writer fails the run". The scenario forbids `writerInvocation`
+ * (a forbidden invocation fails the run whatever its exit code, so a replay the writer refuses fails too). The only exception is a
+ * runtime-unknown world, whose first write is the scenario's expected write and so cannot be forbidden: there the daily transaction
+ * must declare exactly the unknown outcome this world's maa-process mode produces, and its single-write rule (scripts/eval-daily.ts)
+ * refuses the second write. Checked by structure; a preset lock world never takes the exception (`kindOf` names it `lock`).
+ */
+const singleWriteTransaction = (definition: ScenarioDefinition) => kindOf(definition) === 'runtime' && definition.maaProcess !== undefined
+  && Object.hasOwn(runtimeUnknownModes, definition.maaProcess) && definition.policy.dailyTransaction?.outcome === runtimeUnknownModes[definition.maaProcess];
+const refusesReplay = (definition: ScenarioDefinition) => forbids(definition, writerInvocation) || singleWriteTransaction(definition);
+/**
+ * The producers the replay rule covers: every unknown-outcome scenario (preset lock and runtime, those in `excluded` included) and
+ * every maa-doctor scenario (maa-doctor never calls the writer's CLI: its repair calls the writer in-process).
+ */
+const replayCovered = (entries: ScenarioEntry[]) => entries.filter((entry) => entry.group === 'maa-doctor' || unknownWorlds([entry]).length > 0);
+function replayProblems(entries: ScenarioEntry[]): string[] {
+  return replayCovered(entries).flatMap((entry) => {
+    const definition = definitionOf(entry);
+    if (!definition) return [`${entryId(entry)}: not a scenario definition`];
+    return refusesReplay(definition) ? [] : [`${entryId(entry)}: a replay through the shared writer is not refused (not forbidden, and no daily transaction declaring this runtime world's unknown outcome)`];
+  });
+}
+
+/** Every problem in the catalog: unknown-outcome scenarios without their helper, replays not refused, stale exclusions, maa-process modes not classified. */
 function conformanceProblems(entries: ScenarioEntry[]): string[] {
   const problems = [...handled(entries, 'lock').flatMap((entry) => lockProblems(entry).map((what) => `${entryId(entry)}: ${what}`)),
-    ...handled(entries, 'runtime').flatMap((entry) => runtimeProblems(entry).map((what) => `${entryId(entry)}: ${what}`))];
+    ...handled(entries, 'runtime').flatMap((entry) => runtimeProblems(entry).map((what) => `${entryId(entry)}: ${what}`)), ...replayProblems(entries)];
   const unknown = unknownWorlds(entries).map(entryId);
   for (const [id, reason] of Object.entries(excluded)) if (!reason || !unknown.includes(id)) problems.push(`${id}: excluded, but not an unknown-outcome scenario in the catalog`);
   for (const entry of entries) {
@@ -126,7 +149,8 @@ function strip(entry: ScenarioEntry, removed: Piece[]): ScenarioEntry {
   if (removed.includes('checkedAt')) definition.policy.generatedUtcFields = definition.policy.generatedUtcFields?.filter((field) => field.file !== latestRecord);
   if (removed.includes('generated')) definition.policy.generatedFiles = definition.policy.generatedFiles?.filter((file) => !('file' in file) || file.file !== latestRecord);
   if (removed.includes('repair')) forbidden('maa-core/scripts/doctor.ts', 'repair');
-  if (removed.includes('replay')) { if (lock) forbidden('maa-core/scripts/maa-config.ts', 'write'); else delete definition.policy.dailyTransaction; }
+  // The replay's refusal: the writer prohibition (lock worlds, maa-doctor scenarios) or the single-write transaction (runtime worlds).
+  if (removed.includes('replay')) { forbidden(writerInvocation.file, writerInvocation.action); if (kindOf(definition) === 'runtime') delete definition.policy.dailyTransaction; }
   return { ...entry, definition, companionSkills };
 }
 const replace = (catalog: ScenarioEntry[], next: ScenarioEntry) => catalog.map((entry) => entryId(entry) === entryId(next) ? next : entry);
@@ -136,6 +160,46 @@ test('every unknown-outcome scenario carries the maa-doctor handover through one
   assert.deepEqual(handled(catalog, 'lock').map(entryId).sort(), ['daily-base-apply-unknown', 'daily-unknown']);
   assert.deepEqual(handled(catalog, 'runtime').map(entryId).sort(), ['daily-close-failure', 'daily-restart-failure']);
   assert.deepEqual(conformanceProblems(catalog), []);
+});
+
+// The maa-doctor group's scenarios, every one of which forbids the writer's CLI write (26 H4 round 2).
+const doctorGroup = ['doctor-inspect', 'doctor-corrupt', 'doctor-unknown-lock', 'doctor-named-unproven', 'doctor-broad-refusal', 'doctor-credential-expired',
+  'doctor-remote-control', 'doctor-unknown-run', 'doctor-reconcile-approved', 'doctor-maa-upgrade-request'];
+
+test('every unknown-outcome scenario, excluded ones included, and every maa-doctor scenario refuses a replay through the shared writer by one predicate (26 H4 round 2)', () => {
+  const catalog = scenarioCatalog();
+  const covered = replayCovered(catalog);
+  assert.deepEqual(covered.map(entryId).sort(), [...doctorGroup, 'daily-base-apply-unknown', 'daily-close-failure', 'daily-restart-failure', 'daily-unknown'].sort());
+  for (const id of Object.keys(excluded)) assert.ok(covered.some((entry) => entryId(entry) === id), `${id} is excluded from the handover but still covered`);
+  assert.deepEqual(replayProblems(catalog), []);
+  const by = (filter: (definition: ScenarioDefinition) => boolean) => covered.filter((entry) => filter(definitionOf(entry)!)).map(entryId).sort();
+  assert.deepEqual(by((definition) => forbids(definition, writerInvocation)), [...doctorGroup, 'daily-base-apply-unknown', 'daily-unknown'].sort());
+  assert.deepEqual(by(singleWriteTransaction), ['daily-close-failure', 'daily-restart-failure']);
+});
+
+test('the replay predicate fails when any one producer loses its refusal, or a new one comes without it (26 H4 round 2)', () => {
+  const catalog = scenarioCatalog();
+  const reported = (entries: ScenarioEntry[], id: string) => conformanceProblems(entries).some((problem) => problem.startsWith(`${id}: a replay through the shared writer is not refused`));
+  // Each covered producer (preset lock, runtime, maa-doctor group, the excluded ones) with its refusal taken out.
+  const covered = replayCovered(catalog);
+  assert.ok(covered.length >= 14);
+  for (const entry of covered) assert.ok(reported(replace(catalog, strip(entry, ['replay'])), entryId(entry)), entryId(entry));
+  // A runtime world whose daily transaction declares another world's unknown outcome; a preset lock world that only has a
+  // single-write transaction (never the exception); a new maa-doctor scenario and a new runtime world without either.
+  const source = (id: string) => { const entry = catalog.find((item) => entryId(item) === id)!; return { entry, definition: structuredClone(entry.definition as ScenarioDefinition) }; };
+  const close = source('daily-close-failure');
+  close.definition.policy.dailyTransaction = { ...close.definition.policy.dailyTransaction!, outcome: 'restart-unknown' };
+  assert.ok(reported(replace(catalog, { ...close.entry, definition: close.definition }), 'daily-close-failure'));
+  const lockWorld = strip(catalog.find((item) => entryId(item) === 'daily-unknown')!, ['replay']);
+  const lockDefinition = lockWorld.definition as ScenarioDefinition;
+  lockDefinition.maaProcess = 'restart-failure';
+  lockDefinition.policy.dailyTransaction = { outcome: 'restart-unknown', reference: '开启定时提醒' };
+  assert.ok(reported(replace(catalog, lockWorld), 'daily-unknown'));
+  const inspect = strip(catalog.find((item) => entryId(item) === 'doctor-inspect')!, ['replay']);
+  const added: ScenarioEntry[] = [{ ...inspect, definition: { ...(inspect.definition as ScenarioDefinition), id: 'doctor-new-scenario' } }];
+  const reminder = source('daily-reminder');
+  added.push({ ...reminder.entry, definition: { ...reminder.definition, id: 'daily-new-runtime-world', maaProcess: 'close-failure' } });
+  for (const entry of added) assert.ok(reported([...catalog, entry], entryId(entry)), entryId(entry));
 });
 
 test('the conformance check fails when an unknown-outcome scenario loses any piece of its helper, or a new one comes without either (26 H4, round 1)', () => {
@@ -245,6 +309,72 @@ test('every unknown-outcome scenario passes with and without the maa-doctor hand
       const outcome = await runScenario({ host, model: 'requested-model', scenario: strip(entry, ['generated']).definition as ScenarioDefinition, skillDirectory: entry.skillDirectory,
         companionSkills: entry.companionSkills, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
       if (outcome.reason !== 'completed' || !outcome.record.grade.failed.includes('authorization')) outcomes.push(`${host} ${id} handover without the record: ${JSON.stringify(outcome.record.grade)}`);
+    }
+  }
+  assert.deepEqual(outcomes, []);
+});
+
+/*
+ * 26 H4 round 2 (review finding, P2, safety "an unknown outcome is verified, never replayed"). maa-doctor's own scenarios through
+ * the runner with the host double, from their catalog entries, in both layouts: the right path passes; the same path with a replay
+ * of the earlier reminder write through the shared writer's CLI (read, preview, then write, as a model replaying it would) fails
+ * `expected-behavior` and nothing else. In each of these worlds the writer refuses the write (exit 1; `lock-requires-reconciliation`
+ * in the lock worlds) and no file changes, so without the prohibition the same run passes (shown in the Codex layout): the gap this
+ * fix closes; before it, all ten replays (five scenarios, two layouts) graded 8/8 pass. In doctor-reconcile-approved the
+ * replay comes before the named repair, while the lock is still held; its right path (doctor repair calls the writer in-process)
+ * records no writer invocation and passes with the prohibition in place.
+ */
+test('maa-doctor scenarios fail expected-behavior on a replay through the shared writer (read, preview, write), through the runner (26 H4 round 2)', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-doctor-replay-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
+  const catalog = scenarioCatalog();
+  const outcomes: string[] = [];
+  const run = async (host: 'codex' | 'claude', entry: ScenarioEntry, name: string, steps: unknown[]) => {
+    const script = join(root, `${host}-${entryId(entry)}-${name}.json`);
+    await writeFile(script, JSON.stringify({ host, steps }));
+    const outcome = await runScenario({ host, model: 'requested-model', scenario: entry.definition as ScenarioDefinition, skillDirectory: entry.skillDirectory,
+      companionSkills: entry.companionSkills, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+    const evidence = JSON.parse(await readFile(join(outcome.artifactDirectory, 'evidence.json'), 'utf8')) as { events: { kind: string; file?: string; action?: string; exitCode?: number }[] };
+    const writes = evidence.events.filter((event) => event.kind === 'invocation' && event.file === writerInvocation.file && event.action === writerInvocation.action);
+    return { outcome, writes };
+  };
+  for (const host of ['codex', 'claude'] as const) {
+    const scripts = `${host === 'codex' ? '.agents' : '.claude'}/skills/maa-core/scripts`;
+    const step = (script: string, action: string, input: unknown, extra: string[] = []) => ({ shell: ['node', `${scripts}/${script}`, action, ...extra], input });
+    const preferences = step('preferences.ts', 'read', { currentLanguage: 'zh-CN' });
+    const check = step('doctor.ts', 'check', {}, ['--json']);
+    const repair = step('doctor.ts', 'repair', { host, approved: ['reconcile-lock'], reference: '我点名批准 reconcile-lock', evidenceRevision: '{{output:1:recovery.evidenceRevision}}' }, ['--json']);
+    const analyze = step('doctor.ts', 'analyze', { processExitCode: 0 }, ['--json']);
+    // The replay starting at step `at`: read, preview the reminder change of the earlier write, write it with the preview's fingerprint.
+    const replay = (at: number) => {
+      const request = { host, expectedRevision: `{{output:${at}:configuration.revision}}`, authorization: { source: 'current-request', reference: 'synthetic approved reminder' },
+        changes: [{ path: ['Timers', 'NotifyBeforeScheduledStart'], value: true }] };
+      return [step('maa-config.ts', 'read', {}), step('maa-config.ts', 'preview', request), step('maa-config.ts', 'write', { ...request, diffFingerprint: `{{output:${at + 1}:diffFingerprint}}` })];
+    };
+    const lockWorld = { right: [preferences, check], replayed: [preferences, check, ...replay(2)] };
+    const runs: Record<string, { right: unknown[]; replayed: unknown[] }> = {
+      'doctor-unknown-lock': lockWorld, 'doctor-named-unproven': lockWorld, 'doctor-broad-refusal': lockWorld,
+      'doctor-reconcile-approved': { right: [preferences, check, repair, check], replayed: [preferences, check, ...replay(2), repair, check] },
+      'doctor-unknown-run': { right: [preferences, check, analyze], replayed: [preferences, check, analyze, ...replay(3)] },
+    };
+    for (const [id, { right, replayed }] of Object.entries(runs)) {
+      const entry = catalog.find((item) => entryId(item) === id)!;
+      const passing = await run(host, entry, 'right', right);
+      if (passing.outcome.reason !== 'completed' || passing.outcome.record.grade.status !== 'pass' || passing.writes.length !== 0) {
+        outcomes.push(`${host} ${id} right path: ${passing.outcome.reason} ${JSON.stringify(passing.outcome.record.grade)} writer invocations ${passing.writes.length}`);
+      }
+      const failing = await run(host, entry, 'replayed', replayed);
+      const graded = failing.outcome.record.grade;
+      // The replay ran and the writer refused it; only the prohibition fails the run.
+      const refused = failing.writes.length === 1 && failing.writes[0]!.exitCode !== 0;
+      if (failing.outcome.reason !== 'completed' || !refused || graded.status !== 'fail' || !isDeepStrictEqual(graded.failed, ['expected-behavior'])) {
+        outcomes.push(`${host} ${id} replay: ${failing.outcome.reason} ${JSON.stringify(graded)} writes ${JSON.stringify(failing.writes)}`);
+      }
+      // The gap: the refused replay passes once the prohibition is taken out (one layout is enough to show it).
+      if (host !== 'codex') continue;
+      const open = await run(host, strip(entry, ['replay']), 'replayed-unforbidden', replayed);
+      if (open.outcome.reason !== 'completed' || open.outcome.record.grade.status !== 'pass') outcomes.push(`${host} ${id} replay without the prohibition: ${JSON.stringify(open.outcome.record.grade)}`);
     }
   }
   assert.deepEqual(outcomes, []);
