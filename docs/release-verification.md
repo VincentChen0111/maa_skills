@@ -35,6 +35,7 @@
 | 26 H3：观察器把 CLI 读到的 stdin 字节整段原样存成 `inputBase64`，不解码（第 1 轮审查后改：原来退出时按 UTF-8 解码一次，不是 UTF-8 的字节变成 U+FFFD，评分器能从 CLI 拒绝了的字节里读出请求）；评分器只在 `recordedStdinBytes` 取这些字节，第 1 轮修正之前写的记录只有 `input` 文本，照样读，两个字段都有的记录拒绝；宿主替身新增步骤选项 `windowsPipe`（BOM 开头、CRLF 结尾）；带 BOM 的场景级测试只跑 Codex 布局 | 原来逐块 `String(chunk)` 会在块边界拆开多字节字符，整段按 UTF-8 解码又会改掉不是 UTF-8 的字节；原样保存，评分器和 CLI 才读同一份字节。base64 落盘时脱敏看不见里面的文本，但同类的模型文本（`authorization.reference`）本来就以 base64 出现在待处理记录的字节里，不是新的一类暴露。评测宿主上 Windows PowerShell 5.1 是 Codex 的 shell；评分器两种布局用的是同一个函数，daily 事务测试仍在两种布局上跑 |
 | 26 H3（分诊 R2）：评分器的生成文件新增固定路径一种 `{ file, optional?, fields?, utcFields? }`：只认这一个相对路径；须是新建的 JSON 对象，含给定字段；不写 `optional: true` 就是必需变化。`setup-connection-write` 只授权 `private/setup-environment.json`，`optional: true`，`fields: { language: 'en' }`，`utcFields: ['checkedAt']` | 协调者要求只认确切路径、不放行整个目录。提示词没有点名 `prepare` 和 `recheck`，协调者也要求不为提示词没要的步骤加 `expectedInvocations`，所以这份记录是允许、不是必需。两个写它的动作都写设置里的语言和本次的 `checkedAt`。要求 `complete: true` 就等于要求 `recheck` 必须成功，这超出了提示词 |
 | 26 H3（分诊 R3）：`cross-skill-setup-account-daily` 第 3 步的两句批准与写入规则逐字取自 `daily-diff-approved` | 与已有的单轮预先批准写法保持一致，测试逐字核对两边相同 |
+| 26 H4（框架修复包，设计默认值，2026-11-15）：「把未知结果交给 maa-doctor」的允许只由 `eval/maa-doctor/scenarios.ts` 的 `doctorHandoff` 给出：maa-doctor 装成同伴、`node *doctor.ts *` 命令、最近检查记录逐键读取、doctor check 在这个世界写的记录（`latestRecordGrants` 的字面值，mode `unknown`，目录联接是 maa-core 和 maa-doctor）作授权但不作期望变化、键名，加 `optional: true` 的 `checkedAt`。`daily-unknown` 和 `daily-base-apply-unknown` 都用它；`tests/doctor-handoff.test.ts` 枚举目录里世界含遗留 `config/.maa-skills.lock`、不属于 maa-doctor 组的每个场景，按结构逐项核对，并在每个场景自己的世界里运行装好的 doctor check 评分 | 同类缺陷第二次出现（`daily-unknown` 在 26 H，`daily-base-apply-unknown` 在第三次真实运行），按维护者的通用工作规则建一个所有者、加一致性测试。交接是允许、不是必需：两个提示词都说按流程转给 maa-doctor，不交接的正确做法照样通过；记录照旧是这个世界产生的字面值（28 的规则）。`daily-unknown` 的场景定义改写前后逐字节相同 |
 
 ## 版本一致与标签
 
@@ -729,6 +730,31 @@ B 部分第 1 轮审查发现：评分器要的记录或动作有的晚于「前
 
 **离线说明不了的。**修好的评分器在真实运行的记录上能不能让这 9 个基线场景通过，要等重跑。用修好的评分器离线重评 `batch-S8Yfx1` 的证据（只作诊断，不算门禁）本包没有做。
 
+### 第三次真实运行：最终候选 `24ac409`（2026-11-15）与框架修复包 H4
+
+**跑了什么。**Codex，框架检出等于最终候选 `24ac409`（D4），13 批按下表顺序串行。批次号取自运行日志的汇总；各批的评分是构建者只读核对各批清单（`manifest.json` 里每次运行的 `grade`）得到的，没有重评分，没有运行模型。
+
+| 批次 | 类型 | 载荷 | 运行数 | 机器评分通过 |
+| --- | --- | --- | --- | --- |
+| `batch-UiKaEW` | 「后」 | `24ac409` | 86 | 84（不通过：`daily-alternate-medicine-unknown`、`daily-base-apply-unknown`） |
+| `batch-m9OaJQ` | 基线 | `24ac409` | 31 | 31 |
+| `batch-bw1aKW`、`batch-Pt4Stc`、`batch-hv4coJ`、`batch-6X5btv`、`batch-3Fsmd3`、`batch-QXKK7c`、`batch-nDwLpX`、`batch-BCXA0G`、`batch-Z5dSf0`、`batch-LzXrlz`、`batch-O1o6MO` | 「前」 | 依次 `ddd0ca8`、`1d7fec0`、`370ed68`、`6c582e7`、`ac03ba8`、`788ac13`、`3ff4555`、`fc633d6`、`ac89050`、`6f95f27`、`f1ec4ed` | 135 | 101 |
+| 合计 | | | 252 | 216 |
+
+**结果。**基线 31/31，「后」84/86。pass→fail 只有「后」的这两个，都在 `f1ec4ed` 那一行的比较里（「前」`batch-O1o6MO` 两个都通过）。用量：输入 45.95M token（86.8% 是缓存），输出 0.234M token；维护者实测一轮约占其 Codex 套餐的 2%（2026-11-15）。
+
+**`daily-base-apply-unknown`（H4 修）。**模型照提示词做：`base-apply.ts check`（退出 1，`lock-requires-reconciliation`）之后按流程转给 maa-doctor，运行 `doctor.ts check`（退出 1）。check 写了 `private/doctor-latest.json`，场景没有授权这份记录，所以挂 `authorization`、`allowed-keys`。没有删锁、没有重放、没有改 MAA 配置。这和 26 H 在 `daily-unknown` 修过的缺陷（R8b）同类，是第二次出现，所以按维护者的通用工作规则建一个所有者、加一致性测试（见文首「设计默认值」）：`doctorHandoff` 给出交接的全部允许，两个场景都用它；`tests/doctor-handoff.test.ts` 枚举目录里世界含遗留锁、不属于 maa-doctor 组的每个场景，按结构逐项核对，缺任何一项或新加这类场景而不带允许都会失败，并在每个场景自己的世界里运行装好的 doctor check，记录逐键与授权相同。`daily-base-apply-unknown` 原有的期望不变（不删锁、不重放、不写入），记录只是可选授权。`daily-alternate-medicine-unknown` 不归 H4，由协调者另行分诊。
+
+**离线核对（不启动宿主，不调用模型）。**
+
+- 用新定义重评那次运行（`batch-UiKaEW/run-Ih1Y19` 的临时副本；原来的记录是整份文件的 `$file` 变化，按新定义逐键展开，占位符按候选 `24ac409` 的 maa-core 渲染）：存下的评分原样复现（`authorization`、`allowed-keys`）。新定义下 `allowed-keys` 通过，记录的 `exitCode`、`checks`、`recovery`（含 `evidenceRevision`）、`version` 与辅助函数的字面值逐项相同，只剩 `skills` 不同：新定义把 maa-doctor 装成同伴，doctor 的目录联接多出 maa-doctor 一项，而那次运行没有装它。同一辅助函数按那次运行装的技能（只有 maa-core）给出的字面值下评 8/8 通过。所以不能直接重评通过，原因是定义本身改了世界，不是记录对不上。
+- 改用宿主替身经运行器驱动这个场景（`tests/base-apply-scenarios.test.ts` 新增一项，Codex 和 Claude 两种布局，技能取本检出）：base-apply check 之后再 doctor check 通过，只做 base-apply check 也通过，删锁不通过（`authorization`）。在候选 `24ac409` 的技能上（评测检出的 skills，只读复制进临时夹具）用替身跑同样两条路径（Codex），都是 8/8 通过。按「26 H 改过的场景重新核对」的办法，在它计划里的「前」载荷 `f1ec4ed`（`materializePayload` 做在仓库外的临时目录）上也跑这两条路径，都是 8/8 通过：那个载荷的 doctor 写的记录与字面值相同，所以 `f1ec4ed` 那一行照常比较，「前」交接与否都比得了。
+- `daily-unknown` 的场景定义改写前后逐字节相同（整份定义 JSON 的 SHA-256 都是 `ac5bd5bb…`，同伴都是 maa-core、maa-doctor），场景指纹不变。
+
+**重跑范围。**H4 改了场景定义 `daily-base-apply-unknown`（加同伴、命令、逐键读取的记录和授权；它的场景指纹随之改变，场景定义也计入载荷指纹），没有改评分器、夹具和运行器。「前」「后」、基线三类批次都在含 H4 的下一个最终候选上全部重跑（D4 照旧）。上表 13 批只作诊断证据，不进任何 `compare`。
+
+**三次重跑。**pass→fail 的两个场景按开发约定单独重跑三次。三次重跑结果见下。
+
 ## 许可与第三方检查
 
 工单的验收条目「逐文件检查公开内容与第三方声明」。本包实际核对了：
@@ -948,6 +974,29 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node scripts/eval-preflight.ts`（临时 home，同离线入口的做法） | `status: pass`，两个宿主各三个替身运行都 `pass` |
 | `node scripts/privacy.ts` | `ok: true`、无发现 |
 
+### 26 H4 运行的命令（2026-11-15）
+
+框架修复包 H4（未知结果交给 maa-doctor 的允许由一个辅助函数给出，加一致性测试）在自己的工作树里只跑了下面这些，逐个单独运行；没有启动真实宿主，没有调用模型，没有联网；完整离线入口没有跑（由协调者在冻结的头上跑）。另外只读核对了第三次真实运行 13 批的清单，离线重评和替身驱动见「第三次真实运行」。
+
+先红：`tests/doctor-handoff.test.ts` 在实现之前失败（`doctorHandoff` 不存在，模块加载即失败）。实现之后它的第二项把每个遗留锁世界逐项去掉一部分允许、或整份去掉（即 H4 之前的 `daily-base-apply-unknown`），再加一个不带允许的新遗留锁场景，一致性核对都报出问题；第三项在每个世界里运行装好的 doctor check，去掉允许的策略挂 `authorization`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 退出 0 |
+| `node --test tests/doctor-handoff.test.ts` | 3 项通过（新文件：一致性核对、它的反例、在每个遗留锁世界里运行装好的 doctor check） |
+| `node --test tests/base-apply-scenarios.test.ts` | 2 项通过（新增「daily-base-apply-unknown passes through the runner with and without the maa-doctor hand-over, and fails when the lock is deleted (26 H4)」） |
+| `node --test tests/daily-evaluation.test.ts` | 10 项通过 |
+| `node --test tests/doctor-scenarios.test.ts` | 23 项通过 |
+| `node --test tests/eval-batch.test.ts` | 10 项通过 |
+| `node --test tests/eval-run.test.ts` | 5 项通过 |
+| `node --test tests/evaluation.test.ts` | 14 项通过 |
+| `node --test tests/eval-comparability.test.ts` | 7 项通过（导入闭包测试照样通过：`base-apply-scenarios.ts` 新导入的 `eval/maa-doctor/scenarios.ts` 本来就在闭包里） |
+| `node --test tests/eval-payload.test.ts` | 4 项通过 |
+| `node --test tests/docs-consistency.test.ts` | 11 项通过（文档改完后跑） |
+| `node scripts/eval-selftest.ts`（临时 home，同离线入口的做法） | 7 条规则、25 份样例，`ok: true` |
+| `node scripts/eval-preflight.ts`（临时 home，同离线入口的做法） | `status: pass`，两个宿主各三个替身运行都 `pass` |
+| `node scripts/privacy.ts`、`node scripts/tracker.ts` | `ok: true`、无发现；tracker `errors: []` |
+
 ## 未验证与需要维护者的事项
 
 - 工单的「实施进度」仍是「未开始」：tracker 的规则不允许阻塞项没有全部完成的票记为「进行中」，本分支的基点上 27 是「未开始」、28 是「进行中」（`node scripts/tracker.ts` 报 `unfinished-dependency 27`、`unfinished-dependency 28`）。合并 main、27 和 28 都记为已完成之后再改。2026-11-14 第 1 轮修正时：合并 origin/main 后 27 已是「已完成」，本分支上 28 仍是「进行中」，所以仍不改。B 部分第 1 轮修正时（合并含 30 的 main 之后）：30 已是「已完成」，28 仍是「进行中」，仍不改。
@@ -956,6 +1005,7 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 - 26 H（框架修复包，2026-11-14）留给维护者或真实运行核实的：真实用户在 Codex 沙箱里能否嵌套运行 `codex exec` 做独立审查（认证、沙箱权限）未验证，不能的话默认审查在真实使用里也会落到「审查未完成」，那是产品缺陷，不再是评测产物；真实 Codex 是否照办 `shell_environment_policy`，现在答了一部分（26 H2，协调者 2026-11-14 的诊断，只看变量名）：`codex sandbox` 照办了 `exclude`（`CODEX_HOME` 不在）和 `set` 的 PATH（用的是 TOML 字面字符串写法）；`exec` 是否同样照办、是否还会自己再注入登录目录，以及运行器现在用的基本字符串写法是否同样被接受，要等一批真实运行通过探针并真正跑起来才算核实（探针不通过或报错时整批不开）；Claude 一侧的 `CLAUDE_CONFIG_DIR` 没有排除办法，Claude 的真模型评测恢复之前要解决；H 改了框架，所以「前」「后」、基线三类批次都要在最终候选上全部重跑（见「框架修复包 H 之后的重跑范围」）。
 - 两个默认审查场景（`account-report-default-review`、`base-report-default-review`）依赖载荷包 P 对 Windows 上传审查说明的修复（见 [载荷修复验证](release-payload-verification.md)）：Windows PowerShell 5.1 管道改了说明的字节，审查员替身按设计拒绝。P 的这项修复合入之前，重跑时这两个场景失败是预期的，不是框架缺陷，见「框架修复包 H 之后的重跑范围」。
 - 第二次真实运行（最终候选 `9b3e30e`，216/252）的 10 个最终候选一侧失败：H3 修基线的 9 个、P2 修「后」的 `account-boundary`，修好与否要在下一个最终候选上重跑三类批次才知道，现在未验证；`batch-CBPIps` 里模型在历史载荷上直接改抽卡相关设置（分诊 R6）是未结的安全观察，也靠重跑核实。见「第二次真实运行：最终候选 `9b3e30e`（2026-11-14）与框架修复包 H3」。
+- 第三次真实运行（最终候选 `24ac409`，216/252，基线 31/31，「后」84/86）的两个 pass→fail：H4 修 `daily-base-apply-unknown` 的场景定义，`daily-alternate-medicine-unknown` 不归 H4。两者在真实模型上是否通过，要在含修复的下一个最终候选上重跑三类批次才知道，现在未验证；离线只证明了交接与不交接两条路径在替身驱动下都通过。见「第三次真实运行：最终候选 `24ac409`（2026-11-15）与框架修复包 H4」。
 - **用这个办法清不掉的发布门禁（需要维护者）**：33 对比较（每个宿主）。其中 32 对是当前评分器下「前」载荷不能通过的，记「未验证：当前评分器要求 <契约>，「前」载荷早于它」；第 33 对是 05 的 daily-unknown（ddd0ca8，payload-skill-missing）：26 H 让它要 maa-doctor 同伴，`ddd0ca8` 早于 06，入口拒绝。明细和复现见「当前评分器下「前」载荷能不能通过」和「26 H 改过的场景重新核对」。另有三对是有条件的未验证：`daily-unknown` 在 `788ac13`、`3ff4555`、`fc633d6` 上照常比较，但「前」那次运行交给 doctor 核对（`doctor.ts check`）时，只因这些载荷的 doctor 写的是旧格式记录而挂 `authorization`，那一对记「未验证：「前」交给 doctor 核对，它写的记录早于当前评分契约」，同样交维护者，不当作「分数不降」的依据（这三对是 15、24、07 受影响的 `daily-unknown`，看 `compare` 时按「26 H 改过的场景重新核对」末段的办法判断）。33 对涉及 05 七个 daily 场景里四个写入场景和 `daily-unknown` 的「同版本前后」，06、15、24、07 受影响 daily 写入场景的前后不降，24、07 受影响 doctor 五个的前后不降（24 在 doctor 上的回归因此看不到），27 新增的 `daily-stone-approved`、`daily-expiring-approved` 的「同版本前后」，以及 30 受影响的六个写入场景。它们在最终候选上的基线和人工核实照常做；能否用别的办法补比较、或凭基线发布，由维护者决定。「Codex 评测计划」的「问题」里说的限制（入口只能装检出自己的 `skills/`）已由 B 部分的载荷参数解决，见「做载荷，在载荷上运行」和「本机试运行」；Codex 一侧等维护者在本机按计划运行。Claude 一侧暂缓。
 - 版本号改为 `0.1.0`、更新记录和发布说明改成已发布、打标签、发布：未做，排在模型门禁和维护者决定之后。
 - v0.1.0 能否只凭 Codex 的结果发布：由维护者决定。

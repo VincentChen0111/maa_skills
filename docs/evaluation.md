@@ -188,7 +188,7 @@ bare 模式不读取 OAuth 登录，所以去掉 `--bare`，两种认证方式�
 node scripts/eval-run.ts codex <fixed-model> eval/custom-case.json codex skills/maa-example
 ```
 
-待测目录复制到两个临时原生 skill 目录中，源目录保持不变。此复制仅构造评测样例，不是面向用户的安装器。源目录须含 `SKILL.md`，文件树含符号链接则拒绝。companion 按名字装在待测 skill 旁边；跨 skill 场景的 `skills` 列出的 skill 各按自己的名字装入，提示词列出全部入口。单个场景要的额外 companion 用 `companions` 声明（2026-11-14，26 H：`daily-unknown` 把未知结果交给 maa-doctor 核对，装上 maa-doctor），与组的 companion 一样装入，提示词仍只点名待测 skill。场景按实际工具设置允许键、禁止键、精确写入授权、确认过的下载地址及预期动作。
+待测目录复制到两个临时原生 skill 目录中，源目录保持不变。此复制仅构造评测样例，不是面向用户的安装器。源目录须含 `SKILL.md`，文件树含符号链接则拒绝。companion 按名字装在待测 skill 旁边；跨 skill 场景的 `skills` 列出的 skill 各按自己的名字装入，提示词列出全部入口。单个场景要的额外 companion 用 `companions` 声明（2026-11-14，26 H：`daily-unknown` 把未知结果交给 maa-doctor 核对，装上 maa-doctor），与组的 companion 一样装入，提示词仍只点名待测 skill。2026-11-15（26 H4）起，世界里有遗留写入锁、把未知结果交给 maa-doctor 的场景（maa-doctor 组以外）都经 `eval/maa-doctor/scenarios.ts` 的 `doctorHandoff` 取得这份允许：同伴、doctor 命令、逐键读取的最近检查记录、这个世界里 doctor check 写的记录（字面值，可选授权）和可选的 `checkedAt`；`tests/doctor-handoff.test.ts` 枚举目录里的这类场景逐个核对。场景按实际工具设置允许键、禁止键、精确写入授权、确认过的下载地址及预期动作。
 
 自定义场景可用 `jsonInputs` 准备相对临时工作区的 JSON 文件；值中的 `{{private}}`、`{{workspace}}` 会渲染为本次临时目录。策略里以 `{{workspace}}` 开头的字符串在评分前渲染成工作区内的真实路径；恰为 `{{maa-core-version}}` 的字符串在宿主启动前渲染成本次工作区装入的 maa-core 的版本号（doctor 场景用它核对 doctor 报告的已装版本），恰为 `{{maa-record-version}}` 的字符串渲染成这份 maa-core 随包 MAA 核实记录（`references/verified-versions.json`）的 `recordVersion` 整数（doctor 场景用它核对版本检查的证据），读不到时保持原样、对应授权无法匹配。`jsonFiles` 指定要按字段观察的文件，其余文件按完整字节比较。越界的输入路径会被拒绝。`commands` 单独声明 Claude 允许执行的命令模式，不等同于 `expectedCalls` 的验收动作；这些输入和权限也纳入场景摘要。重放所需的实际评分策略与合成秘密保存在本机 `scenario.json`，不得直接发布。
 

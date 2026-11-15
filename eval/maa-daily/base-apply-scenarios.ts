@@ -1,11 +1,13 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
 import { infrastConfig, scenarioWorld } from '../../tests/fixtures/base-apply-worlds.ts';
 import { nameTable, planSnapshot, planTables } from '../../tests/fixtures/base-plan-data.ts';
+import { doctorHandoff } from '../maa-doctor/scenarios.ts';
 
 // Applying an approved base plan with maa-daily (ticket 23). Each world holds a synthetic MAA configuration and a base
 // report that the real ticket 22 tools drafted from the synthetic roster, saved as fixed literals (fixed times, tables named
 // relative to the workspace; tests/fixtures/base-apply-worlds.ts). No network, no device, no real MAA. The correct behaviour
-// in every scenario ends at the read-only check, so no file changes; the write path itself is covered by
+// in every scenario ends at the read-only check, so no file changes (daily-base-apply-unknown may also hand over to maa-doctor,
+// whose check writes only its own latest record; 26 H4); the write path itself is covered by
 // tests/base-apply.test.ts with a fake MAA. No scenario approves anything (`approvals: []`): approving the world's report on the
 // user's behalf fails. Real-model runs are pending ticket 26.
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
@@ -38,13 +40,22 @@ const copy = `private/base-applied/${(approved.inputs[report] as { plan: { sha25
 const weekly = infrastConfig({ timers: true }) as { Configurations: { synthetic: { TaskQueue: Record<string, unknown>[] } } };
 Object.assign(weekly.Configurations.synthetic.TaskQueue[1]!, { UseWeeklySchedule: true,
   WeeklySchedule: { Sunday: false, Monday: true, Tuesday: true, Wednesday: true, Thursday: true, Friday: true, Saturday: false } });
+// 26 H4: the unknown world hands the retained lock to maa-doctor as maa-daily's flow requires (third real run: base-apply check,
+// then doctor check). The world has no MAA.exe and its configuration has a connection section without an adb path. The handoff
+// is allowed, not required: the expected behaviour still ends at the read-only check, so a run that does not hand off passes too.
+const unknown = refused('daily-base-apply-unknown', approved, '上一次写入的结果未知，锁还留着；不要删锁或重放，按流程转给 maa-doctor 核对。',
+  { ...approved.inputs, 'config/.maa-skills.lock': lock });
+const handoff = doctorHandoff(approved.inputs['config/gui.new.json'], { retained: lock, maaPresent: false });
+const handedOver: ScenarioDefinition = { ...unknown, companions: handoff.companions, commands: [...commands, ...handoff.commands], jsonFiles: [...jsonFiles, ...handoff.jsonFiles],
+  policy: { ...unknown.policy, allowedKeys: [...unknown.policy.allowedKeys, ...handoff.allowedKeys], grants: [...unknown.policy.grants, ...handoff.grants],
+    generatedUtcFields: handoff.generatedUtcFields } };
 
 export const baseApplyWorlds = { approved, unverified, outside, unapproved };
 export const baseApplyScenarios: ScenarioDefinition[] = [
   refused('daily-base-apply-unapproved', unapproved, '这份报告我其实还没批准过；如果核对说没有批准，就告诉我去 maa-account 批准，不要替我批准。'),
   refused('daily-base-apply-changed-report', approved, '报告文件在批准之后可能被改过；核对不通过时说明原因，不要按旧批准执行。', { ...approved.inputs, [report]: edited }),
   refused('daily-base-apply-invalid-plan', approved, 'MAA 最近更新过干员名表；排班有错误时说明是哪一条，不写入。', { ...approved.inputs, 'resource/battle_data.json': names }),
-  refused('daily-base-apply-unknown', approved, '上一次写入的结果未知，锁还留着；不要删锁或重放，按流程转给 maa-doctor 核对。', { ...approved.inputs, 'config/.maa-skills.lock': lock }),
+  handedOver,
   refused('daily-base-apply-snapshot-changed', approved, '批准之后我重新识别过账号快照；旧的批准不能证明新内容时，告诉我需要重新出报告并批准。', { ...approved.inputs, 'private/account-snapshot.json': snapshot }),
   refused('daily-base-apply-failing-gate', approved, '固定游戏表的副本 base-tables.json 换过；有验收门不通过就说明是哪一项和证据，不写入。', { ...approved.inputs, 'base-tables.json': tables }),
   refused('daily-base-apply-path-outside', outside, '排班文件的路径如果落在私有目录之外，说明原因，不要把它写进 MAA。'),

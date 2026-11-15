@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
+import { runScenario, type ScenarioDefinition } from '../scripts/eval-run.ts';
+import { entryId, scenarioCatalog } from '../scripts/eval-scenarios.ts';
 import { baseApplyScenarios, baseApplyWorlds } from '../eval/maa-daily/base-apply-scenarios.ts';
 
 // Offline seam validation for the ticket 23 scenarios: the installed product CLIs run in the evaluation fixture the way
@@ -64,5 +68,33 @@ test('base apply scenarios run the installed CLIs offline: every refusal is name
     assert.equal(grade(policy, evidence).status, 'pass', `${scenario.id}: ${JSON.stringify(grade(policy, evidence))}`);
     assert.equal(grade(policy, { ...evidence, events: evidence.events.filter(event => event.file !== 'maa-core/scripts/base-apply.ts') }).status, 'fail',
       `${scenario.id}: without the real check invocation the scenario does not pass`);
+  }
+});
+
+// 26 H4: the third real run on 24ac409 did what daily-base-apply-unknown's prompt asks (base-apply check, then doctor check through
+// the hand-over) and failed authorization on doctor's latest record. Driven through the runner with the host double, from the
+// catalog entry (maa-doctor installed beside maa-daily): the hand-over and the plain check both pass; deleting the lock does not.
+test('daily-base-apply-unknown passes through the runner with and without the maa-doctor hand-over, and fails when the lock is deleted (26 H4)', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-base-apply-handoff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const entry = scenarioCatalog().find((item) => entryId(item) === 'daily-base-apply-unknown')!;
+  assert.deepEqual(Object.keys(entry.companionSkills).sort(), ['maa-core', 'maa-doctor']);
+  const double = fileURLToPath(new URL('../eval/host-double.mjs', import.meta.url));
+  const reference = baseApplyWorlds.approved.reference;
+  for (const host of ['codex', 'claude'] as const) {
+    const scripts = `${host === 'codex' ? '.agents' : '.claude'}/skills/maa-core/scripts`;
+    const checked = [{ shell: ['node', `${scripts}/preferences.ts`, 'read'], input: { currentLanguage: 'zh-CN' } }, { shell: ['node', `${scripts}/maa-config.ts`, 'read'], input: {} },
+      { shell: ['node', `${scripts}/base-apply.ts`, 'check'], input: { reference, profile: 0, task: 1 } }];
+    const runs = { 'hand-over': [...checked, { shell: ['node', `${scripts}/doctor.ts`, 'check', '--json'], input: {} }], 'check-only': checked,
+      'lock-deleted': [...checked, { shell: ['node', '-e', 'require("fs").unlinkSync("config/.maa-skills.lock")'] }] };
+    for (const [name, steps] of Object.entries(runs)) {
+      const script = join(root, `${host}-${name}.json`);
+      await writeFile(script, JSON.stringify({ host, steps }));
+      const outcome = await runScenario({ host, model: 'requested-model', scenario: entry.definition as ScenarioDefinition, skillDirectory: entry.skillDirectory,
+        companionSkills: entry.companionSkills, executable: process.execPath, executableArgs: [double, script], auth: { mode: 'host-double' }, artifactParent: join(root, 'records') });
+      assert.equal(outcome.reason, 'completed', `${host} ${name}`);
+      if (name === 'lock-deleted') assert.ok(outcome.record.grade.failed.includes('authorization'), `${host} ${name}: ${JSON.stringify(outcome.record.grade)}`);
+      else assert.equal(outcome.record.grade.status, 'pass', `${host} ${name}: ${JSON.stringify(outcome.record.grade)}`);
+    }
   }
 });

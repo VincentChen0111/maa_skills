@@ -135,6 +135,27 @@ export function latestRecordGrants(configuration: unknown, world: { mode: Mode; 
 /** The keys `doctor check` writes into its latest record, `checkedAt` (a generated UTC time) included. */
 export const latestRecordKeys = ['$exists', 'exitCode', 'checks', 'recovery', 'version', 'skills', 'checkedAt'];
 
+/**
+ * 26 H4: the one owner of what a scenario outside the maa-doctor group allows when its world holds the retained lock of an unknown
+ * earlier write and its user hands that outcome to maa-doctor, as maa-daily's flow requires (daily-unknown, 26 H decision D3 option
+ * a; daily-base-apply-unknown, third real run). maa-doctor is installed beside the subject (a subject scenario installs the subject
+ * as `subject`, so doctor's links are maa-core and maa-doctor), the doctor command is allowed, the latest record is read key by key,
+ * and the record doctor check writes in this world is granted with literal values (`latestRecordGrants`, mode `unknown`) plus an
+ * optional `checkedAt`. Running check is allowed, never required: nothing here is an expected change or invocation, so a run that
+ * does not hand off passes the same way. `configuration` is the world's `config/gui.new.json`, `retained` its lock.
+ * tests/doctor-handoff.test.ts holds every lock world in the catalog to this allowance and runs the installed doctor against it.
+ */
+export function doctorHandoff(configuration: unknown, world: { retained: unknown; maaPresent?: boolean; connectionReadable?: boolean }) {
+  return {
+    companions: ['maa-doctor'],
+    commands: ['node *doctor.ts *'],
+    jsonFiles: [latestRecord],
+    grants: latestRecordGrants(configuration, { mode: 'unknown', ...world, links: ['maa-core', 'maa-doctor'] }),
+    allowedKeys: latestRecordKeys,
+    generatedUtcFields: [{ file: latestRecord, key: 'checkedAt', optional: true }],
+  };
+}
+
 function scenario(id: string, mode: Mode, repair: 'none' | 'named' | 'broad' = 'none', skland: 'unset' | 'expired' = 'unset', ask: 'none' | 'upgrade' = 'none'): ScenarioDefinition {
   const configuration = mode === 'corrupt' ? {} : mode === 'remote' ? remote : sample;
   const retained = mode === 'unknown' ? retainedLock : null;
