@@ -22,15 +22,27 @@ export class TrainingCheckError extends Error {
 type PlannableResult = TrainingResult & { operator: NonNullable<TrainingResult['operator']>; role: string; skillName: string; currentRank: number; targetRank: number };
 
 /**
- * Ticket 32 FO2-1: the one stop for prepare and refresh. Facts that leave the plan itself unknowable refuse it with every reason
- * (a cost tool's conflict behind `targets:incomplete` included, FO1-2); facts only the start needs are not refusals here.
+ * Ticket 32 FO3 (recurrence rule: the stop-reason class of FO1-2, FO2-1, FO3-2 and FO3-3): the one decision on where a training
+ * result stops. prepare and refresh act on it; apply reads what refresh saved (`startIssues`). Conformance: `32 FO3 conformance`.
+ * - `target-changed` (refresh only): the query names another operator, skill or target, or the snapshot shows a completed rank
+ *   other than the plan's (one at or past the target included). Nothing is saved; an account update or the user settles it.
+ * - `unknowable`: the plan itself cannot be determined (rank unknown or conflicting, identity, invalid input, no assistant for
+ *   the first tier), with every reason. prepare refuses; refresh saves the reasons as `startIssues`, so apply stops the same way.
+ * - `plannable`: the plan is known; `facts` are what only the start still needs (saved as `startIssues`).
  */
-function assertPlannable(result: TrainingResult): asserts result is PlannableResult {
+type TrainingStop = { kind: 'target-changed' } | { kind: 'unknowable'; issues: string[]; details: Record<string, unknown> }
+  | { kind: 'plannable'; result: PlannableResult; facts: string[] };
+function trainingStop(result: TrainingResult, plan: TrainingPlan | null): TrainingStop {
+  if (plan && (result.operator && result.operator.id !== plan.target.operatorId || result.skill !== null && result.skill !== plan.target.skill
+    || result.targetRank !== null && result.targetRank !== plan.rank || result.issues.includes(`target.mastery.${plan.target.skill}:below-current`)
+    || result.currentRank !== null && result.currentRank !== plan.target.currentRank)) return { kind: 'target-changed' };
   const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
-  if (!unknowable.length && result.operator && result.role && result.skillName && result.currentRank !== null && result.targetRank !== null) return;
-  throw new TrainingCheckError('training-facts-required', { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
-    stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
-      .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
+  if (unknowable.length || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
+    return { kind: 'unknowable', issues: result.issues.length ? result.issues : ['training:target-identity-incomplete'],
+      details: { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
+        stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
+          .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) } };
+  return { kind: 'plannable', result: result as PlannableResult, facts: startFacts(result).facts };
 }
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
@@ -101,15 +113,22 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     // Ticket 32 R3-2: the other plans' payments are reserved too, and the gate records which ones it saw.
     // Ticket 32 R5-2: this plan's own payments go through the same reservation as the other plans'.
     const payments = planPayments(await allPlans(options), null);
-    const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
+    const { result: queried, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
     plan.paymentsSeen = payments.map(paymentKey);
-    // Ticket 32 FO2-1: missing or conflicting facts are named as such, never reported as a changed target.
-    assertPlannable(result);
-    if (result.operator.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
-      || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
+    const stop = trainingStop(queried, plan);
+    if (stop.kind === 'target-changed') throw new Error('training-refresh-target-changed');
+    if (stop.kind === 'unknowable') {
+      // Ticket 32 FO3-3: the plan exists, so what keeps its start closed is saved and apply stops with the same code.
+      plan.materialReady = false; plan.startIssues = stop.issues;
+      plan.spends = { ...plan.spends }; delete plan.spends[String(plan.rank)];
+      plan.history.push({ at: new Date().toISOString(), kind: 'start-facts-pending', rank: plan.rank });
+      await save(context.file, plan);
+      throw new TrainingCheckError('training-facts-required', stop.details);
+    }
+    const result = stop.result;
     // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
     // only a shortage or an unknown count in the materials is a material wait.
-    const missing = startFacts(result);
+    const missing = { facts: stop.facts, materials: startFacts(result).materials };
     const gate = !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
     plan.materialReady = gate !== 'short';
     if (missing.facts.length) plan.startIssues = missing.facts; else delete plan.startIssues;
@@ -142,10 +161,12 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     || request.currentTrainee !== null && typeof request.currentTrainee !== 'string' || request.manualTraining !== undefined && typeof request.manualTraining !== 'boolean') throw new Error('training-authorization-required');
   // Ticket 32 R3-2: every plan's payments made after the inventory time are reserved before this plan's gate.
   const payments = planPayments(await allPlans(options), null);
-  const { result } = await queryTraining(request.query, { ...options, payments });
+  const { result: queried } = await queryTraining(request.query, { ...options, payments });
   // Ticket 32 follow-on: only facts that make the plan itself unknowable refuse preparation; facts the start needs are saved
   // on the plan (`startIssues`) and keep the start closed until a refresh clears them.
-  assertPlannable(result);
+  const stop = trainingStop(queried, null);
+  if (stop.kind !== 'plannable') throw new TrainingCheckError('training-facts-required', stop.kind === 'unknowable' ? stop.details : {});
+  const result = stop.result;
   const settings = await readSettings(options.home);
   // Ticket 32: an approved report item is resolved, not trusted as text; the plan may only narrow what it approved.
   if (authorization.source === 'approved-report') await verifyApprovedTraining(settings.privateDirectory, authorization.reference, result);
@@ -153,7 +174,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // The trainee of an in-training tier is in the training room now; "no trainee" contradicts it.
   if (inTraining !== null && request.currentTrainee !== result.operator.id) throw new Error('training-in-training-trainee-conflict');
   // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
-  const missing = startFacts(result);
+  const missing = { facts: stop.facts, materials: startFacts(result).materials };
   const gate = inTraining === null && !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
   const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
   // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting). A tier the user

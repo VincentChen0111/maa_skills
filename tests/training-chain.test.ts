@@ -700,3 +700,50 @@ test('32 FO2-2: when a recipe needs a stage nobody confirmed, the training outpu
   const confirmed = formatTraining(calculateTraining(f.tables, f.snapshot, { ...f.request, target: 1, progress: { ...workshop, confirmedStages: ['stage_synthetic'] } }), 'zh-CN');
   assert.doesNotMatch(confirmed, /confirmedStages/);
 });
+
+/**
+ * Ticket 32 FO3 (recurrence rule: the stop-reason class came back in FO1-2, FO2-1 and FO3-2/FO3-3). Every input that can stop a
+ * plan, through every producer (prepare, refresh) and the consumer (apply reading what refresh saved), comes from one decision.
+ */
+test('32 FO3 conformance: where prepare, refresh and apply stop, for every kind of input', async t => {
+  const current = (mastery?: number, skill = '1') => ({ source: 'user-confirmed', skillLevel: 7, ...(mastery === undefined ? {} : { mastery: { [skill]: mastery } }) });
+  const roomOnly = { source: 'user-confirmed', availableAssistants: ['char_helper', 'char_locked'] };
+  type Outcome = { prepare: string; refresh: string; saved: string[] | null; apply: string };
+  const facts = 'training-facts-required', changed = 'training-refresh-target-changed', go = 'proceeds';
+  // The plan under refresh: M1 finished with real completion evidence (paid at the snapshot's inventory time); M2 is next.
+  const cases: { name: string; mastery?: number; query: Record<string, unknown>; expect: Outcome }[] = [
+    { name: 'snapshot older than the plan completion, current = that completion (FO3-1)', mastery: 0, query: { current: current(1) },
+      expect: { prepare: facts, refresh: go, saved: null, apply: go } },
+    { name: 'snapshot older than the plan completion, no stated rank', mastery: 0, query: { current: current() }, expect: { prepare: 'saved', refresh: go, saved: null, apply: go } },
+    { name: 'no current rank anywhere', query: { current: current() },
+      expect: { prepare: facts, refresh: facts, saved: ['targets:incomplete', 'current.mastery.1:unknown-or-invalid'], apply: facts } },
+    { name: 'stated rank conflicts with a snapshot as new as the plan', mastery: 1, query: { current: current(0) },
+      expect: { prepare: facts, refresh: facts, saved: ['targets:incomplete', 'current.mastery.1:conflict'], apply: facts } },
+    { name: 'snapshot one tier ahead of the plan', mastery: 2, query: { current: current() }, expect: { prepare: 'saved', refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'snapshot two tiers ahead (FO3-2)', mastery: 3, query: { current: current() }, expect: { prepare: facts, refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'snapshot two tiers ahead, stated rank = the plan completion', mastery: 3, query: { current: current(1) }, expect: { prepare: facts, refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'another operator', query: { name: '合成助手', current: current(1) }, expect: { prepare: 'saved', refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'another skill', query: { skill: 2, current: current(0, '2') }, expect: { prepare: facts, refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'another target', query: { target: 3, current: current(1) }, expect: { prepare: 'saved', refresh: changed, saved: null, apply: 'waiting' } },
+    { name: 'no assistant for the next tier (FO3-3)', query: { current: current(1), facts: { ...roomOnly, trainingRoomLevel: 3, availableAssistants: [] } },
+      expect: { prepare: facts, refresh: facts, saved: ['training:stage-2-pending'], apply: facts } },
+    { name: 'training room unverified', query: { current: current(1), facts: roomOnly },
+      expect: { prepare: 'saved', refresh: facts, saved: ['training:room-unverified', 'training:room-rank-unavailable'], apply: facts } },
+  ];
+  const outcome = async (run: () => Promise<unknown>) => { try { await run(); return 'ok'; } catch (error) { return (error as Error).message; } };
+  for (const row of cases) {
+    const f = scanned(trainingFixture()); f.snapshot.items.mat = 2;
+    if (row.mastery !== undefined) f.snapshot.operators[0]!.mastery = { '1': row.mastery } as never;
+    // Separate worlds: a plan prepared in one would be reserved by the refresh in the other.
+    const p = await world(t, f), r = await world(t, f);
+    const query = (w: typeof p) => ({ ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile, ...row.query });
+    const prepared = await outcome(() => prepareTrainingPlan({ query: query(p), binding, currentTrainee: null, authorization: { source: 'current-request', reference: 'x' } }, { home: p.root }));
+    const plan = between({ '1': f.snapshot.readAt }); await storePlan(r, plan);
+    const refreshed = await outcome(() => refreshTrainingMaterials({ id: plan.id, query: query(r) }, { home: r.root }));
+    const saved = (await readTrainingPlan(plan.id, { home: r.root })).startIssues ?? null;
+    const applied = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true }, r.maa, { home: r.root });
+    const actual: Outcome = { prepare: prepared === 'ok' ? 'saved' : prepared, refresh: refreshed === 'ok' ? go : refreshed, saved,
+      apply: applied.status === 'check-required' ? String(applied.reason) : applied.status === 'waiting' ? 'waiting' : go };
+    assert.deepEqual(actual, row.expect, row.name);
+  }
+});

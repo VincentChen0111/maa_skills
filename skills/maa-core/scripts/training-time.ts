@@ -146,7 +146,8 @@ export function startFacts(result: TrainingResult): { facts: string[]; materials
 
 /** Read-only. Missing facts stay unknown; estimates never claim a training has started. */
 export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown, evidence?: TrainingEvidence, payments: TierPayment[] = []): TrainingResult {
-  const request = object(input), snapshot = object(snapshotInput), facts = object(request.facts), current = object(request.current);
+  const request = object(input), snapshot = object(snapshotInput), facts = object(request.facts);
+  let current = object(request.current);
   const skill = integer(request.skill, 1, 3) ? request.skill : null, targetRank = integer(request.target, 1, 3) ? request.target : null;
   // Workshop and stage facts for crafting routes; training never spends vouchers, so voucher validity is not passed on.
   const progress = request.progress === undefined ? {} : { progress: request.progress !== null && typeof request.progress === 'object' && !Array.isArray(request.progress)
@@ -164,7 +165,17 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
       current: costCurrent, target: { mastery: { [key]: to } } }], ...progress, mode: 'no-craft' });
   };
   let stock: ObjectValue = snapshot;
-  const materials = gaps(targetRank);
+  let materials = gaps(targetRank);
+  // Ticket 32 FO3-1: a plan's real completion outranks a snapshot read before it. A stated rank equal to that completion, against
+  // a snapshot still on an earlier rank for this skill, is that same stale read, not a conflict: the cost uses the snapshot's
+  // rank and the evidence below raises the start. Any other stated rank is checked against the snapshot as usual.
+  const key = String(skill), stated = object(current.mastery)[key], seen = materials.costs[0]?.operator
+    ? object(array(snapshot.operators).map(object).find(row => row.id === materials.costs[0]!.operator!.id)?.mastery)[key] : undefined;
+  if (evidence && integer(evidence.completedRank, 0, 3) && stated === evidence.completedRank && integer(seen, 0, 3) && seen < evidence.completedRank) {
+    const { [key]: _stale, ...mastery } = object(current.mastery);
+    current = { ...current, mastery };
+    materials = gaps(targetRank);
+  }
   const cost = materials.costs[0];
   const result: TrainingResult = { status: 'needs-input', operator: cost?.operator ?? null, skill, skillId: null, skillName: null,
     currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []],
