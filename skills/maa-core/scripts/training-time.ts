@@ -122,6 +122,28 @@ export function materialGate(gaps: GapResult | null, crafting: boolean): 'ready'
   return crafting && covered(comparison.craft) ? 'crafting' : 'short';
 }
 
+const prepareFacts = new Set(['training:unsupported-field', 'training:current-rank-unknown', 'training:target-identity-incomplete', 'training:in-training-invalid',
+  'training:in-training-inventory-time-unknown', 'training:in-training-snapshot-conflict']);
+/**
+ * Ticket 32 follow-on (prepare/start split): the one classification of a training result's issues. A prepare fact makes the
+ * plan itself unknowable (identity, current rank, an in-training statement nothing vouches for, invalid input) or leaves it
+ * nothing to write (no assistant for the first tier). Everything else, including any code added later, is a start fact or a
+ * material wait: the plan is saved and the tier's start waits until a refresh clears it.
+ */
+export function trainingIssuePhase(issue: string, firstRank: number | null): 'prepare' | 'start' {
+  if (prepareFacts.has(issue) || /^(request:|progress:[^:]+:invalid$|inventory:invalid$|targets:|total:)/.test(issue)) return 'prepare';
+  return issue === `training:stage-${firstRank}-pending` ? 'prepare' : 'start';
+}
+/** The start facts (`training:` codes) and the first tier's material issues; an empty list with a covered gate opens the start. */
+export function startFacts(result: TrainingResult): { facts: string[]; materials: string[] } {
+  // The plan's next tier needs an assistant for any MAA write (also an in-training tier, which is only observed); later tiers
+  // are checked again by the refresh before their own start.
+  const first = result.currentRank === null ? null : result.currentRank + 1;
+  const gate = result.startMaterials;
+  return { facts: result.issues.filter(issue => issue.startsWith('training:') && (trainingIssuePhase(issue, first) === 'start' && !/^training:stage-\d+-pending$/.test(issue) || issue === `training:stage-${first}-pending`)),
+    materials: gate ? [...gate.issues, ...gate.costs[0]?.issues ?? []] : ['training:start-materials-unknown'] };
+}
+
 /** Read-only. Missing facts stay unknown; estimates never claim a training has started. */
 export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown, evidence?: TrainingEvidence, payments: TierPayment[] = []): TrainingResult {
   const request = object(input), snapshot = object(snapshotInput), facts = object(request.facts), current = object(request.current);

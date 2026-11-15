@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining, materialGate, formatTraining, gateSpend } from './training-time.ts';
+import { queryTraining, materialGate, formatTraining, gateSpend, trainingIssuePhase, startFacts } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, paidRanks, planPayments, paymentKey, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
@@ -93,10 +93,10 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
       || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
     // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
     // only a shortage or an unknown count in the materials is a material wait.
-    const startFacts = result.issues.filter(issue => issue.startsWith('training:'));
-    const gate = !startFacts.length && result.status === 'ok' ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
+    const missing = startFacts(result);
+    const gate = !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
     plan.materialReady = gate !== 'short';
-    if (startFacts.length) plan.startIssues = startFacts; else delete plan.startIssues;
+    if (missing.facts.length) plan.startIssues = missing.facts; else delete plan.startIssues;
     // Ticket 32 R4-1/R4-2: what a start on this gate spends, and the other plans' tiers it reserved.
     // A tier the user already started by hand was paid in the game, not on this gate: nothing is recorded for it (R6-2).
     const spend = gate === 'short' || plan.manualTraining ? null : gateSpend(result.startMaterials, gate);
@@ -108,9 +108,9 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
     const after = stage?.assistants.find(row => row.id === stage.afterStartAssistant);
     if (after) { plan.afterStartAssistants ??= {}; plan.afterStartAssistants[String(plan.rank)] = after.name; }
-    plan.history.push({ at: new Date().toISOString(), kind: startFacts.length ? 'start-facts-pending' : gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
+    plan.history.push({ at: new Date().toISOString(), kind: missing.facts.length ? 'start-facts-pending' : gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
     await save(context.file, plan);
-    if (startFacts.length) throw new TrainingCheckError('training-facts-required', { issues: startFacts });
+    if (missing.facts.length) throw new TrainingCheckError('training-facts-required', { issues: missing.facts });
     return { plan, summary: formatTraining(result, language) };
   });
 }
@@ -127,8 +127,11 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // Ticket 32 R3-2: every plan's payments made after the inventory time are reserved before this plan's gate.
   const payments = planPayments(await allPlans(options), null);
   const { result } = await queryTraining(request.query, { ...options, payments });
-  if (result.status !== 'ok' || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
-    throw new TrainingCheckError('training-facts-required', { issues: result.issues,
+  // Ticket 32 follow-on: only facts that make the plan itself unknowable refuse preparation; facts the start needs are saved
+  // on the plan (`startIssues`) and keep the start closed until a refresh clears them.
+  const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
+  if (unknowable.length || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
+    throw new TrainingCheckError('training-facts-required', { issues: unknowable.length ? unknowable : result.issues,
       stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
         .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
   const settings = await readSettings(options.home);
@@ -138,7 +141,8 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // The trainee of an in-training tier is in the training room now; "no trainee" contradicts it.
   if (inTraining !== null && request.currentTrainee !== result.operator.id) throw new Error('training-in-training-trainee-conflict');
   // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
-  const gate = inTraining === null ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
+  const missing = startFacts(result);
+  const gate = inTraining === null && !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
   const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
   // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting). A tier the user
   // already started by hand was paid in the game, not on this gate (R6-2): nothing is recorded for it.
@@ -147,15 +151,16 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     target: { operatorId: result.operator.id, name: result.operator.name, role: roleNames[result.role]!, skill: result.skill!, skillName: result.skillName, currentRank: result.currentRank, goal: result.targetRank },
     rank: Math.min(3, firstRank), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
     preplacementRequired: request.currentTrainee !== result.operator.id, binding: binding as TrainingPlan['binding'],
-    assistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
-    afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
+    assistants: Object.fromEntries(result.stages.filter(stage => stage.recommendedAssistant).map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
+    afterStartAssistants: Object.fromEntries(result.stages.filter(stage => stage.afterStartAssistant).map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
     materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
     history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: result.inTrainingSource === 'snapshot' ? 'in-training-snapshot' : 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
     // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
     // hand, no later than this plan. Every later tier records its own countdown time.
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
     ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey),
-    ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers };
+    ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers,
+    ...(missing.facts.length ? { startIssues: missing.facts } : {}) };
   if (gate !== 'short' && !spend && request.manualTraining !== true) { plan.materialReady = false; delete plan.craftingRequired; }
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
@@ -268,7 +273,7 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     // Ticket 32 (owner: 「龙门币缺口或者其他材料缺口是可以在进行中逐步补齐的，不能因此判断计划」): a shortage keeps the plan
     // waiting for this start; it is not an error. The next re-entry refreshes materials and starts once they are covered.
     // Ticket 32 R2-3: a missing fact is named; it does not wait as if materials were short.
-    if (action.kind === 'start' && plan.startIssues?.length) return { status: 'check-required', reason: 'training-facts-required', details: { issues: plan.startIssues }, versions: await drift() };
+    if ((action.kind === 'start' || action.kind === 'preplace') && plan.startIssues?.length) return { status: 'check-required', reason: 'training-facts-required', details: { issues: plan.startIssues }, versions: await drift() };
     // Ticket 32 R2-2: the wait ends only through a refresh with the latest snapshot; another apply alone would wait again.
     // Ticket 32 R3-2: a gate that did not see a payment another plan has recorded since is stale; nothing is armed on it.
     if (action.kind === 'start' && plan.materialReady && planPayments(plans, plan.id).some(payment => !(plan.paymentsSeen ?? []).includes(paymentKey(payment)))) {

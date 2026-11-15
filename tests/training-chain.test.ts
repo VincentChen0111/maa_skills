@@ -5,7 +5,7 @@ import { writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
-import { calculateTraining, materialGate, formatTraining, gateSpend, paymentTaken } from '../skills/maa-core/scripts/training-time.ts';
+import { calculateTraining, materialGate, formatTraining, gateSpend, paymentTaken, trainingIssuePhase } from '../skills/maa-core/scripts/training-time.ts';
 import { operatorCatalog } from '../skills/maa-core/scripts/operator-cost.ts';
 import { reconcileTraining, paidRanks, planPayments, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
 import type { GapResult } from '../skills/maa-core/scripts/cultivation-gaps.ts';
@@ -612,4 +612,37 @@ test('32 item 7: a plan prepared from a Skland read that shows this tier trainin
   const prepared = await prepareTrainingPlan({ query, binding, currentTrainee: 'char_synthetic', authorization: { source: 'current-request', reference: '接着练到专二' } }, { home: w.root });
   assert.deepEqual([prepared.manualTraining, prepared.paidAt, prepared.preplacementRequired], [true, { '1': at }, false]);
   assert.ok(prepared.history.some(entry => entry.kind === 'in-training-snapshot' && entry.rank === 1));
+});
+
+test('32 follow-on: facts needed to start no longer block preparation; the plan saves them and waits for a refresh', async t => {
+  const f = scanned(trainingFixture()); f.snapshot.items.mat = 20;
+  const w = await world(t, f), query = { ...f.request, target: 2, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const authorization = { source: 'current-request', reference: '合成干员一技能练到专二' };
+  // The room level is not confirmed and the snapshot has none: the plan is saved, the start is closed and names the fact.
+  const noRoom = { ...query, facts: { source: 'user-confirmed', availableAssistants: ['char_helper', 'char_locked'] } };
+  const plan = await prepareTrainingPlan({ query: noRoom, binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.deepEqual([plan.state, plan.materialReady, plan.startIssues], ['pending', false, ['training:room-unverified', 'training:room-rank-unavailable']]);
+  const held = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true }, w.maa, { home: w.root });
+  assert.deepEqual([held.status, held.reason], ['check-required', 'training-facts-required'], 'not even the preplacement is armed');
+  const refreshed = await refreshTrainingMaterials({ id: plan.id, query: { ...query, target: 1 } }, { home: w.root });
+  assert.deepEqual([refreshed.materialReady, refreshed.startIssues], [true, undefined]);
+  // A later tier's missing estimate is checked again before that tier; the first tier's assistant is recorded.
+  const later = scanned(trainingFixture()); later.snapshot.items.mat = 20; later.tables.characters.char_synthetic.skills[0]!.levelUpCostCond[1]!.lvlUpTime = 0;
+  await writeFile(w.tablesFile, JSON.stringify(later.tables));
+  const second = await prepareTrainingPlan({ query, binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.deepEqual([second.assistants, second.startIssues, second.materialReady], [{ '1': '合成助手' }, undefined, true]);
+  // A fact that makes the plan itself unknowable still refuses: the user's in-training statement the inventory cannot vouch for.
+  await assert.rejects(prepareTrainingPlan({ query: { ...query, inTraining: { source: 'user-confirmed', rank: 2 } }, binding, currentTrainee: 'char_synthetic', authorization }, { home: w.root }),
+    /training-facts-required/);
+});
+
+test('32 follow-on: every training issue the estimate can raise is classified once as a prepare fact or a start fact', async () => {
+  const text = await readFile(resolve('skills/maa-core/scripts/training-time.ts'), 'utf8');
+  const raised = [...new Set([...text.matchAll(/issues\.push\('(training:[a-z0-9-]+)'\)/g)].map(match => match[1]!))];
+  assert.ok(raised.length >= 8, raised.join(','));
+  for (const issue of [...raised, 'training:stage-1-pending', 'training:stage-3-pending']) assert.ok(['prepare', 'start'].includes(trainingIssuePhase(issue, 1)), issue);
+  assert.equal(trainingIssuePhase('training:stage-1-pending', 1), 'prepare', 'the first tier needs an assistant for any MAA write');
+  assert.equal(trainingIssuePhase('training:stage-3-pending', 1), 'start');
+  assert.equal(trainingIssuePhase('training:some-future-code', 1), 'start', 'a new code never blocks preparation by default');
+  assert.equal(trainingIssuePhase('progress:rooms:invalid', 1), 'prepare', 'invalid input is refused at once');
 });
