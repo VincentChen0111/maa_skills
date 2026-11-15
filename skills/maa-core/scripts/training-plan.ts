@@ -85,7 +85,8 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     if (object(request.query).inTraining !== undefined) throw new Error('training-in-training-refresh-unsupported');
     // Ticket 32: the plan's own completion and payment evidence reconciles a snapshot read before them (unattended re-entry).
     // Ticket 32 R3-2: the other plans' payments are reserved too, and the gate records which ones it saw.
-    const payments = planPayments(await allPlans(options), plan.id);
+    // Ticket 32 R5-2: this plan's own payments go through the same reservation as the other plans'.
+    const payments = planPayments(await allPlans(options), null);
     const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
     plan.paymentsSeen = payments.map(paymentKey);
     if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
@@ -97,7 +98,8 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     plan.materialReady = gate !== 'short';
     if (startFacts.length) plan.startIssues = startFacts; else delete plan.startIssues;
     // Ticket 32 R4-1/R4-2: what a start on this gate spends, and the other plans' tiers it reserved.
-    const spend = gate === 'short' ? null : gateSpend(result.startMaterials, gate);
+    // A tier the user already started by hand was paid in the game, not on this gate: nothing is recorded for it.
+  const spend = gate === 'short' || request.manualTraining === true ? null : gateSpend(result.startMaterials, gate);
     plan.spends = { ...plan.spends }; if (spend) plan.spends[String(plan.rank)] = spend; else delete plan.spends[String(plan.rank)];
     if (gate !== 'short' && !spend) plan.materialReady = false;
     plan.reservedTiers = result.reservedTiers;
@@ -153,7 +155,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
     ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey),
     ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers };
-  if (gate !== 'short' && !spend) { plan.materialReady = false; delete plan.craftingRequired; }
+  if (gate !== 'short' && !spend && request.manualTraining !== true) { plan.materialReady = false; delete plan.craftingRequired; }
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
   const config = await readMaaConfig(context.settings.maaDirectory);

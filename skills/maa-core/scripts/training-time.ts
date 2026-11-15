@@ -50,10 +50,29 @@ export function gateSpend(gaps: GapResult | null, gate: 'ready' | 'crafting'): S
   if (!plan || plan.lmd.required === null || !Number.isSafeInteger(plan.lmd.required)) return null;
   const items: Record<string, number> = {};
   for (const [id, row] of Object.entries(plan.ledger)) {
-    if (row.opening === null || row.closing === null) return null;
+    // Ticket 32 R5-1: a row the route never took from (a material voucher whose count no snapshot carries) is not a spend.
+    if (row.opening === null || row.closing === null) { if (row.allocated || row.consumed || row.voucher) return null; continue; }
     if (row.opening - row.closing > 0) items[id] = row.opening - row.closing;
   }
   return { items, lmd: plan.lmd.required };
+}
+/**
+ * Ticket 32 R5-3 (recurrence rule: the one owner of what a payment took out of an inventory read before it). Per item the
+ * larger of the tier's finished materials and the route its gate recorded (crafting inputs and fees): the start used the
+ * finished materials when the stock had them by then, or crafted them from the inputs otherwise, and either may still be in
+ * an inventory read before it. A tier paid outside a gate (by hand in the game, which never crafts) has only its finished cost.
+ */
+export function paymentTaken(catalog: Record<string, unknown>, payment: TierPayment): Spend | null {
+  const row = object(array(object(array(object(catalog[payment.operatorId]).skills)[payment.skill - 1]).levelUpCostCond)[payment.rank - 1]);
+  const costs = array(row.levelUpCost).map(object);
+  if (!costs.length || costs.some(entry => typeof entry.id !== 'string' || !integer(entry.count, 1, 1e9))) return null;
+  const finished: Spend = { items: {}, lmd: 0 };
+  for (const entry of costs) if (entry.id === '4001') finished.lmd += Number(entry.count); else finished.items[entry.id as string] = (finished.items[entry.id as string] ?? 0) + Number(entry.count);
+  if (payment.spent === undefined) return finished;
+  if (!validSpend(payment.spent)) return null;
+  const items = { ...finished.items };
+  for (const [id, count] of Object.entries(payment.spent.items)) items[id] = Math.max(items[id] ?? 0, count);
+  return { items, lmd: Math.max(finished.lmd, payment.spent.lmd) };
 }
 const validSpend = (spend: unknown): spend is Spend => !!spend && typeof spend === 'object' && integer((spend as Spend).lmd, 0, 1e12)
   && !!(spend as Spend).items && typeof (spend as Spend).items === 'object' && Object.values((spend as Spend).items).every(count => integer(count, 0, 1e12));
@@ -118,18 +137,15 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   // after it, or when the inventory time is unknown, still has its materials in it and is counted, whatever rank was stated.
   const paidBefore = (at: unknown) => inventoryAt !== null && time(at) !== null && Date.parse(at as string) <= Date.parse(inventoryAt);
   const paid: Record<string, string> = { ...evidence?.paidAt ?? {}, ...(result.inTrainingRank !== null ? { [String(result.inTrainingRank)]: inventoryAt! } : {}) };
-  let costFrom = observed;
+  // Ticket 32 R5-2: costs start at the completed rank (or the tier in training), so a gate covers exactly the tier it opens and
+  // records exactly that tier's spend. A tier paid at or before the inventory time is already out of it; one paid after it, by
+  // this plan or another (an unknown inventory time included), is still in it and is reserved below, by the one owner.
+  let costFrom = start;
   for (const [rank, at] of Object.entries(paid)) {
     const value = Number(rank);
     if (integer(value, 1, 3) && value > costFrom && value <= targetRank && paidBefore(at)) costFrom = value;
   }
-  for (const [rank, at] of Object.entries(evidence?.paidAt ?? {})) {
-    const value = Number(rank);
-    if (integer(value, 1, 3) && value <= costFrom && !paidBefore(at)) costFrom = value - 1;
-  }
   result.costFromRank = costFrom;
-  // Ticket 32 R3-2: a tier another plan paid after the inventory time (an unknown inventory time included) is still in this
-  // stock; its cost is taken out before this plan's gate. A tier of this skill above the cost start is already counted here.
   const latest = new Map<string, TierPayment>();
   for (const payment of payments) {
     if (!integer(payment.rank, 1, 3) || !integer(payment.skill, 1, 3) || typeof payment.operatorId !== 'string' || paidBefore(payment.at)) continue;
@@ -141,17 +157,10 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   if (result.reservedTiers.length) {
     const tiers = operatorCatalog(tables), items: Record<string, number> = {}; let lmd = 0;
     for (const payment of result.reservedTiers) {
-      // Ticket 32 R4-1: what that start's gate recorded it spends (crafting inputs and fees included); a tier paid outside a gate
-      // (by hand in the game, which never crafts) spends its finished materials.
-      if (payment.spent !== undefined) {
-        if (!validSpend(payment.spent)) { result.issues.push('training:reserved-cost-unknown'); continue; }
-        for (const [id, count] of Object.entries(payment.spent.items)) items[id] = (items[id] ?? 0) + count;
-        lmd += payment.spent.lmd; continue;
-      }
-      const row = object(array(object(array(object(tiers[payment.operatorId]).skills)[payment.skill - 1]).levelUpCostCond)[payment.rank - 1]);
-      const costs = array(row.levelUpCost).map(object);
-      if (!costs.length || costs.some(entry => typeof entry.id !== 'string' || !integer(entry.count, 1, 1e9))) { result.issues.push('training:reserved-cost-unknown'); continue; }
-      for (const entry of costs) if (entry.id === '4001') lmd += Number(entry.count); else items[entry.id as string] = (items[entry.id as string] ?? 0) + Number(entry.count);
+      const taken = paymentTaken(tiers, payment);
+      if (!taken) { result.issues.push('training:reserved-cost-unknown'); continue; }
+      for (const [id, count] of Object.entries(taken.items)) items[id] = (items[id] ?? 0) + count;
+      lmd += taken.lmd;
     }
     const held = object(snapshot.items);
     stock = { ...snapshot, items: Object.fromEntries(Object.entries(held).map(([id, count]) => [id, typeof count === 'number' && items[id] ? Math.max(0, count - items[id]!) : count])),

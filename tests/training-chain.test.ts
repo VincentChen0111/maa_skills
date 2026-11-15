@@ -477,3 +477,53 @@ test('32 R4-1/R4-2: a tier another plan started under a crafting gate reserves w
   delete done.spends; await storePlan(w, done);
   assert.deepEqual(planPayments([done], null).map(row => row.spent), [undefined]);
 });
+
+/** R4/R5 world: 合成助手 M1 costs mat x2 (mat crafts from ore x2), 合成干员 M1 costs `need`; an MAA scan at `scan`. */
+async function craftWorld(t: { after(fn: () => Promise<unknown>): void }, items: Record<string, number>, need: { id: string; count: number }[], scan = '2026-11-09T00:00:00.000Z') {
+  const f = trainingFixture();
+  const tier = (cost: { id: string; count: number }[], seconds: number) => ({ unlockCond: { phase: 'PHASE_2', level: 1 }, lvlUpTime: seconds, levelUpCost: cost.map(c => ({ ...c, type: 'MATERIAL' })) });
+  const skills = (m1: { id: string; count: number }[]) => [{ skillId: 'synthetic_skill', unlockCond: { phase: 'PHASE_0', level: 1 },
+    levelUpCostCond: [tier(m1, 3600), tier([{ id: 'mat', count: 2 }], 7200), tier([{ id: 'mat', count: 3 }], 14400)] }];
+  Object.assign(f.tables.characters.char_helper, { skills: skills([{ id: 'mat', count: 2 }]) });
+  Object.assign(f.tables.characters.char_synthetic, { skills: skills(need) });
+  const formula = (id: string, input: string, count: number) => ({ formulaId: `recipe_${id}`, formulaType: 'F_EVOLVE', itemId: id, count: 1, goldCost: 5, apCost: 360000,
+    costs: [{ id: input, count, type: 'MATERIAL' }], requireRooms: [{ roomId: 'WORKSHOP', roomLevel: 3, roomCount: 1 }], requireStages: [] });
+  Object.assign(f.tables.building.workshopFormulas, { mat: formula('mat', 'ore', 2), ore: formula('ore', 'dust', 3) });
+  // As in the real item table, the materials relate to a material voucher whose count no snapshot carries (R5-1).
+  const voucher = [{ voucherId: 'premium_material_voucher_perm', voucherItemType: 'MATERIAL_ISSUE_VOUCHER' }];
+  Object.assign(f.tables.items.items, { mat: { ...(f.tables.items.items as Record<string, object>).mat, voucherRelateList: voucher }, ore: { name: '合成原料', voucherRelateList: voucher },
+    dust: { name: '合成粉末' }, premium_material_voucher_perm: { name: '合成材料提货券', itemType: 'MATERIAL_ISSUE_VOUCHER' } });
+  Object.assign(f.snapshot, { items, lmd: 1000, source: 'maa', readAt: '2026-11-12T00:00:00.000Z', sourceTimes: { operators: null, inventory: scan } });
+  const w = await world(t, f);
+  const query = (name: string, assistants: string[], target = 1, mastery = 0) => ({ name, skill: 1, target, current: { source: 'user-confirmed', skillLevel: 7, mastery: { '1': mastery } },
+    facts: { source: 'user-confirmed', trainingRoomLevel: 3, availableAssistants: assistants }, progress: workshop, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile });
+  return { f, w, query };
+}
+
+test('32 R5-1: material vouchers whose count no snapshot carries do not keep the start gate closed', async t => {
+  const { w, query } = await craftWorld(t, { mat: 4, ore: 0, dust: 0 }, [{ id: 'ore', count: 4 }]);
+  const a = await prepareTrainingPlan({ query: query('合成助手', ['char_synthetic', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成助手一技能专一' } }, { home: w.root });
+  assert.equal(a.materialReady, true); assert.deepEqual(a.spends?.['1'], { items: { mat: 2 }, lmd: 0 });
+});
+
+test('32 R5-2/R5-3: one owner says what a payment took out of an inventory: only its own tier, never less than the tier\'s finished materials', async t => {
+  // R5-3: A's gate was computed on an old scan (crafting from ore); the user then got mat x2 and rescanned before A started, so A
+  // used the mat. B (no crafting approval) needs mat x2 and reads that newer scan: the mat is reserved, not only the ore.
+  const { w, query } = await craftWorld(t, { mat: 2, ore: 4, dust: 0 }, [{ id: 'mat', count: 2 }], '2026-11-09T12:00:00.000Z');
+  const a = runtimePlan(); a.id = 'plan-a'; a.target = { ...a.target, operatorId: 'char_helper', name: '合成助手' }; a.target.goal = 1; a.rank = 1; a.target.currentRank = 1;
+  a.state = 'complete'; a.preplacementRequired = false; delete a.action; a.paidAt = { '1': '2026-11-10T00:05:01.000Z' }; a.spends = { '1': { items: { ore: 4 }, lmd: 10 } };
+  a.history = [{ at: '2026-11-10T00:05:10.000Z', kind: 'countdown-observed', rank: 1 }, { at: '2026-11-10T01:05:20.000Z', kind: 'completed', rank: 1 }];
+  await storePlan(w, a);
+  const b = await prepareTrainingPlan({ query: query('合成干员', ['char_helper', 'char_locked']), binding, currentTrainee: 'char_helper',
+    authorization: { source: 'current-request', reference: '合成干员一技能专一' } }, { home: w.root });
+  assert.equal(b.materialReady, false, 'A used the mat the newer scan shows');
+  // R5-2: a plan whose own M1 was paid after the scan records for M2 only M2's materials (the gate covers exactly its tier).
+  const own = between({ '1': '2026-11-10T00:00:00.000Z' }); own.id = 'plan-own';
+  own.target = { ...own.target, operatorId: 'char_helper', name: '合成助手' }; own.target.goal = 2; await storePlan(w, own);
+  await rm(join(w.privateDirectory, 'training-plans', 'plan-a.json')); await rm(join(w.privateDirectory, 'training-plans', `${b.id}.json`));
+  Object.assign(w, {}); const g = JSON.parse(await readFile(w.snapshotFile, 'utf8')); g.items = { mat: 4, ore: 0, dust: 0 }; await writeFile(w.snapshotFile, JSON.stringify(g));
+  const refreshed = await refreshTrainingMaterials({ id: own.id, query: query('合成助手', ['char_synthetic', 'char_locked'], 2, 1) }, { home: w.root });
+  assert.equal(refreshed.materialReady, true, 'M1 (2) reserved, M2 (2) covered by the remaining 2');
+  assert.deepEqual(refreshed.spends?.['2'], { items: { mat: 2 }, lmd: 0 }, 'M2 only, not M1 again');
+});
