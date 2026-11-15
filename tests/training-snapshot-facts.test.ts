@@ -103,3 +103,18 @@ test('32 FO1-1: the Skland snapshot is not chosen over a default whose inventory
   Object.assign(sk.snapshot, { readAt: '2026-11-12T02:00:00.000Z' }); await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
   assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.selected, 'skland-covers-more');
 });
+
+test('32 FO2-4: a default snapshot without inventory does not outrank a complete Skland snapshot by its import time', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'training-noinv-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const privateDirectory = join(root, 'private'); await mkdir(privateDirectory, { recursive: true });
+  await writeFile(join(root, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory }));
+  const maa = trainingFixture();
+  Object.assign(maa.snapshot, { items: {}, lmd: null, readAt: '2026-11-12T01:00:00.000Z', sourceTimes: { operators: '2026-11-12T00:00:00.000Z', inventory: null },
+    coverage: { operators: { status: 'complete' }, inventory: { status: 'missing', issues: [] } } });
+  const sk = skland(trainingFixture(), null); Object.assign(sk.snapshot, { readAt: '2026-11-10T00:00:00.000Z' });
+  const tablesFile = join(root, 'tables.json'); await writeFile(tablesFile, JSON.stringify(maa.tables));
+  await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
+  await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
+  const chosen = await queryTraining({ ...trainingFixture().request, target: 1, tablesFile }, { home: root });
+  assert.equal(chosen.result.snapshotUsed?.selected, 'skland-covers-more');
+});

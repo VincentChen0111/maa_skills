@@ -31,3 +31,25 @@
 - FO1-8：计划记下 `snapshotUsed`、`trainingRoom`，摘要里列出。
 
 第 2 轮审查复核这些修复。
+
+## 第 2 轮
+
+范围 `91960d0..febcce3`（后续包全部提交加第 1 轮修复）。结论 NO-GO：P2 2，P3 2，没有安全类发现；第 1 轮的八项修复都成立，审查员逐个运行相关测试文件通过、类型检查通过，并对每项给出离线复现。
+
+修复会话逐条复核：
+
+| 编号 | 发现 | 结论 | 理由 |
+| --- | --- | --- | --- |
+| FO2-1（P2） | refresh 在当前档次算不出来（例如 `current` 与快照冲突）时报 `training-refresh-target-changed`，不带任何原因；按快照改选后的正常续接也会走到这里 | 接受 | 有离线复现；与 FO1-2 同一类（停下的原因被别的代码盖住），按复发规则改成 prepare 和 refresh 共用一个停止谓词，一个测试覆盖两处 |
+| FO2-2（P2，文档、评测） | maa-daily 唯一能读到的训练说明让 agent 用 `stageRanks` 填关卡条件，没写 `confirmedStages`；训练输出也不提示 | 接受 | 真实：按文档做只能猜原码，猜错时计划一直等材料。场景对 `stageRanks:2` 也判通过这一点不另修：它和 `confirmedStages` 打开同一道门，MAA 在游戏里自己核对关卡，实际结果相同，不是会在正式环境出错的情形 |
+| FO2-3（P3） | 最后一档正在训练、没有要开训的档次时，仍报 `training:room-rank-unavailable` | 接受 | 有离线复现；等于告诉用户训练室练不了正在练的那一档 |
+| FO2-4（P3） | 默认快照没有仓库数量时，时间规则照样弃用完整的森空岛快照，还标 `default-inventory-newer` | 接受 | 有离线复现；时间规则保护的是更新的库存，这份快照没有库存可保护 |
+
+修复：
+
+- FO2-1：`training-plan.ts` 的 `assertPlannable` 是 prepare 和 refresh 唯一的停止谓词：让计划本身无法确定的事实（档次算不出、干员缺失、冲突、非法输入）以 `training-facts-required` 停下，`details.issues` 列出全部原因、`details.blocking` 标出挡住的那些；refresh 先过这一道，再比目标。目标真的变了仍报 `training-refresh-target-changed`。测试 `32 FO2-1`（同一个冲突输入分别走 prepare 和 refresh）。
+- FO2-2：`training.md` 加工补料写明用户一句话确认关卡时写 `progress.confirmedStages:[报出的 ID]`、不填 `stageRanks`、不换算数字；训练输出在加工展开里有未确认关卡时给出要写的 ID（确认之后不再出现）。测试 `32 FO2-2`。
+- FO2-3：训练室上限只在还有档次要开训时核对。测试 `32 FO2-3`（一级训练室在练最后一档专一）。
+- FO2-4：只有默认快照有仓库数量（覆盖为 complete 或 partial 且有物品）时才比时间。测试 `32 FO2-4`。
+
+第 3 轮审查复核这些修复。

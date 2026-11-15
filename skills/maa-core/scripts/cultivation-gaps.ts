@@ -506,8 +506,11 @@ export async function selectSnapshot(privateDirectory: string, needed: SnapshotD
     const inventoryTime = (value: unknown) => { const data = object(value), at = data.source === 'skland' ? data.readAt : object(data.sourceTimes).inventory ?? data.readAt;
       return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? Date.parse(at) : null; };
     const fresh = inventoryTime(skland.value), stale = inventoryTime(fallback.value);
+    // Ticket 32 FO2-4: the age rule protects a newer inventory; a default snapshot that holds no counts has none to protect.
+    const status = object(object(object(fallback.value).coverage).inventory).status;
+    const holdsInventory = (status === 'complete' || status === 'partial') && Object.keys(object(object(fallback.value).items)).length > 0;
     if (own.every(domain => other.includes(domain)) && other.length > own.length) {
-      if (fresh !== null && stale !== null && fresh >= stale) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
+      if (!holdsInventory || fresh !== null && stale !== null && fresh >= stale) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
       return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default-inventory-newer') };
     }
   }

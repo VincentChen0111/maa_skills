@@ -666,3 +666,37 @@ test('32 FO1-2/FO1-6/FO1-8: a refusal keeps every reason; a room limit holds onl
     binding, currentTrainee: null, authorization }, { home: w.root });
   assert.deepEqual(held.startIssues, ['training:room-rank-unavailable']);
 });
+
+test('32 FO2-1: prepare and refresh stop on missing facts through one predicate, keeping every reason', async t => {
+  const f = scanned(trainingFixture()); f.snapshot.items.mat = 20; f.snapshot.operators[0]!.mastery = { '1': 0 } as never;
+  const w = await world(t, f), query = { ...f.request, target: 1, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const plan = await prepareTrainingPlan({ query, binding, currentTrainee: null, authorization: { source: 'current-request', reference: '合成干员一技能练到专一' } }, { home: w.root });
+  const conflicting = { ...query, current: { ...f.request.current, mastery: { '1': 1 } } };
+  const facts = (error: Error & { details?: { issues?: string[] } }) => error.message === 'training-facts-required' && Boolean(error.details?.issues?.some(issue => issue.includes('conflict')));
+  await assert.rejects(prepareTrainingPlan({ query: conflicting, binding, currentTrainee: null, authorization: { source: 'current-request', reference: 'x' } }, { home: w.root }), facts);
+  await assert.rejects(refreshTrainingMaterials({ id: plan.id, query: conflicting }, { home: w.root }), facts, 'not "target changed"');
+  // A real target change still says so.
+  await assert.rejects(refreshTrainingMaterials({ id: plan.id, query: { ...query, target: 2 } }, { home: w.root }), /training-refresh-target-changed/);
+});
+
+test('32 FO2-3: with no tier left to start, the room level is not reported as unable', () => {
+  // Level-1 room (limit M1) training the last tier M1: nothing is left to start, so the room is not "unable".
+  const f = trainingFixture(); f.snapshot.items.mat = 20;
+  for (const operator of f.snapshot.operators) Object.assign(operator, { skillLevel: 7, mastery: { '1': 0, '2': 0, '3': 0 } });
+  const at = '2026-11-12T00:00:00.000Z';
+  Object.assign(f.snapshot, { source: 'skland', readAt: at, sourceTimes: { operators: at, inventory: at },
+    base: { rooms: [{ type: 'training', slotId: 'slot_train', level: 1, operators: [{ id: 'char_synthetic', role: 'trainee', targetSkill: 0, remainSecs: 3600, moodRaw: 0, moodAt: at }] }] },
+    coverage: { operators: { status: 'complete', issues: [] }, inventory: { status: 'complete', issues: [] }, base: { status: 'complete', issues: [] } } });
+  const last = calculateTraining(f.tables, f.snapshot, { ...f.request, target: 1, facts: { ...f.request.facts, trainingRoomLevel: 1 } });
+  assert.equal(last.inTrainingRank, 1); assert.ok(!last.issues.includes('training:room-rank-unavailable'), last.issues.join(','));
+});
+
+test('32 FO2-2: when a recipe needs a stage nobody confirmed, the training output says how to record the user\'s one-line confirmation', () => {
+  const f = craftable(trainingFixture());
+  Object.assign((f.tables.building.workshopFormulas as Record<string, object>).synthetic!, { requireStages: [{ stageId: 'stage_synthetic', rank: 2 }] });
+  Object.assign(f.tables, { stages: { stages: { stage_synthetic: { stageId: 'stage_synthetic', code: 'SYN-1' } } } });
+  const asked = formatTraining(calculateTraining(f.tables, f.snapshot, { ...f.request, target: 1, progress: workshop }), 'zh-CN');
+  assert.match(asked, /confirmedStages:\["stage_synthetic"\]/); assert.match(asked, /不填 stageRanks/);
+  const confirmed = formatTraining(calculateTraining(f.tables, f.snapshot, { ...f.request, target: 1, progress: { ...workshop, confirmedStages: ['stage_synthetic'] } }), 'zh-CN');
+  assert.doesNotMatch(confirmed, /confirmedStages/);
+});

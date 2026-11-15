@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining, materialGate, formatTraining, gateSpend, trainingIssuePhase, startFacts } from './training-time.ts';
+import { queryTraining, materialGate, formatTraining, gateSpend, trainingIssuePhase, startFacts, type TrainingResult } from './training-time.ts';
 import { nextTrainingAction, reconcileTraining, paidRanks, planPayments, paymentKey, holdsTrainingRoom, trainingCheckRequired, staticCode, type TrainingPlan } from './training-state.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
@@ -17,6 +17,20 @@ import { sameConfigValue } from './config-projection.ts';
 export class TrainingCheckError extends Error {
   readonly details: Record<string, unknown>;
   constructor(code: string, details: Record<string, unknown>) { super(code); this.details = details; }
+}
+
+type PlannableResult = TrainingResult & { operator: NonNullable<TrainingResult['operator']>; role: string; skillName: string; currentRank: number; targetRank: number };
+
+/**
+ * Ticket 32 FO2-1: the one stop for prepare and refresh. Facts that leave the plan itself unknowable refuse it with every reason
+ * (a cost tool's conflict behind `targets:incomplete` included, FO1-2); facts only the start needs are not refusals here.
+ */
+function assertPlannable(result: TrainingResult): asserts result is PlannableResult {
+  const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
+  if (!unknowable.length && result.operator && result.role && result.skillName && result.currentRank !== null && result.targetRank !== null) return;
+  throw new TrainingCheckError('training-facts-required', { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
+    stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
+      .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
 }
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
@@ -89,7 +103,9 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     const payments = planPayments(await allPlans(options), null);
     const { result, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
     plan.paymentsSeen = payments.map(paymentKey);
-    if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
+    // Ticket 32 FO2-1: missing or conflicting facts are named as such, never reported as a changed target.
+    assertPlannable(result);
+    if (result.operator.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
       || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
     // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
     // only a shortage or an unknown count in the materials is a material wait.
@@ -129,12 +145,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   const { result } = await queryTraining(request.query, { ...options, payments });
   // Ticket 32 follow-on: only facts that make the plan itself unknowable refuse preparation; facts the start needs are saved
   // on the plan (`startIssues`) and keep the start closed until a refresh clears them.
-  const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
-  if (unknowable.length || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
-    // Ticket 32 FO1-2: every reason stays in the refusal (a cost tool's conflict behind `targets:incomplete` included).
-    throw new TrainingCheckError('training-facts-required', { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
-      stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
-        .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
+  assertPlannable(result);
   const settings = await readSettings(options.home);
   // Ticket 32: an approved report item is resolved, not trusted as text; the plan may only narrow what it approved.
   if (authorization.source === 'approved-report') await verifyApprovedTraining(settings.privateDirectory, authorization.reference, result);

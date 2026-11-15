@@ -257,7 +257,8 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   const trainingData = object(object(tables.building).trainingData);
   const roomLimit = object(array(trainingData.phases)[(result.trainingRoom?.level ?? 0) - 1]).specSkillLvlLimit;
   // Ticket 32 FO1-6: the room must train the tier this plan starts next; a later tier above its limit waits for its own refresh.
-  if (!integer(roomLimit, 1, 3) || roomLimit < firstStart) result.issues.push('training:room-rank-unavailable');
+  // Ticket 32 FO2-3: with no tier left to start (the last one is in training), there is nothing for the room to refuse.
+  if (firstStart <= (targetRank ?? 0) && (!integer(roomLimit, 1, 3) || roomLimit < firstStart)) result.issues.push('training:room-rank-unavailable');
   const base = trainingData.basicSpeedBuff;
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
   const available = facts.source === 'user-confirmed' && Array.isArray(facts.availableAssistants) && facts.availableAssistants.every(id => typeof id === 'string') ? facts.availableAssistants : null;
@@ -364,8 +365,14 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
     if (materialGate(gate, true) === 'crafting') lines.push(en ? 'Crafting from current stock covers it; MAA crafts it at the start only with the user\'s own crafting approval.'
       : '按现有库存加工可以补齐；只有用户亲口批准加工，开训时才让 MAA 自动合成。');
   }
-  if (decomposition &&(Object.keys(decomposition.short).length || decomposition.steps.length || decomposition.pending.length || (decomposition.lmdGap ?? 1) > 0))
+  if (decomposition &&(Object.keys(decomposition.short).length || decomposition.steps.length || decomposition.pending.length || (decomposition.lmdGap ?? 1) > 0)) {
     lines.push('', ...formatDecomposition(decomposition, gate.stageCodes));
+    // Ticket 32 FO2-2: an unconfirmed stage condition is settled by the user's one-line confirmation, recorded as reported (never a guessed rank).
+    const stageIds = [...new Set([...decomposition.assumptions, ...decomposition.pending.flatMap(entry => entry.issues)]
+      .filter(issue => /^stage:[^:]+:unknown$/.test(issue)).map(issue => issue.split(':')[1]))];
+    if (stageIds.length) lines.push(en ? `If the user confirms these stages are cleared, add progress.confirmedStages:${JSON.stringify(stageIds)} to the query, not stageRanks.`
+      : `关卡条件可以一次问清：用户确认这些关卡都已通关时，在查询的 progress 里写 confirmedStages:${JSON.stringify(stageIds)}，不填 stageRanks。`);
+  }
   return lines.join('\n');
 }
 
