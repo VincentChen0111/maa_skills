@@ -10,7 +10,7 @@ Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\u
 
 - `operators` 可省略；省略时只列快照实际观察到的已持有干员。同名有多个游戏 ID 时返回歧义，先让用户指定 ID。
 - `room` 可省略；支持控制中枢、制造站、贸易站、发电站、会客室、办公室、加工站、训练室、宿舍、回收站，也接受游戏表对应的大写房间类型。两个过滤项同时传时取交集。
-- 默认读取设置指定的私有目录内 `account-snapshot.json`。`snapshotFile` 可以指定另一份同格式快照；脚本不更新它。
+- 没有传 `snapshotFile` 时，由共享规则选一份快照整份读取：默认读 MAA 识别快照 `account-snapshot.json`；它缺这次查询要用的一类数据（MAA 识别从来没有技能等级、专精、模组和基建），而森空岛快照 `account-snapshot-skland.json` 这一类是完整的，就整份改读森空岛快照；没有可用的 MAA 识别快照时也读森空岛快照。两份不合并。输出写明读的是哪一份、为什么和读取时间，回复里照样告诉用户；用的是森空岛快照时，说明读取时间不是游戏内的数据时间，森空岛比游戏内滞后多久没有测过。基建技能查询只需要干员的精英和等级，所以 MAA 识别快照可用时就读它。`snapshotFile` 可以指定另一份同格式快照；脚本不更新它。JSON 输出的 `snapshotSource` 和 Markdown 第一行写明来源。
 - 默认运行时读取公开固定提交的 `character_table.json`、`building_data.json`，及 KayChung17 的交叉核对表。来源链接与完整提交见下节。结果列出获取时间、SHA256 和来源。
 - `tablesFile` 指向离线 JSON，结构为 `{ "characters": 游戏干员表, "building": 基建表, "crossCheck": 可选交叉表 }`。此模式完全不联网，明确标为「所提供的数据，本次未核验公网出处」，不会信任文件自己声称的来源。它供离线重放与合成演示使用；游戏数据不随 skill 打包。
 - `format` 为 `json`（默认）或 `markdown`。JSON 含 `ok`、`result` 和同一结果渲染的 `summary`；Markdown 是该 `summary` 的原文。语言遵循设置；中文及英文模板之外，由调用方按设置翻译。

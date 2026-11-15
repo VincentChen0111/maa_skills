@@ -12,6 +12,7 @@ import { collectStageJobs, loadStageTables, type StageRequest } from './stage-jo
 import { inline, inert, citationLink, type ResearchItem } from './research.ts';
 import type { ResearchTransport } from './research-transport.ts';
 import { readSettings } from './preferences.ts';
+import { selectSnapshot, SnapshotSelectionError, type SnapshotDomain } from './account-snapshot.ts';
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
 
@@ -273,9 +274,12 @@ export async function draftCultivationReport(value: unknown, options: DraftOptio
     || !Array.isArray(revision.corrections) || revision.corrections.some(entry => Object.keys(object(entry)).some(key => !['finding', 'change'].includes(key)))))
     throw new Error('report-revision-invalid');
   const settings = await readSettings(options.home);
-  const file = input.snapshotFile ? resolve(input.snapshotFile) : join(settings.privateDirectory, 'account-snapshot.json');
+  // One whole snapshot (OB-9): skills are needed when a step targets skill level, mastery or modules; stock always.
+  const skills = input.steps.some(step => { const target = isObject(step.target) ? step.target as Record<string, unknown> : {}; return ['skillLevel', 'mastery', 'modules'].some(key => target[key] !== undefined); });
+  const needed: SnapshotDomain[] = ['operators', 'inventory', ...(skills ? ['skills' as const] : [])];
   let snapshot: unknown;
-  try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('cultivation-snapshot-unavailable'); }
+  try { snapshot = (await selectSnapshot(settings.privateDirectory, needed, input.snapshotFile)).snapshot; }
+  catch (error) { if (error instanceof SnapshotSelectionError) throw new Error('cultivation-snapshot-unavailable'); throw error; }
   const cited = await resolveEvidence(input, snapshot, settings.privateDirectory, options);
   if (cited.issues.length) return { status: 'needs-input', issues: cited.issues };
   const built = buildCultivationReport(await loadGapTables(options.fetcher), snapshot, input, cited.evidence, (options.now?.() ?? new Date()).toISOString());

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
+import { selectSnapshot, snapshotSourceLine, SnapshotSelectionError } from './account-snapshot.ts';
 import { readSettings, startup } from './preferences.ts';
 import { readPublicJson, type PublicJsonResult } from './public-data.ts';
 
@@ -219,21 +220,24 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     let settings: Awaited<ReturnType<typeof readSettings>>;
     try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
     const language = startup(settings, input.currentLanguage ?? 'zh-CN').language;
-    const snapshotFile = input.snapshotFile ?? (settings?.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null);
-    if (!snapshotFile) throw new Error('base-snapshot-required');
-    // A snapshot that does not exist is named as such; one that is not JSON or not a snapshot stays base-snapshot-invalid.
-    const raw = await readFile(snapshotFile, 'utf8').catch(error => { throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new CheckRequiredError('base-snapshot-missing') : error; });
-    let snapshot: unknown;
-    try { snapshot = JSON.parse(raw.replace(/^﻿/, '')); } catch { throw new Error('base-snapshot-invalid'); }
+    if (!settings.privateDirectory) throw new Error('base-snapshot-required');
+    // One whole snapshot chosen by the shared predicate (OB-9): base skills need the owned operators' elite and level. A snapshot
+    // that does not exist is named as such; one that is not JSON stays base-snapshot-invalid.
+    let selection: Awaited<ReturnType<typeof selectSnapshot>>;
+    try { selection = await selectSnapshot(settings.privateDirectory, ['operators'], input.snapshotFile); }
+    catch (error) { throw error instanceof SnapshotSelectionError ? error.kind === 'missing' ? new CheckRequiredError('base-snapshot-missing') : new Error('base-snapshot-invalid') : error; }
+    const snapshot: unknown = selection.snapshot, sourceLine = snapshotSourceLine(selection);
     let result: BaseResult;
     if (input.tablesFile) {
       let supplied: Record<string, unknown>;
       try { supplied = object(JSON.parse((await readFile(input.tablesFile, 'utf8')).replace(/^﻿/, ''))); } catch { throw new CheckRequiredError('base-tables-file-unreadable'); }
       result = queryBaseSkills(snapshot, { characters: supplied.characters, building: supplied.building, crossCheck: supplied.crossCheck }, input);
     } else result = await queryPublicBaseSkills(snapshot, input);
-    const summary = formatBaseSkills(result, language);
+    const summary = `${sourceLine}
+
+${formatBaseSkills(result, language)}`;
     if (input.format === 'markdown') process.stdout.write(summary);
-    else process.stdout.write(JSON.stringify({ ok: true, result, summary }));
+    else process.stdout.write(JSON.stringify({ ok: true, result, snapshotSource: { source: selection.source, readAt: selection.readAt, chosen: selection.chosen }, summary }));
   } catch (error) {
     const stable = new Set(['base-data-invalid', 'base-input-invalid', 'base-snapshot-invalid', 'base-snapshot-required', 'base-room-invalid', 'base-cross-check-invalid',
       'public-data-input-invalid', 'public-data-network-failed', 'public-data-http-failed', 'public-data-too-large', 'public-data-json-invalid']);
