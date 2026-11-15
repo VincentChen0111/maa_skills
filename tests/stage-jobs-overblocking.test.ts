@@ -192,3 +192,32 @@ test('review round 1 (F2): with prerequisites still open, confirmable says wheth
   assert.equal(answered.stages[0]!.candidates[0]!.status, 'ready');
   assert.equal(matchStageJobs(open.snapshot, open.tables, open.request, open.jobs, open.search).hash, open.hash);
 });
+
+// Review rounds 1 and 2 (package 2) both found defects in what `confirmable` means, so it has one owner and this table:
+// confirmable ⇔ the job is unknown, one job confirmation plus answers to any still-unverified prerequisite would make it
+// ready, and answering the prerequisites alone would not. The Markdown hint (its only consumer in the tool) shows exactly then.
+test('conformance: confirmable is true exactly when the job confirmation itself is needed and enough', () => {
+  const tables = { ...stageTables, characters: { char_synthetic_c: { name: '合成丙', profession: 'CASTER' } },
+    stages: { ...stageTables.stages, synthetic_00: { stageId: 'synthetic_00', code: 'SYN-0', levelId: 'Obt/Synthetic/level_synthetic_00', zoneId: 'synthetic_map', difficulty: 'NORMAL', unlockCondition: [] } } };
+  const open = { completions: undefined, completionEvidence: undefined }; // merged over stageRequest below, so the prerequisites stay open
+  const unstated = { opers: [{ name: '合成甲' }] };
+  const raid = { stages: [{ stageId: 'synthetic_01#f#', code: 'SYN-1', difficulty: 'raid' as const, loops: 1 }], completions: { synthetic_01: 'PASS' as const }, completionEvidence: '用户：没三星' };
+  const cases: [string, Partial<StageRequest>, Record<string, unknown>, number, boolean][] = [
+    ['only the prerequisites are open: answering them is enough', open, {}, 1, false],
+    ['prerequisites and row-level unknowns open', open, unstated, 1, true],
+    ['only row-level unknowns', stageRequest, unstated, 1, true],
+    ['only an undeclared action operator', stageRequest, { actions: [{ type: 'Deploy', name: '合成丙' }] }, 1, true],
+    ['only document notes', stageRequest, { doc: { title: '合成作业', details: '开局先放合成甲' } }, 1, true],
+    ['a prerequisite known unmet', { ...stageRequest, ...raid }, unstated, 3, false],
+    ['an invalid requirement', stageRequest, { opers: [{ name: '合成甲', requirements: { elite: 'two' } }] }, 1, false],
+    ['the MAA version unverified', { ...stageRequest, maaVersion: '' }, unstated, 1, false],
+    ['already ready', stageRequest, {}, 1, false],
+  ];
+  for (const [name, request, content, difficulty, expected] of cases) {
+    const report = matchStageJobs(snapshot, tables, { ...stageRequest, ...request } as StageRequest, [withContent(151, content, difficulty)]);
+    const candidate = report.stages[0]!.candidates[0]!;
+    assert.equal(candidate.confirmable, expected, name);
+    assert.equal(/对这份作业确认一次即可准备/.test(formatStageJobs(report)), expected, `${name}: the Markdown hint`);
+    assert.equal(matchStageJobs(report.snapshot, report.tables, report.request, report.jobs, report.search).hash, report.hash, `${name}: re-verifies`);
+  }
+});

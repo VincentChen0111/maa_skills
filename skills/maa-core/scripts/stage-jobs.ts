@@ -499,9 +499,10 @@ export function matchStageJobs(snapshotValue: unknown, tablesValue: unknown, req
         const candidate = evaluate(job, applies);
         if (confirmation && !applies) candidate.reasons.push('job-confirmation-content-changed');
         if (applies) candidate.confirmation = { reference: confirmation!.reference };
-        // Whether one confirmation of this job (with the answer to any prerequisite still unverified) would make it ready: the
-        // agent asks the user only then, and asks both in the same question.
-        else if (candidate.status === 'unknown') candidate.confirmable = evaluate(job, true, true).status === 'ready';
+        // The one owner of `confirmable` (package 2 review rounds 1 and 2): the job confirmation is needed and enough, i.e. with
+        // answers to any prerequisite still unverified, confirming makes the job ready and not confirming does not. The agent asks
+        // only then, together with the prerequisites in one question. The repeat evaluations add the same shared entries.
+        else if (candidate.status === 'unknown') candidate.confirmable = evaluate(job, true, true).status === 'ready' && evaluate(job, false, true).status !== 'ready';
         return candidate;
       } catch (error) {
         const code = error instanceof Error && /^[a-z][a-z0-9-]{0,63}$/.test(error.message) ? error.message : 'unreadable', content = job.content as unknown;

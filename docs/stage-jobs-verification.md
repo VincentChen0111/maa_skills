@@ -205,7 +205,7 @@ R2 修复先新增两项公开接口反例，`.tmp/stage-r2-red.txt` 实测 7 pa
 - 候选逐份核对：内容 MAA 用不了的作业记 blocked（`job-content-invalid:<代码>`），在线读到的内容解析不了时保留原文、同样只挡这一份；同一关、同一批的其他候选照常核对。
 - 前置：没核实的前置写成 `prerequisite-unverified:<前置 stageId>:<要求>`，用户说的状态不够写成 `prerequisite-unmet:…`；报告的前置带关卡代号，前置关卡的表条目随报告保存；接口说明要求把所有前置合成一个问题只问一次。
 - MAA 版本：请求没写时用已安装 MAA 的版本补上，报告记 `maaVersionSource`。
-- 整份作业一次确认：`request.jobConfirmations`，覆盖范围与例外见规格「默认值及其来源」；候选的 `confirmable` 说明确认一次能否变成 ready，Markdown 给出问法所需的作业号和原文指纹。
+- 整份作业一次确认：`request.jobConfirmations`，覆盖范围与例外见规格「默认值及其来源」；候选的 `confirmable` 说明这份作业是否要确认、确认一次（连同前置的回答）能否变成 ready，Markdown 给出问法所需的作业号和原文指纹。
 - 快照：`query` 没传 `snapshotFile` 时经 `selectSnapshot` 整份读一份（要干员和技能），报告记 `snapshotSelection`（在指纹外，和 `versions` 一样），Markdown 的来源行由同一函数生成。成本、培养报告、基建技能查询也改用这条规则。
 
 测试先行：`tests/stage-jobs-overblocking.test.ts` 8 项、`tests/snapshot-selection.test.ts` 5 项和 `tests/operator-cost.test.ts` 新增的 1 项先写，在改动前失败（缺导出或断言不成立），改动后全部通过。原有断言随行为改写：`job-group-name-duplicate` 改为 `job-content-invalid:job-group-name-duplicate`（`tests/stage-jobs-mastery.test.ts`）；场景测试里有两份快照时不再先得到待核（`tests/stage-scenarios.test.ts`）。
