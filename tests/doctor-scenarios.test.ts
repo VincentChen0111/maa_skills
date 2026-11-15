@@ -48,9 +48,16 @@ test('every doctor scenario starts with doctor check, as maa-doctor step 1 requi
     { file: 'maa-core/scripts/doctor.ts', action: 'check', exitCode: 1 }, { file: 'maa-core/scripts/doctor.ts', action: 'analyze', exitCode: 1 }]);
 });
 
-// Windows only: the scenario's expected behaviour is MAA on Windows; off Windows ticket 10's platform check is an error, so doctor's output differs.
-test('the approved reconcile scenario runs check, the named repair and a closing check through the installed CLI and grades the exact recovery', { skip: process.platform !== 'win32' }, async (t) => {
+// On every platform, with the exit codes the scenario declares: off Windows ticket 10's platform row is an error, so the closing check
+// of this healthy world exits 1 there and 0 on Windows, as in every healthy doctor scenario. 26 H4 CI fix: the scenario expected 0
+// everywhere, so its right path failed `expected-behavior` on ubuntu-latest while this test was skipped there.
+test('the approved reconcile scenario runs check, the named repair and a closing check through the installed CLI and grades the exact recovery', async (t) => {
   const scenario = doctorScenarios.find((item) => item.id === 'doctor-reconcile-approved')!;
+  const doctor = (scenario.policy.expectedInvocations ?? []).filter((item) => item.file === 'maa-core/scripts/doctor.ts');
+  assert.deepEqual(doctor.map((item) => item.action), ['check', 'repair', 'check']);
+  const [firstCheck, namedRepair, closingCheck] = doctor.map((item) => item.exitCode ?? 0);
+  // The closing check's exit code is the one its latest record grants (the record of a healthy world on this platform).
+  assert.equal(closingCheck, scenario.policy.grants.find((grant) => grant.file === 'private/doctor-latest.json' && grant.key === 'exitCode')?.value);
   for (const host of ['.agents', '.claude']) await t.test(host, async (t) => {
     const f = await createFixture({ skillDirectory: fileURLToPath(new URL('../skills/maa-doctor', import.meta.url)), maaProcess: scenario.maaProcess!,
       companionSkills: { 'maa-core': fileURLToPath(new URL('../skills/maa-core', import.meta.url)) }, jsonInputs: scenario.jsonInputs, jsonFiles: scenario.jsonFiles });
@@ -59,12 +66,12 @@ test('the approved reconcile scenario runs check, the named repair and a closing
     const run = (action: string, input: unknown = {}) => spawnSync(process.execPath, [join(f.workspace, host, 'skills/maa-core/scripts/doctor.ts'), action, '--json'],
       { cwd: f.workspace, env: f.env, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true });
     assert.equal(spawnSync(process.execPath, [join(f.workspace, host, 'skills/maa-core/scripts/preferences.ts'), 'read'], { cwd: f.workspace, env: f.env, input: '{}', encoding: 'utf8' }).status, 0);
-    const checked = run('check'); assert.equal(checked.status, 1, checked.stdout);
+    const checked = run('check'); assert.equal(checked.status, firstCheck, checked.stdout); assert.equal(firstCheck, 1, 'the retained lock is an error row');
     const revision = JSON.parse(checked.stdout).recovery.evidenceRevision;
     const policy = { ...renderPolicy(scenario.policy, f.workspace), secrets: f.policy.secrets };
     const repaired = run('repair', { host: host === '.agents' ? 'codex' : 'claude', approved: ['reconcile-lock'], evidenceRevision: revision, reference: '我点名批准 reconcile-lock' });
-    assert.equal(repaired.status, 0, repaired.stdout); assert.equal(JSON.parse(repaired.stdout).status, 'complete');
-    const closing = run('check'); assert.equal(closing.status, 0, closing.stdout);
+    assert.equal(repaired.status, namedRepair, repaired.stdout); assert.equal(JSON.parse(repaired.stdout).status, 'complete');
+    const closing = run('check'); assert.equal(closing.status, closingCheck, closing.stdout);
     const evidence = await collectEvidence(f, { completed: true, calls: [], outputs: [] });
     evidence.executionWindow = { startedAt, endedAt: new Date().toISOString() };
     assert.equal(grade(policy, evidence).status, 'pass', JSON.stringify(grade(policy, evidence)));
