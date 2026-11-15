@@ -24,7 +24,8 @@ test('32 OB-4: the training room level comes from the snapshot when the user did
   const f = unconfirmedRoom(skland(trainingFixture(), null, [{ type: 'training', slotId: 'slot_train', level: 2, operators: [] }]));
   const two = calculateTraining(f.tables, f.snapshot, { ...f.request, target: 2 });
   assert.deepEqual(two.trainingRoom, { level: 2, source: 'snapshot' }); assert.ok(!two.issues.includes('training:room-unverified'), two.issues.join(','));
-  assert.ok(calculateTraining(f.tables, f.snapshot, { ...f.request, target: 3 }).issues.includes('training:room-rank-unavailable'), 'a level-2 room cannot train M3');
+  const three = calculateTraining(f.tables, f.snapshot, { ...f.request, target: 3 }).issues; // FO1-6: M3 waits for its own refresh, M1 is not held
+  assert.ok(three.includes('training:stage-3-pending') && !three.includes('training:room-rank-unavailable'), three.join(','));
   const confirmed = calculateTraining(f.tables, f.snapshot, { ...f.request, target: 3, facts: { ...f.request.facts, trainingRoomLevel: 3 } });
   assert.deepEqual(confirmed.trainingRoom, { level: 3, source: 'user-confirmed' }); assert.ok(!confirmed.issues.includes('training:room-rank-unavailable'));
   // No room, two rooms or no level in the snapshot: still a fact to confirm.
@@ -82,4 +83,23 @@ test('32 OB-9: without a named snapshot the query reads the Skland snapshot whol
   // A named snapshot is read as named.
   const named = await queryTraining({ ...query, snapshotFile: join(privateDirectory, 'account-snapshot-skland.json') }, { home: root });
   assert.deepEqual([named.result.snapshotUsed?.file, named.result.snapshotUsed?.selected], ['account-snapshot-skland.json', 'named']);
+});
+
+test('32 FO1-1: the Skland snapshot is not chosen over a default whose inventory is newer, whatever it covers', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'training-fresh-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const privateDirectory = join(root, 'private'); await mkdir(privateDirectory, { recursive: true });
+  await writeFile(join(root, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory }));
+  const maa = trainingFixture(); maa.snapshot.items.mat = 0;
+  Object.assign(maa.snapshot, { readAt: '2026-11-12T01:00:00.000Z', sourceTimes: { operators: null, inventory: '2026-11-12T00:00:00.000Z' } });
+  const sk = skland(trainingFixture(), null); sk.snapshot.items.mat = 20; Object.assign(sk.snapshot, { readAt: '2026-11-10T00:00:00.000Z' });
+  const tablesFile = join(root, 'tables.json'); await writeFile(tablesFile, JSON.stringify(maa.tables));
+  await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
+  await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
+  const query = { ...trainingFixture().request, target: 1, tablesFile };
+  const older = await queryTraining(query, { home: root });
+  assert.deepEqual([older.result.snapshotUsed?.file, older.result.snapshotUsed?.selected], ['account-snapshot.json', 'default-inventory-newer']);
+  // A default without a scan time is bounded by its import time: a Skland read after that import is newer.
+  Object.assign(maa.snapshot, { sourceTimes: { operators: null, inventory: null } }); await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(maa.snapshot));
+  Object.assign(sk.snapshot, { readAt: '2026-11-12T02:00:00.000Z' }); await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(sk.snapshot));
+  assert.equal((await queryTraining(query, { home: root })).result.snapshotUsed?.selected, 'skland-covers-more');
 });

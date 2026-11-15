@@ -256,7 +256,8 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
   if (!result.trainingRoom) result.issues.push('training:room-unverified');
   const trainingData = object(object(tables.building).trainingData);
   const roomLimit = object(array(trainingData.phases)[(result.trainingRoom?.level ?? 0) - 1]).specSkillLvlLimit;
-  if (!integer(roomLimit, 1, 3) || roomLimit < targetRank) result.issues.push('training:room-rank-unavailable');
+  // Ticket 32 FO1-6: the room must train the tier this plan starts next; a later tier above its limit waits for its own refresh.
+  if (!integer(roomLimit, 1, 3) || roomLimit < firstStart) result.issues.push('training:room-rank-unavailable');
   const base = trainingData.basicSpeedBuff;
   const baseBonus = typeof base === 'number' && Number.isFinite(base) && base >= 0 && base <= 1 ? base : null;
   const available = facts.source === 'user-confirmed' && Array.isArray(facts.availableAssistants) && facts.availableAssistants.every(id => typeof id === 'string') ? facts.availableAssistants : null;
@@ -300,7 +301,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
     const best = assistants.filter(row => row.available === true && row.estimatedSeconds !== null).sort((a, b) => a.estimatedSeconds! - b.estimatedSeconds! || a.id.localeCompare(b.id))[0];
     const after = assistants.filter(row => row.available === true && row.speedBonus !== null).sort((a, b) => b.speedBonus! - a.speedBonus! || a.id.localeCompare(b.id))[0];
     result.stages.push({ rank, baseSeconds, recommendedAssistant: best?.id ?? null, afterStartAssistant: after?.id ?? null, estimatedSeconds: best?.estimatedSeconds ?? null, assistants });
-    if (!baseSeconds || !best) result.issues.push(`training:stage-${rank}-pending`);
+    if (!baseSeconds || !best || rank > firstStart && integer(roomLimit, 1, 3) && roomLimit < rank) result.issues.push(`training:stage-${rank}-pending`);
   }
   if (!result.issues.length) result.status = 'ok';
   return result;

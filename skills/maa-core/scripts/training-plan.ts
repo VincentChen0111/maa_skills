@@ -102,7 +102,7 @@ export async function refreshTrainingPlan(input: unknown, options: Options = {})
     const spend = gate === 'short' || plan.manualTraining ? null : gateSpend(result.startMaterials, gate);
     plan.spends = { ...plan.spends }; if (spend) plan.spends[String(plan.rank)] = spend; else delete plan.spends[String(plan.rank)];
     if (gate !== 'short' && !spend && !plan.manualTraining) plan.materialReady = false;
-    plan.reservedTiers = result.reservedTiers;
+    plan.reservedTiers = result.reservedTiers; plan.snapshotUsed = result.snapshotUsed; plan.trainingRoom = result.trainingRoom;
     if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
@@ -131,7 +131,8 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   // on the plan (`startIssues`) and keep the start closed until a refresh clears them.
   const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
   if (unknowable.length || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
-    throw new TrainingCheckError('training-facts-required', { issues: unknowable.length ? unknowable : result.issues,
+    // Ticket 32 FO1-2: every reason stays in the refusal (a cost tool's conflict behind `targets:incomplete` included).
+    throw new TrainingCheckError('training-facts-required', { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
       stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
         .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
   const settings = await readSettings(options.home);
@@ -158,7 +159,7 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
     // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
     // hand, no later than this plan. Every later tier records its own countdown time.
     ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
-    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey),
+    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey), snapshotUsed: result.snapshotUsed, trainingRoom: result.trainingRoom,
     ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers,
     ...(missing.facts.length ? { startIssues: missing.facts } : {}) };
   if (gate !== 'short' && !spend && request.manualTraining !== true) { plan.materialReady = false; delete plan.craftingRequired; }
@@ -363,7 +364,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
-    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [], reservedTiers: plan.reservedTiers ?? [],
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [], reservedTiers: plan.reservedTiers ?? [], snapshotUsed: plan.snapshotUsed ?? null, trainingRoom: plan.trainingRoom ?? null,
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }

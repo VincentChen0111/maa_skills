@@ -476,7 +476,7 @@ export async function loadGapTables(fetcher?: typeof fetch): Promise<GapTables> 
 }
 
 export type SnapshotDomain = 'operators' | 'skills' | 'inventory' | 'base';
-export type SnapshotUsed = { file: string; source: string | null; readAt: string | null; selected: 'named' | 'default' | 'skland-covers-more' };
+export type SnapshotUsed = { file: string; source: string | null; readAt: string | null; selected: 'named' | 'default' | 'skland-covers-more' | 'default-inventory-newer' };
 /** A domain counts only when its coverage is complete; skills (level, mastery) also need values, which MAA recognition never has. */
 const snapshotCovers = (snapshot: unknown, domain: SnapshotDomain) => {
   const value = object(snapshot), coverage = object(value.coverage);
@@ -501,7 +501,15 @@ export async function selectSnapshot(privateDirectory: string, needed: SnapshotD
   if (!fallback.ok) { if (skland.ok) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') }; throw new Error('gaps-snapshot-unavailable'); }
   if (skland.ok) {
     const own = needed.filter(domain => snapshotCovers(fallback.value, domain)), other = needed.filter(domain => snapshotCovers(skland.value, domain));
-    if (own.every(domain => other.includes(domain)) && other.length > own.length) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
+    // Ticket 32 FO1-1: never trade a newer inventory for coverage; the start gate counts this stock. The Skland inventory is as of
+    // its read; the default's is its depot scan time, bounded by its import time when the scan time is missing.
+    const inventoryTime = (value: unknown) => { const data = object(value), at = data.source === 'skland' ? data.readAt : object(data.sourceTimes).inventory ?? data.readAt;
+      return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? Date.parse(at) : null; };
+    const fresh = inventoryTime(skland.value), stale = inventoryTime(fallback.value);
+    if (own.every(domain => other.includes(domain)) && other.length > own.length) {
+      if (fresh !== null && stale !== null && fresh >= stale) return { snapshot: skland.value, used: usedOf(skland.value, snapshotFiles.skland, 'skland-covers-more') };
+      return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default-inventory-newer') };
+    }
   }
   return { snapshot: fallback.value, used: usedOf(fallback.value, snapshotFiles.maa, 'default') };
 }

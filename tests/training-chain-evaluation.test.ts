@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createFixture, collectEvidence } from '../scripts/eval-fixture.ts';
 import { grade } from '../scripts/evaluation.ts';
@@ -28,7 +28,7 @@ async function drive(t: { after(fn: () => Promise<unknown>): void }, definition:
     const evidence = await collectEvidence(fixture, { completed: true, calls: [], outputs });
     return grade({ ...definition.policy, secrets: fixture.policy.secrets }, evidence);
   };
-  return { invoke, request, graded };
+  return { invoke, request, graded, workspace: fixture.workspace };
 }
 
 test('32: the prepare-only chain scenarios pass with the documented inputs', async t => {
@@ -98,6 +98,13 @@ test('32 follow-on: the new chain scenarios pass with the documented moves and f
   const waited = applyOnly.invoke('training-plan.ts', 'apply', { id: 'synthetic-plan', host: 'codex' });
   assert.equal(JSON.parse(waited.stdout).result.next, 'refresh');
   assert.equal((await applyOnly.graded()).status, 'fail');
+  // FO1-5: a rewrite that widens the plan (another goal) fails even with the fixed id, rank and readiness.
+  const widened = await drive(t, followOn('training-chain-waiting-refresh'));
+  widened.invoke('training-plan.ts', 'list', {}); widened.invoke('training-plan.ts', 'refresh', { id: 'synthetic-plan', query: widened.request });
+  widened.invoke('training-plan.ts', 'apply', { id: 'synthetic-plan', host: 'codex' });
+  const record = join(widened.workspace, 'private/training-plans/synthetic-plan.json'), stored = JSON.parse(await readFile(record, 'utf8'));
+  stored.target.goal = 3; await writeFile(record, JSON.stringify(stored, null, 2));
+  assert.equal((await widened.graded()).status, 'fail');
   // OB-6, OB-4/OB-9, item 7: preparing straight from the request is the documented move.
   for (const [id, trainee] of [['training-chain-lower-bound', null], ['training-chain-skland-facts', null], ['training-chain-skland-in-progress', 'char_synthetic']] as const) {
     const run = await drive(t, followOn(id));
@@ -108,6 +115,20 @@ test('32 follow-on: the new chain scenarios pass with the documented moves and f
   // Asking instead of preparing (nothing saved), or naming nobody in the room while the snapshot shows the trainee, fails.
   const asked = await drive(t, followOn('training-chain-skland-facts'));
   assert.equal((await asked.graded()).status, 'fail');
+  // FO1-4: guessing the facts as "user-confirmed" and reading the MAA snapshot leaves a different record and fails.
+  const guessed = await drive(t, followOn('training-chain-skland-facts'));
+  assert.equal(guessed.invoke('training-plan.ts', 'prepare', { query: { ...guessed.request, current: { source: 'user-confirmed', skillLevel: 7, mastery: { '1': 0 } },
+    facts: { ...guessed.request.facts, trainingRoomLevel: 3 }, snapshotFile: join(guessed.workspace, 'private/account-snapshot.json') }, binding, currentTrainee: null,
+    authorization: { source: 'current-request', reference: 'synthetic' } }).status, 0);
+  assert.equal((await guessed.graded()).status, 'fail');
+  // FO1-3 / item 8: the stage confirmation is visible in the plan: with it the crafting gate opens; without it the tier waits.
+  const workshop = { source: 'user-confirmed', rooms: { WORKSHOP: [3] } };
+  for (const [confirmed, grade] of [[true, 'pass'], [false, 'fail']] as const) {
+    const run = await drive(t, followOn('training-chain-confirm-stages'));
+    const prepared = run.invoke('training-plan.ts', 'prepare', { query: { ...run.request, progress: confirmed ? { ...workshop, confirmedStages: ['stage_synthetic'] } : workshop },
+      binding, currentTrainee: 'char_synthetic', authorization: { source: 'current-request', reference: '合成干员一技能练到专一' }, crafting: { reference: '缺的材料让 MAA 自动去加工站合成' } });
+    assert.equal(prepared.status, 0, prepared.stderr); assert.equal((await run.graded()).status, grade, String(confirmed));
+  }
   const nobody = await drive(t, followOn('training-chain-skland-in-progress'));
   assert.equal(nobody.invoke('training-plan.ts', 'prepare', { query: nobody.request, binding, currentTrainee: null, authorization: { source: 'current-request', reference: 'synthetic' } }).status, 1);
   assert.equal((await nobody.graded()).status, 'fail');

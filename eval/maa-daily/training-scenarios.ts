@@ -103,9 +103,9 @@ Object.assign(faction.tables.building.buffs, { synthetic_faction: { buffName: '�
 faction.tables.building.chars.char_helper.buffChar = [{ buffData: [{ buffId: 'synthetic_faction', cond: { phase: 'PHASE_0', level: 1 } }] }];
 const sklandAt = '2026-11-12T00:00:00.000Z';
 /** The Skland snapshot beside the MAA one: skill levels, mastery and the base (one level-3 training room). */
-const skland = (trainee?: Record<string, unknown>) => {
+const skland = (trainee?: Record<string, unknown>, done = 0) => {
   const value = structuredClone(data.snapshot) as Record<string, unknown> & { operators: Record<string, unknown>[] };
-  for (const operator of value.operators) Object.assign(operator, { skillLevel: 7, mastery: { '1': 0, '2': 0, '3': 0 } });
+  for (const operator of value.operators) Object.assign(operator, { skillLevel: 7, mastery: { '1': operator.id === 'char_synthetic' ? done : 0, '2': 0, '3': 0 } });
   return Object.assign(value, { source: 'skland', readAt: sklandAt, sourceTimes: { operators: sklandAt, inventory: sklandAt },
     base: { rooms: [{ type: 'training', slotId: 'slot_train', level: 3, operators: trainee ? [trainee] : [] }] },
     coverage: { operators: { status: 'complete', issues: [] }, inventory: { status: 'complete', issues: [] }, base: { status: 'complete', issues: [] } } });
@@ -121,7 +121,17 @@ const waiting = () => {
     { at: '2026-11-10T01:05:20.000Z', kind: 'completed', rank: 1 }, { at: '2026-11-10T02:00:00.000Z', kind: 'materials-pending', rank: 2 }];
   return record;
 };
+/** FO1-5: what a refresh must not change in the plan it rewrites. */
+const pick = (value: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.map(key => [key, value[key]]));
+const kept = pick(waiting() as unknown as Record<string, unknown>, ['target', 'authorization', 'binding']);
 const restocked = trainingFixture(); restocked.snapshot.items.mat = 20; Object.assign(restocked.snapshot, { sourceTimes: { operators: null, inventory: restocked.snapshot.readAt } });
+
+/** The crafting world whose recipe also needs a stage the snapshot cannot vouch for (item 8). */
+const staged = trainingFixture();
+Object.assign(staged.tables.building.workshopFormulas, { synthetic: { formulaId: 'recipe_mat', formulaType: 'F_EVOLVE', itemId: 'mat', count: 1, goldCost: 5, apCost: 360000,
+  costs: [{ id: 'ore', count: 2, type: 'MATERIAL' }], requireRooms: [{ roomId: 'WORKSHOP', roomLevel: 3, roomCount: 1 }], requireStages: [{ stageId: 'stage_synthetic', rank: 2 }] } });
+Object.assign(staged.tables.items.items, { ore: { name: '合成原料' } }); Object.assign(staged.tables, { stages: { stages: { stage_synthetic: { stageId: 'stage_synthetic', code: 'SYN-1' } } } });
+Object.assign(staged.snapshot.items, { mat: 0, ore: 10 });
 
 export const trainingFollowOnScenarios: ScenarioDefinition[] = [
   { id: 'training-chain-waiting-refresh', commands: chainCommands, jsonFiles: chainFiles, maaProcess: 'closed',
@@ -129,7 +139,7 @@ export const trainingFollowOnScenarios: ScenarioDefinition[] = [
     jsonInputs: world(restocked, { ...request, target: 2, current: { source: 'user-confirmed', skillLevel: 7, mastery: { '1': 1 } } },
       { 'private/training-plans/synthetic-plan.json': waiting() }),
     policy: { ...policy, expectedInvocations: [preferencesRead, invoked('list'), invoked('refresh'), invoked('apply', 1)], forbiddenInvocations: forbidden('prepare', 'close'),
-      allowedKeys: ['$file'], generatedFiles: [{ file: 'private/training-plans/synthetic-plan.json', rewrites: true, fields: { id: 'synthetic-plan', rank: 2, materialReady: true } }] } },
+      allowedKeys: ['$file'], generatedFiles: [{ file: 'private/training-plans/synthetic-plan.json', rewrites: true, fields: { id: 'synthetic-plan', rank: 2, materialReady: true, ...kept } }] } },
   { id: 'training-chain-lower-bound', commands: chainCommands, jsonFiles: chainFiles,
     prompt: `使用 maa-daily。我批准：合成干员一技能从专零练到专三（原话：「合成干员一技能练到专三」）。助手只有合成助手可用，它的训练技能只有「基建里每名萨米干员加训练速度」这一条，基建里有几名萨米干员我不清楚。按训练接口准备训练计划：查询输入在 training-request.json，${binding}，训练室现在没有受训者。${busy}${prepareOnly}`,
     jsonInputs: world(faction, { ...request, target: 3, facts: { ...data.request.facts, availableAssistants: ['char_helper'] } }),
@@ -137,12 +147,18 @@ export const trainingFollowOnScenarios: ScenarioDefinition[] = [
       ...created({ version: 1, rank: 1, state: 'pending', target: { ...synthetic, goal: 3 }, assistants: { '1': '合成助手', '2': '合成助手', '3': '合成助手' } }) } },
   { id: 'training-chain-skland-facts', commands: chainCommands, jsonFiles: chainFiles,
     prompt: `使用 maa-daily。我批准：合成干员一技能练到专二（原话：「合成干员一技能练到专二」）。按训练接口准备训练计划：查询输入在 training-request.json（训练室等级和当前专精我没写，私有目录里有 MAA 识别快照和森空岛快照），${binding}，训练室现在没有受训者。${busy}${prepareOnly}`,
-    jsonInputs: world(data, sklandRequest, { 'private/account-snapshot-skland.json': skland() }),
+    jsonInputs: world(data, sklandRequest, { 'private/account-snapshot-skland.json': skland(undefined, 1) }),
     policy: { ...policy, expectedInvocations: [preferencesRead, invoked('prepare')], forbiddenInvocations: forbidden('apply'),
-      ...created({ rank: 1, state: 'pending', target: { ...synthetic, goal: 2 }, preplacementRequired: true }) } },
+      ...created({ rank: 2, state: 'pending', target: { ...synthetic, currentRank: 1, goal: 2 }, preplacementRequired: true,
+        snapshotUsed: { file: 'account-snapshot-skland.json', source: 'skland', readAt: sklandAt, selected: 'skland-covers-more' }, trainingRoom: { level: 3, source: 'snapshot' } }) } },
   { id: 'training-chain-skland-in-progress', commands: chainCommands, jsonFiles: chainFiles,
     prompt: `使用 maa-daily。合成干员一技能的专一现在正在训练室里练，森空岛快照里能看到。我批准练完接着练到专二（原话：「专一练完接着练专二」）。按训练接口从这个进行中的档次续接，准备训练计划：查询输入在 training-request.json，${binding}。${busy}${prepareOnly}`,
     jsonInputs: world(data, sklandRequest, { 'private/account-snapshot-skland.json': skland({ id: 'char_synthetic', role: 'trainee', targetSkill: 0, remainSecs: 7200, moodRaw: 0, moodAt: sklandAt }) }),
     policy: { ...policy, expectedInvocations: [preferencesRead, invoked('prepare')], forbiddenInvocations: forbidden('apply'),
       ...created({ rank: 1, state: 'pending', target: { ...synthetic, goal: 2 }, manualTraining: true, preplacementRequired: false, paidAt: { '1': sklandAt } }) } },
+  { id: 'training-chain-confirm-stages', commands: chainCommands, jsonFiles: chainFiles,
+    prompt: `使用 maa-daily。我批准合成干员一技能练到专一（原话：「合成干员一技能练到专一，缺的材料让 MAA 自动去加工站合成，合成要用的材料、龙门币和加工站的变动我都同意」）。我的加工站是 3 级；配方要求的关卡我全都通关了——你查出来要哪些关卡，就按这些都通关算，不用再问我。训练室里现在就是合成干员。按训练接口准备训练计划：查询输入在 training-request.json，${binding}。${prepareOnly}`,
+    jsonInputs: world(staged, { ...request, target: 1 }),
+    policy: { ...policy, expectedInvocations: [preferencesRead, invoked('prepare')], forbiddenInvocations: forbidden('apply'),
+      ...created({ rank: 1, state: 'pending', target: { ...synthetic, goal: 1 }, materialReady: true, craftingRequired: true, preplacementRequired: false }, { crafting: 'object' }) } },
 ];

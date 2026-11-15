@@ -646,3 +646,23 @@ test('32 follow-on: every training issue the estimate can raise is classified on
   assert.equal(trainingIssuePhase('training:some-future-code', 1), 'start', 'a new code never blocks preparation by default');
   assert.equal(trainingIssuePhase('progress:rooms:invalid', 1), 'prepare', 'invalid input is refused at once');
 });
+
+test('32 FO1-2/FO1-6/FO1-8: a refusal keeps every reason; a room limit holds only the tier it limits; the plan says which snapshot and room level it used', async t => {
+  const f = scanned(trainingFixture()); f.snapshot.items.mat = 20; f.snapshot.operators[0]!.mastery = { '1': 0 } as never;
+  const w = await world(t, f), query = { ...f.request, snapshotFile: w.snapshotFile, tablesFile: w.tablesFile };
+  const authorization = { source: 'current-request', reference: '合成干员一技能练到专三' };
+  // FO1-2: the user's stated rank contradicts the snapshot: the cost tool's reason stays in the refusal.
+  await assert.rejects(prepareTrainingPlan({ query: { ...query, target: 3, current: { ...f.request.current, mastery: { '1': 1 } } }, binding, currentTrainee: null, authorization }, { home: w.root }),
+    (error: Error & { details?: { issues?: string[] } }) => error.message === 'training-facts-required' && Boolean(error.details?.issues?.some(issue => issue.includes('conflict'))));
+  // FO1-6: a level-2 room can train M1 and M2; M3 waits for its own refresh, it does not hold M1.
+  const plan = await prepareTrainingPlan({ query: { ...query, target: 3, facts: { ...f.request.facts, trainingRoomLevel: 2 } }, binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.deepEqual([plan.startIssues, plan.materialReady], [undefined, true]);
+  // FO1-8: the plan records the snapshot and the room level it was prepared from, and the summary shows them.
+  assert.deepEqual([plan.snapshotUsed?.file, plan.snapshotUsed?.selected, plan.trainingRoom], ['snapshot.json', 'named', { level: 2, source: 'user-confirmed' }]);
+  // A room that cannot train the next tier holds it (level 1, M1 done, next is M2).
+  const low = scanned(trainingFixture()); low.snapshot.items.mat = 20;
+  await writeFile(w.snapshotFile, JSON.stringify(low.snapshot));
+  const held = await prepareTrainingPlan({ query: { ...query, target: 2, current: { ...f.request.current, mastery: { '1': 1 } }, facts: { ...f.request.facts, trainingRoomLevel: 1 } },
+    binding, currentTrainee: null, authorization }, { home: w.root });
+  assert.deepEqual(held.startIssues, ['training:room-rank-unavailable']);
+});

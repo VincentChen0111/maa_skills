@@ -20,6 +20,9 @@ export type TrainingPlan = {
   spends?: Record<string, Spend>;
   /** Ticket 32 R4-2: the other plans' tiers the last gate took out of the stock. */
   reservedTiers?: TierPayment[];
+  /** Ticket 32 FO1-8: the snapshot and training-room level the last gate used. */
+  snapshotUsed?: { file: string; source: string | null; readAt: string | null; selected: string } | null;
+  trainingRoom?: { level: number; source: 'user-confirmed' | 'snapshot' } | null;
   action?: { kind: TrainingActionKind; dueAt: string; armedAt: string; operation?: string; timerIdentity?: unknown; completedAt?: string;
     native?: { process: string; taskId: number; chain: string; appendedAt: string; paramsHash: string; startedAt?: string } };
   preplacedAt?: string; confirmationAt?: string; startedAt?: string; latestObservationAt?: string; expectedCompleteAt?: string; assistantAttempted?: boolean;

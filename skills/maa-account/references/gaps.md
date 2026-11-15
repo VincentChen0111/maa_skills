@@ -28,7 +28,7 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 {"targets":[{"name":"合成干员","target":{"elite":1,"level":1}}],"progress":{"source":"user-confirmed","rooms":{"WORKSHOP":[3]},"stageRanks":{"stage_synthetic":2},"voucherValidity":{"premium_material_voucher_perm":true}},"format":"markdown"}
 ```
 
-配方的房间条件：用户确认的 `progress.rooms` 优先；没确认的房间用快照基建（完整读取时）里同类房间的等级，例如制造站 → `MANUFACTURE`，结果 `inputSources.rooms` 写明每个房间等级来自 `user-confirmed` 还是 `snapshot`；加工站（`WORKSHOP`）快照里没有，仍要用户确认。关卡条件报成 `stage:<ID>:unknown`（`stageCodes` 给关卡代号）时，用户一句话确认「这些都通关了」，就把报出的这些 ID 原样写进 `progress.confirmedStages:[...]`；只接受某个配方确实要求的关卡 ID，其余以 `progress:confirmedStages:invalid` 拒绝。没给 `snapshotFile` 时按需要的内容选快照（干员、技能专精、仓库、基建）：默认快照缺而森空岛快照覆盖得更多时整份读森空岛快照，不合并，结果的 `snapshotUsed` 写明读的哪份、来源和读取时间。
+配方的房间条件：用户确认的 `progress.rooms` 优先；没确认的房间用快照基建（完整读取时）里同类房间的等级，例如制造站 → `MANUFACTURE`，结果 `inputSources.rooms` 写明每个房间等级来自 `user-confirmed` 还是 `snapshot`；加工站（`WORKSHOP`）快照里没有，仍要用户确认。关卡条件报成 `stage:<ID>:unknown`（`stageCodes` 给关卡代号）时，用户一句话确认「这些都通关了」，就把报出的这些 ID 原样写进 `progress.confirmedStages:[...]`；只接受某个配方确实要求的关卡 ID，其余以 `progress:confirmedStages:invalid` 拒绝。没给 `snapshotFile` 时按需要的内容选快照（干员、技能专精、仓库、基建）：默认快照缺而森空岛快照覆盖得更多、且森空岛读取时间不早于默认快照的仓库扫描时间时整份读森空岛快照，不合并；森空岛更旧时仍用默认快照（`default-inventory-newer`）。结果的 `snapshotUsed` 写明读的哪份、来源和读取时间。
 
 `format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1：标准输入本身不合格时输出 `{ok:false,error:<代码>}`；其余输出 `{ok:false,status:"check-required",reason:<稳定代码>,check:<要核对什么>,alternatives:[<替代做法>]}`，按 `check` 核对并把替代做法告诉用户，不输出路径或原始系统信息。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
 

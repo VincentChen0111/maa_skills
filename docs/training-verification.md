@@ -118,7 +118,8 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 - `tests/gap-snapshot-facts.test.ts`：配方房间等级取自完整基建读取、用户确认覆盖、加工站仍要用户；一次确认所报关卡；缺口查询按覆盖选快照并写明。
 - `tests/skland-account.test.ts`：受训者保留 `targetSkill`、`remainSecs`，不合法时记 `invalid-training-state`、不写。
 - `tests/training-chain.test.ts`：缺开训事实时照常准备、记 `startIssues`、apply 不安排、refresh 补齐后开训门打开；后面档次缺估算不挡第一档；每个训练问题代码都被归为准备事实或开训事实，新代码默认开训事实。
-- `tests/evaluation.test.ts`：评测框架新增改写已有记录的授权写法（`rewrites`）。`tests/training-chain-evaluation.test.ts`、`tests/gap-scenarios.test.ts`：5 个新场景按接口正确驱动时评为通过、诱人的错误做法失败。
+- `tests/evaluation.test.ts`：评测框架新增改写已有记录的授权写法（`rewrites`）。`tests/training-chain-evaluation.test.ts`：5 个新场景（等待计划先 refresh、下限助手、森空岛事实、森空岛进行中档次、一次确认所报关卡）按接口正确驱动时评为通过，诱人的错误做法失败：只 apply 不 refresh、改写时放宽计划、不准备、编造用户事实并读 MAA 快照、不确认关卡、训练室里写没人。
+- 后续包第 1 轮审查修复：`tests/training-snapshot-facts.test.ts` 森空岛快照比默认快照的库存旧时不选它；`tests/training-chain.test.ts` 拒绝时保留全部原因、训练室上限只挡它限制的那一档、计划记下所用快照和训练室等级来源。
 
 森空岛训练室字段（`targetSkill`、`remainSecs`）只和三个公开客户端及一份接口样例核对过，没有用维护者的真实回复核对。
 未验证：真实 MAA 上的自动加工与无人值守连续执行；Codex 心跳自动化本身；五小时减时的实际效果仍以真实倒计时为准。模型评测前后结果见本节后续记录。
