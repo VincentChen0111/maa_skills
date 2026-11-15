@@ -6,7 +6,7 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 
 1. `targets` 按用户给定顺序列出明确目标。每项使用[成本接口](cost.md)的 `name`、可选 `operatorId`、`target` 和可选 `current`，不放 `mode`。同名歧义、缺练度或成本时先核对；任一目标总成本未知时不分配共享库存。相同干员重复出现需合并目标，避免重复收取晋升或前置成本，不自行选择较高目标。
 2. 快照未提供的库存可在 `inventory: {source: "user-confirmed", items: {物品ID: 数量}, lmd: 数量}` 补齐。只传用户确认的事实；明确 0 与未知不同，已知冲突返回待核。`items` 不放 `4001`，龙门币用 `lmd`。不要根据识别完成或未列物品推断全库存为零。
-3. 配方条件在 `progress` 中补充，须 `source: "user-confirmed"`。`rooms` 是房间类型到等级数组，例如 `WORKSHOP: [3]` 表示一间三级加工站；按配方的等级和房间数核对。`stageRanks` 使用公开 `requireStages.stageId/rank` 原字段，值 0–2；工具返回关卡 ID 与公开关卡代码以便核对。所读来源只证明配方门槛为 2，不证明星数对应；不要把用户给出的星数自行换算为原码，也不要让普通用户猜数字。缺事实时说明具体配方/关卡条件待核；仅有带真实依据的明确补充时录入。能查询到配方不等于当前已解锁。
+3. 配方条件在 `progress` 中补充，须 `source: "user-confirmed"`。`rooms` 是房间类型到等级数组，例如 `WORKSHOP: [3]` 表示一间三级加工站；按配方的等级和房间数核对。`stageRanks` 使用公开 `requireStages.stageId/rank` 原字段，值 0–2；工具返回关卡 ID 与公开关卡代码以便核对。所读来源只证明配方门槛为 2，不证明星数对应；不要把用户给出的星数自行换算为原码，也不要让普通用户猜数字。用户只说「这些关卡都通关了」时，不填 `stageRanks`，把工具报出的关卡 ID 原样写进 `confirmedStages`（见下文）。缺事实时说明具体配方/关卡条件待核；仅有带真实依据的明确补充时录入。能查询到配方不等于当前已解锁。
 4. 仅对实际相关的券核对有效性：`progress.voucherValidity` 按券 ID 给 `true`（用户确认当前有效）或 `false`（用户确认当前不可用）。五类支持券的有效性均须确认，未确认或数量未知不算已核覆盖。`*_perm` 只标 `permanent-name-inference`，不能由名字或缺 expiry 推定有效；两类限时券为 `timed-explicit`。同名但不同 ID 的券不可混算。零库存无需再追问有效性。
 5. 返回 `needs-input` 时 `raw/comparison` 为 null，不宣称已满足。`partial` 表示比较中仍有未知；只陈述已核覆盖及具体待核项。`ok` 只是选定方案的输入与算术已知，仍可能有正缺口，也不证明游戏此刻可执行。保留当前心情、生产排队、模组任务/信赖等未核实状态。
 
@@ -27,6 +27,8 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 ```json
 {"targets":[{"name":"合成干员","target":{"elite":1,"level":1}}],"progress":{"source":"user-confirmed","rooms":{"WORKSHOP":[3]},"stageRanks":{"stage_synthetic":2},"voucherValidity":{"premium_material_voucher_perm":true}},"format":"markdown"}
 ```
+
+配方的房间条件：用户确认的 `progress.rooms` 优先；没确认的房间用快照基建（完整读取时）里同类房间的等级，例如制造站 → `MANUFACTURE`，结果 `inputSources.rooms` 写明每个房间等级来自 `user-confirmed` 还是 `snapshot`；加工站（`WORKSHOP`）快照里没有，仍要用户确认。关卡条件报成 `stage:<ID>:unknown`（`stageCodes` 给关卡代号）时，用户一句话确认「这些都通关了」，就把报出的这些 ID 原样写进 `progress.confirmedStages:[...]`；只接受某个配方确实要求的关卡 ID，其余以 `progress:confirmedStages:invalid` 拒绝。没给 `snapshotFile` 时按需要的内容选快照（干员、技能专精、仓库、基建）：默认快照缺而森空岛快照覆盖得更多时整份读森空岛快照，不合并，结果的 `snapshotUsed` 写明读的哪份、来源和读取时间。
 
 `format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1：标准输入本身不合格时输出 `{ok:false,error:<代码>}`；其余输出 `{ok:false,status:"check-required",reason:<稳定代码>,check:<要核对什么>,alternatives:[<替代做法>]}`，按 `check` 核对并把替代做法告诉用户，不输出路径或原始系统信息。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
 
