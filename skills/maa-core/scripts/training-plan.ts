@@ -1,17 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink, realpath } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, unlink, realpath } from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining } from './training-time.ts';
-import { nextTrainingAction, reconcileTraining, type TrainingPlan } from './training-state.ts';
+import { queryTraining, materialGate } from './training-time.ts';
+import { nextTrainingAction, reconcileTraining, paidRanks, holdsTrainingRoom, type TrainingPlan } from './training-state.ts';
+import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
 import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
 import { compareVersionStamp, readMaaVersion, readVersionStamp, type MaaVersionReader } from './maa-version.ts';
 import type { ExpiringMedicineGrant } from './consumption-grant.ts';
 import { sameConfigValue } from './config-projection.ts';
 
+/** A refusal with static diagnostic details (issue codes and IDs only, never paths or user text) that the CLI prints beside the code. */
+export class TrainingCheckError extends Error {
+  readonly details: Record<string, unknown>;
+  constructor(code: string, details: Record<string, unknown>) { super(code); this.details = details; }
+}
+/** Ticket 32: only fixed lowercase codes (optionally one `:detail`) reach the CLI output; anything else stays generic. */
+const staticCode = (error: unknown) => error instanceof Error && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]+)*)?$/.test(error.message) ? error.message : undefined;
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 const object = (value: unknown): Record<string, unknown> => {
@@ -65,17 +73,20 @@ export async function readTrainingPlan(id: string, options: Options = {}): Promi
 export async function refreshTrainingMaterials(input: unknown, options: Options = {}) {
   const request = object(input);
   return withPlan(request.id, options, async (plan, context) => {
-    if (plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
-    const { result } = await queryTraining(request.query, options);
+    if (plan.closed || plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
+    if (object(request.query).inTraining !== undefined) throw new Error('training-in-training-refresh-unsupported');
+    // Ticket 32: the plan's own completion and payment evidence reconciles a snapshot read before them (unattended re-entry).
+    const { result } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) } });
     if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
       || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
-    const material = result.materials.comparison?.noCraft;
-    plan.materialReady = Boolean(result.status === 'ok' && material && [...Object.values(material.materials), material.lmd, material.exp].every(row => row.remaining === 0));
+    const gate = result.status === 'ok' ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
+    plan.materialReady = gate !== 'short';
+    if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
     const after = stage?.assistants.find(row => row.id === stage.afterStartAssistant);
     if (after) { plan.afterStartAssistants ??= {}; plan.afterStartAssistants[String(plan.rank)] = after.name; }
-    plan.history.push({ at: new Date().toISOString(), kind: plan.materialReady ? 'materials-verified' : 'materials-pending', rank: plan.rank });
+    plan.history.push({ at: new Date().toISOString(), kind: gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
     await save(context.file, plan); return plan;
   });
 }
@@ -83,22 +94,36 @@ export async function refreshTrainingMaterials(input: unknown, options: Options 
 /** Saves only a private pending record. MAA is not changed until apply. */
 export async function prepareTrainingPlan(input: unknown, options: Options = {}): Promise<TrainingPlan> {
   const request = object(input), binding = object(request.binding);
-  const authorization = object(request.authorization);
-  if (Object.keys(request).some(key => !['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining'].includes(key))
+  const authorization = object(request.authorization), crafting = request.crafting === undefined ? undefined : object(request.crafting);
+  if (Object.keys(request).some(key => !['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining', 'crafting'].includes(key))
     || !['current-request', 'approved-report'].includes(String(authorization.source)) || typeof authorization.reference !== 'string' || !authorization.reference.trim()
+    || Object.keys(authorization).some(key => !['source', 'reference'].includes(key))
+    || crafting && (Object.keys(crafting).some(key => key !== 'reference') || typeof crafting.reference !== 'string' || !crafting.reference.trim())
     || request.currentTrainee !== null && typeof request.currentTrainee !== 'string' || request.manualTraining !== undefined && typeof request.manualTraining !== 'boolean') throw new Error('training-authorization-required');
   const { result } = await queryTraining(request.query, options);
-  if (result.status !== 'ok' || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null) throw new Error('training-facts-required');
-  const material = result.materials.comparison?.noCraft;
-  const materialReady = Boolean(material && [...Object.values(material.materials), material.lmd, material.exp].every(row => row.remaining === 0));
-  const id = randomUUID(), now = new Date().toISOString();
+  if (result.status !== 'ok' || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
+    throw new TrainingCheckError('training-facts-required', { issues: result.issues,
+      stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
+        .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) });
+  const settings = await readSettings(options.home);
+  // Ticket 32: an approved report item is resolved, not trusted as text; the plan may only narrow what it approved.
+  if (authorization.source === 'approved-report') await verifyApprovedTraining(settings.privateDirectory, authorization.reference, result);
+  const inTraining = result.inTrainingRank;
+  // The trainee of an in-training tier is in the training room now; "no trainee" contradicts it.
+  if (inTraining !== null && request.currentTrainee !== result.operator.id) throw new Error('training-in-training-trainee-conflict');
+  // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
+  const gate = inTraining === null ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
+  const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
   const plan: TrainingPlan = { version: 1, id, authorization: { source: authorization.source as 'current-request' | 'approved-report', reference: authorization.reference },
     target: { operatorId: result.operator.id, name: result.operator.name, role: roleNames[result.role]!, skill: result.skill!, skillName: result.skillName, currentRank: result.currentRank, goal: result.targetRank },
-    rank: Math.min(3, result.currentRank + 1), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
+    rank: Math.min(3, firstRank), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
     preplacementRequired: request.currentTrainee !== result.operator.id, binding: binding as TrainingPlan['binding'],
     assistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
     afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
-    materialReady, manualTraining: request.manualTraining === true, assistantState: 'unverified', history: [{ at: now, kind: 'prepared', rank: result.currentRank + 1 }], consumed: [], issues: [] };
+    materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
+    history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
+    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.snapshotReadAt! } } : {}),
+    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}) };
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
   const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
@@ -108,6 +133,62 @@ export async function prepareTrainingPlan(input: unknown, options: Options = {})
   await mkdir(context.directory, { recursive: true });
   const file = await open(context.file, 'wx', 0o600); try { await file.writeFile(JSON.stringify(plan, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
   return plan;
+}
+
+/**
+ * Ticket 32: the approved cultivation item must still be approved and unchanged, name this operator, and let maa-daily
+ * arrange mastery training of this skill to at least the plan's goal. Report errors keep their static codes.
+ */
+async function verifyApprovedTraining(privateDirectory: string, reference: string, result: Awaited<ReturnType<typeof queryTraining>>['result']) {
+  const { state, item } = await resolveApprovedItem(privateDirectory, reference);
+  const scope = object(item.scope), reportItem = state.content.items.find(entry => entry.id === item.id);
+  const arranged = Array.isArray(scope.dailyMayArrange) ? scope.dailyMayArrange : [];
+  if (state.kind !== 'cultivation' || !reportItem || JSON.stringify(reportItem.scope) !== JSON.stringify(item.scope)
+    || !scope.operator || typeof scope.operator !== 'object' || (scope.operator as Record<string, unknown>).id !== result.operator!.id
+    || !arranged.some(entry => entry && typeof entry === 'object' && (entry as Record<string, unknown>).action === 'mastery-training'
+      && (entry as Record<string, unknown>).skill === result.skill && Number((entry as Record<string, unknown>).toLevel) >= result.targetRank!))
+    throw new Error('training-approval-scope-mismatch');
+}
+
+/** Ticket 32: every saved plan, read through the same validation; an unreadable record is reported, never skipped. */
+async function allPlans(options: Options): Promise<TrainingPlan[]> {
+  const settings = await readSettings(options.home), directory = join(settings.privateDirectory, 'training-plans');
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return [] as string[]; throw error; });
+  const plans: TrainingPlan[] = [];
+  for (const name of names.filter(entry => /^[a-zA-Z0-9-]{1,80}\.json$/.test(entry)).sort()) {
+    try { plans.push(await readTrainingPlan(name.slice(0, -5), options)); } catch { throw new Error('training-plan-record-invalid'); }
+  }
+  return plans;
+}
+
+/** Ticket 32: safe summaries of every plan, so an unattended re-entry finds the plan that holds the training room. */
+export async function listTrainingPlans(options: Options = {}) {
+  return (await allPlans(options)).map(plan => ({ ...summarizeTrainingPlan(plan), holdsTrainingRoom: holdsTrainingRoom(plan), closed: Boolean(plan.closed) }))
+    .sort((a, b) => Number(b.holdsTrainingRoom) - Number(a.holdsTrainingRoom) || a.history[0]!.at.localeCompare(b.history[0]!.at));
+}
+
+/**
+ * Ticket 32: the user closes a plan (with their own words) after checking the game, which frees the training room for
+ * the next plan. Nothing is replayed or deleted; a plan whose own one-shot timer is still armed cannot be closed.
+ */
+export async function closeTrainingPlan(input: unknown, options: Options = {}) {
+  const request = object(input);
+  if (Object.keys(request).some(key => !['id', 'reference'].includes(key)) || typeof request.reference !== 'string' || !request.reference.trim()) throw new Error('training-close-reference-required');
+  return withPlan(request.id, options, async (plan, context) => {
+    if (plan.closed) return { status: 'complete' as const, plan: summarizeTrainingPlan(plan) };
+    if (plan.action?.timerIdentity && !plan.action.completedAt) {
+      if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
+      const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+      const current = trainingTimerIdentity(config.Timers?.List?.[plan.binding.timer]), expected = trainingTimerIdentity(plan.action.timerIdentity);
+      if (sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null }) && current.IsEnabled !== false)
+        return { status: 'check-required' as const, reason: 'training-timer-still-armed' };
+    }
+    const at = new Date().toISOString();
+    plan.closed = { at, reference: request.reference as string };
+    plan.history.push({ at, kind: 'closed-by-user', rank: plan.rank });
+    await save(context.file, plan);
+    return { status: 'complete' as const, plan: summarizeTrainingPlan(plan) };
+  });
 }
 
 function grantFor(plan: TrainingPlan, action: { kind: TrainingGrant['kind']; dueAt: string }, expectedTimer?: unknown): TrainingGrant {
@@ -140,6 +221,9 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     // Every result reports the MAA and record versions against those read at preparation; a difference refuses nothing.
     const drift = async () => compareVersionStamp(plan.versions, await versionStampOf(maaDirectory, maa));
     if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply', versions: await drift() };
+    if (plan.closed) return { status: 'check-required', reason: 'training-plan-closed', versions: await drift() };
+    // Ticket 32: one training room, one plan. Another plan that armed MAA and is not finished or closed keeps it.
+    if ((await allPlans(options)).some(other => other.id !== plan.id && holdsTrainingRoom(other))) return { status: 'check-required', reason: 'training-other-plan-active', versions: await drift() };
     const action = nextTrainingAction(plan, new Date().toISOString());
     if (!action || action.kind === 'start' && !plan.materialReady) return { status: 'check-required', reason: 'training-facts-or-materials-required', versions: await drift() };
     const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
@@ -220,6 +304,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed),
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
@@ -232,6 +317,13 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     if (process.argv[2] === 'prepare') result = summarizeTrainingPlan(await prepareTrainingPlan(request));
     else if (process.argv[2] === 'read') result = summarizeTrainingPlan(await readTrainingPlan(String(request.id)));
     else if (process.argv[2] === 'refresh') result = summarizeTrainingPlan(await refreshTrainingMaterials(request));
+    else if (process.argv[2] === 'list') {
+      if (Object.keys(request).length) throw new Error('training-request-invalid');
+      result = await listTrainingPlans();
+    } else if (process.argv[2] === 'close') {
+      result = await closeTrainingPlan(request);
+      if (object(result).status !== 'complete') process.exitCode = 1;
+    }
     else if (['apply', 'reconcile'].includes(process.argv[2]!)) {
       const settings = await readSettings(); if (!settings.maaDirectory) throw new Error('maa-directory-unset');
       const { createMaaProcess } = await import('./maa-process.ts');
@@ -245,5 +337,9 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       }
     } else throw new Error('training-action-invalid');
     console.log(JSON.stringify({ ok: process.exitCode !== 1, result }));
-  } catch (error) { console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? 'training-plan-check-required' })); process.exitCode = 1; }
+  } catch (error) {
+    console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? staticCode(error) ?? 'training-plan-check-required',
+      ...(error instanceof TrainingCheckError ? error.details : {}) }));
+    process.exitCode = 1;
+  }
 }

@@ -4,6 +4,7 @@ import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prepareTrainingPlan, readTrainingPlan, applyTrainingPlan, reconcileTrainingPlan, refreshTrainingMaterials } from '../skills/maa-core/scripts/training-plan.ts';
 import { trainingFixture } from './fixtures/training-data.ts';
+import { approvedTrainingReport } from './fixtures/training-report.ts';
 import { queryTraining } from '../skills/maa-core/scripts/training-time.ts';
 import { configFixture } from './fixtures/training-runtime.ts';
 import { plan, log } from './fixtures/training-runtime.ts';
@@ -189,9 +190,11 @@ test('27: a training apply passes a current expiring-medicine approval to the wr
   await writeFile(f.file, JSON.stringify(f.config));
   await writeFile(join(f.root, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }));
   await writeFile(join(f.root, 'snapshot.json'), JSON.stringify(data.snapshot)); await writeFile(join(f.root, 'tables.json'), JSON.stringify(data.tables));
+  // Ticket 32: an approved-report reference is resolved against a real approved report item.
+  const hash = await approvedTrainingReport(f.privateDirectory, data);
   const plan = await prepareTrainingPlan({ query: { ...data.request, snapshotFile: join(f.root, 'snapshot.json'), tablesFile: join(f.root, 'tables.json') },
     binding: { profile: 0, infrastTask: 0, progressTask: 1, timer: 0 }, currentTrainee: null,
-    authorization: { source: 'approved-report', reference: 'synthetic approved training report entry' } }, { home: f.root });
+    authorization: { source: 'approved-report', reference: `cultivation/${hash}#S1` } }, { home: f.root });
   const before = await readFile(f.file, 'utf8');
   const refused = await applyTrainingPlan({ id: plan.id, host: 'codex', closedConfirmed: true }, f.maa, { home: f.root });
   assert.equal(refused.status, 'rejected'); assert.equal(refused.reason, 'training-expiring-grant-required');

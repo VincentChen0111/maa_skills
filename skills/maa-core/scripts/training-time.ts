@@ -1,6 +1,6 @@
 // Independent calculations from fixed table fields and complete skill descriptions; see training-sources.md.
 import { queryBaseSkills, isBaseRoom } from './base-query.ts';
-import { calculateCultivationGaps, type GapTables, type GapResult } from './cultivation-gaps.ts';
+import { calculateCultivationGaps, type GapTables, type GapResult, type GapPlan } from './cultivation-gaps.ts';
 import { loadOperatorCostTables, operatorCostSources, operatorCatalog } from './operator-cost.ts';
 import { craftingSources } from './cultivation-gaps.ts';
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
@@ -14,32 +14,95 @@ type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const integer = (value: unknown, min: number, max: number): value is number => Number.isSafeInteger(value) && Number(value) >= min && Number(value) <= max;
+const reductionPending = 'assistant:five-hour-reduction-pending:';
+/** Issues that still allow a speed estimate: availability (handled by selection) and a pending reduction (estimated without it). */
+const estimateKeepingIssue = (issue: string) => issue === 'assistant:unavailable' || issue === 'assistant:availability-unverified' || issue.startsWith(reductionPending);
 const professions: Record<string, string> = { PIONEER: '先锋', WARRIOR: '近卫', TANK: '重装', SNIPER: '狙击', CASTER: '术师', SUPPORT: '辅助', MEDIC: '医疗', SPECIAL: '特种' };
 export type TrainingTables = GapTables & { skillNames: unknown };
 export type TrainingAssistant = { id: string; name: string; available: boolean | null; speedBonus: number | null; estimatedSeconds: number | null; conditions: string[]; issues: string[] };
 export type TrainingResult = { status: 'ok' | 'needs-input'; operator: { id: string; name: string } | null; skill: number | null; skillId: string | null;
   skillName: string | null; currentRank: number | null; targetRank: number | null; role: string | null; materials: GapResult; issues: string[];
+  /** Ticket 32: the user-confirmed rank now in training, the rank costs are counted from (tiers paid in the snapshot excluded), the snapshot's read time, and the materials of the next tier to start. */
+  inTrainingRank: number | null; costFromRank: number | null; snapshotReadAt: string | null; startMaterials: GapResult | null;
   stages: { rank: number; baseSeconds: number | null; recommendedAssistant: string | null; afterStartAssistant: string | null; estimatedSeconds: number | null; assistants: TrainingAssistant[] }[];
   assumptions: string[] };
+/** Ticket 32: a plan's own evidence, passed only by training-plan (never from query JSON): its evidence-backed completed rank and when each rank was paid. */
+export type TrainingEvidence = { completedRank: number; paidAt: Record<string, string> };
+
+const rowsOf = (plan: GapPlan) => [...Object.values(plan.materials), plan.lmd, plan.exp];
+const covered = (plan: GapPlan) => rowsOf(plan).every(row => row.remaining === 0) && !plan.voucherAllocations.length && plan.route.every(step => step.kind === 'craft');
+/**
+ * Ticket 32: the one start gate (prepare and refresh share it). `ready`: the tier's finished materials are in stock.
+ * `crafting`: only with the user's crafting approval, the shortage is covered by workshop crafting from stock with base
+ * materials and LMD (fees included) reserved; MAA's OperProgress crafts missing mastery materials itself (training-sources).
+ * MAA never exchanges vouchers, so no route that uses one counts.
+ */
+export function materialGate(gaps: GapResult | null, crafting: boolean): 'ready' | 'crafting' | 'short' {
+  const comparison = gaps?.comparison;
+  if (!comparison) return 'short';
+  if (covered(comparison.noCraft)) return 'ready';
+  return crafting && covered(comparison.craft) ? 'crafting' : 'short';
+}
 
 /** Read-only. Missing facts stay unknown; estimates never claim a training has started. */
-export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown): TrainingResult {
+export function calculateTraining(tables: TrainingTables, snapshotInput: unknown, input: unknown, evidence?: TrainingEvidence): TrainingResult {
   const request = object(input), snapshot = object(snapshotInput), facts = object(request.facts), current = object(request.current);
   const skill = integer(request.skill, 1, 3) ? request.skill : null, targetRank = integer(request.target, 1, 3) ? request.target : null;
-  const costTarget = { name: request.name, ...(request.operatorId === undefined ? {} : { operatorId: request.operatorId }), current,
-    target: { mastery: { [String(skill)]: targetRank } } };
-  const materials = calculateCultivationGaps(tables, snapshot, { targets: [costTarget], mode: 'no-craft' });
+  // Workshop and stage facts for crafting routes; training never spends vouchers, so voucher validity is not passed on.
+  const progress = request.progress === undefined ? {} : { progress: request.progress !== null && typeof request.progress === 'object' && !Array.isArray(request.progress)
+    ? Object.fromEntries(Object.entries(request.progress).filter(([key]) => key !== 'voucherValidity')) : request.progress };
+  /** Shared costs to rank `to`; `from` re-bases this skill's current rank (a tier already paid in the snapshot). */
+  const gaps = (to: number | null, from?: number, operatorId?: string) => {
+    const key = String(skill);
+    let costSnapshot: unknown = snapshot, costCurrent: ObjectValue = current;
+    if (from !== undefined && operatorId) {
+      costSnapshot = { ...snapshot, operators: array(snapshot.operators).map(row => object(row).id === operatorId && object(object(row).mastery)[key] != null
+        ? { ...object(row), mastery: { ...object(object(row).mastery), [key]: from } } : row) };
+      if (object(current.mastery)[key] !== undefined) costCurrent = { ...current, mastery: { ...object(current.mastery), [key]: from } };
+    }
+    return calculateCultivationGaps(tables, costSnapshot, { targets: [{ name: request.name, ...(request.operatorId === undefined ? {} : { operatorId: request.operatorId }),
+      current: costCurrent, target: { mastery: { [key]: to } } }], ...progress, mode: 'no-craft' });
+  };
+  const materials = gaps(targetRank);
   const cost = materials.costs[0];
   const result: TrainingResult = { status: 'needs-input', operator: cost?.operator ?? null, skill, skillId: null, skillName: null,
-    currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []], stages: [],
+    currentRank: null, targetRank, role: null, materials, issues: [...materials.issues, ...cost?.issues ?? []],
+    inTrainingRank: null, costFromRank: null, snapshotReadAt: null, startMaterials: null, stages: [],
     assumptions: ['Estimated duration = base seconds / (1 + assistant base bonus + applicable skill bonuses). This is a table/text inference, not live timing.',
       'Actual countdown and completion evidence supersede estimates; active skills do not prove assignment or condition activation.'] };
-  if (Object.keys(request).some(key => !['name', 'operatorId', 'skill', 'target', 'current', 'facts'].includes(key))) result.issues.push('training:unsupported-field');
+  const sharedIssues = result.issues.length;
+  if (Object.keys(request).some(key => !['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'inTraining', 'progress'].includes(key))) result.issues.push('training:unsupported-field');
   if (skill === null || targetRank === null || !cost?.operator || !cost.total) return result;
   const operator = array(snapshot.operators).map(object).find(row => row.id === cost.operator!.id)!;
-  const start = object(operator.mastery)[String(skill)] ?? object(current.mastery)[String(skill)];
-  if (!integer(start, 0, 3)) { result.issues.push('training:current-rank-unknown'); return result; }
+  const observed = object(operator.mastery)[String(skill)] ?? object(current.mastery)[String(skill)];
+  if (!integer(observed, 0, 3)) { result.issues.push('training:current-rank-unknown'); return result; }
+  const readAt = typeof snapshot.readAt === 'string' && Number.isFinite(Date.parse(snapshot.readAt)) ? snapshot.readAt : null;
+  result.snapshotReadAt = readAt;
+  // A plan's real completion evidence outranks an older snapshot; a snapshot ahead of it stays as read (the caller stops on the mismatch).
+  const start = evidence && integer(evidence.completedRank, 0, 3) && evidence.completedRank > observed ? evidence.completedRank : observed;
   result.currentRank = start;
+  // The user confirms the next rank is training now and its materials were already taken from this snapshot's inventory.
+  if (request.inTraining !== undefined) {
+    const fact = object(request.inTraining);
+    if (evidence || !readAt || Object.keys(fact).some(key => !['source', 'rank'].includes(key)) || fact.source !== 'user-confirmed' || fact.rank !== start + 1 || start + 1 > targetRank)
+      result.issues.push('training:in-training-invalid');
+    else result.inTrainingRank = start + 1;
+  }
+  // A tier paid at or before the snapshot was read is already gone from its inventory, so it is not counted again;
+  // a tier paid later (or at an unknown time) still has its materials in that inventory and is counted.
+  const paid: Record<string, string> = { ...evidence?.paidAt ?? {}, ...(result.inTrainingRank !== null ? { [String(result.inTrainingRank)]: readAt! } : {}) };
+  let costFrom = observed;
+  if (readAt) for (const [rank, at] of Object.entries(paid)) {
+    const value = Number(rank);
+    if (integer(value, 1, 3) && value > costFrom && value <= targetRank && typeof at === 'string' && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.parse(readAt)) costFrom = value;
+  }
+  result.costFromRank = costFrom;
+  if (costFrom !== observed) {
+    result.materials = gaps(targetRank, costFrom, cost.operator.id);
+    result.issues.splice(0, sharedIssues, ...result.materials.issues, ...result.materials.costs[0]?.issues ?? []);
+  }
+  const firstStart = (result.inTrainingRank ?? start) + 1;
+  if (firstStart <= targetRank && costFrom < firstStart) result.startMaterials = firstStart === targetRank ? result.materials : gaps(firstStart, costFrom, cost.operator.id);
   const catalog = operatorCatalog(tables), char = object(catalog[cost.operator.id]);
   const selectedSkill = object(array(char.skills)[skill - 1]);
   result.skillId = typeof selectedSkill.skillId === 'string' ? selectedSkill.skillId : null;
@@ -71,9 +134,11 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
       if (helper.ownership !== 'owned' || trainingSkills.some(row => row.status === 'unknown')) issues.push('assistant:skill-or-ownership-unknown');
       for (const item of active) {
         if (item.text === '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）') {
+          // Ticket 32: an unknown five-hour fact (any tier after the next, or no confirmed prior assistance) estimates
+          // without the reduction and keeps it pending; real countdowns supersede the estimate. It never disqualifies the assistant.
           const prior = object(facts.previousAssistance);
           if (rank !== start + 1 || facts.source !== 'user-confirmed' || !integer(prior.seconds, 0, 31 * 86400) || typeof prior.remainedTogether !== 'boolean'
-            || typeof prior.assistantId !== 'string' || typeof prior.traineeId !== 'string') issues.push(`assistant:prior-assistance-unverified:${item.id}`);
+            || typeof prior.assistantId !== 'string' || typeof prior.traineeId !== 'string') issues.push(`${reductionPending}${item.id}`);
           else if (prior.seconds >= 18000 && prior.remainedTogether && prior.assistantId === helper.id && prior.traineeId === cost.operator!.id) durationFactor = 0.5;
           continue;
         }
@@ -94,7 +159,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
       }
       const isAvailable = available === null ? null : available.includes(helper.id);
       if (isAvailable !== true) issues.push(isAvailable === false ? 'assistant:unavailable' : 'assistant:availability-unverified');
-      const speedBonus = issues.some(issue => issue !== 'assistant:unavailable' && issue !== 'assistant:availability-unverified') ? null : Math.round(bonus * 1e6) / 1e6;
+      const speedBonus = issues.some(issue => !estimateKeepingIssue(issue)) ? null : Math.round(bonus * 1e6) / 1e6;
       assistants.push({ id: helper.id, name: helper.name, available: isAvailable, speedBonus,
         estimatedSeconds: baseSeconds !== null && speedBonus !== null ? Math.ceil(baseSeconds * durationFactor / (1 + speedBonus)) : null,
         conditions: active.map(item => item.text), issues });
@@ -110,7 +175,7 @@ export function calculateTraining(tables: TrainingTables, snapshotInput: unknown
 
 export const trainingSources: Record<string, PublicJsonSource> = { ...craftingSources, skillNames: { ...operatorCostSources.characters!, file: 'zh_CN/gamedata/excel/skill_table.json' } };
 /** tablesFile is explicitly unverified offline input; public mode records actual fixed-source hashes. */
-export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}) {
+export async function queryTraining(input: unknown, options: { home?: string; fetcher?: typeof fetch; evidence?: TrainingEvidence } = {}) {
   const request = object(input), settings = await readSettings(options.home);
   const snapshot = JSON.parse(await readFile(typeof request.snapshotFile === 'string' ? request.snapshotFile : join(settings.privateDirectory, 'account-snapshot.json'), 'utf8'));
   let tables: TrainingTables;
@@ -122,7 +187,7 @@ export async function queryTraining(input: unknown, options: { home?: string; fe
       sources: [...costs.sources ?? [], building.source, stages.source, skillNames.source] };
   }
   const { tablesFile: _tables, snapshotFile: _snapshot, format: _format, ...body } = request;
-  const result = calculateTraining(tables, snapshot, body);
+  const result = calculateTraining(tables, snapshot, body, options.evidence);
   return { result, language: settings.language ?? 'zh-CN', source: request.tablesFile ? 'supplied-unverified' : 'fixed-public', sources: request.tablesFile ? [] : tables.sources ?? [] };
 }
 
@@ -136,6 +201,8 @@ export function formatTraining(result: TrainingResult, language = 'zh-CN'): stri
     lines.push(`${en ? 'After verified start, attempt assistant' : '核实开训后尝试换助手'}: ${stage.afterStartAssistant ?? '?'}; ${en ? 'assignment and retained reduction remain unverified' : '实际就位及减时保留效果待核'}。`);
     for (const helper of stage.assistants) lines.push(`- ${helper.name}: ${helper.speedBonus === null ? '?' : `${Math.round(helper.speedBonus * 10000) / 100}%`} / ${helper.estimatedSeconds ?? '?'}s; ${helper.conditions.join('；')}; ${helper.issues.join(', ')}`);
   }
+  if (result.inTrainingRank !== null) lines.push('', en ? `M${result.inTrainingRank} is in training (user-confirmed); its materials are already paid and not counted again.`
+    : `M${result.inTrainingRank} 正在训练（用户确认），材料已付，不再计入。`);
   lines.push('', `${en ? 'Pending facts' : '待核'}: ${result.issues.join(', ') || '-'}`, `${en ? 'Material issues' : '材料待核'}: ${result.materials.issues.join(', ') || '-'}`);
   return lines.join('\n');
 }

@@ -12,8 +12,8 @@ if (native) {
     const { observeDaily } = await import('./.eval-daily-observer.mjs');
     observeDaily(workspace, file);
   }
-  // doctor and stage preparation reach MAA through the same boundary; only that module is replaced, never the writer.
-  else if (process.env.MAA_EVAL_MAA_PROCESS && ['maa-core/scripts/doctor.ts', 'maa-core/scripts/stage-jobs.ts'].includes(native[1])) {
+  // doctor, stage preparation and training plans (ticket 32) reach MAA through the same boundary; only that module is replaced, never the writer.
+  else if (process.env.MAA_EVAL_MAA_PROCESS && ['maa-core/scripts/doctor.ts', 'maa-core/scripts/stage-jobs.ts', 'maa-core/scripts/training-plan.ts'].includes(native[1])) {
     const { redirectMaaProcess } = await import('./.eval-daily-observer.mjs');
     redirectMaaProcess(workspace);
   }

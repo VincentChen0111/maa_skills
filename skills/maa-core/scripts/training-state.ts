@@ -15,7 +15,35 @@ export type TrainingPlan = {
   assistantState: 'unverified'; history: { at: string; kind: string; rank: number }[]; consumed: string[]; issues: string[];
   /** MAA and verification record versions read at preparation; absent in plans prepared before ticket 25. */
   versions?: import('./maa-version.ts').MaaVersionStamp;
+  /** Ticket 32: when each rank's materials were paid (user-confirmed in-training rank: the snapshot's read time; plan starts: the start evidence). */
+  paidAt?: Record<string, string>;
+  /** Ticket 32: the user's own words allowing MAA's OperProgress to craft a tier's missing materials; never part of the writer authorization. */
+  crafting?: { reference: string };
+  /** Ticket 32: the current tier's material check passed only through crafting. */
+  craftingRequired?: boolean;
+  /** Ticket 32: the user closed this plan (it no longer holds the training room or schedules anything). */
+  closed?: { at: string; reference: string };
 };
+/** Ticket 32: states in which a plan no longer holds the training room. Failed and unknown plans hold it until the user closes them. */
+export const releasedStates: readonly TrainingPlan['state'][] = ['complete', 'satisfied'];
+/**
+ * Ticket 32: a plan that has reached MAA's configuration at least once and is neither finished nor closed holds the single
+ * training room. An arming the writer refused before writing (rejected or busy) changed nothing and does not count.
+ */
+export function holdsTrainingRoom(plan: TrainingPlan): boolean {
+  if (plan.closed || releasedStates.includes(plan.state)) return false;
+  const armed = plan.history.filter(entry => entry.kind.startsWith('arming-')).length;
+  return armed > plan.history.filter(entry => /^configuration-(?:rejected|busy)-before-write$/.test(entry.kind)).length;
+}
+/**
+ * Ticket 32: payment times the plan can vouch for. Recorded times win; plans from before ticket 32 fall back to the
+ * first countdown observed for a rank, which is no earlier than its real start (so a cost check stays conservative).
+ */
+export function paidRanks(plan: TrainingPlan): Record<string, string> {
+  const paid: Record<string, string> = {};
+  for (const entry of plan.history) if (['countdown-observed', 'external-training-observed'].includes(entry.kind)) paid[String(entry.rank)] ??= entry.at;
+  return { ...paid, ...plan.paidAt };
+}
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
 const validTime = (text: string) => Number.isFinite(Date.parse(text));
@@ -128,7 +156,7 @@ export function reconcileTraining(input: TrainingPlan, text: string, observedAt:
       plan.history.push({ at: stamp, kind: 'completed', rank: plan.rank }); plan.target.currentRank = plan.rank;
       if (plan.rank >= plan.target.goal) plan.state = 'complete';
       else {
-        plan.rank++; plan.state = 'pending'; plan.preplacementRequired = false; plan.materialReady = false; plan.manualTraining = false;
+        plan.rank++; plan.state = 'pending'; plan.preplacementRequired = false; plan.materialReady = false; plan.manualTraining = false; delete plan.craftingRequired;
         delete plan.action; delete plan.confirmationAt; delete plan.startedAt; delete plan.latestObservationAt; delete plan.expectedCompleteAt; delete plan.assistantAttempted;
       }
       continue;
@@ -143,6 +171,7 @@ export function reconcileTraining(input: TrainingPlan, text: string, observedAt:
       if (!seconds || (!plan.confirmationAt && !plan.manualTraining && !plan.startedAt)) { plan.state = 'unknown'; plan.issues.push('training:start-evidence-incomplete'); continue; }
       if (at.getTime() < Math.max(Date.parse(plan.confirmationAt ?? plan.createdAt), Date.parse(plan.latestObservationAt ?? plan.createdAt))) { plan.state = 'unknown'; plan.issues.push('training:evidence-order-invalid'); continue; }
       plan.state = 'started'; plan.startedAt ??= plan.confirmationAt ?? stamp;
+      plan.paidAt = { ...plan.paidAt, [String(plan.rank)]: plan.paidAt?.[String(plan.rank)] ?? plan.startedAt };
       plan.latestObservationAt = stamp;
       plan.issues = plan.issues.filter(issue => !recoverableEvidenceIssues.has(issue));
       if (plan.action && ['start', 'observe'].includes(plan.action.kind)) plan.action.completedAt = stamp;
@@ -156,6 +185,7 @@ export function reconcileTraining(input: TrainingPlan, text: string, observedAt:
 
 export function nextTrainingAction(plan: TrainingPlan, now: string): { kind: TrainingActionKind; dueAt: string } | null {
   if (!validTime(now)) throw new Error('training-time-invalid');
+  if (plan.closed) return null;
   if (plan.action && (!plan.action.completedAt || !plan.action.native?.startedAt)) return null;
   if (['failed', 'complete', 'satisfied'].includes(plan.state) || hardIssue(plan)) return null;
   const earliest = Date.parse(now) + 5 * 60000;

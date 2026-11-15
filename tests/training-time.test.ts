@@ -23,12 +23,33 @@ test('five-hour reduction requires continuous same-person evidence and cannot be
   Object.assign(tables.building.buffs, { synthetic_reduce: { buffName: '合成时长条件', roomType: 'TRAINING', description: '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）' } });
   tables.building.chars.char_helper.buffChar.push({ buffData: [{ buffId: 'synthetic_reduce', cond: { phase: 'PHASE_0', level: 1 } }] });
   const helper = (facts: unknown) => calculateTraining(tables, snapshot, { ...request, target: 1, facts }).stages[0]?.assistants.find(row => row.id === 'char_helper');
-  assert.equal(helper(request.facts)?.estimatedSeconds, null);
+  // Ticket 32: an unknown five-hour fact estimates without the reduction and keeps it pending; it never disqualifies the assistant.
+  assert.equal(helper(request.facts)?.estimatedSeconds, 2400);
+  assert.ok(helper(request.facts)?.issues.includes('assistant:five-hour-reduction-pending:synthetic_reduce'));
   const evidence = { assistantId: 'char_helper', traineeId: 'char_synthetic', seconds: 18000, remainedTogether: true };
   assert.equal(helper({ ...request.facts, previousAssistance: evidence })?.estimatedSeconds, 1200);
   assert.equal(helper({ ...request.facts, previousAssistance: { ...evidence, seconds: 17999 } })?.estimatedSeconds, 2400);
   assert.equal(helper({ ...request.facts, previousAssistance: { ...evidence, remainedTogether: false } })?.estimatedSeconds, 2400);
   assert.equal(helper({ ...request.facts, previousAssistance: { ...evidence, traineeId: 'char_other' } })?.estimatedSeconds, 2400);
+});
+
+test('32: a five-hour-condition assistant stays usable for every later tier, estimated without the reduction that is still pending', () => {
+  const { tables, snapshot, request } = trainingFixture();
+  Object.assign(tables.building.buffs, { synthetic_reduce: { buffName: '合成时长条件', roomType: 'TRAINING', description: '进驻训练室单次协助一名干员训练时长达5小时，则该名干员下次训练所需时间-50%（任意一方离开训练室时，效果消失）' } });
+  tables.building.chars.char_helper.buffChar = [{ buffData: [{ buffId: 'synthetic_reduce', cond: { phase: 'PHASE_0', level: 1 } }] }];
+  const facts = { ...request.facts, availableAssistants: ['char_helper'] };
+  const pending = 'assistant:five-hour-reduction-pending:synthetic_reduce';
+  const unknown = calculateTraining(tables, snapshot, { ...request, target: 3, facts });
+  assert.equal(unknown.status, 'ok', JSON.stringify(unknown.issues));
+  assert.deepEqual(unknown.stages.map(stage => [stage.rank, stage.recommendedAssistant, stage.estimatedSeconds]), [[1, 'char_helper', 3429], [2, 'char_helper', 6858], [3, 'char_helper', 13715]]);
+  for (const stage of unknown.stages) assert.ok(stage.assistants.find(row => row.id === 'char_helper')!.issues.includes(pending), String(stage.rank));
+  // A confirmed five-hour fact reduces only the next tier; later tiers depend on assistance that has not happened yet.
+  const confirmed = calculateTraining(tables, snapshot, { ...request, target: 3, facts: { ...facts,
+    previousAssistance: { assistantId: 'char_helper', traineeId: 'char_synthetic', seconds: 18000, remainedTogether: true } } });
+  assert.equal(confirmed.status, 'ok');
+  assert.deepEqual(confirmed.stages.map(stage => stage.estimatedSeconds), [1715, 6858, 13715]);
+  assert.equal(confirmed.stages[0]!.assistants.find(row => row.id === 'char_helper')!.issues.includes(pending), false);
+  assert.ok(confirmed.stages[1]!.assistants.find(row => row.id === 'char_helper')!.issues.includes(pending));
 });
 
 test('the installed query CLI reads synthetic files and renders the same computed ranks in English', async t => {
