@@ -110,4 +110,15 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 - `tests/training-checks.test.ts`：训练和缺口命令每个停下的原因都有核对项和替代做法（枚举脚本里抛出和返回的全部代码及直接依赖的代码），缺口命令输出这个形状。
 - 既有测试改动：`tests/cultivation-report.test.ts` 的覆盖句改为「已覆盖到第 k 步…可以在推进中逐步补齐」并要求出现基础材料一节；`tests/gap-scenarios.test.ts` 增加新场景的分支。
 
+
+后续包（过度阻挡复核，同样只用真实临时目录与合成数据）：
+
+- `tests/training-texts.test.ts`：固定建筑表（`6f63c14e`，sha256 `8b400019…`）里全部 110 个训练室技能逐一跑训练估算，每个都让唯一可用助手得到非空、不低于基础 5% 的加速和每档推荐；剩下 13 个按下限（2 个五小时、11 个阵营人数/人间烟火/武道），8 个分支技能和塔露拉的多分支按固定表的分支名得到确切加速；用户写的分支不覆盖固定表。
+- `tests/training-snapshot-facts.test.ts`：训练室等级取自快照、用户确认覆盖、快照没有/两间/无等级仍待核；森空岛受训者在练这个技能且有剩余时间才算进行中，闲着、别的技能、没剩余时间、别的干员、旧快照都不算，同一次读取矛盾时用户事实待核；不指定快照时只在森空岛快照覆盖超集时整份改读，并写明读了哪份。
+- `tests/gap-snapshot-facts.test.ts`：配方房间等级取自完整基建读取、用户确认覆盖、加工站仍要用户；一次确认所报关卡；缺口查询按覆盖选快照并写明。
+- `tests/skland-account.test.ts`：受训者保留 `targetSkill`、`remainSecs`，不合法时记 `invalid-training-state`、不写。
+- `tests/training-chain.test.ts`：缺开训事实时照常准备、记 `startIssues`、apply 不安排、refresh 补齐后开训门打开；后面档次缺估算不挡第一档；每个训练问题代码都被归为准备事实或开训事实，新代码默认开训事实。
+- `tests/evaluation.test.ts`：评测框架新增改写已有记录的授权写法（`rewrites`）。`tests/training-chain-evaluation.test.ts`、`tests/gap-scenarios.test.ts`：5 个新场景按接口正确驱动时评为通过、诱人的错误做法失败。
+
+森空岛训练室字段（`targetSkill`、`remainSecs`）只和三个公开客户端及一份接口样例核对过，没有用维护者的真实回复核对。
 未验证：真实 MAA 上的自动加工与无人值守连续执行；Codex 心跳自动化本身；五小时减时的实际效果仍以真实倒计时为准。模型评测前后结果见本节后续记录。
