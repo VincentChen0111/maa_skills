@@ -2,6 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
 import { readSettings, startup } from './preferences.ts';
 import type { Protector } from './credential-protection.ts';
 import { saveAccountSnapshot, snapshotFiles, type AccountSnapshot, type BaseOperator, type BaseRoom, type Coverage, type Operator } from './account-snapshot.ts';
@@ -424,19 +425,21 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const action = process.argv[2] ?? '';
     if (!['inspect', 'import', 'compare'].includes(action)) throw new Error('unknown-action');
     const input = request(await readStdinJson({ maxBytes: null, empty: {} }), action);
-    const settings = await readSettings();
+    let settings: Awaited<ReturnType<typeof readSettings>>;
+    try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
     const { language } = startup(settings, input.currentLanguage ?? 'zh-CN');
     if (action === 'compare') {
       const load = async (source: 'maa' | 'skland', path: string) => {
         try { return JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: source }; throw error; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: source }; throw new CheckRequiredError('skland-snapshot-unreadable'); }
       };
       const sides = [await load('maa', resolve(input.maaFile ?? join(settings.privateDirectory, snapshotFiles.maa))),
         await load('skland', resolve(input.sklandFile ?? join(settings.privateDirectory, snapshotFiles.skland)))];
       const missing = sides.flatMap(side => isObject(side) && typeof side.missing === 'string' ? [side.missing] : []);
       if (missing.length) fail({ error: 'snapshot-missing', missing });
       else {
-        const comparison = compareAccountSnapshots(sides[0], sides[1]);
+        let comparison: ReturnType<typeof compareAccountSnapshots>;
+        try { comparison = compareAccountSnapshots(sides[0], sides[1]); } catch { throw new CheckRequiredError('skland-snapshot-unreadable'); }
         const summary = formatComparison(comparison, language);
         if (input.format === 'markdown') process.stdout.write(summary); else console.log(JSON.stringify({ ok: true, comparison, summary }));
       }
@@ -447,6 +450,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       else console.log(JSON.stringify(outcome.body));
     }
   } catch (error) {
-    fail({ error: stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required') });
+    // Standard-input refusals and a held snapshot lock keep their codes; everything else says why and what to check (owner
+    // trial item 10), without a path or system message.
+    const code = stdinJsonCode(error) ?? (!(error instanceof CheckRequiredError) && (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : null);
+    if (code) fail({ error: code });
+    else { console.error(JSON.stringify(checkRequiredFor('skland-account', error))); process.exitCode = 1; }
   }
 }

@@ -4,6 +4,8 @@
 
 `check` 返回 `checkedAt`、`exitCode`、`checks`、`recovery`、`version` 和 `skills`，并原子保存到私有目录 `doctor-latest.json`。每条检查包含 `id`、`group`、`status`（normal/warning/error）、`reason`、`repair`（id、executor 为 skill/user、description；执行者为 skill 时另有 `channel`，即执行它的现有脚本入口），新增各项另有 `message` 一句说明和可选的 `details`（只含字段种类、文件名或 skill 名）。setup 和 doctor 共用 `maa-core/scripts/checks.ts` 的原因与修法表，安装组与 `setup.ts check` 是同一个函数（`inspectInstallation`）；导出的 `runChecks(context, maa)` 的 context 需要 `home`（设置目录）。本接口不替 setup 推定下载或人工操作授权。
 
+没能完成的失败退出码为 2，输出 `{ok:false, status:"check-required", reason, check, alternatives}`：设置读不了是 `settings-unreadable`；`check`、`analyze` 未分类的失败是 `check-could-not-complete`；`repair` 未分类的失败是 `doctor-repair-outcome-unknown`（修复可能做了一部分，不重试，先 `check`）。把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。
+
 ## 八组检查
 
 | group | 检查 | 内容 |

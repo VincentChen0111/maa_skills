@@ -119,7 +119,7 @@ test('setup CLI reports missing prerequisites and malformed input without raw pa
   assert.doesNotMatch(missing.stdout + noSettings.stdout + invalid.stdout, /maa-setup-|synthetic command|Synthetic private/);
   await updateSettings({ language: 'en', privateDirectory: f.privateDirectory, maaDirectory: f.maaDirectory }, f.home);
   await writeFile(f.privateDirectory, 'synthetic blocked directory');
-  const blocked = run('prepare'); assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).status, 'unexpected-failure');
+  const blocked = run('prepare'); assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).status, 'check-required'); assert.equal(JSON.parse(blocked.stdout).reason, 'setup-files-unwritable');
   assert.doesNotMatch(blocked.stdout, /maa-setup-|EPERM|ENOTDIR|EEXIST/);
 });
 

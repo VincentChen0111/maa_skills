@@ -208,5 +208,5 @@ test('doctor analyze CLI validates its input, keeps 0/1/2 exit codes and records
   const missing = JSON.parse(missingRun.stdout);
   assert.deepEqual([missing.outcome, missing.missingEvidence.includes('debug/asst.log')], ['unknown', true]);
   await rm(f.privateDirectory, { recursive: true }); await writeFile(f.privateDirectory, 'synthetic blocked directory');
-  const failed = invoke('{}'); assert.equal(failed.status, 2); assert.equal(JSON.parse(failed.stdout).status, 'unexpected-failure');
+  const failed = invoke('{}'); assert.equal(failed.status, 2); assert.deepEqual([JSON.parse(failed.stdout).status, JSON.parse(failed.stdout).reason], ['check-required', 'check-could-not-complete']);
 });

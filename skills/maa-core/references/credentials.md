@@ -11,7 +11,7 @@
 
 ## 命令
 
-`node <maa-core>/scripts/credentials.ts check [--json]`：agent 使用。只读，不解密，不联网，不创建目录。返回 `checkedAt`、`exitCode`、`credentials`（每项 `service`、`state`、`experimental`、`savedAt`、`lastResultAt`、`expiresAt`）和 `checks`（每项 `id`、`status`、`reason`、`message`、`repair`）。退出码 0 表示没有错误（可以有提醒），1 表示有已知过期或无法读取的凭据，或请求不合法，2 表示意外失败。输出里没有值、账号标识或本机路径。
+`node <maa-core>/scripts/credentials.ts check [--json]`：agent 使用。只读，不解密，不联网，不创建目录。返回 `checkedAt`、`exitCode`、`credentials`（每项 `service`、`state`、`experimental`、`savedAt`、`lastResultAt`、`expiresAt`）和 `checks`（每项 `id`、`status`、`reason`、`message`、`repair`）。退出码 0 表示没有错误（可以有提醒），1 表示有已知过期或无法读取的凭据，或请求不合法，2 表示检查没有完成：这时输出 `{ok:false, status:"check-required", reason, check, alternatives}`，`reason` 为 `credentials-check-incomplete`，不能说明凭据可用还是不可用；把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。输出里没有值、账号标识或本机路径。
 
 `node <maa-core>/scripts/credentials.ts input <nga|skland|bilibili> [--language <BCP 47 标签>]`：只给用户本人在自己的终端运行。agent 给出带实际路径的这条命令，让用户自己打开终端运行；给命令时附上 `--language` 和用户的语言标签。流程依次显示该服务的说明、询问是否继续（输入 y），再请用户粘贴一个值。两次输入都不显示在屏幕上，Ctrl+C 取消。森空岛的说明在粘贴之前显示，内容见用户手册。说明文字有中文和英文两种：标签以 `zh` 开头用中文，其他语言用英文；没有 `--language` 时用设置文件里的语言，再没有时用系统语言。
 

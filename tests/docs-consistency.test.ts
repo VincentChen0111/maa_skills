@@ -30,8 +30,8 @@ const contract: Record<string, Record<string, string[]>> = {
     // Ticket 08's download and recheck actions, transcribed from the same validation (`downloadActions` in setup.ts).
     plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
     install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'candidate'] },
-  'stage-jobs.ts': { stages: ['codes', 'tablesFile'], query: ['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'],
-    prepare: ['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed'] },
+  'stage-jobs.ts': { stages: ['codes', 'tablesFile'], query: ['request', 'tablesFile', 'jobsFile', 'snapshotFile', 'operator', 'format', 'saveReport'],
+    prepare: ['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed', 'snapshotFile'] },
   'account-snapshot.ts': { inspect: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'], import: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'] },
   'operator-cost.ts': { query: ['name', 'operatorId', 'target', 'current', 'mode', 'snapshotFile', 'format'] },
   'cultivation-gaps.ts': { query: ['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'] },

@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { resolveApprovedItem } from './advice-report.ts';
 import { readPrivateFile, type GateResult, type Freshness, type PlanInputs } from './base-plan.ts';
 import { baseApplyRecheck, reportPlanText, type BaseContent } from './base-report.ts';
@@ -21,7 +22,8 @@ type ObjectValue = Record<string, unknown>;
 const isObject = (value: unknown): value is ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value);
 const object = (value: unknown): ObjectValue => isObject(value) ? value : {};
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
-const code = (error: unknown) => error instanceof Error && /^(base|plan|report|maa|configuration|public-data)-[A-Za-z0-9:,_-]+$/.test(error.message) ? error.message : 'base-apply-check-failed';
+const known = (error: unknown) => error instanceof Error && /^(base|plan|report|maa|configuration|public-data)-[A-Za-z0-9:,_-]+$/.test(error.message) ? error.message : null;
+const code = (error: unknown) => known(error) ?? 'base-apply-check-failed';
 const hm = (hour: unknown, minute: unknown) => Number.isInteger(hour) && Number.isInteger(minute) ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}` : '??:??';
 
 /** `versionReader` is the MAA.exe metadata boundary for `check`; `apply` reads through the MAA process boundary instead. */
@@ -217,6 +219,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (result.status !== 'complete' && result.status !== 'unchanged') process.exitCode = 1;
     }
   } catch (error) {
-    process.stdout.write(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? code(error) })); process.exitCode = 1;
+    // Known refusals keep their codes. Settings that cannot be read and anything unclassified say what to check (item 10);
+    // an unclassified failure of apply may have happened inside the writer, so its outcome is unknown.
+    const refused = stdinJsonCode(error) ?? known(error);
+    process.stdout.write(JSON.stringify(refused ? { ok: false, error: refused }
+      : checkRequiredFor('base-apply', error, process.argv[2] === 'apply' ? 'base-apply-outcome-unknown' : undefined))); process.exitCode = 1;
   }
 }

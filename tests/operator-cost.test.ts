@@ -234,3 +234,19 @@ test('the public cost CLI executes through a real Windows development directory 
   assert.deepEqual(JSON.parse(run.stdout).total, { materials: { mat: 2 }, lmd: 102, exp: 20 });
   assert.deepEqual(await readdir(privateDirectory), ['account-snapshot.json']);
 });
+
+test('OB-9: a skill target reads the Skland snapshot whole when the MAA snapshot has no skills; other targets keep the default', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'maa-cost-select-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); const privateDirectory = join(root, 'private'); await mkdir(home); await mkdir(privateDirectory);
+  await writeFile(join(home, 'config.json'), JSON.stringify({ language: 'zh-CN', privateDirectory }));
+  await writeFile(join(privateDirectory, 'account-snapshot.json'), JSON.stringify(costSnapshot()));
+  const skland = { ...costSnapshot(), source: 'skland', readAt: '2026-11-16T00:00:00.000Z', operators: [{ id: 'char_synthetic', name: '合成干员', elite: 2, level: 1, skillLevel: 7, mastery: { 1: 0 }, modules: {} }],
+    coverage: { operators: { status: 'complete' }, inventory: { status: 'complete' } } };
+  await writeFile(join(privateDirectory, 'account-snapshot-skland.json'), JSON.stringify(skland));
+  const mastery = await queryOperatorCost({ name: '合成干员', target: { mastery: { 1: 1 } } }, { home, fetcher: syntheticNetwork() });
+  assert.equal(mastery.selection?.source, 'skland'); assert.equal(mastery.selection?.chosen, 'skland-covers'); assert.deepEqual(mastery.selection?.lacking, ['skills']);
+  assert.equal(mastery.snapshot.source, 'skland'); assert.equal(mastery.snapshot.readAt, '2026-11-16T00:00:00.000Z');
+  assert.match(formatOperatorCostMarkdown(mastery), /整份改读森空岛快照，两份不合并/);
+  const elite = await queryOperatorCost({ name: '合成干员', target: { elite: 1, level: 1 } }, { home, fetcher: syntheticNetwork() });
+  assert.equal(elite.selection?.source, 'maa'); assert.equal(elite.selection?.chosen, 'maa-default');
+});

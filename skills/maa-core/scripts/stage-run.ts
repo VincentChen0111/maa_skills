@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
 import { executeConfigWrite, type MaaProcess } from './maa-config.ts';
 import { runChecks, type CheckBoundaries } from './doctor.ts';
 import { blockingChecks } from './checks.ts';
@@ -497,7 +498,6 @@ export async function switchStageRun(input: { privateDirectory: string; maaDirec
 
 const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
-  const known = /^[a-z][a-z-]{2,48}$/;
   try {
     const action = process.argv[2];
     if (process.argv.length !== 3 || !['start', 'observe', 'verify', 'decide', 'progress', 'switch', 'read'].includes(action!)) fail('action-invalid');
@@ -506,7 +506,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       verify: ['runId'], decide: ['runId', 'decision', 'reason'], progress: ['runId', 'reference', 'stages'], switch: ['runId', 'stageId', 'expectedRevision', 'host', 'closedConfirmed'],
       read: ['runId'] };
     if (Object.keys(input).some(key => !allowed[action!]!.includes(key))) fail('request-invalid');
-    const settings = await readSettings();
+    let settings: Awaited<ReturnType<typeof readSettings>>;
+    try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
     const paths = { maaDirectory: settings.maaDirectory ?? fail('maa-directory-unset'), privateDirectory: settings.privateDirectory };
     let boundary: MaaProcess | undefined;
     const get = async () => boundary ??= (await import('./maa-process.ts')).createMaaProcess(paths.maaDirectory);
@@ -527,7 +528,9 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
     }
     console.log(JSON.stringify({ ok: true, ...object(result) }));
   } catch (error) {
-    const reason = stdinJsonCode(error) ?? (error instanceof Error && known.test(error.message) ? error.message : 'check-required');
-    console.log(JSON.stringify({ ok: false, status: 'check-required', reason })); process.exitCode = 1;
+    // A request refused while standard input was read keeps its code; every other refusal says why, what to check and what else
+    // can be done (owner trial item 10). The gate's own reasons are catalogue reasons; anything unclassified is stage-run-failed.
+    const refused = stdinJsonCode(error);
+    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : checkRequiredFor('stage-run', error))); process.exitCode = 1;
   }
 }

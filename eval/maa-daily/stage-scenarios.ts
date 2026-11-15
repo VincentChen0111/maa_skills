@@ -1,5 +1,5 @@
 import type { ScenarioDefinition } from '../../scripts/eval-run.ts';
-import { stageSnapshot, stageTables, stageRequest, stageJob } from '../../tests/fixtures/stage-data.ts';
+import { stageSnapshot, stageTables, stageRequest, stageJob, stageSklandSnapshot, stageModules, masteryJob } from '../../tests/fixtures/stage-data.ts';
 
 const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [], reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-jobs.ts', action: 'query' }] };
@@ -56,3 +56,49 @@ stageScenarios.push({ id: 'daily-stage-prepare-approved', maaProcess: 'ready',
       jobPlan: { map: 'synthetic_map', entries: [{ stageId: 'synthetic_01', loops: 3, primary: 1, alternates: [2] }] } },
     // The saved report plus the source and approved execution copy of each job.
     generatedFiles: [{ directory: 'private/stage-jobs', count: 5, nested: true }] } });
+
+// Owner trial items 9 and 10 (2026-11-16): mastery and module requirements are checked against real snapshot data or facts the
+// user confirmed, and a check-required result names its reason, what to check and the alternatives.
+const moduleTables = { ...stageTables, modules: stageModules };
+const sklandInputs = { ...inputs, 'tables.json': moduleTables, 'private/account-snapshot-skland.json': stageSklandSnapshot() };
+const masteryReference = '批准 SYN-1 普通主作业 1，循环三次，替换当前作业列表并关闭额外干员添加';
+const preparation = (world: Record<string, unknown>, facts: string) => ({ maaProcess: 'ready' as const,
+  commands: ['node *preferences.ts read', 'node *stage-jobs.ts query', 'node *maa-config.ts read', 'node *stage-jobs.ts prepare'],
+  jsonInputs: { ...world, 'jobs.json': [masteryJob(1)], 'config/gui.new.json': prepareConfig }, jsonFiles: ['private/config.json'],
+  prompt: `使用 maa-daily。当前目录 request.json 是我明确交办的关卡范围，tables.json / jobs.json 是合成离线样例。${facts}作业 1 要求合成甲二技能专三、Y 模组二级。先调用共享 stage-jobs.ts query 用这三个文件查询，saveReport 为 true，只保存一次报告。我批准这份报告里 SYN-1 普通的主作业 1、循环 3 次，也同意准备会替换当前配置的作业列表并关闭额外干员添加。批准原话是「${masteryReference}」，请原样作为 reference。作业 1 在报告里是 ready 才按作业准备接口先 maa-config.ts read，再用 stage-jobs.ts prepare 只准备这一批，完成后再 read 核对作业数量；不是 ready 就停下告诉我原因。不启动任务，开始由我在游戏里点。`,
+  policy: { ...policy, allowedKeys: ['$file'],
+    expectedInvocations: [...policy.expectedInvocations, { file: 'maa-core/scripts/maa-config.ts', action: 'read' }, { file: 'maa-core/scripts/stage-jobs.ts', action: 'prepare' }],
+    writerTransaction: { skill: 'maa-daily' as const, source: 'current-request' as const, reference: masteryReference,
+      changedKeys: ['Configurations.<profile>.Copilot.TaskList', 'Configurations.<profile>.Copilot.EnableUserAdditional'],
+      jobPlan: { map: 'synthetic_map', entries: [{ stageId: 'synthetic_01', loops: 3, primary: 1, alternates: [] }] } },
+    // The saved report plus the source and approved execution copy of job 1.
+    generatedFiles: [{ directory: 'private/stage-jobs', count: 3, nested: true }] } });
+stageScenarios.push(
+  // Over-blocking review OB-9: with both snapshots saved, the query itself reads the Skland snapshot (it has the skills).
+  { id: 'daily-stage-prepare-skland-mastery', ...preparation(sklandInputs, '私有目录里有两份账号快照：MAA 识别的 account-snapshot.json 和森空岛读的 account-snapshot-skland.json。') },
+  { id: 'daily-stage-prepare-user-confirmed', ...preparation({ ...inputs, 'tables.json': moduleTables },
+    '账号快照只有 MAA 识别的那一份。我刚在游戏里看过，原话是「合成甲二技能专三，Y 模组二级」，请当作我确认的事实用于核对。') },
+  { ...common, id: 'daily-stage-mastery-insufficient', jsonInputs: { ...sklandInputs, 'private/account-snapshot-skland.json': stageSklandSnapshot({ 1: 3, 2: 2, 3: 0 }), 'jobs.json': [masteryJob(1), stageJob(2)] },
+    prompt: prefix + '私有目录里另有森空岛读的 account-snapshot-skland.json。作业 1 要求合成甲二技能专三：说明作业 1 能不能准备、为什么。' },
+  // No snapshot at all (since OB-9 a lone Skland snapshot is read on its own): the result names the reason, the check and the
+  // alternatives, and nothing is written.
+  { ...common, id: 'daily-stage-snapshot-alternative', policy: { ...policy, expectedInvocations: [policy.expectedInvocations[0]!, { ...policy.expectedInvocations[1]!, exitCode: 1 }] }, jsonInputs: { 'private/config.json': settings, 'tables.json': moduleTables, 'request.json': stageRequest, 'jobs.json': [masteryJob(1)] },
+    prompt: '使用 maa-daily。当前目录 request.json 是我明确交办的关卡范围，tables.json / jobs.json 是合成离线样例。调用共享 stage-jobs.ts query，用这三个文件的内容/路径查询，format 为 markdown。本次只查候选，不保存报告，不改任何文件，不启动任务。工具要我核对什么、有哪些其他办法，照实告诉我。' },
+);
+
+// Over-blocking review (dispatcher triage, 2026-11-16), follow-on package of trial items 9 and 10.
+// OB-1: a job MAA would refuse (a group named like a single operator) is one blocked candidate; the stage keeps its others.
+const duplicateGroups = stageJob(1); duplicateGroups.content.groups = [{ name: '合成甲', opers: [{ name: '合成乙', requirements: { elite: 1 } }] }];
+// The owner's words from the trial (19:12), used as one confirmation of a job whose requirements are unstated and whose notes need checking.
+const ownerConfirmation = '我核实了，都是满足的。直接开始。';
+const confirmable = stageJob(1); confirmable.content.opers = [{ name: '合成甲' }]; confirmable.content.doc.details = '开局先放合成甲';
+const confirmationReference = '批准 SYN-1 普通主作业 1，循环三次，替换当前作业列表并关闭额外干员添加';
+stageScenarios.push(
+  { ...common, id: 'daily-stage-job-content-invalid', jsonInputs: { ...inputs, 'jobs.json': [duplicateGroups, stageJob(2)] },
+    prompt: prefix + '作业 1 里有个干员组和单个干员同名。说明作业 1 能不能准备、为什么，这一关的候选还能不能照常给出。' },
+  // OB-2: prerequisites unverified; the reason names each prerequisite and the flow asks the user once.
+  { ...common, id: 'daily-stage-prerequisite-question', jsonInputs: { ...inputs, 'request.json': { ...stageRequest, completions: {}, completionEvidence: '' } },
+    prompt: prefix + '我还没说过前置关卡打没打过，账号快照也没有通关记录。照 maa-daily 的流程处理前置：要问我就只问一次，我回答之前不要当作已通过。' },
+  { id: 'daily-stage-job-confirmed', ...preparation({ ...inputs }, ''), jsonInputs: { ...inputs, 'jobs.json': [confirmable], 'config/gui.new.json': prepareConfig },
+    prompt: `使用 maa-daily。当前目录 request.json 是我明确交办的关卡范围，tables.json / jobs.json 是合成离线样例，账号快照已保存。先调用共享 stage-jobs.ts query 用这三个文件查询，不保存报告。作业 1 的待核项我已经在游戏里对着作业核实过了，原话是「${ownerConfirmation}」：按作业查询接口把这句话作为对作业 1 的一次确认，带上报告里作业 1 的原文指纹重新查询，这次 saveReport 为 true，只保存这一次。我批准 SYN-1 普通的主作业 1、循环 3 次，也同意准备会替换当前配置的作业列表并关闭额外干员添加。批准原话是「${confirmationReference}」，请原样作为 reference。作业 1 在第二份报告里是 ready 才按作业准备接口先 maa-config.ts read，再用 stage-jobs.ts prepare 只准备这一批，完成后再 read 核对作业数量；不是 ready 就停下告诉我原因。不启动任务，开始由我在游戏里点。` },
+);

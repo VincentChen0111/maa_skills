@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { checkRequired } from '../skills/maa-core/scripts/check-required.ts';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -228,13 +229,13 @@ test('the unified writer accepts only the continuation list of approved jobs; th
   const cli = spawnSync(process.execPath, [script('maa-config.ts'), 'write'], { env, encoding: 'utf8', input: JSON.stringify({ host: 'claude', expectedRevision: '0'.repeat(64),
     authorization: { source: 'current-request', reference: '合成用户批准', jobPlan: valid },
     changes: [{ path: ['Configurations', 0, 'Copilot', 'TaskList'], value: approvedJobList(valid, c.batch.privateDirectory) }, { path: ['Configurations', 0, 'Copilot', 'EnableUserAdditional'], value: false }] }) });
-  assert.deepEqual(JSON.parse(cli.stdout), { ok: false, status: 'check-required' });
+  assert.deepEqual(JSON.parse(cli.stdout), checkRequired('job-continuation-route-required'));
   assert.equal(await readFile(join(c.batch.privateDirectory, 'daily-pending.jsonl'), 'utf8'), pending);
   await failedPrimary(c);
   const call = (input: unknown) => JSON.parse(spawnSync(process.execPath, [script('stage-run.ts'), 'switch'], { env, encoding: 'utf8', input: JSON.stringify(input) }).stdout);
   const body = { runId: c.runId, stageId: 'synthetic_01', expectedRevision: before, host: 'claude' };
-  assert.deepEqual(call({ ...body, extra: 1 }), { ok: false, status: 'check-required', reason: 'request-invalid' });
-  assert.deepEqual(call(body), { ok: false, status: 'check-required', reason: 'switch-not-decided' });
+  assert.deepEqual(call({ ...body, extra: 1 }), checkRequired('request-invalid'));
+  assert.deepEqual(call(body), checkRequired('switch-not-decided'));
 });
 
 /**

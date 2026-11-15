@@ -3,7 +3,14 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { randomUUID } from 'node:crypto';
-import { readSettings, settingsHome, startup } from './preferences.ts';
+import { readSettings as readSettingsFile, settingsHome, startup } from './preferences.ts';
+import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
+/** Settings that exist but cannot be read are refused by their own code, not as an unclassified failure. */
+const readSettings = (home?: string) => readSettingsFile(home).catch(() => { throw new Error('settings-unreadable'); });
+/** A recognition file or MAA cache that cannot be read is reported as such, without its path or the system message. */
+const readInput = (path: string) => readFile(path, 'utf8').catch(error => {
+  throw Object.assign(new CheckRequiredError('account-input-unreadable'), { code: (error as NodeJS.ErrnoException).code });
+});
 // Adapted from nhyo/dsh-maa-cli src/operators/{depot,operator-box}.js
 // at cdeaa8fac12bdc1db5b4ea5c33fca358dc6cf43b. Copyright (c) 2026 nhyo.
 // Installed MIT license: ../LICENSE. Source details: THIRD_PARTY_NOTICES.md in the repository.
@@ -18,6 +25,75 @@ export type AccountSnapshot = { version: 1; source: 'maa' | 'skland'; readAt: st
   base: { rooms: BaseRoom[] } | null; sourceTimes: { operators: string | null; inventory: string | null };
   coverage: { operators: Coverage; inventory: Coverage; base: Coverage; medicine?: Coverage; vouchers?: Coverage; stageClears?: Coverage } };
 export const snapshotFiles = { maa: 'account-snapshot.json', skland: 'account-snapshot-skland.json' } as const;
+
+/**
+ * What a query needs from a snapshot: owned operators with elite/level/potential, per-operator skill level, mastery and
+ * modules, the depot, or the base layout. MAA recognition never provides skills or the base (see `parseMaaSnapshot`).
+ */
+export type SnapshotDomain = 'operators' | 'skills' | 'inventory' | 'base';
+/** Whether a snapshot provides a domain. `complete` demands an unqualified read (the bar for switching to Skland). */
+export function snapshotCovers(value: unknown, domain: SnapshotDomain, complete = false): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, any>, coverage = snapshot.coverage ?? {};
+  const read = (status: unknown) => complete ? status === 'complete' : status === 'complete' || status === 'partial';
+  const operators = Array.isArray(snapshot.operators) && snapshot.operators.length > 0 && read(coverage.operators?.status)
+    && !(Array.isArray(coverage.operators?.issues) && coverage.operators.issues.includes('empty-recognition'));
+  if (domain === 'operators') return operators;
+  if (domain === 'skills') return operators && snapshot.operators.some((operator: Record<string, unknown>) => Number.isSafeInteger(operator?.skillLevel)
+    || operator?.mastery && typeof operator.mastery === 'object' || operator?.modules && typeof operator.modules === 'object');
+  if (domain === 'inventory') return read(coverage.inventory?.status) && !!snapshot.items && typeof snapshot.items === 'object';
+  return read(coverage.base?.status) && Array.isArray(snapshot.base?.rooms);
+}
+export class SnapshotSelectionError extends Error {
+  readonly kind: 'missing' | 'unreadable';
+  constructor(kind: 'missing' | 'unreadable') { super(`snapshot-${kind}`); this.name = 'SnapshotSelectionError'; this.kind = kind; }
+}
+export type SnapshotSelection = { snapshot: Record<string, unknown>; source: 'maa' | 'skland' | null; readAt: string | null;
+  /** explicit: the request named the file; maa-default: the MAA snapshot covered the query or no better one existed;
+   * skland-covers: the MAA snapshot lacked a needed domain the Skland snapshot covers completely; maa-missing /
+   * maa-unreadable: there was no usable MAA snapshot, so the Skland snapshot was read. */
+  chosen: 'explicit' | 'maa-default' | 'skland-covers' | 'maa-missing' | 'maa-unreadable'; lacking: SnapshotDomain[] };
+/**
+ * The one owner of "which saved snapshot does this query read" (over-blocking review OB-9, 2026-11-16). One whole file is
+ * read, never two merged (spec: 两份快照不合并): an explicit `snapshotFile` as it is; otherwise the MAA recognition snapshot,
+ * unless it lacks a needed domain that the Skland snapshot covers completely, or there is no usable MAA snapshot at all.
+ * Callers print the source and read time it returns.
+ */
+export async function selectSnapshot(privateDirectory: string, needed: readonly SnapshotDomain[], explicitFile?: string): Promise<SnapshotSelection> {
+  const load = async (file: string): Promise<Record<string, unknown> | 'missing' | 'unreadable'> => {
+    let raw: string;
+    try { raw = await readFile(file, 'utf8'); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'; }
+    try { return object(JSON.parse(raw.replace(/^﻿/, ''))); } catch { return 'unreadable'; }
+  };
+  const result = (snapshot: Record<string, unknown>, chosen: SnapshotSelection['chosen'], lacking: SnapshotDomain[]): SnapshotSelection => ({ snapshot,
+    source: snapshot.source === 'maa' || snapshot.source === 'skland' ? snapshot.source : null, readAt: typeof snapshot.readAt === 'string' ? snapshot.readAt : null, chosen, lacking });
+  if (explicitFile !== undefined) {
+    const named = await load(resolve(explicitFile));
+    if (typeof named === 'string') throw new SnapshotSelectionError(named);
+    return result(named, 'explicit', needed.filter(domain => !snapshotCovers(named, domain)));
+  }
+  const maa = await load(join(privateDirectory, snapshotFiles.maa));
+  const lacking = typeof maa === 'string' ? [...needed] : needed.filter(domain => !snapshotCovers(maa, domain));
+  if (typeof maa !== 'string' && !lacking.length) return result(maa, 'maa-default', []);
+  const skland = await load(join(privateDirectory, snapshotFiles.skland));
+  if (typeof skland !== 'string') {
+    if (typeof maa === 'string') return result(skland, maa === 'missing' ? 'maa-missing' : 'maa-unreadable', needed.filter(domain => !snapshotCovers(skland, domain)));
+    if (lacking.every(domain => snapshotCovers(skland, domain, true))) return result(skland, 'skland-covers', lacking);
+  }
+  if (typeof maa === 'string') throw new SnapshotSelectionError(maa);
+  return result(maa, 'maa-default', lacking);
+}
+/** One line for the user: which snapshot was read, why, and its read time (Skland's is not the in-game data time). */
+export function snapshotSourceLine(selection: Pick<SnapshotSelection, 'source' | 'readAt' | 'chosen' | 'lacking'>): string {
+  const names: Record<SnapshotDomain, string> = { operators: '干员', skills: '技能等级、专精和模组', inventory: '仓库', base: '基建' };
+  const why = selection.chosen === 'skland-covers' ? `（MAA 识别快照没有${selection.lacking.map(domain => names[domain]).join('、')}，森空岛快照完整，整份改读森空岛快照，两份不合并）`
+    : selection.chosen === 'maa-missing' ? '（没有 MAA 识别快照，改读森空岛快照）' : selection.chosen === 'maa-unreadable' ? '（MAA 识别快照读不了，改读森空岛快照）'
+    : selection.chosen === 'explicit' ? '（请求指定的快照）' : '';
+  const source = selection.source === 'skland' ? '森空岛快照' : selection.source === 'maa' ? 'MAA 识别快照' : '来源未标明的快照';
+  const caveat = selection.source === 'skland' ? '；读取时间是本次从森空岛读的时间，不是游戏内的数据时间，森空岛比游戏内滞后多久没有测过' : '';
+  const gap = selection.lacking.length && selection.chosen !== 'skland-covers' ? `；这份快照没有${selection.lacking.map(domain => names[domain]).join('、')}，相关项待核` : '';
+  return `账号来源：${source}${why}，读取时间 ${selection.readAt ?? '未知'}${caveat}${gap}。`;
+}
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object-required');
   return value as Record<string, unknown>;
@@ -128,12 +204,12 @@ export async function inspectMaaSnapshot(value: unknown, home = settingsHome()):
     input.operBoxFile = join(maaDirectory, 'data/OperBoxData.json');
   }
   let text: string;
-  if (input.callbackFile) text = await readFile(input.callbackFile, 'utf8');
+  if (input.callbackFile) text = await readInput(input.callbackFile);
   else {
     const data: Record<string, unknown> = {};
     for (const [key, path] of [['depot', input.depotFile], ['operBox', input.operBoxFile]] as const) if (path) {
       let raw: string;
-      try { raw = await readFile(path, 'utf8'); }
+      try { raw = await readInput(path); }
       catch (error) { if (configured && (error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
       try { data[key] = JSON.parse(raw.replace(/^\uFEFF/, '')); } catch { data[key] = null; }
     }
@@ -151,17 +227,19 @@ export async function importMaaSnapshot(value: unknown, home = settingsHome()): 
  */
 export async function saveAccountSnapshot(privateDirectory: string, fileName: (typeof snapshotFiles)[keyof typeof snapshotFiles],
   produce: () => Promise<AccountSnapshot>): Promise<AccountSnapshot> {
-  await mkdir(privateDirectory, { recursive: true });
+  // A writing step that fails is a save failure; a held lock (EEXIST) stays busy, and errors of produce() keep their own code.
+  const saving = <T>(step: Promise<T>) => step.catch(error => { throw (error as NodeJS.ErrnoException).code === 'EEXIST' ? error : new CheckRequiredError('account-save-failed'); });
+  await saving(mkdir(privateDirectory, { recursive: true }));
   const lockFile = join(privateDirectory, '.account-snapshot.lock');
-  const lock = await open(lockFile, 'wx', 0o600);
+  const lock = await saving(open(lockFile, 'wx', 0o600));
   const temporary = join(privateDirectory, `.account-snapshot-${randomUUID()}.tmp`);
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    await saving(lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })));
     const snapshot = await produce();
-    const file = await open(temporary, 'wx', 0o600);
-    try { await file.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`); await file.sync(); }
+    const file = await saving(open(temporary, 'wx', 0o600));
+    try { await saving(file.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`)); await saving(file.sync()); }
     finally { await file.close(); }
-    await rename(temporary, join(privateDirectory, fileName));
+    await saving(rename(temporary, join(privateDirectory, fileName)));
     return snapshot;
   } finally {
     try { await unlink(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -195,10 +273,11 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       operatorCount: snapshot.operators.length, itemCount: Object.keys(snapshot.items).length, lmd: snapshot.lmd, summary }));
   } catch (error) {
     // Ticket 26: the static codes this script throws are reported as they are, so a refusal says why. Anything else (a file
-    // that cannot be read, a failed save) stays account-check-required and prints no path or system message.
-    const code = stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy'
-      : error instanceof Error && accountErrorCodes.has(error.message) ? error.message : 'account-check-required');
-    console.error(JSON.stringify({ ok: false, error: code }));
+    // that cannot be read, a failed save, an unclassified failure) is a specific check-required result (owner trial item 10)
+    // that prints no path or system message.
+    const code = stdinJsonCode(error) ?? (error instanceof CheckRequiredError ? null : (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy'
+      : error instanceof Error && accountErrorCodes.has(error.message) ? error.message : null);
+    console.error(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('account-snapshot', error)));
     process.exitCode = 1;
   }
 }

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
+import { CheckRequiredError, checkRequired, checkRequiredFor } from './check-required.ts';
 import { approvedJobList, verifyApprovedJobFiles, type ApprovedJobPlan } from './stage-job-plan.ts';
 import { buildTrainingChanges, inspectTrainingAsset, installTrainingAsset, trainingTaskFields, type TrainingGrant, type TrainingAsset } from './training-config.ts';
 import { connectionFields, prepareSetupConnection, type SetupWriteRequest, type ConnectionContext, type AdbBoundary } from './setup-connection.ts';
@@ -615,8 +616,12 @@ export async function inspectConfiguration(maaDirectory: string) {
 
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
 if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
+  const action = process.argv[2];
+  // The write starts the transaction: from here an unclassified failure is an unknown outcome, never "nothing changed".
+  let transaction = false;
   try {
-    const settings = await readSettings();
+    let settings: Awaited<ReturnType<typeof readSettings>>;
+    try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
     if (!settings.maaDirectory) throw new Error('maa-directory-unset');
     if (process.argv.length !== 3) throw new Error('action-invalid');
     if (process.argv[2] === 'read') console.log(JSON.stringify({ ok: true, configuration: await inspectConfiguration(settings.maaDirectory) }));
@@ -627,7 +632,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (Object.keys(body).some(key => !keys.includes(key))) throw new Error('request-invalid');
       /** A job-plan continuation (ticket 17) is written only by `stage-run.ts switch`, after the re-run gate allowed it. */
       const jobPlan = body.authorization && typeof body.authorization === 'object' ? (body.authorization as RecordValue).jobPlan : undefined;
-      if (jobPlan && typeof jobPlan === 'object' && Object.hasOwn(jobPlan, 'continuation')) throw new Error('request-invalid');
+      if (jobPlan && typeof jobPlan === 'object' && Object.hasOwn(jobPlan, 'continuation')) throw new Error('job-continuation-route-required');
       // Ticket 23: an approved base plan is applied only through base-apply.ts, which re-runs every check first.
       if (body.authorization && typeof body.authorization === 'object' && Object.hasOwn(body.authorization, 'basePlan')) throw new Error('base-apply-route-required');
       if (process.argv[2] === 'preview') {
@@ -639,6 +644,7 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
         const { createMaaProcess } = await import('./maa-process.ts');
         let boundary: MaaProcess | undefined;
         const get = () => boundary ??= createMaaProcess(settings.maaDirectory!);
+        transaction = true;
         const result = await executeConfigWrite({ ...body, maaDirectory: settings.maaDirectory, privateDirectory: settings.privateDirectory } as WriteRequest,
           { inspect: () => get().inspect(), close: () => get().close(), start: () => get().start(), version: () => get().version!() });
         console.log(JSON.stringify({ ok: result.status === 'complete', ...result }));
@@ -648,7 +654,9 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
   } catch (error) {
     // Ticket 26: a request refused while reading standard input reached neither MAA nor a file, so it is a plain rejection.
     const refused = stdinJsonCode(error);
-    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : { ok: false, status: 'check-required' })); process.exitCode = 1;
+    // Everything else says why and what to check (owner trial item 10). Inside the transaction nothing is assumed unchanged.
+    console.log(JSON.stringify(refused ? { ok: false, status: 'rejected', reason: refused } : transaction ? checkRequired('maa-config-write-outcome-unknown')
+      : checkRequiredFor('maa-config', error, action === 'preview' ? 'maa-config-preview-failed' : action === 'write' ? 'maa-config-write-outcome-unknown' : undefined))); process.exitCode = 1;
   }
 }
 export async function executeConfigWrite(request: WriteRequest, maa: MaaProcess) { return writeConfiguration(request, maa); }

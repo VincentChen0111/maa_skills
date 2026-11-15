@@ -13,7 +13,7 @@
 
 `readAt` 是本次实际读取时间；`sourceTimes` 保留文件里的 `syncTime`，缺失为 null，不能把旧缓存的导入说成新扫描。原始回调按输入顺序采用每域最后一次完成、未完成或已识别的错误；较新的未完成/错误会使旧完成结果失效。多个扫描批次或账号的结果须由用户分别提供，工具不合并跨账号缓存。
 
-所有动作退出码 0 表示命令完成，并不表示两类识别都完整；仍须核对 `coverage`。失败都退出 1，错误码说明原因：没有配置 MAA 目录、也没给识别结果文件时为 `maa-directory-required`（这时不导入：请用户先设置 MAA 目录或给出 MAA 的识别结果文件，不拿私有目录或工作区里的其他文件充当识别结果）；请求不合法时为 `invalid-request`、`invalid-format` 或 `conflicting-input`；标准输入不是 JSON 时为 `input-json-invalid`，可能已经丢字时为 `input-encoding-lossy`；识别结果文件的内容不对时为对应代码（例如 `recognition-failed`、`invalid-ownership`）；设置不可读时为 `settings-unreadable`；文件读不了或保存失败时为 `account-check-required`；互斥文件已存在时为 `account-busy`。照实把错误码告诉用户，不绕过脚本另写快照。导入失败保留已有快照；成功解析到的缺失、未完成或损坏状态会写入新快照，避免沿用旧数据充当这次识别结果。快照使用临时文件与改名替换，锁不会自动抢占。
+所有动作退出码 0 表示命令完成，并不表示两类识别都完整；仍须核对 `coverage`。失败都退出 1，错误码说明原因：没有配置 MAA 目录、也没给识别结果文件时为 `maa-directory-required`（这时不导入：请用户先设置 MAA 目录或给出 MAA 的识别结果文件，不拿私有目录或工作区里的其他文件充当识别结果）；请求不合法时为 `invalid-request`、`invalid-format` 或 `conflicting-input`；标准输入不是 JSON 时为 `input-json-invalid`，可能已经丢字时为 `input-encoding-lossy`；识别结果文件的内容不对时为对应代码（例如 `recognition-failed`、`invalid-ownership`）；设置不可读时为 `settings-unreadable`；识别结果文件或 MAA 识别缓存读不了、快照没能保存或其他未分类的失败时输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`account-input-unreadable`、`account-save-failed`、`account-import-failed`），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户；互斥文件已存在时为 `account-busy`。照实把错误码告诉用户，不绕过脚本另写快照。导入失败保留已有快照；成功解析到的缺失、未完成或损坏状态会写入新快照，避免沿用旧数据充当这次识别结果。快照使用临时文件与改名替换，锁不会自动抢占。
 
 ## 共享工具直接输入
 

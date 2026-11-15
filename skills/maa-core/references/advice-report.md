@@ -47,7 +47,7 @@
 | `skip` | `{reportHash, userWords}` | `{ok, status:"unreviewed"}` |
 | `approve` | `{reportHash, items:["S1"], userWords}` | `{ok, status, approved:[{id, reference}]}` |
 
-退出码 0 表示成功；1 表示 `needs-input` 或被拒绝，输出 `{ok:false, error:<代码>}`。常见代码：`report-not-approvable:<状态>`、`report-brief-required`、`report-brief-mismatch`、`report-review-exists`、`report-revision-already-reviewed`、`report-correction-missing:<编号>`、`report-correction-not-accepted:<编号>`、`report-finding-decision-required:<编号>`、`report-finding-reason-required:<编号>`、`report-reviewer-invalid`、`report-user-words-required`、`report-item-unknown:<编号>`、`report-content-mismatch`、`report-not-found`。错误只有固定代码。
+退出码 0 表示成功；1 表示 `needs-input` 或被拒绝，输出 `{ok:false, error:<代码>}`。常见代码：`report-not-approvable:<状态>`、`report-brief-required`、`report-brief-mismatch`、`report-review-exists`、`report-revision-already-reviewed`、`report-correction-missing:<编号>`、`report-correction-not-accepted:<编号>`、`report-finding-decision-required:<编号>`、`report-finding-reason-required:<编号>`、`report-reviewer-invalid`、`report-user-words-required`、`report-item-unknown:<编号>`、`report-content-mismatch`、`report-not-found`。错误只有固定代码。设置读不了或未分类的失败输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`settings-unreadable`；未分类时培养报告为 `cultivation-report-failed`，基建报告为 `base-report-failed`，写记录的动作可能只写了一部分，先 `read` 看报告状态），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。
 
 ## 存放
 

@@ -40,7 +40,7 @@
 | `account-busy` | 另一个快照写入正在进行，本次没有保存 | 保留锁，稍后再试，不删除锁 |
 | `snapshot-missing` | `compare` 缺少一边的快照，`missing` 列出 `maa` 或 `skland` | 先按对应流程建立那份快照 |
 | `input-encoding-lossy`、`input-json-invalid` | 标准输入可能已经丢字（Windows PowerShell 管道），或不是 JSON；什么都没做 | 非 ASCII 字符和 `?` 改成 `\uXXXX` 转义后重发 |
-| `account-check-required` | 设置不可读、请求不合法或其他失败 | 先核对，不自动重放 |
+| `status: "check-required"` | 设置不可读（`settings-unreadable`）、请求不合法（`skland-request-invalid`）、比较的快照读不了（`skland-snapshot-unreadable`）、快照没能保存（`account-save-failed`）或其他未分类的失败（`skland-read-failed`）；输出 `{ok:false, status:"check-required", reason, check, alternatives}` | 把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户；不自动重放 |
 
 ## 快照内容
 
@@ -52,7 +52,7 @@
 - `base.rooms` 列出房间类型、`slotId`、等级和驻员；心情是原始值 `moodRaw`（满值 8,640,000）及其记录时间 `moodAt`。
 - `coverage.medicine`、`coverage.vouchers`、`coverage.stageClears` 固定为 `unavailable`、`no-source`：理智药等药剂、凭证和各类券、逐关通关状态没有来源，不补零，不推断。
 
-查询工具（成本、缺口、基建、训练）默认读 MAA 快照 `account-snapshot.json`。用户要用森空岛数据时，在请求里传 `snapshotFile` 指向私有目录的 `account-snapshot-skland.json`，并在回复里说明用的是哪个来源和读取时间。两份快照不合并；用户问两边是否一致时用 `compare`，按结果列出差异和两边的时间，不替用户判断哪边对。两份是否属于同一账号无法核对。
+查询工具（关卡作业、成本、培养报告、基建技能查询）没有传 `snapshotFile` 时，由共享规则选一份快照整份读取：默认读 MAA 识别快照 `account-snapshot.json`；它缺这次查询要用的一类数据（MAA 识别从来没有技能等级、专精、模组和基建），而森空岛快照 `account-snapshot-skland.json` 这一类是完整的，就整份改读森空岛快照；没有可用的 MAA 识别快照时也读森空岛快照。两份不合并。输出写明读的是哪一份、为什么和读取时间，回复里照样告诉用户；用的是森空岛快照时，说明读取时间不是游戏内的数据时间，森空岛比游戏内滞后多久没有测过。用户点名要用某一份时，传 `snapshotFile` 指向它。缺口和训练工具由训练修复改成同一规则，合并前仍按各自接口说明。两份快照不合并；用户问两边是否一致时用 `compare`，按结果列出差异和两边的时间，不替用户判断哪边对。两份是否属于同一账号无法核对。
 
 ## 每次读取后都要告诉用户
 

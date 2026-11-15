@@ -117,3 +117,30 @@ Copilot.cs、CopilotViewModel.cs 的哈希与上文 15 的记录相同。
 ### 同类项目的思路
 
 [MAA-PRTS](https://github.com/OriginiumLab/MAA-PRTS/blob/305d3b6bdef58f06989586d59ac2fed2ba7e0f8f/backend/core/copilot.py)（MIT，`305d3b6bdef58f06989586d59ac2fed2ba7e0f8f`）只借思路，没有复制代码：好评率门槛随票数升高（第 69–80、489–508 行，5 票 65%、100 票及以上 85%、中间按对数过渡，5 票以下不筛）；缺一人时标「可借」（第 298–310 行）。本工具采用的门槛数字和理由见规格「默认值及其来源」。
+
+## 试用 9：专精、模组和组名的 MAA 语义（2026-11-16）
+
+维护者试用 v0.1.0 候选时，TL-S-1 到 TL-S-4 的作业全部卡在专精和模组「待核」，TL-S-4 的作业 110140 因为组名重复准备失败。维护者原话，2026-11-16：「这里战斗因为待核被阻挡了。1.为什么专精模组查不到？ 2. 怎么get over？3.check required 要给我具体的，和有没有替代」，随后「现在修」。
+
+核对方法：用 `gh api` 只读拉取 MaaAssistantArknights 两个支持版本的源码，只 grep、只读相关行，不运行下载的代码。A = v6.21.4 `52d0b2acaca116585b02e1e6a9da303460f81a24`，B = v6.22.0 `901e01c600f4895ac4e7e48a9b471fc9f52af301`。下面涉及的文件在两个版本里逐字节相同（`AsstProxy.cs` 除外，内容相同、B 的行号多 19），链接给 B，A 的行号相同。完整记录（带 A、B 两边的链接）在会话共享笔记里，这里只留结论和决定性的行。
+
+前缀 `https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/`：
+
+| 事实 | 依据 |
+| --- | --- |
+| core 只解析 `elite`、`level`、`skill_level`、`module` 四个要求，默认值都是 -1；`potentiality` 那一行被注释掉，不读 | `src/MaaCore/Common/AsstBattleDef.h#L128-L137`；`src/MaaCore/Config/Miscellaneous/CopilotConfig.cpp#L108-L141`（`groups[].opers[]` 用同一个解析，`#L168-L190`） |
+| `module` 是模组类型编号：-1 无要求、不切换；0 不使用模组（主动点「无模组」）；1–5 依次是 χ、Y、α、Δ、β。官方文档把 2 写成 γ，代码的枚举是 `Upsilon`，模板注释写「y模组」 | `AsstBattleDef.h#L133`、`#L280-L316`；`docs/zh-cn/protocol/copilot-schema.md#L31-L40`；`resource/tasks/Copilot/formation.json#L95-L98` |
+| 游戏数据的模组类型字母与编号的对应：MAA 自己的干员数据按 `A`→α、`B`→β、`X`→χ、`Y`→Y、`D`→Δ 映射。固定公开模组表 `uniequip_table.json`（`Kengxxiao/ArknightsGameData` `6f63c14…`）的 `typeName2` 取值正是 X、Y、D、A、B，原始模组为 null | `src/MaaCore/Config/Miscellaneous/OperBoxDataConfig.cpp#L49-L52`；固定表 2026-11-16 只读统计：X 309、Y 184、A 21、D 7、B 1、null 404 |
+| 自动编队真的会选模组：编号 0–5 时先 OCR 找「分支」页再点模板；点不到就判这个干员不可用（GUI 显示「所需模组未解锁」），换同组下一个；`module > 0` 在解析时隐含精二 | `src/MaaCore/Task/Miscellaneous/BattleFormationTask.cpp#L665-L691`；`CopilotConfig.cpp#L126-L131` |
+| `module_level` 两个版本都不读、不检查（文档写「暂不支持」，GUI 的属性被注释掉） | `copilot-schema.md#L31-L40`；`src/MaaWpfGui/Models/Copilot/CopilotModel.cs#L395-L434`；作业要求结构里没有这个字段（`AsstBattleDef.h#L128-L137`） |
+| `skill_level` 1–7 是技能等级，8/9/10 是专精 1/2/3；只在 `skill` 为 1–3 时核对 `skill` 选中的那个技能；`skill` 为 0 时不点技能，沿用默认或上次编队的技能 | `AsstBattleDef.h#L153`、`#L354`；`BattleFormationTask.cpp#L763-L765`、`#L783-L798`；`formation.json#L24-L33` |
+| 组名：解析不去重（`OperUsageGroups` 是 vector），`opers[]` 每一项以干员名为组名先入列，`groups[]` 随后入列；编队开始时检查重名，发现重名回调 `BattleFormationParseFailed` 并失败，编队子任务失败整个作业任务就停下，不会开始行动；没有成员的组先被跳过、不参与检查 | `AsstBattleDef.h#L489`；`CopilotConfig.cpp#L145-L193`；`BattleFormationTask.cpp#L866-L874`；`src/MaaCore/Task/Interface/CopilotTask.cpp#L42`；`src/MaaCore/Task/PackageTask.cpp#L29-L31`；GUI 文案「编队解析失败」`src/MaaWpfGui/Main/AsstProxy.cs#L2647-L2648` |
+| 关闭自动编队时战斗按组名建表，先出现的组生效、后面的同名组被忽略，不报错（读代码的推论，未运行） | `src/MaaCore/Task/Miscellaneous/BattleProcessTask.cpp#L107-L117` |
+
+由此定下的实现（`stage-jobs.ts`）：
+
+- 专精按 `skill` 选中的那个技能核对快照的 `mastery`；`skill` 为 0 时只有每个技能都达到才算满足，全部不够记已知不够，其余待核。
+- 模组按编号对应的字母，在快照里找这位干员这种类型的那一个模组（模组与类型的对应取自固定公开模组表，报告保存用到的条目，准备时同样重算）；未解锁（0）或等级不够记已知不够，找不到或读不到记待核。`module_level` MAA 不读，写了时并入同一模组的等级要求；没写模组类型时待核。
+- 组名按 MAA 的方式算：单个干员用干员名，空组不算。重名是 MAA 自己拒绝的作业，所以我们的拒绝是对的；改成只挡这一份候选（`job-group-name-duplicate`，blocked），不再让整次查询失败。原来的检查拿 `operator-<序号>` 当单个干员的组名，漏掉了「组名等于干员名」和「同一干员写两次」两种 MAA 也会拒绝的重名，现在一并核对。没有成员的组 MAA 会跳过，作业动作用到它就部署不了，记待核（`job-group-empty`），原来是整次查询失败。
+
+未核实：设备上的模板命中和「分支」页识别；`module: 0` 用在没有模组页的干员上的结果（读代码的推论，所以只有快照证明这位干员有已解锁的模组时才算满足）；关闭自动编队时的行为。
