@@ -41,7 +41,7 @@ description: maa_skills 的共享脚本和接口说明，由 maa-setup、maa-acc
 
 调用方的约定：
 
-- 先读偏好：调用 `scripts/preferences.ts read` 的 skill 在给用户的第一句答复之前运行它，按返回的语言答复。任何答复都算，包括拒绝越界请求、简短回答和追问。脚本还不能运行时先答复怎么补上：缺少 maa-core 时给安装方法；maa-setup 在 Node 24 能运行之前先给 Node 的下载答复，能运行后立即读。
+- 先读偏好：调用 `scripts/preferences.ts read` 的 skill 在给用户的第一句答复之前运行它，按返回的语言答复。任何答复都算，包括拒绝越界请求、简短回答和追问。用户限定这次只读、点名先调用或只调用别的脚本、或列出不许调用的动作时也一样：偏好读取只读，不在这些限定之内，照样最先运行。脚本还不能运行时先答复怎么补上：缺少 maa-core 时给安装方法；maa-setup 在 Node 24 能运行之前先给 Node 的下载答复，能运行后立即读。
 - 调用前读对应的接口说明，只通过脚本读写，不直接改它管理的文件。
 - 用户的文本作为数据经标准输入传给脚本，不拼进命令行。
 - Windows PowerShell 用管道传 JSON 时，非 ASCII 字符和 `?` 都写成 `\uXXXX` 转义（例如「中」写成 `\u4e2d`，`?` 写成 `\u003f`），JSON 里只留 ASCII；管道加在开头的 BOM 由脚本去掉。Windows PowerShell 5.1 会把管道里的非 ASCII 字符换成 `?`：脚本见到 BOM 和 `?` 同时出现时返回 `input-encoding-lossy`，什么都没做，改成转义后重发。有些控制台（例如中文 Windows 默认的代码页 936）的管道不加 BOM，这时丢掉的字察觉不到，换成的 `?` 会原样存下；所以非 ASCII 字符一律转义，不要靠 `input-encoding-lossy` 发现丢字。没有自己代码的脚本在标准输入不是 JSON 时返回 `input-json-invalid`，超过上限时返回 `input-too-large`。

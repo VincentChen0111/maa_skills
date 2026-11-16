@@ -220,3 +220,43 @@
 - Claude 一侧没有评测这段文字。
 - 预览少列某一项时「去掉后再预览一次」这条路径，现有场景都用摘要里看得到的字段，没有专门的场景核对。
 - 「评测影响」一段列出的其他场景，以及本包与 #106 合在一起的载荷，本包都没有评测，由发布评测比较。
+
+## D-N8：先读偏好不受用户限定影响（2026-11-16）
+
+起因：工单 26 第五次真实发布评测（候选 `31189cc`，批次 `Zn12LJ`）里，`daily-alternate-medicine-used` 的运行 `BxQxIG` 没有运行 `preferences.ts read` 就答复，只挂 expected-behavior。分诊把 #106 的四批也算进来（`Gs7BLk`、`zy4Rgo` 的载荷是 `a6e306a`，`AGAdmw`、`XgvbIz` 的是 `5761e35`；`maa-daily/SKILL.md` 第 10、12 行、`stage-run.md`、`maa-core/SKILL.md` 第 44 行和场景定义在这三份载荷里相同）：4 个 `daily-alternate-*` 场景共 27 次运行有 6 次没有读偏好（`BxQxIG`；`k9dPuy`、`xV1jPO`；`rqT7Pr`；`rXEEt1`、`Tu7b8H`），失败都只挂 expected-behavior，通过的都读了。27 次运行读的 skill 文件相同（maa-daily 的 SKILL.md、maa-core 的 SKILL.md、`references/stage-run.md`），所以不是没读到规则。失败的运行在开场白或最后的答复里，把用户那句「这一次先只读：调用共享 stage-run.ts read 读取这条记录（只读），不调用 start、observe、verify、decide、progress 或 switch，也不改任何文件」当成只许调用的清单（「按你的限制只调用 `stage-run.ts read`」）。对照组 `daily-run-*` 用同样的文字、同样的 `run-request.json` 和命令，提示里没有「先」，在 `Gs7BLk`、`AGAdmw`、`Zn12LJ` 三批的 18 次运行都读了。根因有两处。一是所有者「先读偏好」列了几种答复，没说用户限定调用范围时读取照旧。二是模型照着执行的 `stage-run.md` 第 3 行只有一句没链接、也没命令的「先读偏好」，`stage-jobs.md` 第 3 行也一样；一致性检查只看 SKILL.md，看不到这两处（包 P2 一节记下的已知局限）。协调者复核后接受（D-N8）：这是真实但影响低的缺陷。存的语言和对话语言不同、没设语言或读到 check-required 时，会用错语言或漏掉提示。它不是安全问题，没有花费、重放或失败即放行，但评分器判失败，挡住了发布评测。场景提示不改：它进场景哈希，改了就不能和之前的批次比较，而且用户真会这样说。
+
+| 修改 | 证据（离线） |
+| --- | --- |
+| `maa-core/SKILL.md` 调用方约定的「先读偏好」，在「任何答复都算……」之后、例外之前加一句：「用户限定这次只读、点名先调用或只调用别的脚本、或列出不许调用的动作时也一样：偏好读取只读，不在这些限定之内，照样最先运行。」两个例外（缺少 maa-core，maa-setup 在 Node 24 能运行之前）仍在它后面。`preferences.ts read` 在接口说明里就是只读 | `tests/docs-consistency.test.ts`：约定的这一条要同时含「任何答复」和「不在这些限定之内」，删掉含其中任一个的那句都只报一处；别的 skill 文档写出其中任一个都算复述，例如 maa-daily 的 SKILL.md 补一句「偏好读取不在这些限定之内」就报复述 |
+| `maa-daily/references/stage-run.md`、`references/stage-jobs.md` 第 3 行的「先读偏好，用已保存语言解释结果」改成「按 maa-core 调用方约定的「先读偏好」先运行 maa-daily 入口里的 `preferences.ts read`，用返回的语言解释结果」，其中规则名链接到 `../../maa-core/SKILL.md`，不写规则本身的话；同一行的 PowerShell 转义说明不动（`stdin-json` 的一致性测试核对它） | 同一文件「every skill document that runs preferences.ts read or names the rule points to the one read-first rule in maa-core」：扫描范围从 SKILL.md 扩到 `skills/` 下每份 Markdown；所有者以外的文档里，提到「先读偏好」或运行 `preferences.ts read` 的每一行都要链接约定，而且链接的相对路径要从这份文档解析到 `maa-core/SKILL.md`；提到这条规则的文档恰好是四个读取方和这两份参考文件。「the read-first check fails when a skill drops the pointer, restates the rule, or the owner loses it」：两份参考文件去掉链接，或者把链接写成 `../maa-core/SKILL.md`（从 references 目录指不到所有者），都只报那一行；新增一份只写 `preferences.ts read` 的参考文件，报那一行并进入枚举，读取方不变；原来四个读取方各自去掉链接仍只报该文件一处。先红：改文字前运行，这两项失败，报 3 处（约定缺「不在这些限定之内」、`maa-daily/references/stage-jobs.md:3`、`maa-daily/references/stage-run.md:3`），其余 10 项通过 |
+
+本包选定的写法（设计默认值，2026-11-16，不是维护者原话；产品规则那条登记在规格）：
+
+- 分诊建议链接写成任意层 `../` 都算。这里改成要求相对路径从所在文档解析到所有者：层数写错的链接在这项检查里就报，不只靠断链检查。
+- 逐行规则对 SKILL.md 也生效。读取方运行读取的行都没有链接时，只按读取方报一次，不再按行重复报，所以原来「四个读取方各自去掉链接都只报该文件」的断言不变。读取方另有一行提到规则却没链接时照样按行报，比分诊建议的「跳过 SKILL.md 的读取行」严一点。
+- 逐行规则只认字面的「先读偏好」和 `preferences.ts read`，不用命令提取：`maa-core/references/preferences.md` 是脚本自己的接口说明，命令提取会把它第 7、15、19 行算成读取（本机临时探针核实，探针文件已删除），它不是调用方。
+- 包 P2 一节记下的已知局限缩小了：参考文件里写了规则名或命令的行现在查得到。换了别的说法、又不写规则名和命令的复述仍然查不到。
+
+其他生产方：在 `skills/` 下逐份搜「先读偏好」「读偏好」「`preferences.ts` … `read`」「已保存语言」「返回的语言」，没有链接的只有上面两处；新测试枚举出的提到规则的文档也只有这六份。
+
+规格登记：「私有目录与设置文件」里读设置一条追加 2026-11-16 的补充；「规则来源」新增「26 发布评测：先读偏好不受用户限定影响」一行；「默认值及其来源」在包 P2「先读偏好」一行之后新增标「D-N8」的一行。
+
+运行器指纹和场景哈希不变：`scripts/eval-batch.ts` 的 `runnerSources` 和 `scripts/eval-run.ts` 的 `scenarioHashSources` 里没有 Markdown 文件，也没有本包改的文件；本包只改 `skills/**/*.md`、`tests/` 和 `docs/`，不改 `eval/`、场景提示和评分器。只有载荷摘要会变。
+
+本包实际运行的命令（2026-11-16，本机 Windows，Node 24）：
+
+- `npm ci`、`npm run typecheck`：通过。
+- 先红：见上表。
+- 逐个单独运行：`docs-consistency` 12 项、`stdin-json` 13（含真实 `powershell.exe` 管道测试）、`check-required` 12、`community-cli` 3、`eval-fixture` 9、`eval-payload` 4、`help-installation` 6、`release-package` 7、`review-brief-handoff` 3、`metadata` 3、`stage-alternate-scenarios` 2、`stage-run-scenarios` 1、`stage-scenarios` 9、`daily-evaluation` 10、`cross-skill-scenarios` 8、`account-installation` 3，全部通过，没有跳过。
+- `node scripts/privacy.ts`：没有发现。`node scripts/tracker.ts`：没有错误。仓库断链检查（`scripts/metadata.ts` 的 `inspectMetadata`）：没有问题。
+- 完整测试 `npm test`（本包最终的 skill、测试和规格文字上，只有本节记录随后补写）：1359 项，1357 通过、0 失败，跳过的 2 项都是只在非 Windows 上运行的平台检查（原生进程适配器不可用、Windows 传输拒绝在别处运行）。
+- 没有调用模型，没有运行真实的 `codex` 或 `claude`，没有联网，没有碰真实 MAA。
+
+评测（待协调者运行，本包没有运行）：定向评测，4 个 `daily-alternate-*` 场景各 9 次、6 个 `daily-run-*` 各 1 次，和第五次运行在 `31189cc` 上的「后」批次比较。约定的文字几乎每个操作类场景都会读（据分诊统计，第五次运行里 124 个场景有 117 个读了 `maa-core/SKILL.md`），所以它涉及的每个场景「后不低于前」的整体比较，由下一个候选的发布评测在发布前做。
+
+未验证：
+
+- 改文字后跳过率是否下降：失败是随机的（约 22%），只有上面的定向评测能说明。
+- 约定改动对其他场景的影响，尤其 setup-* 会不会因此更早读偏好：由下一个候选的发布评测比较。
+- Claude 一侧没有评测这段文字。
+- Codex 在每次运行里都先发一句开场白再运行命令，通过的运行也一样。严格按「第一句答复之前」，开场白也可能算答复；评分器不查顺序，本包不处理。
