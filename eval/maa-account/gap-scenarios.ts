@@ -15,6 +15,8 @@ const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{
 const base = { policy, networkFixtures, commands: ['node *preferences.ts *', 'node *cultivation-gaps.ts query*'] };
 const confirmed = '我确认加工站有一间3级房间，stage_synthetic 的通关rank为2（公开配方字段），当前持有的 premium_material_voucher_perm 有效可选。';
 const shared = gapSnapshot(); shared.lmd = 209;
+// Ticket 32 (owner, 2026-11-16): gaps go down to base materials; LMD is short and unlocks are unconfirmed, yet the decomposition still comes back.
+const broke = gapSnapshot(); broke.lmd = 0;
 export const gapScenarios: ScenarioDefinition[] = [
   { ...base, id: 'account-gaps-voucher-craft', prompt: `使用 maa-account。按已有合成快照查询合成干员到精英1等级1的加工与材料券缺口。${confirmed}调用共享缺口query，说明凭证换下级料后加工的顺序、原始需求、已有/加工/凭证覆盖、费用和仍缺；同时展示不加工对照。只读，不兑换、不操作设备、不保存文件。`,
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': gapSnapshot() } },
@@ -24,4 +26,6 @@ export const gapScenarios: ScenarioDefinition[] = [
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': gapSnapshot() } },
   { ...base, id: 'account-gaps-shared-stock', prompt: `使用 maa-account。按此顺序查询两个目标：合成干员到精英1等级1，合成二号到精英1等级1。${confirmed}调用共享缺口query，库存、材料券和龙门币只共享一份，先保留全部原始需求。解释加工费用能支持几份材料及各目标分配，保留交叉核对缺项；只读，不兑换、不保存文件。`,
     jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': shared } },
+  { ...base, id: 'account-gaps-base-materials', prompt: '使用 maa-account。按已有合成快照查询合成干员到精英1等级1还缺什么。上级材料的缺口我知道了，真正卡我的是基础材料：告诉我缺的基础材料和龙门币，再告诉我材料券怎么用。我现在没空回答问题，加工站和关卡情况你没法确认的就先按假设算并标出来。本次只读，不改快照。',
+    jsonInputs: { 'private/config.json': settings, 'private/account-snapshot.json': broke } },
 ];

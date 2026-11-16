@@ -35,8 +35,8 @@ const contract: Record<string, Record<string, string[]>> = {
   'account-snapshot.ts': { inspect: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'], import: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'] },
   'operator-cost.ts': { query: ['name', 'operatorId', 'target', 'current', 'mode', 'snapshotFile', 'format'] },
   'cultivation-gaps.ts': { query: ['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'] },
-  'training-time.ts': { query: ['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'tablesFile', 'snapshotFile', 'format'] },
-  'training-plan.ts': { prepare: ['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining'], read: ['id'], refresh: ['id', 'query'],
+  'training-time.ts': { query: ['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'inTraining', 'progress', 'tablesFile', 'snapshotFile', 'format'] },
+  'training-plan.ts': { prepare: ['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining', 'crafting'], read: ['id'], refresh: ['id', 'query'], list: [], close: ['id', 'reference'],
     apply: ['id', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'], reconcile: ['id', 'logFile', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'] },
   'base-query.ts': { query: ['operators', 'room', 'tablesFile', 'snapshotFile', 'format', 'currentLanguage'] },
   // `check [--json]` and `input <service> [--stdin]` take no JSON on standard input (input reads terminal answers).
@@ -297,7 +297,7 @@ const commandCalls: Record<string, Record<string, string[]>> = {
   'operator-cost.ts': { query: ['queryOperatorCost'] },
   'cultivation-gaps.ts': { query: ['queryCultivationGaps'] },
   'training-time.ts': { query: ['queryTraining'] },
-  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingMaterials'],
+  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingPlan'], list: ['listTrainingPlans'], close: ['closeTrainingPlan'],
     apply: ['applyTrainingPlan'], reconcile: ['reconcileTrainingPlan'] },
   'base-query.ts': { query: ['queryBaseSkills', 'queryPublicBaseSkills'] },
   'credentials.ts': { check: ['inspectCredentials'], input: ['runInput'] },
@@ -359,6 +359,7 @@ const writingCommands: Record<string, Record<string, WritingCommand>> = {
   'training-plan.ts': {
     prepare: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
     refresh: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
+    close: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
     apply: { writes: '私有目录里的训练记录，经配置写入器改 MAA 配置', markers: ['training-plans', 'gui.new.json'] },
     reconcile: { writes: '私有目录里的训练记录，经配置写入器改 MAA 配置', markers: ['training-plans', 'gui.new.json'] },
   },

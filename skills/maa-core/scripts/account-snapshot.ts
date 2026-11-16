@@ -51,15 +51,23 @@ export class SnapshotSelectionError extends Error {
 export type SnapshotSelection = { snapshot: Record<string, unknown>; source: 'maa' | 'skland' | null; readAt: string | null;
   /** explicit: the request named the file; maa-default: the MAA snapshot covered the query or no better one existed;
    * skland-covers: the MAA snapshot lacked a needed domain the Skland snapshot covers completely; maa-missing /
-   * maa-unreadable: there was no usable MAA snapshot, so the Skland snapshot was read. */
-  chosen: 'explicit' | 'maa-default' | 'skland-covers' | 'maa-missing' | 'maa-unreadable'; lacking: SnapshotDomain[] };
+   * maa-unreadable: there was no usable MAA snapshot, so the Skland snapshot was read; maa-inventory-newer (only with
+   * `newestInventory`): the Skland snapshot would cover the lacking domains, but its read is older than the MAA depot scan. */
+  chosen: 'explicit' | 'maa-default' | 'skland-covers' | 'maa-missing' | 'maa-unreadable' | 'maa-inventory-newer'; lacking: SnapshotDomain[] };
+/** The time a snapshot's inventory reflects: a Skland read is live; an MAA import holds its depot scan time, else its import time. */
+function inventoryTime(snapshot: Record<string, unknown>): number | null {
+  const scan = snapshot.sourceTimes && typeof snapshot.sourceTimes === 'object' ? (snapshot.sourceTimes as Record<string, unknown>).inventory : undefined;
+  const at = snapshot.source === 'skland' ? snapshot.readAt : scan ?? snapshot.readAt;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? Date.parse(at) : null;
+}
 /**
  * The one owner of "which saved snapshot does this query read" (over-blocking review OB-9, 2026-11-16). One whole file is
  * read, never two merged (spec: 两份快照不合并): an explicit `snapshotFile` as it is; otherwise the MAA recognition snapshot,
  * unless it lacks a needed domain that the Skland snapshot covers completely, or there is no usable MAA snapshot at all.
  * Callers print the source and read time it returns.
  */
-export async function selectSnapshot(privateDirectory: string, needed: readonly SnapshotDomain[], explicitFile?: string): Promise<SnapshotSelection> {
+export async function selectSnapshot(privateDirectory: string, needed: readonly SnapshotDomain[], explicitFile?: string,
+  options: { newestInventory?: boolean } = {}): Promise<SnapshotSelection> {
   const load = async (file: string): Promise<Record<string, unknown> | 'missing' | 'unreadable'> => {
     let raw: string;
     try { raw = await readFile(file, 'utf8'); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'; }
@@ -78,7 +86,19 @@ export async function selectSnapshot(privateDirectory: string, needed: readonly 
   const skland = await load(join(privateDirectory, snapshotFiles.skland));
   if (typeof skland !== 'string') {
     if (typeof maa === 'string') return result(skland, maa === 'missing' ? 'maa-missing' : 'maa-unreadable', needed.filter(domain => !snapshotCovers(skland, domain)));
-    if (lacking.every(domain => snapshotCovers(skland, domain, true))) return result(skland, 'skland-covers', lacking);
+    if (lacking.every(domain => snapshotCovers(skland, domain, true))) {
+      // Ticket 32 FO1-1/FO2-4, for callers whose result opens a spend from the depot (the training start gate and the gaps it
+      // shares): a newer MAA depot scan is never traded for coverage. An MAA snapshot without counts has none to protect.
+      // A Skland read without a depot cannot replace the MAA counts at all.
+      const fresh = inventoryTime(skland), scan = inventoryTime(maa);
+      // FO5-2: an import whose depot recognition came back empty (`partial`, no items) holds no counts either.
+      const counted = snapshotCovers(maa, 'inventory') && !!maa.items && typeof maa.items === 'object' && Object.keys(maa.items).length > 0;
+      if (options.newestInventory && counted) {
+        if (!snapshotCovers(skland, 'inventory')) return result(maa, 'maa-default', lacking);
+        if (fresh === null || scan === null || fresh < scan) return result(maa, 'maa-inventory-newer', lacking);
+      }
+      return result(skland, 'skland-covers', lacking);
+    }
   }
   if (typeof maa === 'string') throw new SnapshotSelectionError(maa);
   return result(maa, 'maa-default', lacking);
@@ -88,7 +108,8 @@ export function snapshotSourceLine(selection: Pick<SnapshotSelection, 'source' |
   const names: Record<SnapshotDomain, string> = { operators: '干员', skills: '技能等级、专精和模组', inventory: '仓库', base: '基建' };
   const why = selection.chosen === 'skland-covers' ? `（MAA 识别快照没有${selection.lacking.map(domain => names[domain]).join('、')}，森空岛快照完整，整份改读森空岛快照，两份不合并）`
     : selection.chosen === 'maa-missing' ? '（没有 MAA 识别快照，改读森空岛快照）' : selection.chosen === 'maa-unreadable' ? '（MAA 识别快照读不了，改读森空岛快照）'
-    : selection.chosen === 'explicit' ? '（请求指定的快照）' : '';
+    : selection.chosen === 'explicit' ? '（请求指定的快照）'
+    : selection.chosen === 'maa-inventory-newer' ? '（森空岛快照的读取时间早于 MAA 的仓库扫描时间，要用更新的库存，仍读 MAA 识别快照，两份不合并）' : '';
   const source = selection.source === 'skland' ? '森空岛快照' : selection.source === 'maa' ? 'MAA 识别快照' : '来源未标明的快照';
   const caveat = selection.source === 'skland' ? '；读取时间是本次从森空岛读的时间，不是游戏内的数据时间，森空岛比游戏内滞后多久没有测过' : '';
   const gap = selection.lacking.length && selection.chosen !== 'skland-covers' ? `；这份快照没有${selection.lacking.map(domain => names[domain]).join('、')}，相关项待核` : '';

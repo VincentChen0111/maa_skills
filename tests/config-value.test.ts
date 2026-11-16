@@ -77,6 +77,7 @@ const sites: { file: string; site: string; kind: Kind; why: string }[] = [
   { file: 'training-config.ts', site: '!sameConfigValue(trainingTimerIdentity(timer), trainingTimerIdentity(grant.expectedTimer))', kind: 'configuration-value', why: 'the bound timer is unchanged' },
   { file: 'training-plan.ts', site: 'return sameConfigValue(expected, actual);', kind: 'configuration-value', why: 'the bound queue and timer are unchanged' },
   { file: 'training-plan.ts', site: 'if (!sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null })', kind: 'configuration-value', why: 'cleanup owns the timer it armed' },
+  { file: 'training-plan.ts', site: 'timers.some(timer => sameConfigValue({ ...current, IsEnabled: null }, { ...trainingTimerIdentity(timer), IsEnabled: null }))', kind: 'configuration-value', why: 'close refuses while a one-shot this plan armed is still on (ticket 32 R1-4)' },
   // Fingerprints that keep key order, on purpose.
   { file: 'config-projection.ts', site: "update(JSON.stringify(projectConfig(config)))", kind: 'fingerprint-key-order-counts', why: 'approval revision: a profile index is the key order of Configurations; a re-save in another order only refuses' },
   { file: 'config-projection.ts', site: "update(JSON.stringify(config)).digest('hex')", kind: 'fingerprint-key-order-counts', why: 'doctor exact comparison, unchanged by round 1' },
@@ -104,6 +105,7 @@ const sites: { file: string; site: string; kind: Kind; why: string }[] = [
   { file: 'stage-jobs.ts', site: "const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value))", kind: 'not-configuration', why: 'report, job and snapshot hashes' },
   { file: 'stage-jobs.ts', site: 'digest(row.required) !== digest(row.effectiveRequired)', kind: 'not-configuration', why: 'job requirement display' },
   { file: 'stage-run.ts', site: "const digest = createHash('sha256').update(JSON.stringify({ runId: record.runId,", kind: 'not-configuration', why: 'switch request key over the generated list' },
+  { file: 'training-plan.ts', site: 'JSON.stringify(reportItem.scope) !== JSON.stringify(item.scope)', kind: 'not-configuration', why: 'approved cultivation report item scope (ticket 32)' },
   { file: 'training-state.ts', site: 'JSON.stringify(target.skill_mastery) === JSON.stringify(ranks)', kind: 'not-configuration', why: 'MAA log task parameters' },
   { file: 'training-state.ts', site: "JSON.stringify(params.facility) === '[\"Training\"]'", kind: 'not-configuration', why: 'MAA log task parameters' },
   { file: 'training-state.ts', site: "hash: createHash('sha256').update(JSON.stringify(parameters))", kind: 'not-configuration', why: 'MAA log task parameters' },
