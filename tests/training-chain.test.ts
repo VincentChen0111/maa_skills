@@ -370,7 +370,8 @@ test('32 R2-4: the training summary and the refresh output show the shortage dow
   assert.equal(refreshed.plan.materialReady, false); assert.match(refreshed.summary, /加工展开到基础材料/);
 });
 
-test('32 R3-1: the apply CLI prints each stop with its own reason, with or without details', async t => {
+// The apply CLI reaches MAA through the Windows-only process boundary (elsewhere it stops on maa-process-platform-unavailable before any plan stop).
+test('32 R3-1: the apply CLI prints each stop with its own reason, with or without details', { skip: process.platform !== 'win32' }, async t => {
   const f = scanned(trainingFixture()); const w = await world(t, f);
   const apply = (id: string) => {
     const run = spawnSync(process.execPath, ['--import', versionDoublePreload, resolve('skills/maa-core/scripts/training-plan.ts'), 'apply'], { encoding: 'utf8',
