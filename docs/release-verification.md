@@ -1718,7 +1718,10 @@ FU-1（重建候选包第 3 轮审查转来的后续工单，D-N6）：第 3 步
 - 用量（6 批 48 份运行的 `run.json` 合计）：输入 5.41M（缓存 4.06M，75.0%），输出 0.029M。
 - 读偏好：按 48 份运行的 `evidence.json`：
   - 44 份（最终候选 40 份，「前」`f51ba18` 4 份）正好两次调用，先 `preferences.ts read`、再 `stage-run.ts read`，退出码都是 0；
-  - 「前」`f1ec4ed` 的 4 份先失败、后重试，每份 4–7 次调用，也只调用这两个脚本：两个脚本都先以退出码 1 失败过 1 到 3 次，改正后重发成功。看过的一份（`6cac6591…`），失败的原因是模型在 Windows PowerShell 里自己写的引号把传给脚本的 JSON 写坏了，`preferences.ts read` 报 `invalid-input`；
+  - 「前」`f1ec4ed` 的 4 份先失败、后重试，每份 4–7 次调用，也只调用这两个脚本：
+    - 凡是在 Windows PowerShell 里用管道把输入直接传给这两个脚本的调用都失败了，`preferences.ts read` 报 `invalid-input`，`stage-run.ts read` 返回 `check-required`；换成别的传法（`cmd` 重定向，或者由 node 子进程传入）之后都成功了。其中三份第一次读偏好传的是单独的语言字符串，不是 JSON 对象。
+    - 原因：Windows PowerShell 5.1 的管道在输入前面加 BOM（离线实测为 `efbbbf`）。`f1ec4ed` 的两个脚本直接用 `JSON.parse` 解析标准输入，不去掉 BOM；去掉它的共享读取器是 #94（`53b7ac7`）加的，`f51ba18` 和最终候选里都有，`f1ec4ed` 里没有。离线复现（设置目录用新建的空临时目录）：同样的管道传给 `f1ec4ed` 的 `preferences.ts read` 报 `invalid-input`、传给它的 `stage-run.ts read` 返回 `check-required`，传给最终载荷的 `preferences.ts read` 则成功；`f1ec4ed` 的 `preferences.ts read` 改用 `cmd` 重定向也成功。
+    - 最终候选和 `f51ba18` 的 44 份都用这种管道，没有一次失败。
   - 48 份里，每一次成功的 `stage-run.ts read` 之前都先成功读了偏好，`changes` 都为空。跳过读偏好的次数：改写之前，没改的 skill 上 30 次里 7 次，#108 的 skill 文字下 40 次里 19 次；改写之后 48 次里 0 次，其中最终候选 40 次里 0 次。
 - 场景指纹：每个场景在三个载荷上的 `scenarioHash` 都相同，`daily-alternate-medicine-used` 是 `592533a6…`，`daily-alternate-medicine-unknown` 是 `3a52f41f…`，`daily-alternate-exhausted` 是 `da657ea3…`，`daily-alternate-prepared` 是 `5a203c5f…`。
 
@@ -2159,7 +2162,8 @@ A 部分第 2 轮（没有「前」的运行、规则来源、记录更正）和
 | `node scripts/maa-version-check.ts notes` | 两行与发布说明里的逐字相同 |
 | `npm run typecheck` | 通过 |
 | `node --test tests/docs-consistency.test.ts` | 12/12 |
-| 引文核对（仓库外的只读脚本第 2 版，规则见[审查记录](reviews/2026-11-17-26-run6-results.md)「引文核对脚本第 2 版」） | 本包（`12cd8c4..` 当前工作区）四个文件新增行里 42 处引文，四个文件是三份文档和本包的审查记录：9 处标签，31 处找到出处，2 处是同一文件里本包没改的文字；没找到的 0 处。第 1 轮修复之后、连同审查记录重跑 |
+| 复发规则的证据陈述核对（仓库外的只读脚本 `claim-check.mjs`，做法见[审查记录](reviews/2026-11-17-26-run6-results.md)「第 2 轮」） | 170 行带证据标记的新增行全部有归属，96 句陈述都成立，0 处失败 |
+| 引文核对（仓库外的只读脚本第 2 版，规则见[审查记录](reviews/2026-11-17-26-run6-results.md)「引文核对脚本第 2 版」） | 本包（`12cd8c4..` 当前工作区）四个文件新增行里 44 处引文，四个文件是三份文档和本包的审查记录：10 处标签，32 处找到出处，2 处是同一文件里本包没改的文字；没找到的 0 处。第 2 轮修复之后、连同审查记录重跑 |
 
 ## 发布候选包（26 RC，2026-11-14）
 
