@@ -172,3 +172,32 @@
 - 真模型是否在每个读取方都先读偏好再答复、是否不再直接改 MAA 配置：只有新的「后」批次能证明。R6 在最终候选上只有一次拒绝，不算证明。
 - Claude 一侧的真模型评测仍暂缓（规格「26 H」那一行），本包的文字在 Claude 上没有评测过。
 - 「先读偏好」对 maa-setup 的例外（Node 24 不能运行时先答复下载页）没有专门的场景核对。
+
+## D-N1：写入请求只带会变的字段（2026-11-16）
+
+起因：工单 26 发布评测里，`daily-expiring-approved` 在 main 自己的载荷上 8 次运行有 5 次失败（批次 `XgvbIz` 的 `SG8LFY`、`utFHPG`，`zy4Rgo` 的 `jehc2r`、`xXTENM`，`Gs7BLk` 的 `nltyKo`），挂 authorization、write-lock、expected-behavior。5 次失败的写入请求都多带了 `UseExpireMedicineForActivity: false`：用户说批准「不包括活动结束前的临期药」，而夹具里这个值本来就是 false；3 次通过的运行（`mPN2yX`、`bSTMDH`、`cLPJ3M`）只带 `UseExpiringMedicine` 和 `MedicineExpireDays`。场景提示说「只写上面这几个字段」，批准的改动集也只有这两项。协调者决定（D-N1）改 skill 文字、不改评分器，评分器对消耗类字段保持严格。
+
+离线复现（本机 Windows，Node 24，真实临时目录，只替代 MAA 进程；直接调用共享写入器的导出入口）：两种请求的预览都只列两项改动、差异指纹相同，写入都是 `complete`，`changedKeys` 都是两项，写入后的配置字节相同（同一个 SHA-256），锁都取到并释放、配置目录只剩 `gui.new.json`，备份相同。唯一的差别是私有 `daily-pending.jsonl` 的 `changes` 按请求原样多记了 `UseExpireMedicineForActivity: false`。重开失败时两种请求都留下 unknown 和锁；锁的进程退出后，doctor 恢复检查两边都是 `comparison: applied`、`canRestore: true`，多带的请求只多列一条 `UseExpireMedicineForActivity: unchanged`。写入器没有因此打开任何消耗设置，也没有不安全的行为。
+
+| 修改 | 证据（离线） |
+| --- | --- |
+| `maa-daily/references/configuration.md`「预览与差异指纹」一节，在 `write` 示例之前新增一段：请求的 `changes` 只放值会变的字段；用户提到的字段在 `read` 摘要里已经是要的值时不放进请求（例子就是活动临期药本来关着）；摘要看不到的字段，请求里没有出现在预览 `changes` 里的项去掉后再预览一次，用新的差异指纹写入；向用户说明这一项本来就是这个值、没有改；下文「一起写」「同时设置」指写入后的值，已经对的字段同样不放进请求 | `tests/docs-consistency.test.ts`「the configuration reference owns the rule that a write request carries only the values it changes」：这一段恰好一处、在预览一节里、在 `write` 示例之前，含五个要点；去掉这一段、多写一份、挪到示例之后、去掉任一要点，检查都报错。先红：改文字前运行，报 `0 paragraphs start with the rule` |
+| 无代码改动；给文字里「已经对的字段不放进请求，批准照样按写入后的整个任务核对」补一个写入器一致性测试 | `tests/consumption-grant.test.ts`「a write request may leave out a field already at its target value: same diff and bytes, and the grant judges the task after the write」：上面两种请求的预览、指纹、`changedKeys` 和配置字节相同，待执行记录分别记 2 项和 3 项；「允许使用源石保存状态」本来开着时，只写 `UseStone` 和 `StoneCount` 的碎石请求照样 `complete`。写完即通过，这是对已有行为的核对，不是新行为 |
+
+规格登记：「MAA 配置写入」新增「请求只带会变的字段」一条，「规则来源」新增「26 发布评测：写入请求只带会变的字段」一行，「默认值及其来源」新增标「D-N1」的一行。`maa-daily/SKILL.md` 没有改（另一个 PR 在改它）。
+
+本包实际运行的命令（2026-11-16，本机 Windows，Node 24）：
+
+- `npm ci`、`npm run typecheck`：通过。
+- 先红：新的 docs-consistency 测试在改文字前失败（见上表）。
+- 逐个单独运行：`docs-consistency` 12 项、`consumption-grant` 37、`check-required` 10、`stdin-json` 13、`setup-download-vendors` 67、`config-writer-diff` 22、`maa-config` 144、`daily-evaluation` 10，全部通过，没有跳过。
+- `node scripts/privacy.ts`：没有发现。`node scripts/tracker.ts`：没有错误。
+- 没有运行完整离线入口 `node scripts/check.ts`，没有调用模型，没有运行真实的 `codex` 或 `claude`，没有碰真实 MAA。
+
+评测影响：本包改了载荷（`skills/maa-daily/references/configuration.md`），按 AGENTS.md 要在固定模型和场景上跑前后比较。受影响的是经 `maa-config.ts` 读或写配置的场景：maa-daily 组 `scenarios.ts` 的全部 15 个（`daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure`、`daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing`、`daily-quantity-rerun`、`daily-diff-approved`、`daily-diff-drift-projection`、`daily-diff-drift-noise`）和 `cross-skill-setup-account-daily`。作业准备、专精、基建排班、setup 和 doctor 的写入经各自的入口，不用 `maa-config.ts write` 的 `changes`，不在其中。本包不改场景、评分器和夹具，运行器指纹不变。
+
+未验证：
+
+- 真模型是否照这段文字只带会变的字段，`daily-expiring-approved` 是否稳定通过：只有前后批次能证明，PR 合并前要跑完。
+- Claude 一侧没有评测这段文字。
+- 预览少列某一项时「去掉后再预览一次」这条路径，现有场景都用摘要里看得到的字段，没有专门的场景核对。

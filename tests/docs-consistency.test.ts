@@ -876,3 +876,47 @@ test('maa-core owns the rule against editing MAA configuration directly, and maa
   assert.equal(boundary.length, 1);
   assert.match(boundary[0]!, /\[[^\]]*「不直接改 MAA 配置」[^\]]*\]\(\.\.\/maa-core\/SKILL\.md\)/);
 });
+
+/*
+ * A write request carries only the values it changes (ticket 26 release eval, decision D-N1). In 5 of 8 Codex runs of
+ * daily-expiring-approved the request added `UseExpireMedicineForActivity: false`, a value the Fight task already held, because
+ * the user's approval said it excludes activity expiring medicine. The writer wrote the same bytes as without it, but the private
+ * pending record kept the extra consumption key, outside the approved change set, so the strict grader failed the run. The grader
+ * stays strict; the rule has one owner, a paragraph of the configuration reference's preview section, ahead of the write example.
+ */
+const onlyChangedOwner = 'maa-daily/references/configuration.md';
+const onlyChangedRule = '请求的 `changes` 只放值会变的字段';
+/** What the rule has to say, each as a phrase of its paragraph. */
+const onlyChangedParts: [string, string][] = [
+  ['the read summary as the first way to see a value already at its target', '`read` 摘要'],
+  ['the reported example: activity expiring medicine already off', '`UseExpireMedicineForActivity`'],
+  ['a request item the preview leaves out is removed and previewed again', '再预览一次'],
+  ['the user hears the item was already at that value', '没有改'],
+  ['「一起写」 and 「同时设置」 below mean the values after the write', '写入后'],
+];
+function onlyChangedProblems(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const start = lines.indexOf('## 预览与差异指纹');
+  const end = lines.findIndex((line, index) => index > start && line.startsWith('## '));
+  const section = start < 0 ? [] : lines.slice(start + 1, end < 0 ? undefined : end);
+  const rules = lines.filter((line) => line.startsWith(onlyChangedRule));
+  if (rules.length !== 1) return [`${rules.length} paragraphs start with the rule`];
+  const rule = rules[0]!;
+  const problems = onlyChangedParts.filter(([, phrase]) => !rule.includes(phrase)).map(([what]) => `missing: ${what}`);
+  if (!section.includes(rule)) problems.push('the rule is outside the preview section');
+  const example = lines.findIndex((line) => line.includes('`write` 输入示例'));
+  if (example < 0 || lines.indexOf(rule) > example) problems.push('the rule comes after the write example');
+  return problems;
+}
+
+test('the configuration reference owns the rule that a write request carries only the values it changes', async () => {
+  const text = await readFile(join(skills, onlyChangedOwner), 'utf8');
+  assert.deepEqual(onlyChangedProblems(text), []);
+  const rule = text.split(/\r?\n/).find((line) => line.startsWith(onlyChangedRule))!;
+  // The check reports the paragraph dropped, restated, moved after the write example, or losing any of its parts.
+  assert.deepEqual(onlyChangedProblems(text.replace(rule, '')), ['0 paragraphs start with the rule']);
+  assert.deepEqual(onlyChangedProblems(`${text}\n${rule}\n`), ['2 paragraphs start with the rule']);
+  const moved = text.replace(`${rule}\r\n`, '').replace(`${rule}\n`, '').replace('## 事务与失败', `${rule}\n\n## 事务与失败`);
+  assert.deepEqual(onlyChangedProblems(moved), ['the rule is outside the preview section', 'the rule comes after the write example']);
+  for (const [what, phrase] of onlyChangedParts) assert.deepEqual(onlyChangedProblems(text.replace(rule, rule.replaceAll(phrase, ''))), [`missing: ${what}`]);
+});

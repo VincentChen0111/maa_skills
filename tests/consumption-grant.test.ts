@@ -382,6 +382,35 @@ test('an ordinary write of the pre-transaction values gets no restore allowance'
   });
 });
 
+// D-N1 (ticket 26 release eval): the configuration reference tells the agent to leave a field already at its target value out of
+// the request. That is safe only if leaving it out changes nothing the writer checks: the same diff, fingerprint and bytes, and a
+// grant still judged on the whole task after the write, so opening stone with the save switch already on needs only the changes.
+test('a write request may leave out a field already at its target value: same diff and bytes, and the grant judges the task after the write', async t => {
+  const expiring = { expiringMedicine: { days: 3, forActivity: false } };
+  const opened = [{ path: task(0, 'UseExpiringMedicine'), value: true }, { path: task(0, 'MedicineExpireDays'), value: 3 }];
+  const outcomes: { diff: unknown; changedKeys: unknown; bytes: Buffer; recorded: number }[] = [];
+  for (const changes of [opened, [...opened, { path: task(0, 'UseExpireMedicineForActivity'), value: false }]]) {
+    const f = await maaFixture(t, config([fight({ IsEnable: true })]));
+    const preview = await previewConfigWrite({ maaDirectory: f.maaDirectory, privateDirectory: f.privateDirectory, host: 'codex',
+      expectedRevision: (await inspectConfiguration(f.maaDirectory)).revision,
+      authorization: { source: 'current-request', reference: 'synthetic approval', ...expiring } as never, changes });
+    const result = await write(f, expiring, changes);
+    assert.equal(result.status, 'complete', JSON.stringify(result));
+    const pending = JSON.parse((await readFile(join(f.privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim());
+    outcomes.push({ diff: [preview.diffFingerprint, preview.changes], changedKeys: result.changedKeys, bytes: await readFile(f.file), recorded: pending.changes.length });
+  }
+  assert.deepEqual(outcomes[1]!.diff, outcomes[0]!.diff);
+  assert.deepEqual(outcomes[1]!.changedKeys, outcomes[0]!.changedKeys);
+  assert.deepEqual(outcomes[1]!.bytes, outcomes[0]!.bytes);
+  // The one difference: the pending record keeps the request as sent, so the extra item is recorded as part of this request.
+  assert.deepEqual(outcomes.map(outcome => outcome.recorded), [2, 3]);
+  const f = await maaFixture(t, config([fight({ IsEnable: true, UseStoneAllowSave: true })]));
+  const result = await write(f, { stoneCount: 2 }, [{ path: task(0, 'UseStone'), value: true }, { path: task(0, 'StoneCount'), value: 2 }]);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  const saved = JSON.parse(await readFile(f.file, 'utf8')).Configurations[profile].TaskQueue[0];
+  assert.deepEqual([saved.UseStone, saved.UseStoneAllowSave, saved.StoneCount], [true, true, 2]);
+});
+
 test('the restore allowance needs the doctor-restore consumer, values equal to the backup task and a class that ends closed', () => {
   const current = { source: 'current-request' as const };
   const opened = fight({ UseExpiringMedicine: true, MedicineExpireDays: 3 });
