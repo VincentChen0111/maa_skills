@@ -50,6 +50,14 @@ function trainingStop(result: TrainingResult, plan: TrainingPlan | null): Traini
           .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) } };
   return { kind: 'plannable', result: result as PlannableResult, facts: startFacts(result).facts };
 }
+/**
+ * Ticket 32 FO5-3: a reconcile whose cleanup needs checking went through itself; the shared result names the plan (static
+ * identity) and keeps the MAA version drift every reconcile returns. `read` shows the rest of the plan.
+ */
+export function reconcileCheckRequired(reconciled: { plan: TrainingPlan; cleanup?: { reason?: unknown } | null; versions: unknown }) {
+  return checkRequired(String(reconciled.cleanup?.reason) as CheckRequiredReason,
+    { plan: reconciled.plan.id, state: reconciled.plan.state, rank: reconciled.plan.rank, versions: reconciled.versions });
+}
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 const object = (value: unknown): Record<string, unknown> => {
@@ -433,8 +441,7 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       } else {
         const reconciled = await reconcileTrainingPlan(request, createMaaProcess(settings.maaDirectory));
         result = { ...reconciled, plan: summarizeTrainingPlan(reconciled.plan) };
-        // The reconcile itself went through; the details name the plan (static identity), and read shows the rest.
-        if (reconciled.cleanup?.status === 'check-required') printed = checkRequired(reconciled.cleanup.reason as CheckRequiredReason, { plan: reconciled.plan.id, state: reconciled.plan.state, rank: reconciled.plan.rank });
+        if (reconciled.cleanup?.status === 'check-required') printed = reconcileCheckRequired(reconciled);
         if (reconciled.cleanup && reconciled.cleanup.status !== 'complete') process.exitCode = 1;
       }
     } else throw new Error('training-action-invalid');

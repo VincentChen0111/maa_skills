@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan } from '../skills/maa-core/scripts/training-plan.ts';
+import { prepareTrainingPlan, applyTrainingPlan, refreshTrainingMaterials, reconcileTrainingPlan, readTrainingPlan, listTrainingPlans, closeTrainingPlan, refreshTrainingPlan, reconcileCheckRequired } from '../skills/maa-core/scripts/training-plan.ts';
 import { calculateTraining, materialGate, formatTraining, gateSpend, paymentTaken, trainingIssuePhase } from '../skills/maa-core/scripts/training-time.ts';
 import { operatorCatalog } from '../skills/maa-core/scripts/operator-cost.ts';
 import { reconcileTraining, paidRanks, planPayments, type TrainingPlan } from '../skills/maa-core/scripts/training-state.ts';
@@ -748,4 +748,12 @@ test('32 FO3 conformance: where prepare, refresh and apply stop, for every kind 
       apply: applied.status === 'check-required' ? String(applied.reason) : applied.status === 'waiting' ? 'waiting' : go };
     assert.deepEqual(actual, row.expect, row.name);
   }
+});
+
+test('32 FO5-3: a reconcile whose cleanup needs checking names the plan and keeps the MAA version drift', () => {
+  const plan = between({ '1': '2026-11-10T00:00:00.000Z' });
+  const versions = { state: 'same', recorded: { maaVersion: 'v6.22.0', recordVersion: 3 }, current: { maaVersion: 'v6.22.0', recordVersion: 3 }, changed: [] };
+  const printed = reconcileCheckRequired({ plan, cleanup: checkRequired('training-timer-ownership-changed'), versions });
+  assert.equal(isCheckRequired(printed), true);
+  assert.deepEqual(printed.details, { plan: plan.id, state: plan.state, rank: plan.rank, versions });
 });

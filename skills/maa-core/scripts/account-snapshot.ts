@@ -91,7 +91,9 @@ export async function selectSnapshot(privateDirectory: string, needed: readonly 
       // shares): a newer MAA depot scan is never traded for coverage. An MAA snapshot without counts has none to protect.
       // A Skland read without a depot cannot replace the MAA counts at all.
       const fresh = inventoryTime(skland), scan = inventoryTime(maa);
-      if (options.newestInventory && snapshotCovers(maa, 'inventory')) {
+      // FO5-2: an import whose depot recognition came back empty (`partial`, no items) holds no counts either.
+      const counted = snapshotCovers(maa, 'inventory') && !!maa.items && typeof maa.items === 'object' && Object.keys(maa.items).length > 0;
+      if (options.newestInventory && counted) {
         if (!snapshotCovers(skland, 'inventory')) return result(maa, 'maa-default', lacking);
         if (fresh === null || scan === null || fresh < scan) return result(maa, 'maa-inventory-newer', lacking);
       }

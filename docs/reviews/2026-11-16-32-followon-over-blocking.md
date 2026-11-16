@@ -100,3 +100,25 @@ FO3-1 修复：`calculateTraining` 有计划证据、查询写的档次恰为计
 - 文档：`training.md`、`gaps.md` 写明共用的选快照规则和 `reason`、`check`、`alternatives`、`details`；maa-core 的核对项一条补上 `details`；规格两张来源表各加一行。
 
 轮次授权：本包已在第 4 轮 GO；这次是合并带来的新代码改动，协调者要求放进本包审查。维护者 2026-11-11 原话「以后这种情况可以你自己授权，最好压缩复核轮次」（2026-11-14 重申），修复会话据此授权第 5 轮，只复核这次改动。
+
+### 第 5 轮结果
+
+范围 `985b60c..5640f10`。结论 NO-GO：P2 1，P3 2，没有安全类发现。审查员核实：不带选项的调用方（base-query、cultivation-report、operator-cost、stage-jobs）行为不变；原因码目录完整；退出码和标准输入拒绝的形状不变；`code:detail` 只影响训练和缺口两个生产方；details 不输出路径、原话或干员名；一致性测试完整枚举生产方和使用方；场景 `training-chain-skland-facts` 仍能区分对错。逐个运行 9 个测试文件共 84 个通过，类型检查通过。
+
+| 编号 | 发现 | 结论 | 理由 |
+| --- | --- | --- | --- |
+| FO5-1（P2） | 真实数据下 `training-facts-required` 的 `details.stages` 整项丢失：助手问题码带固定表 buffId（如 `train_spd_reduceTime[000]`，含方括号和 &），数组上限 200 也装不下一个账号的全部干员 | 接受 | 有离线复现，`985b60c` 照常输出；维护者要的具体缺项因此丢失；规格对静态值的定义本来接受这些字符 |
+| FO5-2（P3） | MAA 仓库识别为空时导入器写 `partial` + `empty-recognition` + 空物品，`newestInventory` 把它当成有库存去比时间，弃用完整的森空岛快照 | 接受 | 有离线复现；FO2-4 同一条规则的回归，训练因此读不到专精和训练室等级；库存为零所以不会多花 |
+| FO5-3（P3） | reconcile 清理结果是 check-required 时输出丢了 `versions` | 接受 | training.md 写明 reconcile 的返回都带 `versions`，read 拿不到这个比较 |
+
+审查员另列一项不算缺陷：MAA 快照存在但读不了时，共用函数会改读森空岛快照（旧版拒绝）；写入器带锁、`fsync` 并原子替换，只有外部损坏或权限被改才会出现，修复会话同意按正式环境几乎不会发生处理，不修。
+
+修复：
+
+- FO5-1：静态值按规格定义：不含空格、斜杠、反斜杠的可打印 ASCII（方括号、& 等都算），数组上限 2000、对象 200 个键。测试 `ticket 32 FO5-1`（真实形状的 buffId 问题码、600 名助手）。
+- FO5-2：`newestInventory` 只在 MAA 快照真有物品时才算有库存。测试 `ticket 32 FO5-2`。
+- FO5-3：reconcile 的 check-required 输出经 `reconcileCheckRequired` 一处构造，带计划 ID、状态、档次和 `versions`。测试 `32 FO5-3`。
+
+审查员的四份复现脚本在修复后的树上：两种 `stages` 情形都保留；空识别的 MAA 快照下读森空岛快照、训练拿到专精和训练室等级；reconcile 输出带 `versions`。
+
+轮次授权：第 5 轮后仍有接受的 P2（FO5-1），按维护者「以后这种情况可以你自己授权，最好压缩复核轮次」授权第 6 轮，复核本轮修复。

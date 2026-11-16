@@ -86,3 +86,11 @@ test('ticket 32 FO1-1/FO2-4: with newestInventory a newer MAA depot scan is neve
   // The option is opt-in: other callers keep the coverage rule.
   assert.equal((await selectSnapshot(await world(t, { maa: scanned, skland: older }), needed)).chosen, 'skland-covers');
 });
+
+test('ticket 32 FO5-2: an MAA import whose depot recognition came back empty has no counts to protect', async t => {
+  const empty = { ...maa, readAt: '2026-11-12T01:00:00.000Z', items: {}, sourceTimes: { ...maa.sourceTimes, inventory: '2026-11-12T00:30:00.000Z' },
+    coverage: { ...maa.coverage, inventory: { status: 'partial' as const, issues: ['empty-recognition'] } } };
+  const older = { ...skland, readAt: '2026-11-12T00:00:00.000Z' };
+  const chosen = await selectSnapshot(await world(t, { maa: empty, skland: older }), ['operators', 'skills', 'inventory'], undefined, { newestInventory: true });
+  assert.deepEqual([chosen.source, chosen.chosen], ['skland', 'skland-covers']);
+});

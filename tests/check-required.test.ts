@@ -285,3 +285,13 @@ test('ticket 32: details carry only static codes and IDs beside the catalogue te
   assert.equal(checkRequiredFor('training-plan', new Error('synthetic unclassified')).reason, 'training-unclassified-failure');
   assert.equal(checkRequiredFor('cultivation-gaps', new Error('gaps-source-unavailable:building')).reason, 'gaps-source-unavailable');
 });
+
+test('ticket 32 FO5-1: real assistant issue codes and a whole account of assistants stay in details', () => {
+  // Fixed-table buff IDs carry brackets and ampersands; an account can own several hundred operators.
+  const issues = ['assistant:five-hour-unverified:train_spd_reduceTime[000]', 'assistant:branch-unverified:train_spd&cost[010]'];
+  const assistants = Array.from({ length: 600 }, (_, index) => ({ id: `char_${index}_synthetic`, issues }));
+  const result = checkRequired('training-facts-required', { issues, stages: [{ rank: 1, assistants }] });
+  assert.deepEqual((result.details as { issues: string[] }).issues, issues);
+  assert.equal(((result.details as { stages: { assistants: unknown[] }[] }).stages[0]!.assistants).length, 600);
+  assert.ok(isCheckRequired(result));
+});

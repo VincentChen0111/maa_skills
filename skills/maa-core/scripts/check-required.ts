@@ -24,15 +24,17 @@ export type CheckRequired = { ok: false; status: 'check-required'; reason: Check
  */
 export type CheckRequiredDetails = { readonly [key: string]: StaticDetail };
 type StaticDetail = string | number | boolean | null | readonly StaticDetail[] | { readonly [key: string]: StaticDetail };
-const staticText = /^[A-Za-z0-9_.:#+-]{1,160}$/;
+// Printable ASCII without a space, slash or backslash (spec, 32 合并后): issue codes carry fixed-table buff IDs such as
+// `train_spd_reduceTime[000]`; a path, an address or user text never fits. Sizes fit a whole account's assistants (FO5-1).
+const staticText = /^[!-.0-[\]-~]{1,200}$/;
 function staticDetail(value: unknown, depth: number): boolean {
   if (value === null || typeof value === 'boolean') return true;
   if (typeof value === 'number') return Number.isFinite(value);
   if (typeof value === 'string') return staticText.test(value);
   if (depth >= 8 || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.length <= 200 && value.every(item => staticDetail(item, depth + 1));
+  if (Array.isArray(value)) return value.length <= 2000 && value.every(item => staticDetail(item, depth + 1));
   const entries = Object.entries(value);
-  return entries.length <= 50 && entries.every(([key, item]) => /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(key) && staticDetail(item, depth + 1));
+  return entries.length <= 200 && entries.every(([key, item]) => /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(key) && staticDetail(item, depth + 1));
 }
 const staticDetails = (value: unknown): value is CheckRequiredDetails => !!value && typeof value === 'object' && !Array.isArray(value) && staticDetail(value, 0);
 /** Appended to `check` when a reason has no alternative, so the user is told so rather than left guessing. */
