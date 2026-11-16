@@ -49,7 +49,7 @@
 - 标准输入的 JSON 最多 64 KiB。
 - `fresh: true`：即使缓存未过期也重新请求（仍受限速和风控停止约束）；`cacheOnly: true`：只用缓存，一个请求也不发。两者不能同时为真。
 - `format`：`json`（默认，输出 `{ "ok": true, "result": … }`）或 `markdown`（按设置语言输出中文或英文的引用摘要，其他语言由 agent 翻译）。
-- 退出码：0 表示 `status` 为 `ok`；1 表示其他状态（结果照常输出）或请求不合法（`{ "ok": false, "error": "request-invalid" }`）；2 表示意外失败（`research-failed`）。错误只有固定代码，不带响应原文或请求头。
+- 退出码：0 表示 `status` 为 `ok`；1 表示其他状态（结果照常输出）或请求不合法（`{ "ok": false, "error": "request-invalid" }`）；设置读不了（退出码 1）和意外失败（退出码 2）输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`settings-unreadable`、`research-failed`），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。错误只有固定代码，不带响应原文或请求头。
 
 `node <maa-core>/scripts/nga.ts status`：不联网、不解密，返回 `stopped`、`stoppedUntil`、`stopReason`、`lastRequestAt` 和凭据状态 `credential`。
 

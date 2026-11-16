@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { executeConfigRecovery, inspectConfigRecovery, inspectManagedFields, readConfiguration, type MaaProcess, type RecoveryRequest } from './maa-config.ts';
 import { readSettings, settingsHome } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { inspectCredentials, userCredentialRepairs } from './credentials.ts';
 import { blockingChecks, groupOf, libraryCheck, type CheckResult as LibraryCheckResult, type LibraryCheck } from './checks.ts';
 import { inspectInstallation } from './setup.ts';
@@ -196,7 +197,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       console.log(`Current state: ${JSON.stringify(value.currentState)}; next steps (decided by the model): ${value.nextSteps.join(', ') || 'none'}; replay: ${value.replay}`);
       console.log(`Evidence: ${JSON.stringify(value.evidence)}`);
       console.log(`Referral: ${JSON.stringify(value.referral)}`);
-    } else console.log(`${value.status}: ${value.reason ?? 'complete'}`);
+    } else if (value.status === 'check-required') console.log(`check-required: ${value.reason}\n${value.check}\n${(value.alternatives as string[]).join('\n')}`);
+    else console.log(`${value.status}: ${value.reason ?? 'complete'}`);
   };
   try {
     const args = process.argv.slice(2); const action = args[0] ?? ''; const flags = args.slice(1);
@@ -236,5 +238,8 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
         }
       }
     }
-  } catch { emit({ status: 'unexpected-failure', reason: 'check-could-not-complete' }); process.exitCode = 2; }
+  } catch (error) {
+    // Settings that cannot be read and anything unclassified say what to check (item 10); a repair may have half happened.
+    emit(checkRequiredFor('doctor', error, process.argv[2] === 'repair' ? 'doctor-repair-outcome-unknown' : undefined)); process.exitCode = 2;
+  }
 }

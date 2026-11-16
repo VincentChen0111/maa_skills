@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { inspectCredentials } from './credentials.ts';
 import type { Protector } from './credential-protection.ts';
 import { cacheKey, contentNotice, formatResearchMarkdown, getCached, putCached, readGateState, researchDirectory, systemClock, withResearchGate, type Clock,
@@ -270,8 +271,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       if (result.status !== 'ok') process.exitCode = 1;
     }
   } catch (error) {
-    const code = stdinJsonCode(error) ?? (error instanceof Error && ['request-invalid', 'settings-unreadable'].includes(error.message) ? error.message : 'research-failed');
-    console.log(JSON.stringify({ ok: false, error: code }));
-    process.exitCode = code === 'research-failed' ? 2 : 1;
+    // A refused request keeps its code; settings that cannot be read and anything unclassified say what to check (item 10).
+    const code = stdinJsonCode(error) ?? (error instanceof Error && error.message === 'request-invalid' ? error.message : null);
+    const failure = code ? null : checkRequiredFor('skland-community', error);
+    console.log(JSON.stringify(failure ?? { ok: false, error: code }));
+    process.exitCode = failure?.reason === 'research-failed' ? 2 : 1;
   }
 }

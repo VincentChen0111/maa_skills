@@ -13,6 +13,7 @@ import { checkPlanText, gateTitles, generateBasePlan, loadPlanTables, parsePlanS
 import { saveAdviceReport, loadAdviceReport, writeReviewBrief, recordReview, recordReviewFailure, recordReviewSkip, approveReportItems,
   formatAdviceReportMarkdown, type AdviceContent, type ApprovedItem, type ReportState } from './advice-report.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
 import { inline } from './research.ts';
 import { readMaaVersion, readVersionStamp, type MaaVersionReader, type MaaVersionStamp } from './maa-version.ts';
 
@@ -318,7 +319,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       }
     }
   } catch (error) {
-    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|base|plan|public-data)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : 'base-report-failed');
-    console.log(JSON.stringify({ ok: false, error: code })); process.exitCode = 1;
+    // Known refusals keep their codes; settings that cannot be read and anything unclassified say what to check (item 10).
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(report|base|plan|public-data)-[a-z0-9-]+(?::[A-Za-z0-9_-]+)?$/.test(error.message) ? error.message : null);
+    console.log(JSON.stringify(code ? { ok: false, error: code } : checkRequiredFor('base-report', error))); process.exitCode = 1;
   }
 }

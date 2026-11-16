@@ -198,8 +198,8 @@ test('a job missing exactly one operator the account does not own is listed sepa
   const stage = first([withOpers(71, [owned, borrowed]), stageJob(72)]);
   const candidate = stage.candidates[0]!;
   assert.equal(candidate.status, 'support');
-  assert.deepEqual(candidate.support, { slot: 'operator-1', members: [{ name: '合成丁', skill: 2, required: { elite: 2, level: 60 }, effectiveRequired: { elite: 2, level: 60 } }] });
-  assert.deepEqual(candidate.assignment, { 'operator-0': '合成甲' });
+  assert.deepEqual(candidate.support, { slot: '合成丁', members: [{ name: '合成丁', skill: 2, required: { elite: 2, level: 60 }, effectiveRequired: { elite: 2, level: 60 } }] });
+  assert.deepEqual(candidate.assignment, { 合成甲: '合成甲' });
   assert.deepEqual(candidate.execution!.content.opers, [owned, borrowed]);
   assert.equal(stage.primary, 72); assert.deepEqual(stage.alternates, []); assert.deepEqual(stage.supportCandidates, [71]);
   // A group slot whose members are all unowned keeps every member so MAA can borrow any of them.
@@ -223,7 +223,7 @@ test('a job missing exactly one operator the account does not own is listed sepa
   const markdown = formatStageJobs(matchStageJobs(snapshot, stageTables, stageRequest, [withOpers(71, [owned, borrowed])]));
   assert.match(markdown, /需借助战候选（不进默认建议，批准时须点名）：71/);
   assert.match(markdown, /作业 71：support（需借助战）/);
-  assert.match(markdown, /需借助战：缺 operator-1，可借 合成丁（S2，要求 \{"elite":2,"level":60\}）；MAA 只按干员名和技能从助战列表挑选，不核对作业写的精英化和等级，助战练度需要自己确认；开始前在自动战斗页勾选「借助战」并选「补漏」/);
+  assert.match(markdown, /需借助战：缺 合成丁，可借 合成丁（S2，要求 \{"elite":2,"level":60\}）；MAA 只按干员名和技能从助战列表挑选，不核对作业写的精英化和等级，助战练度需要自己确认；开始前在自动战斗页勾选「借助战」并选「补漏」/);
 });
 
 test('a 需借助战 job is prepared only when the approval names it; the plan records the borrowed slot', async t => {
@@ -240,9 +240,9 @@ test('a 需借助战 job is prepared only when the approval names it; the plan r
   const maa = { inspect: async () => ({ running, treeExited: !running, idle: true, ready: running }), close: async () => { running = false; actions.push('close'); }, start: async () => { running = true; actions.push('reopen'); } };
   const approval = { reportHash: report.hash, reference: '合成用户点名批准作业 71 借助战补 合成丁，三次仅准备', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 71, alternates: [72], loops: 3 }] };
   const input = { report, approval, snapshot, maaDirectory, privateDirectory, profile: 0, host: 'claude' as const, closedConfirmed: true, expectedRevision: (await inspectConfiguration(maaDirectory)).revision };
-  await assert.rejects(() => prepareStageJobs(input, maa), /approval-requires-ready-candidate/);
-  await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, selections: [{ ...approval.selections[0]!, supportJobs: [71, 72] }] } }, maa), /approval-mismatch/);
-  await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, selections: [{ ...approval.selections[0]!, supportJobs: [99] }] } }, maa), /approval-mismatch/);
+  await assert.rejects(() => prepareStageJobs(input, maa), /stage-jobs-support-not-named/);
+  await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, selections: [{ ...approval.selections[0]!, supportJobs: [71, 72] }] } }, maa), /stage-jobs-support-not-named/);
+  await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, selections: [{ ...approval.selections[0]!, supportJobs: [99] }] } }, maa), /stage-jobs-support-not-named/);
   assert.deepEqual(actions, []); assert.deepEqual(JSON.parse(await readFile(configFile, 'utf8')), config);
   const named = { ...approval, selections: [{ ...approval.selections[0]!, supportJobs: [71] }] };
   const result = await prepareStageJobs({ ...input, approval: named }, maa);
@@ -253,7 +253,7 @@ test('a 需借助战 job is prepared only when the approval names it; the plan r
   assert.equal(copilot.SupportMode, 3); assert.equal(copilot.LoopTimes, 7); assert.equal(copilot.EnableUserAdditional, false);
   assert.deepEqual(JSON.parse(await readFile(copilot.TaskList[0].FilePath, 'utf8')).opers, [owned, borrowed]);
   const pending = JSON.parse((await readFile(join(privateDirectory, 'daily-pending.jsonl'), 'utf8')).trim());
-  assert.deepEqual(pending.authorization.jobPlan.entries[0].primary.support, { slot: 'operator-1', members: ['合成丁'] });
+  assert.deepEqual(pending.authorization.jobPlan.entries[0].primary.support, { slot: '合成丁', members: ['合成丁'] });
   assert.equal(pending.authorization.jobPlan.entries[0].alternates[0].support, undefined);
 });
 
@@ -267,7 +267,7 @@ test('reports in the earlier match structure no longer verify, so their approval
   const older = { ...displayed, hash: createHash('sha256').update(JSON.stringify(displayed)).digest('hex') } as typeof report;
   const approval = { reportHash: older.hash, reference: '旧报告上的批准', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [], loops: 3 }] };
   const maa = { inspect: async () => { throw new Error('must-not-inspect'); }, close: async () => {}, start: async () => {} };
-  await assert.rejects(() => prepareStageJobs({ report: older, approval, snapshot, maaDirectory: 'unused', privateDirectory: 'unused', profile: 0, host: 'codex', expectedRevision: 'unused' }, maa), /approval-mismatch/);
+  await assert.rejects(() => prepareStageJobs({ report: older, approval, snapshot, maaDirectory: 'unused', privateDirectory: 'unused', profile: 0, host: 'codex', expectedRevision: 'unused' }, maa), /stage-jobs-report-stale/);
   assert.notEqual(older.hash, report.hash);
 });
 

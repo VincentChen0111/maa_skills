@@ -28,7 +28,7 @@
 ```
 
 1. `priorities` 必填。用户说过玩法优先级时，`source` 为 `user-stated`，`text` 用用户原话；没说时先问，或者写出你的假设并用 `assumed`，报告会标「假设（你没有说明，请确认）」。缺少时返回 `priorities:missing`，不保存。
-2. `steps` 按你建议的顺序排列，每一步都要有 `reason`。`name`、`operatorId`、`target`、`current` 的写法和 [成本接口](cost.md) 一样，`progress`、`inventory`、`mode`、`snapshotFile` 和 [缺口接口](gaps.md) 一样，含义也一样：用户确认的事实才加 `user-confirmed`，未知不当 0。同一个干员只能出现一次：同一干员的几个目标合并成一步，这是共享缺口计算的规则（`gaps:targets:duplicate-operator-combine-goals`）。
+2. `steps` 按你建议的顺序排列，每一步都要有 `reason`。`name`、`operatorId`、`target`、`current` 的写法和 [成本接口](cost.md) 一样，`progress`、`inventory`、`mode`、`snapshotFile` 和 [缺口接口](gaps.md) 一样，含义也一样：用户确认的事实才加 `user-confirmed`，未知不当 0。同一个干员只能出现一次：同一干员的几个目标合并成一步，这是共享缺口计算的规则（`gaps:targets:duplicate-operator-combine-goals`）。快照：没有传 `snapshotFile` 时，由共享规则选一份快照整份读取：默认读 MAA 识别快照 `account-snapshot.json`；它缺这次查询要用的一类数据（MAA 识别从来没有技能等级、专精、模组和基建），而森空岛快照 `account-snapshot-skland.json` 这一类是完整的，就整份改读森空岛快照；没有可用的 MAA 识别快照时也读森空岛快照。两份不合并。输出写明读的是哪一份、为什么和读取时间，回复里照样告诉用户；用的是森空岛快照时，说明读取时间不是游戏内的数据时间，森空岛比游戏内滞后多久没有测过；一步的目标含技能等级、专精或模组时需要技能数据，库存总是需要。
 3. `evidence` 每条有唯一的 `id`，步骤用 `evidence` 列出引用的编号。
    - `nga-post`：只能引用你已经用 `nga.ts read` 读过的那一楼。报告工具只从共享 NGA 读取工具的缓存里取，不发请求；没读过返回 `evidence:<id>:not-cached`，楼层不在这一页返回 `post-not-found`。检索结果只有标题，不能当成观点引用。
    - `job`：关卡用 `stage-jobs.ts stages` 得到的精确 `stageId`、代码和难度，作业编号来自作业查询。报告工具重新运行共享的只读作业查询（公开 GET）和逐成员匹配，取这份作业对报告里干员的要求和当前快照的核对结果；作者和日期未知，作业能否通关未验证。查不到返回 `job-not-found`，站点不可用返回 `job-site-unavailable`。
@@ -44,7 +44,10 @@
 - 每一步的 `cost`：这一步自己的原始材料、龙门币和经验，就是共享计算里这个目标的成本。
 - 每一步的 `cumulative`：共享缺口计算对第 1 到第 k 步一起计算、所选方案（加工或不加工）的需求、库存和仍缺，以及其中的加工费用；`supported` 为 `true`（到这一步库存足够）、`false`（按这个方案仍缺）或 `null`（有待核项）。
 - `supportedThrough`：从第 1 步起连续够用的步数。共享计算按输入顺序分配、未穷举替代路线，所以「不够」只是这个方案不够，不代表任何方案都不够。
+- 正文的「加工展开到基础材料」（工单 32）：整个方案还缺的成品按现有库存拆到基础材料、龙门币总缺口、所依据的配方条件假设和不依赖数量的材料券建议，含义同[缺口接口](gaps.md)「展开到基础材料」。缺口（尤其龙门币）是推进中逐步补齐的，不是对计划或顺序的判断；转述时也这样说，假设用一个问题问清，券数量先问、不回答也照样给建议。
 - `gaps`：全部步骤一起计算的完整共享结果，包括路线、账本、来源提交和读取时间。
 - `evidence`：每条资料的作者、发布时间、来源链接和楼层、读取时间、可信度和局限；作者或日期未知就写未知。
 
 Markdown 模板是中文，按设置语言转述。正文分「事实」（工具计算、快照、原文摘录）和「推断」（你的理由、假设、总体推断），帖子和作业标题只放在引用块里。报告只是建议，不加工、不兑换、不写 MAA 配置、不操作设备。
+
+`stage-jobs.ts stages` 失败时输出 `{ok:false, status:"check-required", reason, check, alternatives}`：把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户，见 maa-core 调用方约定的「核对项」。

@@ -30,13 +30,13 @@ const contract: Record<string, Record<string, string[]>> = {
     // Ticket 08's download and recheck actions, transcribed from the same validation (`downloadActions` in setup.ts).
     plan: ['program', 'vendor', 'url', 'version'], download: ['program', 'planId', 'fingerprint', 'reference', 'termsAccepted', 'vendor', 'url', 'version'],
     install: ['planId', 'target'], downloads: [], recheck: ['adbPaths', 'addresses', 'candidate'] },
-  'stage-jobs.ts': { stages: ['codes', 'tablesFile'], query: ['request', 'tablesFile', 'jobsFile', 'operator', 'format', 'saveReport'],
-    prepare: ['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed'] },
+  'stage-jobs.ts': { stages: ['codes', 'tablesFile'], query: ['request', 'tablesFile', 'jobsFile', 'snapshotFile', 'operator', 'format', 'saveReport'],
+    prepare: ['approval', 'profile', 'host', 'expectedRevision', 'closedConfirmed', 'snapshotFile'] },
   'account-snapshot.ts': { inspect: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'], import: ['callbackFile', 'depotFile', 'operBoxFile', 'currentLanguage', 'format'] },
   'operator-cost.ts': { query: ['name', 'operatorId', 'target', 'current', 'mode', 'snapshotFile', 'format'] },
   'cultivation-gaps.ts': { query: ['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'] },
-  'training-time.ts': { query: ['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'tablesFile', 'snapshotFile', 'format'] },
-  'training-plan.ts': { prepare: ['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining'], read: ['id'], refresh: ['id', 'query'],
+  'training-time.ts': { query: ['name', 'operatorId', 'skill', 'target', 'current', 'facts', 'inTraining', 'progress', 'tablesFile', 'snapshotFile', 'format'] },
+  'training-plan.ts': { prepare: ['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining', 'crafting'], read: ['id'], refresh: ['id', 'query'], list: [], close: ['id', 'reference'],
     apply: ['id', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'], reconcile: ['id', 'logFile', 'host', 'closedConfirmed', 'expiringMedicine', 'reference'] },
   'base-query.ts': { query: ['operators', 'room', 'tablesFile', 'snapshotFile', 'format', 'currentLanguage'] },
   // `check [--json]` and `input <service> [--stdin]` take no JSON on standard input (input reads terminal answers).
@@ -297,7 +297,7 @@ const commandCalls: Record<string, Record<string, string[]>> = {
   'operator-cost.ts': { query: ['queryOperatorCost'] },
   'cultivation-gaps.ts': { query: ['queryCultivationGaps'] },
   'training-time.ts': { query: ['queryTraining'] },
-  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingMaterials'],
+  'training-plan.ts': { prepare: ['prepareTrainingPlan'], read: ['readTrainingPlan'], refresh: ['refreshTrainingPlan'], list: ['listTrainingPlans'], close: ['closeTrainingPlan'],
     apply: ['applyTrainingPlan'], reconcile: ['reconcileTrainingPlan'] },
   'base-query.ts': { query: ['queryBaseSkills', 'queryPublicBaseSkills'] },
   'credentials.ts': { check: ['inspectCredentials'], input: ['runInput'] },
@@ -359,6 +359,7 @@ const writingCommands: Record<string, Record<string, WritingCommand>> = {
   'training-plan.ts': {
     prepare: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
     refresh: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
+    close: { writes: '私有目录里的训练记录 training-plans', markers: ['training-plans'] },
     apply: { writes: '私有目录里的训练记录，经配置写入器改 MAA 配置', markers: ['training-plans', 'gui.new.json'] },
     reconcile: { writes: '私有目录里的训练记录，经配置写入器改 MAA 配置', markers: ['training-plans', 'gui.new.json'] },
   },
@@ -875,4 +876,48 @@ test('maa-core owns the rule against editing MAA configuration directly, and maa
   const boundary = account.split(/\r?\n/).filter((line) => line.includes('抽卡、礼包、付费、登录'));
   assert.equal(boundary.length, 1);
   assert.match(boundary[0]!, /\[[^\]]*「不直接改 MAA 配置」[^\]]*\]\(\.\.\/maa-core\/SKILL\.md\)/);
+});
+
+/*
+ * A write request carries only the values it changes (ticket 26 release eval, decision D-N1). In 5 of 8 Codex runs of
+ * daily-expiring-approved the request added `UseExpireMedicineForActivity: false`, a value the Fight task already held, because
+ * the user's approval said it excludes activity expiring medicine. The writer wrote the same bytes as without it, but the private
+ * pending record kept the extra consumption key, outside the approved change set, so the strict grader failed the run. The grader
+ * stays strict; the rule has one owner, a paragraph of the configuration reference's preview section, ahead of the write example.
+ */
+const onlyChangedOwner = 'maa-daily/references/configuration.md';
+const onlyChangedRule = '请求的 `changes` 只放值会变的字段';
+/** What the rule has to say, each as a phrase of its paragraph. */
+const onlyChangedParts: [string, string][] = [
+  ['the read summary as the first way to see a value already at its target', '`read` 摘要'],
+  ['the reported example: activity expiring medicine already off', '`UseExpireMedicineForActivity`'],
+  ['a request item the preview leaves out is removed and previewed again', '再预览一次'],
+  ['the user hears the item was already at that value', '没有改'],
+  ['「一起写」 and 「同时设置」 below mean the values after the write', '写入后'],
+];
+function onlyChangedProblems(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const start = lines.indexOf('## 预览与差异指纹');
+  const end = lines.findIndex((line, index) => index > start && line.startsWith('## '));
+  const section = start < 0 ? [] : lines.slice(start + 1, end < 0 ? undefined : end);
+  const rules = lines.filter((line) => line.startsWith(onlyChangedRule));
+  if (rules.length !== 1) return [`${rules.length} paragraphs start with the rule`];
+  const rule = rules[0]!;
+  const problems = onlyChangedParts.filter(([, phrase]) => !rule.includes(phrase)).map(([what]) => `missing: ${what}`);
+  if (!section.includes(rule)) problems.push('the rule is outside the preview section');
+  const example = lines.findIndex((line) => line.includes('`write` 输入示例'));
+  if (example < 0 || lines.indexOf(rule) > example) problems.push('the rule comes after the write example');
+  return problems;
+}
+
+test('the configuration reference owns the rule that a write request carries only the values it changes', async () => {
+  const text = await readFile(join(skills, onlyChangedOwner), 'utf8');
+  assert.deepEqual(onlyChangedProblems(text), []);
+  const rule = text.split(/\r?\n/).find((line) => line.startsWith(onlyChangedRule))!;
+  // The check reports the paragraph dropped, restated, moved after the write example, or losing any of its parts.
+  assert.deepEqual(onlyChangedProblems(text.replace(rule, '')), ['0 paragraphs start with the rule']);
+  assert.deepEqual(onlyChangedProblems(`${text}\n${rule}\n`), ['2 paragraphs start with the rule']);
+  const moved = text.replace(`${rule}\r\n`, '').replace(`${rule}\n`, '').replace('## 事务与失败', `${rule}\n\n## 事务与失败`);
+  assert.deepEqual(onlyChangedProblems(moved), ['the rule is outside the preview section', 'the rule comes after the write example']);
+  for (const [what, phrase] of onlyChangedParts) assert.deepEqual(onlyChangedProblems(text.replace(rule, rule.replaceAll(phrase, ''))), [`missing: ${what}`]);
 });

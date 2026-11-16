@@ -118,7 +118,7 @@ test('doctor CLI provides human and JSON reports with 0/1/2 exit codes and refus
   await writeFile(f.file, '{');
   const corrupt = invoke(['check', '--json']); assert.equal(corrupt.status, 1); assert.equal(JSON.parse(corrupt.stdout).checks.find((item: { id: string }) => item.id === 'configuration').status, 'error');
   await rm(f.privateDirectory, { recursive: true }); await writeFile(f.privateDirectory, 'synthetic blocked directory');
-  const failed = invoke(['check', '--json']); assert.equal(failed.status, 2); assert.equal(JSON.parse(failed.stdout).status, 'unexpected-failure');
+  const failed = invoke(['check', '--json']); assert.equal(failed.status, 2); assert.deepEqual([JSON.parse(failed.stdout).status, JSON.parse(failed.stdout).reason], ['check-required', 'check-could-not-complete']);
   assert.doesNotMatch(healthy.stdout + human.stdout + corrupt.stdout + failed.stdout, /Synthetic private profile|synthetic-hidden-value|maa-doctor-/);
 });
 

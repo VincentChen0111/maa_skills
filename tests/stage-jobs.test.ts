@@ -194,7 +194,7 @@ test('stale snapshots, unapproved maps and uncertain candidates cannot prepare; 
     close: async () => { running = false; await writeFile(approvedJobFile(privateDirectory, report.hash, 1), '{}'); }, start: async () => { throw new Error('must-not-reopen'); } };
   const approval = { reportHash: report.hash, reference: '合成批准', map: 'synthetic_map', selections: [{ stageId: 'synthetic_01', primary: 1, alternates: [], loops: 3 }] };
   const input = { report, approval, snapshot: account, maaDirectory, privateDirectory, profile: 0, host: 'codex' as const, expectedRevision: (await inspectConfiguration(maaDirectory)).revision };
-  await assert.rejects(() => prepareStageJobs({ ...input, snapshot: { ...account, readAt: '2026-11-12T00:00:00.000Z' } }, maa), /approval/);
+  await assert.rejects(() => prepareStageJobs({ ...input, snapshot: { ...account, readAt: '2026-11-12T00:00:00.000Z' } }, maa), /stage-jobs-snapshot-changed/);
   await assert.rejects(() => prepareStageJobs({ ...input, approval: { ...approval, map: 'other' } }, maa), /approval/);
   const uncertain = matchStageJobs(snapshot(null), tables, request, [job(1)]);
   await assert.rejects(() => prepareStageJobs({ ...input, report: uncertain, snapshot: uncertain.snapshot, approval: { ...approval, reportHash: uncertain.hash } }, maa), /ready/);

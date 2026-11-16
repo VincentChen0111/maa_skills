@@ -2,6 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { CheckRequiredError, checkRequiredFor } from './check-required.ts';
 import { readSettings, startup } from './preferences.ts';
 import type { Protector } from './credential-protection.ts';
 import { saveAccountSnapshot, snapshotFiles, type AccountSnapshot, type BaseOperator, type BaseRoom, type Coverage, type Operator } from './account-snapshot.ts';
@@ -138,6 +139,17 @@ function operators(info: Record<string, unknown>): { operators: Operator[]; cove
 const rooms: [string, BaseRoom['type'], boolean, boolean][] = [['control', 'control', true, false], ['powers', 'power', false, false],
   ['manufactures', 'manufacture', false, false], ['tradings', 'trading', false, false], ['dormitories', 'dormitory', false, false],
   ['meeting', 'meeting', true, true], ['hire', 'hire', true, true], ['training', 'training', true, true]];
+/**
+ * Ticket 32 follow-on item 7: the trainee's skill in training (0-based; -1 is a trainee sitting idle) and the seconds left at
+ * read time, as the public clients read them (nonebot-plugin-skland `Trainee.targetSkill`/`Training.remainSecs`,
+ * arknights-plugin, arknights_bot; see docs/skland-account-sources.md). Kept only when both are valid; never guessed.
+ */
+function trainingState(skill: unknown, seconds: unknown, issues: Set<string>): { targetSkill?: number; remainSecs?: number } {
+  if (skill === undefined && seconds === undefined) return {};
+  if (Number.isSafeInteger(skill) && Number(skill) >= -1 && Number(skill) <= 2 && Number.isSafeInteger(seconds) && Number(seconds) >= 0 && Number(seconds) <= 31 * 86400)
+    return { targetSkill: Number(skill), remainSecs: Number(seconds) };
+  issues.add('invalid-training-state'); return {};
+}
 function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; coverage: Coverage } {
   if (info.building === undefined || info.building === null) return { base: null, coverage: { status: 'invalid', issues: ['not-returned'] } };
   try {
@@ -155,7 +167,7 @@ function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; c
         const room = object(raw);
         if (typeof room.slotId !== 'string' || !/^[A-Za-z0-9_]{1,96}$/.test(room.slotId)) throw new Error('invalid-slot');
         const operators = type === 'training'
-          ? [...(room.trainer ? [stationed(room.trainer, 'trainer')] : []), ...(room.trainee ? [stationed(room.trainee, 'trainee')] : [])]
+          ? [...(room.trainer ? [stationed(room.trainer, 'trainer')] : []), ...(room.trainee ? [Object.assign(stationed(room.trainee, 'trainee'), trainingState(object(room.trainee).targetSkill, room.remainSecs, issues))] : [])]
           : list(room.chars).map(entry => stationed(entry));
         result.push({ type, slotId: room.slotId, level: field(room.level, 'room-level', 1, 5, issues), operators });
       }
@@ -424,19 +436,21 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const action = process.argv[2] ?? '';
     if (!['inspect', 'import', 'compare'].includes(action)) throw new Error('unknown-action');
     const input = request(await readStdinJson({ maxBytes: null, empty: {} }), action);
-    const settings = await readSettings();
+    let settings: Awaited<ReturnType<typeof readSettings>>;
+    try { settings = await readSettings(); } catch { throw new CheckRequiredError('settings-unreadable'); }
     const { language } = startup(settings, input.currentLanguage ?? 'zh-CN');
     if (action === 'compare') {
       const load = async (source: 'maa' | 'skland', path: string) => {
         try { return JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: source }; throw error; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: source }; throw new CheckRequiredError('skland-snapshot-unreadable'); }
       };
       const sides = [await load('maa', resolve(input.maaFile ?? join(settings.privateDirectory, snapshotFiles.maa))),
         await load('skland', resolve(input.sklandFile ?? join(settings.privateDirectory, snapshotFiles.skland)))];
       const missing = sides.flatMap(side => isObject(side) && typeof side.missing === 'string' ? [side.missing] : []);
       if (missing.length) fail({ error: 'snapshot-missing', missing });
       else {
-        const comparison = compareAccountSnapshots(sides[0], sides[1]);
+        let comparison: ReturnType<typeof compareAccountSnapshots>;
+        try { comparison = compareAccountSnapshots(sides[0], sides[1]); } catch { throw new CheckRequiredError('skland-snapshot-unreadable'); }
         const summary = formatComparison(comparison, language);
         if (input.format === 'markdown') process.stdout.write(summary); else console.log(JSON.stringify({ ok: true, comparison, summary }));
       }
@@ -447,6 +461,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
       else console.log(JSON.stringify(outcome.body));
     }
   } catch (error) {
-    fail({ error: stdinJsonCode(error) ?? ((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : 'account-check-required') });
+    // Standard-input refusals and a held snapshot lock keep their codes; everything else says why and what to check (owner
+    // trial item 10), without a path or system message.
+    const code = stdinJsonCode(error) ?? (!(error instanceof CheckRequiredError) && (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'account-busy' : null);
+    if (code) fail({ error: code });
+    else { console.error(JSON.stringify(checkRequiredFor('skland-account', error))); process.exitCode = 1; }
   }
 }

@@ -3,9 +3,11 @@ import { calculateOperatorCost, loadOperatorCostTables, formatOperatorCostMarkdo
 import { readPublicJson, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
 import { readFile, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { selectSnapshot, snapshotFiles, snapshotSourceLine, type SnapshotDomain, type SnapshotSelection } from './account-snapshot.ts';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
+import { checkRequiredFor } from './check-required.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -24,9 +26,17 @@ export type GapPlan = { materials: Record<string, GapRow>; lmd: GapRow; exp: Gap
   vouchers: { id: string; available: number | null; used: number; remaining: number | null; rule: 'permanent-name-inference' | 'timed-explicit' | 'unverified';
     validity: 'confirmed-valid' | 'confirmed-expired' | 'unknown'; choices: string[] }[];
   voucherAllocations: VoucherAllocation[]; route: RouteStep[];
-  targets: { operatorId: string; materials: Record<string, TargetShare>; lmd: TargetShare; exp: TargetShare }[] };
+  targets: { operatorId: string; materials: Record<string, TargetShare>; lmd: TargetShare; exp: TargetShare }[];
+  /** Ticket 32: the craft comparison only — the remaining shortage decomposed into base materials (see `decompose`). */
+  decomposition?: Decomposition };
+export type Decomposition = { short: Record<string, number>; fromStock: Record<string, number>; craftingLmd: number; lmdGap: number | null;
+  steps: { recipeId: string; kind: string; batches: number; inputs: Record<string, number>; output: { id: string; count: number }; lmd: number }[];
+  assumptions: string[]; pending: { item: string; issues: string[] }[];
+  vouchers: { id: string; countKnown: boolean; validity: 'confirmed-valid' | 'confirmed-expired' | 'unknown'; choices: { item: string; short: number }[] }[] };
 export type GapResult = { status: 'ok' | 'partial' | 'needs-input'; issues: string[]; costs: CostResult[]; raw: Cost | null;
-  selected: 'craft' | 'no-craft'; inputSources: { inventory: Record<string, 'snapshot' | 'user-confirmed' | 'unknown'>; progress: 'user-confirmed' | 'unknown' };
+  selected: 'craft' | 'no-craft'; inputSources: { inventory: Record<string, 'snapshot' | 'user-confirmed' | 'unknown'>; progress: 'user-confirmed' | 'unknown'; rooms: Record<string, 'user-confirmed' | 'snapshot'> };
+  /** Ticket 32 follow-on OB-9: the one whole snapshot read (set by the query; null for a direct calculation). */
+  snapshotUsed: SnapshotUsed | null;
   policy: { allocation: 'raw-reservation-then-input-order'; search: 'deterministic-not-exhaustive'; remaining: 'selected-route-not-global-minimum'; execution: 'suggestion-only'; byproducts: 'excluded' };
   stageCodes: Record<string, string | null>;
   comparison: { craft: GapPlan; noCraft: GapPlan } | null };
@@ -37,7 +47,7 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   const targets = Array.isArray(request.targets) ? request.targets : [];
   const costs = targets.map(target => calculateOperatorCost(tables, snapshot, { ...object(target), mode: 'raw' }));
   const result: GapResult = { status: 'needs-input', issues: [], costs, raw: null, comparison: null,
-    selected: request.mode === 'no-craft' ? 'no-craft' : 'craft', inputSources: { inventory: {}, progress: 'unknown' }, stageCodes: {},
+    selected: request.mode === 'no-craft' ? 'no-craft' : 'craft', inputSources: { inventory: {}, progress: 'unknown', rooms: {} }, stageCodes: {}, snapshotUsed: null,
     policy: { allocation: 'raw-reservation-then-input-order', search: 'deterministic-not-exhaustive', remaining: 'selected-route-not-global-minimum', execution: 'suggestion-only', byproducts: 'excluded' } };
   if (Object.keys(request).some(key => !['targets', 'progress', 'inventory', 'mode', 'snapshotFile', 'format'].includes(key)) ||
     targets.some(target => Object.keys(object(target)).some(key => !['name', 'operatorId', 'target', 'current'].includes(key)))) {
@@ -47,7 +57,7 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   const shape = (value: ObjectValue, allowed: string[]) => Object.keys(value).every(key => allowed.includes(key));
   if (request.mode !== undefined && !['craft', 'no-craft'].includes(String(request.mode)) ||
     request.format !== undefined && !['json', 'markdown'].includes(String(request.format)) ||
-    request.progress !== undefined && (progress !== request.progress || progress.source !== 'user-confirmed' || !shape(progress, ['source', 'rooms', 'stageRanks', 'voucherValidity'])) ||
+    request.progress !== undefined && (progress !== request.progress || progress.source !== 'user-confirmed' || !shape(progress, ['source', 'rooms', 'stageRanks', 'voucherValidity', 'confirmedStages'])) ||
     request.inventory !== undefined && (inventory !== request.inventory || inventory.source !== 'user-confirmed' || !shape(inventory, ['source', 'items', 'lmd']))) {
     result.issues.push('request:invalid-confirmation-or-option'); return result;
   }
@@ -57,10 +67,29 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
       (key === 'rooms' ? !Array.isArray(field) || field.some(level => !integer(level) || level > 3) :
         key === 'stageRanks' ? !integer(field) || field > 2 : typeof field !== 'boolean'))) result.issues.push(`progress:${key}:invalid`);
   }
+  // Ticket 32 follow-on item 8: one user confirmation over exactly the stage IDs the tool reported (`stage:<id>:unknown`,
+  // `stageCodes`). Each must be a stage some pinned recipe requires; nothing else is accepted.
+  if (progress.confirmedStages !== undefined) {
+    const required = new Set([...Object.values(object(object(tables.building).workshopFormulas)), ...Object.values(object(object(tables.building).manufactFormulas))]
+      .flatMap(recipe => Array.isArray(object(recipe).requireStages) ? object(recipe).requireStages as unknown[] : []).map(stage => object(stage).stageId));
+    if (!Array.isArray(progress.confirmedStages) || !progress.confirmedStages.length || progress.confirmedStages.some(id => !identifier(id) || !required.has(id)))
+      result.issues.push('progress:confirmedStages:invalid');
+  }
   if (inventory.items !== undefined && (object(inventory.items) !== inventory.items || Object.entries(object(inventory.items)).some(([id, count]) => !identifier(id) || id === '4001' || !integer(count))) ||
     inventory.lmd !== undefined && !integer(inventory.lmd)) result.issues.push('inventory:invalid');
   if (result.issues.length) return result;
   result.inputSources.progress = progress.source === 'user-confirmed' ? 'user-confirmed' : 'unknown';
+  // Ticket 32 follow-on OB-7: room levels the snapshot's complete base read holds (manufacture, power, ...) stand in for rooms
+  // the user did not confirm; a confirmed level overrides. The workshop has no snapshot source and stays the user's.
+  const snapshotRooms: Record<string, number[]> = {};
+  if (object(object(snapshot.coverage).base).status === 'complete') for (const room of Array.isArray(object(snapshot.base).rooms) ? object(snapshot.base).rooms as unknown[] : []) {
+    const value = object(room), id = snapshotRoomIds[String(value.type)];
+    if (id && integer(value.level) && value.level >= 1) (snapshotRooms[id] ??= []).push(value.level);
+  }
+  const userRooms = progress.source === 'user-confirmed' ? object(progress.rooms) : {};
+  for (const id of Object.keys(snapshotRooms)) result.inputSources.rooms[id] = 'snapshot';
+  for (const id of Object.keys(userRooms)) result.inputSources.rooms[id] = 'user-confirmed';
+  const conditions = { ...progress, snapshotRooms };
   if (!costs.length || costs.some(cost => !cost.total)) { result.issues.push('targets:incomplete'); return result; }
   if (new Set(costs.map(cost => cost.operator!.id)).size !== costs.length) { result.issues.push('targets:duplicate-operator-combine-goals'); return result; }
   const raw: Cost = { materials: {}, lmd: 0, exp: 0 };
@@ -103,13 +132,14 @@ export function calculateCultivationGaps(tables: GapTables, snapshotInput: unkno
   for (const [id, value] of Object.entries(plan.materials)) plan.ledger[id] = { opening: value.available, allocated: value.existing ?? 0,
     consumed: 0, crafted: 0, voucher: 0, closing: value.available === null ? null : value.available - value.existing! };
   const craft = structuredClone(plan);
-  applyCrafting(craft, tables, request.progress, known);
+  applyCrafting(craft, tables, conditions, known);
   applyVouchers(plan, tables, request.progress, known);
   applyVouchers(craft, tables, request.progress, known);
-  applyCrafting(craft, tables, request.progress, known, true);
+  applyCrafting(craft, tables, conditions, known, true);
   craft.blocked = craft.blocked.filter(block => knownGap(craft.materials[block.item]!) !== 0);
   for (const block of craft.blocked) if (block.issues.some(issue => /unknown|invalid|ambiguous|cycle|overflow/.test(issue))) craft.materials[block.item]!.remaining = null;
   allocateTargets(plan, costs); allocateTargets(craft, costs);
+  craft.decomposition = decompose(craft, tables, conditions, known);
   result.raw = raw; result.comparison = { craft, noCraft: plan };
   result.status = [craft, plan].some(p => [...Object.values(p.materials), p.lmd, p.exp].some(row => row.remaining === null)) ? 'partial' : 'ok';
   return result;
@@ -218,26 +248,109 @@ function indexRecipes(tables: GapTables): Map<string, (Recipe | null)[]> {
   }
   return recipes;
 }
-function applyCrafting(plan: GapPlan, tables: GapTables, progressInput: unknown, stock: (id: string) => number | null, withVouchers = false): void {
-  const progress = object(progressInput), rooms = object(progress.rooms), stageRanks = object(progress.stageRanks), recipes = indexRecipes(tables);
-  const conditionIssues = (recipe: Recipe): string[] => {
-    const issues: string[] = [];
-    for (const value of recipe.rooms) {
-      const room = object(value);
-      if (!identifier(room.roomId) || !integer(room.roomLevel) || room.roomLevel < 1 || room.roomLevel > 3 || !integer(room.roomCount) || room.roomCount < 1) { issues.push('recipe:room-condition-invalid'); continue; }
-      const available = rooms[room.roomId];
-      if (progress.source !== 'user-confirmed' || !Array.isArray(available) || !available.every(integer)) issues.push(`room:${room.roomId}:unknown`);
-      else if (available.filter(level => level >= Number(room.roomLevel)).length < room.roomCount) issues.push(`room:${room.roomId}:insufficient`);
+const snapshotRoomIds: Record<string, string> = { manufacture: 'MANUFACTURE', power: 'POWER', trading: 'TRADING', control: 'CONTROL', dormitory: 'DORMITORY',
+  meeting: 'MEETING', hire: 'HIRE', training: 'TRAINING' };
+/**
+ * The one recipe-condition predicate: room and stage unlocks against user-confirmed progress (`:unknown`, `:insufficient` or
+ * invalid). Ticket 32 follow-on: a room the user did not confirm uses the snapshot's levels (OB-7); a stage the user confirmed
+ * in one answer over the reported list (`confirmedStages`, item 8) counts as cleared.
+ */
+function recipeConditions(recipe: Recipe, progressInput: unknown): string[] {
+  const progress = object(progressInput), stageRanks = object(progress.stageRanks), snapshotRooms = object(progress.snapshotRooms);
+  const rooms = { ...snapshotRooms, ...progress.source === 'user-confirmed' ? object(progress.rooms) : {} };
+  const confirmedStages = progress.source === 'user-confirmed' && Array.isArray(progress.confirmedStages) ? progress.confirmedStages : [];
+  const issues: string[] = [];
+  for (const value of recipe.rooms) {
+    const room = object(value);
+    if (!identifier(room.roomId) || !integer(room.roomLevel) || room.roomLevel < 1 || room.roomLevel > 3 || !integer(room.roomCount) || room.roomCount < 1) { issues.push('recipe:room-condition-invalid'); continue; }
+    const available = rooms[room.roomId];
+    if (!Array.isArray(available) || !available.every(integer)) issues.push(`room:${room.roomId}:unknown`);
+    else if (available.filter(level => level >= Number(room.roomLevel)).length < room.roomCount) issues.push(`room:${room.roomId}:insufficient`);
+  }
+  for (const value of recipe.stages) {
+    const stage = object(value);
+    if (!identifier(stage.stageId) || !integer(stage.rank) || stage.rank > 2) { issues.push('recipe:stage-condition-invalid'); continue; }
+    const rank = stageRanks[stage.stageId];
+    if (progress.source === 'user-confirmed' && !integer(rank) && confirmedStages.includes(stage.stageId)) continue;
+    if (progress.source !== 'user-confirmed' || !integer(rank)) issues.push(`stage:${stage.stageId}:unknown`);
+    else if (rank < stage.rank) issues.push(`stage:${stage.stageId}:insufficient`);
+  }
+  return issues;
+}
+
+/**
+ * Ticket 32 (owner, 2026-11-16): what the shortage left after the coverage route means in base materials. Unlike that
+ * route, nothing here is suppressed by LMD (crafting fees become their own LMD gap) or by an unknown unlock (labelled as an
+ * assumption); a known-locked or unusable recipe makes the material itself the thing to obtain. Leftover stock is used
+ * first, batch surplus is reused, and an unknown input stock is a labelled worst case of zero. Advice only, never executed.
+ */
+function decompose(plan: GapPlan, tables: GapTables, progressInput: unknown, stock: (id: string) => number | null): Decomposition {
+  const recipes = indexRecipes(tables), result: Decomposition = { short: {}, fromStock: {}, craftingLmd: 0, lmdGap: null, steps: [], assumptions: [], pending: [], vouchers: [] };
+  const closing: Record<string, number> = {}, assumptions = new Set<string>();
+  const left = (id: string) => {
+    if (!Object.hasOwn(closing, id)) {
+      const known = Object.hasOwn(plan.ledger, id) ? plan.ledger[id]!.closing : stock(id);
+      if (known === null) assumptions.add(`inventory:${id}:assumed-zero`);
+      closing[id] = Math.max(0, known ?? 0);
     }
-    for (const value of recipe.stages) {
-      const stage = object(value);
-      if (!identifier(stage.stageId) || !integer(stage.rank) || stage.rank > 2) { issues.push('recipe:stage-condition-invalid'); continue; }
-      const rank = stageRanks[stage.stageId];
-      if (progress.source !== 'user-confirmed' || !integer(rank)) issues.push(`stage:${stage.stageId}:unknown`);
-      else if (rank < stage.rank) issues.push(`stage:${stage.stageId}:insufficient`);
-    }
-    return issues;
+    return closing[id]!;
   };
+  const add = (bucket: Record<string, number>, id: string, count: number) => { bucket[id] = (bucket[id] ?? 0) + count; };
+  const leaf = (id: string, count: number, issues: string[]) => {
+    add(result.short, id, count);
+    if (issues.length) { const pending = result.pending.find(entry => entry.item === id); if (pending) pending.issues = [...new Set([...pending.issues, ...issues])]; else result.pending.push({ item: id, issues }); }
+  };
+  const expand = (id: string, need: number, path: string[]): void => {
+    const reused = Math.min(need, left(id)); closing[id]! -= reused; need -= reused;
+    if (need <= 0) return;
+    const choices = recipes.get(id);
+    if (!choices?.length) return leaf(id, need, []);
+    if (path.includes(id)) return leaf(id, need, [`recipe:${id}:cycle`]);
+    if (choices.length !== 1 || !choices[0]) return leaf(id, need, [`recipe:${id}:${choices.length !== 1 ? 'ambiguous' : 'invalid'}`]);
+    const recipe = choices[0], conditions = recipeConditions(recipe, progressInput);
+    const blocking = conditions.filter(issue => !issue.endsWith(':unknown'));
+    if (blocking.length) return leaf(id, need, blocking);
+    const batches = Math.ceil(need / recipe.count), fee = recipe.fee * batches;
+    const inputs = Object.fromEntries(Object.entries(recipe.inputs).map(([key, count]) => [key, count * batches]));
+    if (![batches, fee, result.craftingLmd + fee, ...Object.values(inputs)].every(integer)) return leaf(id, need, ['craft:overflow']);
+    for (const issue of conditions) assumptions.add(issue);
+    result.craftingLmd += fee;
+    result.steps.push({ recipeId: recipe.id, kind: recipe.kind, batches, inputs, output: { id, count: recipe.count * batches }, lmd: fee });
+    closing[id]! += recipe.count * batches - need;
+    for (const [input, required] of Object.entries(inputs)) {
+      const used = Math.min(required, left(input)); closing[input]! -= used;
+      if (used) add(result.fromStock, input, used);
+      if (required > used) expand(input, required - used, [...path, id]);
+    }
+  };
+  // The coverage route leaves a row unknown when its route needed an unconfirmed fact; the known arithmetic gap is still the shortage.
+  const needs = new Map<string, number>();
+  for (const [id, row] of Object.entries(plan.materials)) {
+    let need = knownGap(row);
+    if (need === null) { assumptions.add(`inventory:${id}:assumed-zero`); need = row.required - row.crafted - row.voucher; }
+    if (need > 0) needs.set(id, need);
+  }
+  for (const [id, need] of needs) expand(id, need, []);
+  result.assumptions = [...assumptions].sort();
+  if (plan.lmd.available !== null) result.lmdGap = Math.max(0, plan.lmd.required + result.craftingLmd - plan.lmd.available);
+  // Count-independent voucher advice: which shortages each voucher could exchange, largest first.
+  const shortages = new Map<string, number>(Object.entries(result.short));
+  for (const [id, need] of needs) shortages.set(id, Math.max(need, shortages.get(id) ?? 0));
+  const items = object(object(tables.items).items);
+  for (const [voucherId, voucher] of Object.entries(items)) {
+    if (!identifier(voucherId) || object(voucher).itemType !== 'MATERIAL_ISSUE_VOUCHER') continue;
+    const choices = [...shortages].filter(([item]) => { const related = object(items[item]).voucherRelateList;
+      return Array.isArray(related) && related.some(value => object(value).voucherId === voucherId && object(value).voucherItemType === 'MATERIAL_ISSUE_VOUCHER'); })
+      .map(([item, short]) => ({ item, short })).sort((a, b) => b.short - a.short || a.item.localeCompare(b.item));
+    if (choices.length) result.vouchers.push({ id: voucherId, countKnown: stock(voucherId) !== null,
+      validity: plan.vouchers.find(entry => entry.id === voucherId)?.validity ?? 'unknown', choices });
+  }
+  return result;
+}
+
+function applyCrafting(plan: GapPlan, tables: GapTables, progressInput: unknown, stock: (id: string) => number | null, withVouchers = false): void {
+  const recipes = indexRecipes(tables);
+  const conditionIssues = (recipe: Recipe): string[] => recipeConditions(recipe, progressInput);
   type Trial = { ledger: GapPlan['ledger']; steps: CraftStep[]; route: RouteStep[]; allocations: VoucherAllocation[]; fees: number; spareLmd: number | null };
   let state: Trial = { ledger: plan.ledger, steps: [], route: [], allocations: [], fees: 0, spareLmd: plan.lmd.available === null ? null : plan.lmd.available - (plan.lmd.existing ?? 0) };
   const entry = (trial: Trial, id: string): LedgerEntry => {
@@ -363,22 +476,69 @@ export async function loadGapTables(fetcher?: typeof fetch): Promise<GapTables> 
     sources: [...tables.sources ?? [], building.source, stages.source].sort((a, b) => a.file.localeCompare(b.file)) };
 }
 
+/** What a training plan and a gap result record about the snapshot they read (the shared `selectSnapshot` choice and the file). */
+export type SnapshotUsed = Pick<SnapshotSelection, 'source' | 'readAt' | 'chosen' | 'lacking'> & { file: string };
+/** Training and gaps read the same snapshot: what the costs, recipe conditions and the training start gate need. */
+export const trainingSnapshotDomains: readonly SnapshotDomain[] = ['operators', 'skills', 'inventory', 'base'];
+/**
+ * Ticket 32 follow-on OB-9, adopting the shared `selectSnapshot`: a named file as it is; otherwise one whole snapshot, the Skland
+ * one when it covers what the MAA one lacks, but never over a newer MAA depot scan (FO1-1/FO2-4: `newestInventory`), since
+ * the training start gate spends from this inventory. Read failures come back as `SnapshotSelectionError`.
+ */
+export async function readTrainingSnapshot(privateDirectory: string, explicitFile?: string): Promise<{ snapshot: Record<string, unknown>; used: SnapshotUsed }> {
+  const selection = await selectSnapshot(privateDirectory, trainingSnapshotDomains, explicitFile, { newestInventory: true });
+  const file = explicitFile !== undefined ? basename(explicitFile) : ['skland-covers', 'maa-missing', 'maa-unreadable'].includes(selection.chosen) ? snapshotFiles.skland : snapshotFiles.maa;
+  return { snapshot: selection.snapshot, used: { file, source: selection.source, readAt: selection.readAt, chosen: selection.chosen, lacking: selection.lacking } };
+}
+
 /** Reads only the selected snapshot and pinned public sources; no recognition, reports or account writes. */
 export async function queryCultivationGaps(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}): Promise<GapResult> {
   const request = object(input), settings = await readSettings(options.home);
-  const file = typeof request.snapshotFile === 'string' ? resolve(request.snapshotFile) : settings.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null;
-  if (!file) throw new Error('gaps-snapshot-directory-required');
-  let snapshot: unknown;
-  try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('gaps-snapshot-unavailable'); }
-  return calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
+  // Ticket 32 follow-on OB-9: a named snapshot is read as named; otherwise the one whole snapshot that covers what gaps need.
+  const explicit = typeof request.snapshotFile === 'string' ? request.snapshotFile : undefined;
+  if (explicit === undefined && !settings.privateDirectory) throw new Error('gaps-snapshot-directory-required');
+  const { snapshot, used } = await readTrainingSnapshot(settings.privateDirectory ?? '', explicit).catch(() => { throw new Error('gaps-snapshot-unavailable'); });
+  const result = calculateCultivationGaps(await loadGapTables(options.fetcher), snapshot, input);
+  result.snapshotUsed = used;
+  return result;
 }
 
 const cell = (value: unknown) => String(value).replace(/[\r\n|]/g, ' ');
+/**
+ * Ticket 32: the base-material view of the remaining shortage, shared by the gap query and the cultivation report. A
+ * shortage is a gap to fill while the plan runs, never a verdict on the plan; assumptions are named so one question can settle them.
+ */
+export function formatDecomposition(decomposition: Decomposition, stageCodes: Record<string, string | null> = {}, names: Record<string, string> = {},
+  escape: (value: string) => string = cell): string[] {
+  const cell = (value: unknown) => escape(String(value));
+  const label = (id: string) => names[id] ? `${cell(names[id])}（${cell(id)}）` : cell(id);
+  const condition = (issue: string) => {
+    const [kind, id, state] = issue.split(':');
+    if (kind === 'stage') return `关卡 ${cell(stageCodes[id!] ?? id)} 已通关（${state === 'unknown' ? '未确认' : cell(state)}）`;
+    if (kind === 'room') return `${cell(id)} 等级够用（未确认）`;
+    if (kind === 'inventory') return `${label(id!)} 库存未知，按 0 计`;
+    return cell(issue);
+  };
+  const lines = ['## 加工展开到基础材料', '',
+    '缺口按现有库存逐级拆到基础材料（建议，未执行）。缺口可以在计划推进中逐步补齐，不代表计划不可行；龙门币单独列为缺口，不会因为龙门币不够就不展开。'];
+  const short = Object.entries(decomposition.short);
+  lines.push('', short.length ? `还要获取的基础材料：${short.map(([id, count]) => `${label(id)} × ${count}`).join('、')}` : '还要获取的基础材料：无');
+  const fromStock = Object.entries(decomposition.fromStock);
+  if (fromStock.length) lines.push(`加工可用的现有库存：${fromStock.map(([id, count]) => `${label(id)} × ${count}`).join('、')}`);
+  for (const step of decomposition.steps) lines.push(`- 加工 ${cell(step.recipeId)}：${Object.entries(step.inputs).map(([id, count]) => `${label(id)} × ${count}`).join(' + ')} → ${label(step.output.id)} × ${step.output.count}；龙门币 ${step.lmd}`);
+  lines.push(`补齐缺口还要的加工费：${decomposition.craftingLmd}；龙门币缺口（含直接需求与全部加工费）：${decomposition.lmdGap === null ? '未知/待核' : decomposition.lmdGap}`);
+  if (decomposition.assumptions.length) lines.push(`按以下假设展开，可一次问清：${decomposition.assumptions.map(condition).join('；')}`);
+  for (const entry of decomposition.pending) lines.push(`- ${label(entry.item)} 不能加工（${entry.issues.map(cell).join('、')}），按成品获取`);
+  for (const voucher of decomposition.vouchers) lines.push(`- 材料券 ${label(voucher.id)}（数量${voucher.countKnown ? '已知' : '未知'}，有效性${voucher.validity === 'confirmed-valid' ? '已确认' : voucher.validity === 'confirmed-expired' ? '已过期' : '待确认'}）可兑换的缺口，按缺得多的优先：${voucher.choices.map(choice => `${label(choice.item)}（缺 ${choice.short}）`).join('、')}`);
+  return lines;
+}
 export function formatCultivationGapsMarkdown(result: GapResult): string {
   const number = (value: number | null) => value === null ? '未知/待核' : String(value);
   const lines = ['# 培养材料缺口', `状态：${result.status}；当前选项：${result.selected}`,
     '以下是独立比较的覆盖建议，不进行加工、兑换或设备操作。先保留原始需求，按输入目标顺序分配；未穷举替代路线，不代表经济最优或所有方案的最小缺口。随机副产物未计入，当前干员心情、生产排队与即时可操作状态未核实。'];
+  if (result.snapshotUsed) lines.push(`快照：${cell(result.snapshotUsed.file)}。${cell(snapshotSourceLine(result.snapshotUsed))}`);
   if (result.issues.length) lines.push(`待核：${result.issues.map(cell).join('、')}`);
+  if (Object.keys(result.stageCodes).length) lines.push('关卡条件可以一次问清：用户确认下面这些关卡都已通关时，在 progress 里写 confirmedStages:[这些关卡 ID]。');
   for (const [id, code] of Object.entries(result.stageCodes)) lines.push(`关卡标识：${cell(id)} → ${cell(code ?? '未知')}；条件 rank 保留公开原码，不推断星数。`);
   for (const cost of result.costs) lines.push('', formatOperatorCostMarkdown(cost));
   if (result.comparison) for (const [mode, plan] of Object.entries(result.comparison)) {
@@ -398,6 +558,7 @@ export function formatCultivationGapsMarkdown(result: GapResult): string {
     for (const allocation of plan.voucherAllocations) lines.push(`- 凭证建议：${cell(allocation.voucherId)} → ${cell(allocation.itemId)} × ${allocation.count}（每券一份，未兑换）`);
     for (const block of plan.blocked) lines.push(`- 待核/未覆盖 ${cell(block.item)}：${block.issues.map(cell).join('、')}`);
     lines.push(`库存守恒账本：${cell(JSON.stringify(plan.ledger))}`);
+    if (plan.decomposition) lines.push('', ...formatDecomposition(plan.decomposition, result.stageCodes));
   }
   lines.push('', `输入来源：${cell(JSON.stringify(result.inputSources))}`,
     '券的限时分类来自公开 usage，永久分类仅为固定 ID 命名推断；实际有效性均接受当次用户确认后才计入。原始成本与配方来源、提交、响应 SHA-256 和实际读取时间见各目标来源；arkntools 只报告差异，不修正主源。');
@@ -414,7 +575,8 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     const result = await queryCultivationGaps(input);
     console.log(object(input).format === 'markdown' ? formatCultivationGapsMarkdown(result) : JSON.stringify(result));
   } catch (error) {
-    const code = stdinJsonCode(error) ?? (error instanceof Error && /^(gaps|cost)-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'gaps-input-invalid');
-    console.error(JSON.stringify({ error: code })); process.exitCode = 1;
+    // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
+    const stdin = stdinJsonCode(error);
+    console.error(JSON.stringify(stdin ? { error: stdin } : checkRequiredFor('cultivation-gaps', error))); process.exitCode = 1;
   }
 }

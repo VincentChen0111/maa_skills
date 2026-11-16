@@ -203,7 +203,7 @@ test('prepare persists native-compatible S1 elite zero and binds it separately f
   assert.match(formatStageJobs(report), /规范化.*elite.*0/); assert.deepEqual(actions, ['reopen']);
   const changed = structuredClone(report); changed.stages[0]!.candidates[0]!.execution!.content.opers[0].requirements.elite = -1;
   changed.stages[0]!.candidates[0]!.execution!.hash = hash(changed.stages[0]!.candidates[0]!.execution!.content);
-  await assert.rejects(() => prepareStageJobs({ ...input, report: changed }, maa), /approval/);
+  await assert.rejects(() => prepareStageJobs({ ...input, report: changed }, maa), /stage-jobs-report-stale/);
 });
 
 test('derived groups preserve the globally unique allocation and the exact chosen alternative requirements', () => {
@@ -228,9 +228,9 @@ test('approval binds displayed execution and search coverage as well as original
   let inspections = 0;
   const maa: MaaProcess = { inspect: async () => { inspections++; throw new Error('must-not-inspect'); }, close: async () => {}, start: async () => {} };
   const changed = structuredClone(report); changed.stages[0]!.candidates[0]!.execution!.content.groups[0].opers[0].name = '合成甲';
-  await assert.rejects(() => prepareStageJobs({ ...base, report: changed }, maa), /approval/);
+  await assert.rejects(() => prepareStageJobs({ ...base, report: changed }, maa), /stage-jobs-report-stale/);
   const searchChanged = structuredClone(report); searchChanged.search[0] = { stageId: 'synthetic_01', mode: 'online', pages: 3, truncated: true, ids: [] };
-  await assert.rejects(() => prepareStageJobs({ ...base, report: searchChanged }, maa), /approval/);
+  await assert.rejects(() => prepareStageJobs({ ...base, report: searchChanged }, maa), /stage-jobs-report-stale/);
   assert.equal(inspections, 0);
 });
 

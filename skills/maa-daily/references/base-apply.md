@@ -44,6 +44,9 @@
 | `base-infrast-task-required`、`base-binding-invalid`、`base-infrast-fields-unverified` | 选的不是基建任务、序号不对或字段不全 | 重新读摘要核对；字段不全请用户在 MAA 里打开一次该任务的自定义设置 |
 | `lock-requires-reconciliation` | 有写入在进行（busy）或上次结果未知（unknown） | busy 等待；unknown 交 maa-doctor |
 | `maa-directory-unset` | 没设 MAA 目录 | 先用 maa-setup 设置 |
+| `base-apply-check-failed` | 读批准记录或 MAA 配置时遇到未分类的错误，没有核对完；什么都没写 | 重新运行 `check`；仍出现时运行 maa-doctor 的检查 |
+
+上表是带固定代码的拒绝（`{ok:false, error}`）。设置读不了或未分类的失败输出 `{ok:false, status:"check-required", reason, check, alternatives}`：`settings-unreadable`；`check` 未分类的失败是 `base-apply-check-failed`（什么都没写）；`apply` 未分类的失败是 `base-apply-outcome-unknown`（可能已经写了一部分，按上面 `unknown` 的做法交 maa-doctor，不重试、不重放）。把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。
 
 副本不在了（例如用户按上一行移走了改过的文件）不是拒绝原因：MAA 的四个字段已经指向它时，`check` 给出 `ready`、`configuration.changes` 为空、`configuration.copy` 为 `absent`，`apply` 经统一写入器（锁、关停 MAA、备份、装回副本、读回）只装回批准的副本，不改配置文件。
 

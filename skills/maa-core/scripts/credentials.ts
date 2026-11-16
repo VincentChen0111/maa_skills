@@ -7,6 +7,7 @@ import { readSettings, settingsHome } from './preferences.ts';
 import { windowsProtector, type Protector } from './credential-protection.ts';
 import type { CheckResult } from './doctor.ts';
 import { blockingChecks } from './checks.ts';
+import { checkRequiredFor } from './check-required.ts';
 
 /**
  * Credentials the user enters in a local script for NGA, the Skland account and experimental Bilibili.
@@ -360,9 +361,10 @@ if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
       console.log(args[1] === '--json' ? JSON.stringify(value) : JSON.stringify(value, null, 2));
       process.exitCode = value.exitCode;
     } catch (error) {
-      const reason = error instanceof CredentialError && error.message === 'request-invalid' ? 'request-invalid' : 'credential-check-required';
-      console.log(JSON.stringify({ status: reason === 'request-invalid' ? 'rejected' : 'unexpected-failure', reason }));
-      process.exitCode = reason === 'request-invalid' ? 1 : 2;
+      // A malformed request is a plain rejection; a check that could not finish says so (owner trial item 10) and keeps exit 2.
+      const rejected = error instanceof CredentialError && error.message === 'request-invalid';
+      console.log(JSON.stringify(rejected ? { status: 'rejected', reason: 'request-invalid' } : checkRequiredFor('credentials', error)));
+      process.exitCode = rejected ? 1 : 2;
     }
   } else {
     let language: Language = languageOf(Intl.DateTimeFormat().resolvedOptions().locale);

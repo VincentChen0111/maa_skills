@@ -1,17 +1,63 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink, realpath } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, unlink, realpath } from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readSettings } from './preferences.ts';
-import { queryTraining } from './training-time.ts';
-import { nextTrainingAction, reconcileTraining, type TrainingPlan } from './training-state.ts';
+import { queryTraining, materialGate, formatTraining, gateSpend, trainingIssuePhase, startFacts, type TrainingResult } from './training-time.ts';
+import { nextTrainingAction, reconcileTraining, paidRanks, planPayments, paymentKey, holdsTrainingRoom, type TrainingPlan } from './training-state.ts';
+import { checkRequired, checkRequiredFor, type CheckRequiredReason } from './check-required.ts';
+import { resolveApprovedItem } from './advice-report.ts';
 import { buildTrainingChanges, trainingTimerIdentity, type TrainingGrant } from './training-config.ts';
 import { executeConfigWrite, inspectConfiguration, versionStampOf, type MaaProcess } from './maa-config.ts';
 import { compareVersionStamp, readMaaVersion, readVersionStamp, type MaaVersionReader } from './maa-version.ts';
 import type { ExpiringMedicineGrant } from './consumption-grant.ts';
 import { sameConfigValue } from './config-projection.ts';
 
+/** A refusal with static diagnostic details (issue codes and IDs only, never paths or user text) that the CLI prints beside the code. */
+export class TrainingCheckError extends Error {
+  readonly details: Record<string, unknown>;
+  constructor(code: CheckRequiredReason, details: Record<string, unknown>) { super(code); this.details = details; }
+}
+/**
+ * Ticket 32 (adopting the shared module after the central merge): a stop built in the flow (apply, close, reconcile) is the
+ * shared result, with the plan's extras beside it (static details, the MAA version drift); the CLI prints it through the module.
+ */
+const held = (reason: CheckRequiredReason, extra: { details?: Record<string, unknown>; versions?: unknown } = {}) => ({ ...checkRequired(reason), ...extra });
+
+type PlannableResult = TrainingResult & { operator: NonNullable<TrainingResult['operator']>; role: string; skillName: string; currentRank: number; targetRank: number };
+
+/**
+ * Ticket 32 FO3 (recurrence rule: the stop-reason class of FO1-2, FO2-1, FO3-2 and FO3-3): the one decision on where a training
+ * result stops. prepare and refresh act on it; apply reads what refresh saved (`startIssues`). Conformance: `32 FO3 conformance`.
+ * - `target-changed` (refresh only): the query names another operator, skill or target, or the snapshot shows a completed rank
+ *   other than the plan's (one at or past the target included). Nothing is saved; an account update or the user settles it.
+ * - `unknowable`: the plan itself cannot be determined (rank unknown or conflicting, identity, invalid input, no assistant for
+ *   the first tier), with every reason. prepare refuses; refresh saves the reasons as `startIssues`, so apply stops the same way.
+ * - `plannable`: the plan is known; `facts` are what only the start still needs (saved as `startIssues`).
+ */
+type TrainingStop = { kind: 'target-changed' } | { kind: 'unknowable'; issues: string[]; details: Record<string, unknown> }
+  | { kind: 'plannable'; result: PlannableResult; facts: string[] };
+function trainingStop(result: TrainingResult, plan: TrainingPlan | null): TrainingStop {
+  if (plan && (result.operator && result.operator.id !== plan.target.operatorId || result.skill !== null && result.skill !== plan.target.skill
+    || result.targetRank !== null && result.targetRank !== plan.rank || result.issues.includes(`target.mastery.${plan.target.skill}:below-current`)
+    || result.currentRank !== null && result.currentRank !== plan.target.currentRank)) return { kind: 'target-changed' };
+  const unknowable = result.issues.filter(issue => trainingIssuePhase(issue, result.currentRank === null ? null : result.currentRank + 1) === 'prepare');
+  if (unknowable.length || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null)
+    return { kind: 'unknowable', issues: result.issues.length ? result.issues : ['training:target-identity-incomplete'],
+      details: { issues: result.issues, ...(unknowable.length ? { blocking: unknowable } : {}),
+        stages: result.stages.filter(stage => !stage.recommendedAssistant || stage.baseSeconds === null)
+          .map(stage => ({ rank: stage.rank, assistants: stage.assistants.map(row => ({ id: row.id, issues: row.issues })) })) } };
+  return { kind: 'plannable', result: result as PlannableResult, facts: startFacts(result).facts };
+}
+/**
+ * Ticket 32 FO5-3: a reconcile whose cleanup needs checking went through itself; the shared result names the plan (static
+ * identity) and keeps the MAA version drift every reconcile returns. `read` shows the rest of the plan.
+ */
+export function reconcileCheckRequired(reconciled: { plan: TrainingPlan; cleanup?: { reason?: unknown } | null; versions: unknown }) {
+  return checkRequired(String(reconciled.cleanup?.reason) as CheckRequiredReason,
+    { plan: reconciled.plan.id, state: reconciled.plan.state, rank: reconciled.plan.rank, versions: reconciled.versions });
+}
 /** `versionReader` reads MAA.exe at preparation (a system boundary); apply and reconcile read it through the MAA process boundary. */
 type Options = { home?: string; fetcher?: typeof fetch; versionReader?: MaaVersionReader };
 const object = (value: unknown): Record<string, unknown> => {
@@ -55,59 +101,180 @@ async function withPlan<T>(id: unknown, options: Options, action: (plan: Trainin
   finally { await lock.close(); await unlink(lockFile); }
 }
 
+/** Ticket 32: MAA's GUI configuration, read with a static failure code (never the path). */
+async function readMaaConfig(maaDirectory: string) {
+  try { return JSON.parse(await readFile(join(maaDirectory, 'config', 'gui.new.json'), 'utf8')); } catch { throw new Error('maa-config-unreadable'); }
+}
+
 export async function readTrainingPlan(id: string, options: Options = {}): Promise<TrainingPlan> {
-  const { file } = await location(id, options), plan = JSON.parse(await readFile(file, 'utf8'));
+  const { file } = await location(id, options);
+  const text = await readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => { throw new Error(error.code === 'ENOENT' ? 'training-plan-not-found' : 'training-plan-invalid'); });
+  let plan: TrainingPlan; try { plan = JSON.parse(text); } catch { throw new Error('training-plan-invalid'); }
   if (plan.version !== 1 || plan.id !== id || !Array.isArray(plan.history) || !Array.isArray(plan.consumed) || !plan.binding || !plan.target) throw new Error('training-plan-invalid');
   return plan;
 }
 
 /** Recomputes the next rank with current inventory. It cannot broaden the authorized target. */
-export async function refreshTrainingMaterials(input: unknown, options: Options = {}) {
+export async function refreshTrainingMaterials(input: unknown, options: Options = {}) { return (await refreshTrainingPlan(input, options)).plan; }
+
+/** Ticket 32 R2-4: the refreshed plan with the estimate summary, which names what the next start still lacks down to base materials. */
+export async function refreshTrainingPlan(input: unknown, options: Options = {}): Promise<{ plan: TrainingPlan; summary: string }> {
   const request = object(input);
   return withPlan(request.id, options, async (plan, context) => {
-    if (plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
-    const { result } = await queryTraining(request.query, options);
-    if (result.operator?.id !== plan.target.operatorId || result.skill !== plan.target.skill || result.targetRank !== plan.rank
-      || result.currentRank !== plan.target.currentRank) throw new Error('training-refresh-target-changed');
-    const material = result.materials.comparison?.noCraft;
-    plan.materialReady = Boolean(result.status === 'ok' && material && [...Object.values(material.materials), material.lmd, material.exp].every(row => row.remaining === 0));
+    if (plan.closed || plan.state !== 'pending' && plan.state !== 'preplaced') throw new Error('training-stage-not-pending');
+    if (object(request.query).inTraining !== undefined) throw new Error('training-in-training-refresh-unsupported');
+    // Ticket 32: the plan's own completion and payment evidence reconciles a snapshot read before them (unattended re-entry).
+    // Ticket 32 R3-2: the other plans' payments are reserved too, and the gate records which ones it saw.
+    // Ticket 32 R5-2: this plan's own payments go through the same reservation as the other plans'.
+    const payments = planPayments(await allPlans(options), null);
+    const { result: queried, language } = await queryTraining(request.query, { ...options, evidence: { completedRank: plan.target.currentRank, paidAt: paidRanks(plan) }, payments });
+    plan.paymentsSeen = payments.map(paymentKey);
+    const stop = trainingStop(queried, plan);
+    if (stop.kind === 'target-changed') throw new Error('training-refresh-target-changed');
+    if (stop.kind === 'unknowable') {
+      // Ticket 32 FO3-3: the plan exists, so what keeps its start closed is saved and apply stops with the same code.
+      plan.materialReady = false; plan.startIssues = stop.issues;
+      plan.spends = { ...plan.spends }; delete plan.spends[String(plan.rank)];
+      plan.history.push({ at: new Date().toISOString(), kind: 'start-facts-pending', rank: plan.rank });
+      await save(context.file, plan);
+      throw new TrainingCheckError('training-facts-required', stop.details);
+    }
+    const result = stop.result;
+    // Ticket 32 R2-3: a fact the next start needs (training room, assistant, identity) is named and keeps the start closed;
+    // only a shortage or an unknown count in the materials is a material wait.
+    const missing = { facts: stop.facts, materials: startFacts(result).materials };
+    const gate = !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(plan.crafting)) : 'short';
+    plan.materialReady = gate !== 'short';
+    if (missing.facts.length) plan.startIssues = missing.facts; else delete plan.startIssues;
+    // Ticket 32 R4-1/R4-2: what a start on this gate spends, and the other plans' tiers it reserved.
+    // A tier the user already started by hand was paid in the game, not on this gate: nothing is recorded for it (R6-2).
+    const spend = gate === 'short' || plan.manualTraining ? null : gateSpend(result.startMaterials, gate);
+    plan.spends = { ...plan.spends }; if (spend) plan.spends[String(plan.rank)] = spend; else delete plan.spends[String(plan.rank)];
+    if (gate !== 'short' && !spend && !plan.manualTraining) plan.materialReady = false;
+    plan.reservedTiers = result.reservedTiers; plan.snapshotUsed = result.snapshotUsed; plan.trainingRoom = result.trainingRoom;
+    if (gate === 'crafting') plan.craftingRequired = true; else delete plan.craftingRequired;
     const stage = result.stages.find(row => row.rank === plan.rank), assistant = stage?.assistants.find(row => row.id === stage.recommendedAssistant);
     if (assistant) plan.assistants[String(plan.rank)] = assistant.name;
     const after = stage?.assistants.find(row => row.id === stage.afterStartAssistant);
     if (after) { plan.afterStartAssistants ??= {}; plan.afterStartAssistants[String(plan.rank)] = after.name; }
-    plan.history.push({ at: new Date().toISOString(), kind: plan.materialReady ? 'materials-verified' : 'materials-pending', rank: plan.rank });
-    await save(context.file, plan); return plan;
+    plan.history.push({ at: new Date().toISOString(), kind: missing.facts.length ? 'start-facts-pending' : gate === 'ready' ? 'materials-verified' : gate === 'crafting' ? 'materials-verified-with-crafting' : 'materials-pending', rank: plan.rank });
+    await save(context.file, plan);
+    if (missing.facts.length) throw new TrainingCheckError('training-facts-required', { issues: missing.facts });
+    return { plan, summary: formatTraining(result, language) };
   });
 }
 
 /** Saves only a private pending record. MAA is not changed until apply. */
 export async function prepareTrainingPlan(input: unknown, options: Options = {}): Promise<TrainingPlan> {
   const request = object(input), binding = object(request.binding);
-  const authorization = object(request.authorization);
-  if (Object.keys(request).some(key => !['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining'].includes(key))
+  const authorization = object(request.authorization), crafting = request.crafting === undefined ? undefined : object(request.crafting);
+  if (Object.keys(request).some(key => !['query', 'authorization', 'binding', 'currentTrainee', 'manualTraining', 'crafting'].includes(key))
     || !['current-request', 'approved-report'].includes(String(authorization.source)) || typeof authorization.reference !== 'string' || !authorization.reference.trim()
+    || Object.keys(authorization).some(key => !['source', 'reference'].includes(key))
+    || crafting && (Object.keys(crafting).some(key => key !== 'reference') || typeof crafting.reference !== 'string' || !crafting.reference.trim())
     || request.currentTrainee !== null && typeof request.currentTrainee !== 'string' || request.manualTraining !== undefined && typeof request.manualTraining !== 'boolean') throw new Error('training-authorization-required');
-  const { result } = await queryTraining(request.query, options);
-  if (result.status !== 'ok' || !result.operator || !result.role || !result.skillName || result.currentRank === null || result.targetRank === null) throw new Error('training-facts-required');
-  const material = result.materials.comparison?.noCraft;
-  const materialReady = Boolean(material && [...Object.values(material.materials), material.lmd, material.exp].every(row => row.remaining === 0));
-  const id = randomUUID(), now = new Date().toISOString();
+  // Ticket 32 R3-2: every plan's payments made after the inventory time are reserved before this plan's gate.
+  const payments = planPayments(await allPlans(options), null);
+  const { result: queried } = await queryTraining(request.query, { ...options, payments });
+  // Ticket 32 follow-on: only facts that make the plan itself unknowable refuse preparation; facts the start needs are saved
+  // on the plan (`startIssues`) and keep the start closed until a refresh clears them.
+  const stop = trainingStop(queried, null);
+  if (stop.kind !== 'plannable') throw new TrainingCheckError('training-facts-required', stop.kind === 'unknowable' ? stop.details : {});
+  const result = stop.result;
+  const settings = await readSettings(options.home);
+  // Ticket 32: an approved report item is resolved, not trusted as text; the plan may only narrow what it approved.
+  if (authorization.source === 'approved-report') await verifyApprovedTraining(settings.privateDirectory, authorization.reference, result);
+  const inTraining = result.inTrainingRank;
+  // The trainee of an in-training tier is in the training room now; "no trainee" contradicts it.
+  if (inTraining !== null && request.currentTrainee !== result.operator.id) throw new Error('training-in-training-trainee-conflict');
+  // The gate checks only the first tier this plan will start; every later tier is checked again by refresh.
+  const missing = { facts: stop.facts, materials: startFacts(result).materials };
+  const gate = inTraining === null && !missing.facts.length && !missing.materials.length ? materialGate(result.startMaterials, Boolean(crafting)) : 'short';
+  const id = randomUUID(), now = new Date().toISOString(), firstRank = result.currentRank + 1;
+  // Ticket 32 R4-1: what a start on this gate spends (crafting inputs and fees when the gate is crafting). A tier the user
+  // already started by hand was paid in the game, not on this gate (R6-2): nothing is recorded for it.
+  const spend = gate === 'short' || request.manualTraining === true ? null : gateSpend(result.startMaterials, gate);
   const plan: TrainingPlan = { version: 1, id, authorization: { source: authorization.source as 'current-request' | 'approved-report', reference: authorization.reference },
     target: { operatorId: result.operator.id, name: result.operator.name, role: roleNames[result.role]!, skill: result.skill!, skillName: result.skillName, currentRank: result.currentRank, goal: result.targetRank },
-    rank: Math.min(3, result.currentRank + 1), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
+    rank: Math.min(3, firstRank), state: result.currentRank >= result.targetRank ? 'satisfied' : 'pending', createdAt: now,
     preplacementRequired: request.currentTrainee !== result.operator.id, binding: binding as TrainingPlan['binding'],
-    assistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
-    afterStartAssistants: Object.fromEntries(result.stages.map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
-    materialReady, manualTraining: request.manualTraining === true, assistantState: 'unverified', history: [{ at: now, kind: 'prepared', rank: result.currentRank + 1 }], consumed: [], issues: [] };
+    assistants: Object.fromEntries(result.stages.filter(stage => stage.recommendedAssistant).map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.recommendedAssistant)!.name])),
+    afterStartAssistants: Object.fromEntries(result.stages.filter(stage => stage.afterStartAssistant).map(stage => [String(stage.rank), stage.assistants.find(row => row.id === stage.afterStartAssistant)!.name])),
+    materialReady: gate !== 'short', manualTraining: request.manualTraining === true || inTraining !== null, assistantState: 'unverified',
+    history: [{ at: now, kind: 'prepared', rank: firstRank }, ...(inTraining !== null ? [{ at: now, kind: result.inTrainingSource === 'snapshot' ? 'in-training-snapshot' : 'in-training-user-confirmed', rank: inTraining }] : [])], consumed: [], issues: [],
+    // Ticket 32 R2-1: a tier already in training was paid no later than the inventory that shows it; one the user started by
+    // hand, no later than this plan. Every later tier records its own countdown time.
+    ...(inTraining !== null ? { paidAt: { [String(inTraining)]: result.inventoryAt! } } : request.manualTraining === true && result.currentRank < result.targetRank ? { paidAt: { [String(firstRank)]: now } } : {}),
+    ...(crafting ? { crafting: { reference: crafting.reference as string } } : {}), ...(gate === 'crafting' ? { craftingRequired: true } : {}), paymentsSeen: payments.map(paymentKey), snapshotUsed: result.snapshotUsed, trainingRoom: result.trainingRoom,
+    ...(spend ? { spends: { [String(firstRank)]: spend } } : {}), reservedTiers: result.reservedTiers,
+    ...(missing.facts.length ? { startIssues: missing.facts } : {}) };
+  if (gate !== 'short' && !spend && request.manualTraining !== true) { plan.materialReady = false; delete plan.craftingRequired; }
   const context = await location(id, options);
   if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
-  const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+  const config = await readMaaConfig(context.settings.maaDirectory);
   plan.configurationBinding = bindConfiguration(config, plan);
   plan.versions = await readVersionStamp(context.settings.maaDirectory, options.versionReader ?? readMaaVersion);
   if (plan.state !== 'satisfied') buildTrainingChanges(config, grantFor(plan, { kind: 'preplace', dueAt: new Date(Math.ceil((Date.now() + 3600000) / 60000) * 60000).toISOString() }), context.settings.privateDirectory);
   await mkdir(context.directory, { recursive: true });
   const file = await open(context.file, 'wx', 0o600); try { await file.writeFile(JSON.stringify(plan, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
   return plan;
+}
+
+/**
+ * Ticket 32: the approved cultivation item must still be approved and unchanged, name this operator, and let maa-daily
+ * arrange mastery training of this skill to at least the plan's goal. Report errors keep their static codes.
+ */
+async function verifyApprovedTraining(privateDirectory: string, reference: string, result: Awaited<ReturnType<typeof queryTraining>>['result']) {
+  const { state, item } = await resolveApprovedItem(privateDirectory, reference);
+  const scope = object(item.scope), reportItem = state.content.items.find(entry => entry.id === item.id);
+  const arranged = Array.isArray(scope.dailyMayArrange) ? scope.dailyMayArrange : [];
+  if (state.kind !== 'cultivation' || !reportItem || JSON.stringify(reportItem.scope) !== JSON.stringify(item.scope)
+    || !scope.operator || typeof scope.operator !== 'object' || (scope.operator as Record<string, unknown>).id !== result.operator!.id
+    || !arranged.some(entry => entry && typeof entry === 'object' && (entry as Record<string, unknown>).action === 'mastery-training'
+      && (entry as Record<string, unknown>).skill === result.skill && Number((entry as Record<string, unknown>).toLevel) >= result.targetRank!))
+    throw new Error('training-approval-scope-mismatch');
+}
+
+/** Ticket 32: every saved plan, read through the same validation; an unreadable record is reported, never skipped. */
+async function allPlans(options: Options): Promise<TrainingPlan[]> {
+  const settings = await readSettings(options.home), directory = join(settings.privateDirectory, 'training-plans');
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return [] as string[]; throw error; });
+  const plans: TrainingPlan[] = [];
+  for (const name of names.filter(entry => /^[a-zA-Z0-9-]{1,80}\.json$/.test(entry)).sort()) {
+    try { plans.push(await readTrainingPlan(name.slice(0, -5), options)); } catch { throw new Error('training-plan-record-invalid'); }
+  }
+  return plans;
+}
+
+/** Ticket 32: safe summaries of every plan, so an unattended re-entry finds the plan that holds the training room. */
+export async function listTrainingPlans(options: Options = {}) {
+  return (await allPlans(options)).map(plan => ({ ...summarizeTrainingPlan(plan), holdsTrainingRoom: holdsTrainingRoom(plan), closed: Boolean(plan.closed) }))
+    .sort((a, b) => Number(b.holdsTrainingRoom) - Number(a.holdsTrainingRoom) || a.history[0]!.at.localeCompare(b.history[0]!.at));
+}
+
+/**
+ * Ticket 32: the user closes a plan (with their own words) after checking the game, which frees the training room for
+ * the next plan. Nothing is replayed or deleted; a plan whose own one-shot timer is still armed cannot be closed.
+ */
+export async function closeTrainingPlan(input: unknown, options: Options = {}) {
+  const request = object(input);
+  if (Object.keys(request).some(key => !['id', 'reference'].includes(key)) || typeof request.reference !== 'string' || !request.reference.trim()) throw new Error('training-close-reference-required');
+  return withPlan(request.id, options, async (plan, context) => {
+    if (plan.closed) return { status: 'complete' as const, plan: summarizeTrainingPlan(plan) };
+    // Ticket 32 R1-4: every one-shot this plan armed (in flight, finished, or awaiting cleanup) must be disabled first.
+    const timers = [plan.action?.timerIdentity, plan.pendingCleanup?.timerIdentity].filter(value => value !== undefined);
+    if (timers.length) {
+      if (!context.settings.maaDirectory) throw new Error('maa-directory-unset');
+      const current = trainingTimerIdentity((await readMaaConfig(context.settings.maaDirectory)).Timers?.List?.[plan.binding.timer]);
+      if (current.IsEnabled !== false && timers.some(timer => sameConfigValue({ ...current, IsEnabled: null }, { ...trainingTimerIdentity(timer), IsEnabled: null })))
+        return held('training-timer-still-armed');
+    }
+    const at = new Date().toISOString();
+    plan.closed = { at, reference: request.reference as string };
+    plan.history.push({ at, kind: 'closed-by-user', rank: plan.rank });
+    await save(context.file, plan);
+    return { status: 'complete' as const, plan: summarizeTrainingPlan(plan) };
+  });
 }
 
 function grantFor(plan: TrainingPlan, action: { kind: TrainingGrant['kind']; dueAt: string }, expectedTimer?: unknown): TrainingGrant {
@@ -139,11 +306,29 @@ export async function applyTrainingPlan(input: unknown, maa: MaaProcess, options
     const maaDirectory = context.settings.maaDirectory;
     // Every result reports the MAA and record versions against those read at preparation; a difference refuses nothing.
     const drift = async () => compareVersionStamp(plan.versions, await versionStampOf(maaDirectory, maa));
-    if (plan.action && !plan.action.completedAt) return { status: 'check-required', reason: 'training-reconcile-before-apply', versions: await drift() };
+    if (plan.action && !plan.action.completedAt) return held('training-reconcile-before-apply', { versions: await drift() });
+    if (plan.closed) return held('training-plan-closed', { versions: await drift() });
+    // Ticket 32 R1-3: the plan's own earlier one-shot is still armed; it must be disabled before the slot is reused.
+    if (plan.pendingCleanup) return held('training-timer-cleanup-pending', { versions: await drift() });
     const action = nextTrainingAction(plan, new Date().toISOString());
-    if (!action || action.kind === 'start' && !plan.materialReady) return { status: 'check-required', reason: 'training-facts-or-materials-required', versions: await drift() };
-    const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
-    if (!matchesBinding(plan, bindConfiguration(config, plan))) return { status: 'check-required', reason: 'training-configuration-binding-changed', versions: await drift() };
+    // Ticket 32: a finished plan is done, not an error; a plan with nothing safe to schedule says why it stopped.
+    if (!action) return ['complete', 'satisfied'].includes(plan.state) ? { status: 'done', reason: 'training-goal-reached', versions: await drift() }
+      : held(plan.action && !plan.action.native?.startedAt ? 'training-reconcile-before-apply' : 'training-plan-stopped', { versions: await drift() });
+    // Ticket 32: one training room, one plan. Another plan that armed MAA and is not finished or closed keeps it.
+    const plans = await allPlans(options);
+    if (plans.some(other => other.id !== plan.id && holdsTrainingRoom(other))) return held('training-other-plan-active', { versions: await drift() });
+    // Ticket 32 (owner: 「龙门币缺口或者其他材料缺口是可以在进行中逐步补齐的，不能因此判断计划」): a shortage keeps the plan
+    // waiting for this start; it is not an error. The next re-entry refreshes materials and starts once they are covered.
+    // Ticket 32 R2-3: a missing fact is named; it does not wait as if materials were short.
+    if ((action.kind === 'start' || action.kind === 'preplace') && plan.startIssues?.length) return held('training-facts-required', { details: { issues: plan.startIssues }, versions: await drift() });
+    // Ticket 32 R2-2: the wait ends only through a refresh with the latest snapshot; another apply alone would wait again.
+    // Ticket 32 R3-2: a gate that did not see a payment another plan has recorded since is stale; nothing is armed on it.
+    if (action.kind === 'start' && plan.materialReady && planPayments(plans, plan.id).some(payment => !(plan.paymentsSeen ?? []).includes(paymentKey(payment)))) {
+      plan.materialReady = false; delete plan.craftingRequired; plan.history.push({ at: new Date().toISOString(), kind: 'materials-stale', rank: plan.rank }); await save(context.file, plan);
+    }
+    if (action.kind === 'start' && !plan.materialReady) return { status: 'waiting', reason: 'training-materials-pending', next: 'refresh', rank: plan.rank, craftingAllowed: Boolean(plan.crafting), versions: await drift() };
+    const config = await readMaaConfig(context.settings.maaDirectory);
+    if (!matchesBinding(plan, bindConfiguration(config, plan))) return held('training-configuration-binding-changed', { versions: await drift() });
     const grant = grantFor(plan, action), prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
     const intended = structuredClone(config);
     for (const change of prepared.changes) {
@@ -187,15 +372,18 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
     let cleanup: { status: string; reason?: string | null } | undefined;
     const expired = action && Date.parse(action.dueAt) + 60000 < Date.parse(observedAt);
     const terminal = ['failed', 'complete', 'satisfied'].includes(plan.state);
-    if (action?.timerIdentity && (expired || terminal || plan.action?.completedAt)) {
-      const config = JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8'));
+    // The plan's own one-shot to disable: the current action's once it expired, finished or the plan ended, or one an
+    // earlier re-entry could not disable yet (ticket 32 R1-3: the writer refused before writing; nothing was changed).
+    const owned = action?.timerIdentity && (expired || terminal || plan.action?.completedAt) ? { timerIdentity: action.timerIdentity, dueAt: action.dueAt } : original.pendingCleanup;
+    if (owned) {
+      const config = await readMaaConfig(context.settings.maaDirectory);
       const current = trainingTimerIdentity(config.Timers?.List?.[plan.binding.timer]);
-      const expected = trainingTimerIdentity(action.timerIdentity);
+      const expected = trainingTimerIdentity(owned.timerIdentity);
       if (!sameConfigValue({ ...current, IsEnabled: null }, { ...expected, IsEnabled: null }) || current.IsEnabled === true) {
-        cleanup = { status: 'check-required', reason: 'training-timer-ownership-changed' };
+        cleanup = held('training-timer-ownership-changed');
       } else if (current.IsEnabled === false) cleanup = { status: 'complete', reason: 'training-timer-already-disabled' };
       else {
-        const grant = grantFor(original, { kind: 'disable', dueAt: action.dueAt }, current);
+        const grant = grantFor(original, { kind: 'disable', dueAt: owned.dueAt }, current);
         const prepared = buildTrainingChanges(config, grant, context.settings.privateDirectory);
         await save(context.file, plan);
         cleanup = await executeConfigWrite({ maaDirectory: context.settings.maaDirectory, privateDirectory: context.settings.privateDirectory,
@@ -203,12 +391,14 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
           expectedRevision: (await inspectConfiguration(context.settings.maaDirectory)).revision,
           authorization: { ...trainingAuthorization(plan, request, grant) }, changes: prepared.changes }, maa);
       }
-      if (cleanup?.status !== 'complete') { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
+      if (cleanup?.status === 'complete') { delete plan.pendingCleanup; plan.issues = plan.issues.filter(issue => issue !== 'training:timer-cleanup-pending'); }
+      else if (cleanup?.status === 'rejected' || cleanup?.status === 'busy') { plan.pendingCleanup = owned; plan.issues.push('training:timer-cleanup-pending'); }
+      else { if (!terminal) plan.state = 'unknown'; plan.issues.push('training:expired-timer-not-disabled'); }
     }
     if (expired && !plan.action?.completedAt && plan.rank === original.rank && !terminal) {
       plan.state = 'unknown'; plan.issues.push('training:execution-unproven-no-replay');
     }
-    const actualBinding = bindConfiguration(JSON.parse(await readFile(join(context.settings.maaDirectory, 'config', 'gui.new.json'), 'utf8')), original);
+    const actualBinding = bindConfiguration(await readMaaConfig(context.settings.maaDirectory), original);
     const observedOriginal = { ...original, confirmationAt: plan.confirmationAt ?? original.confirmationAt,
       action: plan.rank === original.rank ? plan.action : { ...original.action!, completedAt: observedAt } };
     if (matchesBinding(observedOriginal, actualBinding, true)) plan.configurationBinding = actualBinding;
@@ -220,6 +410,7 @@ export async function reconcileTrainingPlan(input: unknown, maa: MaaProcess, opt
 
 export function summarizeTrainingPlan(plan: TrainingPlan) {
   return { id: plan.id, target: plan.target, rank: plan.rank, state: plan.state, materialReady: plan.materialReady, assistantState: plan.assistantState,
+    manualTraining: plan.manualTraining, craftingAllowed: Boolean(plan.crafting), craftingRequired: plan.craftingRequired === true, closed: Boolean(plan.closed), cleanupPending: Boolean(plan.pendingCleanup), startIssues: plan.startIssues ?? [], reservedTiers: plan.reservedTiers ?? [], snapshotUsed: plan.snapshotUsed ?? null, trainingRoom: plan.trainingRoom ?? null,
     action: plan.action ? { kind: plan.action.kind, dueAt: plan.action.dueAt, completedAt: plan.action.completedAt } : null,
     expectedCompleteAt: plan.expectedCompleteAt ?? null, history: plan.history, issues: plan.issues, versions: plan.versions ?? null };
 }
@@ -228,22 +419,38 @@ const entry = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolv
 if (entry && await realpath(fileURLToPath(import.meta.url)) === entry) {
   try {
     if (process.argv.length !== 3) throw new Error('training-action-invalid');
-    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown;
+    const request = object(await readStdinJson({ maxBytes: 1024 * 1024 })); let result: unknown, printed: unknown;
     if (process.argv[2] === 'prepare') result = summarizeTrainingPlan(await prepareTrainingPlan(request));
     else if (process.argv[2] === 'read') result = summarizeTrainingPlan(await readTrainingPlan(String(request.id)));
-    else if (process.argv[2] === 'refresh') result = summarizeTrainingPlan(await refreshTrainingMaterials(request));
+    else if (process.argv[2] === 'refresh') { const refreshed = await refreshTrainingPlan(request); result = { ...summarizeTrainingPlan(refreshed.plan), summary: refreshed.summary }; }
+    else if (process.argv[2] === 'list') {
+      if (Object.keys(request).length) throw new Error('training-request-invalid');
+      result = await listTrainingPlans();
+    } else if (process.argv[2] === 'close') {
+      const closed = await closeTrainingPlan(request);
+      if (closed.status === 'check-required') { printed = checkRequired(closed.reason); process.exitCode = 1; } else result = closed;
+    }
     else if (['apply', 'reconcile'].includes(process.argv[2]!)) {
       const settings = await readSettings(); if (!settings.maaDirectory) throw new Error('maa-directory-unset');
       const { createMaaProcess } = await import('./maa-process.ts');
       if (process.argv[2] === 'apply') {
-        result = await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory));
-        if (object(result).status !== 'complete') process.exitCode = 1;
+        const applied = object(await applyTrainingPlan(request, createMaaProcess(settings.maaDirectory)));
+        // Ticket 32 R3-1: only some stops carry details; every stop keeps its own reason.
+        if (applied.status === 'check-required') { printed = checkRequired(applied.reason as CheckRequiredReason, { ...applied.details && typeof applied.details === 'object' ? applied.details : {}, versions: applied.versions }); process.exitCode = 1; }
+        else { result = applied; if (!['complete', 'waiting', 'done'].includes(String(applied.status))) process.exitCode = 1; }
       } else {
         const reconciled = await reconcileTrainingPlan(request, createMaaProcess(settings.maaDirectory));
         result = { ...reconciled, plan: summarizeTrainingPlan(reconciled.plan) };
+        if (reconciled.cleanup?.status === 'check-required') printed = reconcileCheckRequired(reconciled);
         if (reconciled.cleanup && reconciled.cleanup.status !== 'complete') process.exitCode = 1;
       }
     } else throw new Error('training-action-invalid');
-    console.log(JSON.stringify({ ok: process.exitCode !== 1, result }));
-  } catch (error) { console.error(JSON.stringify({ ok: false, error: stdinJsonCode(error) ?? 'training-plan-check-required' })); process.exitCode = 1; }
+    console.log(JSON.stringify(printed ?? { ok: process.exitCode !== 1, result }));
+  } catch (error) {
+    // Ticket 32: standard-input rejections keep their own code; everything else names its reason, what to check and the alternatives.
+    const stdin = stdinJsonCode(error);
+    console.error(JSON.stringify(stdin ? { ok: false, error: stdin }
+      : checkRequiredFor('training-plan', error, undefined, error instanceof TrainingCheckError ? error.details : undefined)));
+    process.exitCode = 1;
+  }
 }

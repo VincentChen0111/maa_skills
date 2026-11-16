@@ -114,8 +114,11 @@ export type Policy = {
  */
 export type GeneratedFieldType = 'number' | 'string' | 'boolean' | 'array' | 'object';
 export type GeneratedDirectoryFiles = { directory: string; count: number; nested?: boolean; fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] };
-/** 26 H3: one new JSON file at exactly this relative path; required unless `optional`. */
-export type GeneratedExactFile = { file: string; optional?: boolean; fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] };
+/**
+ * 26 H3: one new JSON file at exactly this relative path; required unless `optional`. Ticket 32 follow-on: with `rewrites`, a
+ * file that existed before and still exists, rewritten by the product (a plan record a refresh updates with generated times).
+ */
+export type GeneratedExactFile = { file: string; optional?: boolean; rewrites?: boolean; fields?: Record<string, unknown>; fieldTypes?: Record<string, GeneratedFieldType>; utcFields?: string[] };
 export type GeneratedFile = GeneratedDirectoryFiles | GeneratedExactFile;
 export type EvidenceEvent = {
   kind: 'lock-acquired' | 'lock-released' | 'lock-retained' | 'write' | 'download' | 'invocation';
@@ -199,10 +202,10 @@ function generatedFileGrants(specs: GeneratedFile[], evidence: Evidence): { vali
     if (spec && typeof spec === 'object' && Object.hasOwn(spec, 'file')) {
       const exact = spec as GeneratedExactFile & Record<string, unknown>;
       if (!relativePath(exact.file) || !exact.file.endsWith('.json') || exactPaths.has(exact.file) || ['directory', 'count', 'nested'].some(key => Object.hasOwn(exact, key)) ||
-        exact.optional !== undefined && typeof exact.optional !== 'boolean' || !validFieldTypes(exact.fieldTypes)) { valid = false; continue; }
+        exact.optional !== undefined && typeof exact.optional !== 'boolean' || exact.rewrites !== undefined && typeof exact.rewrites !== 'boolean' || !validFieldTypes(exact.fieldTypes)) { valid = false; continue; }
       exactPaths.add(exact.file);
       const matching = evidence.changes.filter(change => change.key === '$file' && change.file === exact.file);
-      const accepted = matching.filter(change => change.before === undefined && holdsFields(exact, change, evidence.executionWindow));
+      const accepted = matching.filter(change => (exact.rewrites === true ? change.before !== undefined && change.after !== undefined : change.before === undefined) && holdsFields(exact, change, evidence.executionWindow));
       if (accepted.length !== matching.length || matching.length > 1 || !matching.length && exact.optional !== true) valid = false;
       grants.push(...accepted.map(change => ({ file: change.file, key: '$file', value: change.after })));
       continue;

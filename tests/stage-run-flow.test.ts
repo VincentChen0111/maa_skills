@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { checkRequired } from '../skills/maa-core/scripts/check-required.ts';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -67,7 +68,7 @@ test('CLI validates actions and keys and reports a reason code without private d
   const started = call('start', { operation: batch.operation, reference: '合成用户：我点开始了' });
   assert.equal(started.status, 0, started.stdout + started.stderr);
   const { runId } = JSON.parse(started.stdout);
-  assert.deepEqual(JSON.parse(call('start', { operation: batch.operation, reference: 'x', extra: 1 }).stdout), { ok: false, status: 'check-required', reason: 'request-invalid' });
+  assert.deepEqual(JSON.parse(call('start', { operation: batch.operation, reference: 'x', extra: 1 }).stdout), checkRequired('request-invalid'));
   assert.deepEqual(JSON.parse(call('replay', {}).stdout).reason, 'action-invalid');
   const decided = call('decide', { runId, decision: 'retry-within-approval', reason: '直接重打' });
   assert.equal(decided.status, 1); assert.equal(JSON.parse(decided.stdout).reason, 'decision-not-allowed');

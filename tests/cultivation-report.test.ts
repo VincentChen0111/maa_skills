@@ -64,7 +64,9 @@ test('a draft keeps the given order, takes every number from the shared gap calc
   assert.deepEqual(report.items.map(item => item.id), ['S1', 'S2']);
   const markdown = formatCultivationReportMarkdown(result.state);
   assert.match(markdown, /【待审查】/);
-  assert.match(markdown, /库存按此顺序可支持到第 1 步/);
+  // Ticket 32: coverage is stated as how far stock reaches now; the rest is a gap to fill while the plan runs, with its base materials.
+  assert.match(markdown, /现有库存按此顺序已覆盖到第 1 步；从第 2 步起还有材料或龙门币缺口，可以在推进中逐步补齐/);
+  assert.match(markdown, /加工展开到基础材料/); assert.doesNotMatch(markdown, /不足以完成/);
   assert.match(markdown, /推荐理由（推断）：肉鸽里经常用到，先补精一/);
   assert.match(markdown, /本步花费（工具计算）/);
 });
@@ -225,7 +227,8 @@ test('conformance: every re-read or recomputed producer lists real changes only,
   const entry = (content: CultivationContent, id: string) => content.evidence.find(value => value.id === id) as unknown as Entry;
   const cases: Record<string, { later: (content: CultivationContent) => void; changed: (content: CultivationContent) => void; field: string }> = {
     'snapshot': { later: content => { content.snapshot.readAt = later; content.snapshot.sourceTimes = { operators: later, inventory: later };
-      for (const cost of content.gaps.costs) cost.snapshot = { ...cost.snapshot, readAt: later }; },
+      for (const cost of content.gaps.costs) cost.snapshot = { ...cost.snapshot, readAt: later };
+      if (content.snapshotSelection) content.snapshotSelection.readAt = later; },
     changed: content => { content.snapshot.coverage = { ...content.snapshot.coverage as object, inventory: { status: 'complete' } }; }, field: 'snapshot.coverage' },
     'steps': { later: () => undefined, changed: content => { content.steps[0]!.cost.lmd += 1; }, field: 'steps[0].cost' },
     'supportedThrough': { later: () => undefined, changed: content => { content.supportedThrough = 2; }, field: 'supportedThrough' },
@@ -248,7 +251,10 @@ test('conformance: every re-read or recomputed producer lists real changes only,
   }
   // Every top-level content key is either a producer's result, the agent's input (changedFields) or version metadata.
   assert.deepEqual(Object.keys(base).sort(), ['assumptions', 'createdAt', 'evidence', 'gaps', 'input', 'itemNames', 'items', 'kind', 'mode', 'priorities', 'revisionOf',
-    'schemaVersion', 'snapshot', 'steps', 'summary', 'supportedThrough']);
+    'schemaVersion', 'snapshot', 'snapshotSelection', 'steps', 'summary', 'supportedThrough']);
+  // Which saved snapshot was read is a result too (OB-9): reading another one is a real change.
+  const other = structuredClone(base); other.snapshotSelection = { ...other.snapshotSelection!, source: 'skland', chosen: 'skland-covers' };
+  assert.deepEqual(changedReportResults(base, other), ['snapshot.selection']);
 
   // End to end: the correction is drafted later; the job is fetched again with a new read time and counter, the same content.
   const { sha256 } = await writeReviewBrief(directory, 'cultivation', first.reportHash, formatCultivationReportBody(base).join('\n'));

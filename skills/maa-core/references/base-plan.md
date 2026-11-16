@@ -14,7 +14,7 @@
 | `generate` | 方案（见下）`+ target?, base?, snapshotFile?, tablesFile?` | `{ok, applicable, planFile, sha256, source, errors, warnings, unverified, gates, fills, dropped}`；输入不全时 `{ok:false, status:"needs-input", issues}` |
 | `check` | `{planFile, layout, shifts?, mood?, moodDefault?, combos?, exclusions?, efficiency?, tolerance?, runs?, snapshotFile?, tablesFile?}` | `{ok, result}`：检查结果，只读 |
 
-退出码 0 表示成功；1 表示 `needs-input` 或被拒绝，输出 `{ok:false, error:<代码>}`。常见代码：`plan-path-outside-private`、`plan-path-invalid`、`plan-file-missing`、`plan-snapshot-unavailable`、`plan-base-invalid`、`plan-tables-invalid`、`plan-layout-invalid`、`plan-input-invalid`、`public-data-*`。错误只有固定代码，不打印路径或原始内容。
+退出码 0 表示成功；1 表示 `needs-input` 或被拒绝，输出 `{ok:false, error:<代码>}`。常见代码：`plan-path-outside-private`、`plan-path-invalid`、`plan-file-missing`、`plan-snapshot-unavailable`、`plan-base-invalid`、`plan-tables-invalid`、`plan-layout-invalid`、`plan-input-invalid`、`public-data-*`。错误只有固定代码，不打印路径或原始内容。设置读不了或未分类的失败输出 `{ok:false, status:"check-required", reason, check, alternatives}`（`settings-unreadable`、`plan-check-failed`），把 `reason`、`check`（要核对什么）和 `alternatives`（其他办法）告诉用户。
 
 ## 方案（agent 提出，标为推断）
 

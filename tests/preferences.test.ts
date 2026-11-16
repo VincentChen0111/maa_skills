@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { checkRequired } from '../skills/maa-core/scripts/check-required.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, readdir, mkdir, writeFile, chmod, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -149,7 +150,7 @@ test('rejected input is reported as not written, apart from failures that need a
   await writeFile(join(home, 'config.json'), '{"language":');
   const unreadable = cli(home, 'set', { language: 'en' });
   assert.equal(unreadable.status, 1);
-  assert.deepEqual(JSON.parse(unreadable.stderr), { ok: false, error: 'preferences-check-required' });
+  assert.deepEqual(JSON.parse(unreadable.stderr), checkRequired('settings-unreadable'));
   assert.equal(await readFile(join(home, 'config.json'), 'utf8'), '{"language":');
 });
 

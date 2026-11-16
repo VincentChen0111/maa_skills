@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { readStdinJson, stdinJsonCode } from './stdin-json.ts';
 import { readPublicJson, type PublicJsonResult, type PublicJsonSource } from './public-data.ts';
 import { readSettings } from './preferences.ts';
+import { checkRequiredFor } from './check-required.ts';
+import { selectSnapshot, snapshotSourceLine, SnapshotSelectionError, type SnapshotDomain, type SnapshotSelection } from './account-snapshot.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -21,7 +23,9 @@ export type CostResult = {
   mode: 'raw' | 'no-craft'; issues: string[]; uncertainties: string[]; currentSources: Record<string, 'snapshot' | 'user-confirmed'>;
   itemNames: Record<string, string>;
   steps: Step[]; total: Cost | null; inventory: { materials: Record<string, Stock>; lmd: Stock; exp: Stock } | null;
-  snapshot: { readAt: string | null; sourceTimes: unknown; coverage: unknown }; sources: PublicJsonResult['source'][];
+  snapshot: { readAt: string | null; source: 'maa' | 'skland' | null; sourceTimes: unknown; coverage: unknown }; sources: PublicJsonResult['source'][];
+  /** Which saved snapshot the query read and why (`selectSnapshot`); absent when a snapshot object was passed in directly. */
+  selection?: Pick<SnapshotSelection, 'source' | 'readAt' | 'chosen' | 'lacking'> & { line: string };
   crossCheck: { status: 'matched' | 'different' | 'unavailable'; differences: { step: string; primary: unknown; secondary: unknown }[] };
 };
 const emptyCost = (): Cost => ({ materials: {}, lmd: 0, exp: 0 });
@@ -63,7 +67,7 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
   const statuses = ['complete', 'partial', 'pending', 'missing', 'invalid', 'unavailable'];
   const result: CostResult = { status: 'needs-input', operator: null, candidates: [], mode: request.mode === 'no-craft' ? 'no-craft' : 'raw',
     issues: [], uncertainties: [], currentSources: {}, itemNames: {}, steps: [], total: null, inventory: null,
-    snapshot: { readAt: utc(snapshot.readAt), sourceTimes: { operators: utc(object(snapshot.sourceTimes).operators), inventory: utc(object(snapshot.sourceTimes).inventory) },
+    snapshot: { readAt: utc(snapshot.readAt), source: snapshot.source === 'maa' || snapshot.source === 'skland' ? snapshot.source : null, sourceTimes: { operators: utc(object(snapshot.sourceTimes).operators), inventory: utc(object(snapshot.sourceTimes).inventory) },
       coverage: Object.fromEntries(['operators', 'inventory', 'base'].map(key => [key, { status: statuses.includes(String(object(coverage[key]).status)) ? object(coverage[key]).status : 'unknown' }])) },
     sources: tables.sources ?? [], crossCheck: { status: 'matched', differences: [] } };
   const issue = (code: string) => { if (!result.issues.includes(code)) result.issues.push(code); };
@@ -241,7 +245,8 @@ export function calculateOperatorCost(tables: CostTables, snapshotInput: unknown
 const cell = (text: unknown) => String(text).replace(/[\r\n|]/g, ' ');
 export function formatOperatorCostMarkdown(result: CostResult): string {
   const cost = (value: Cost) => `${Object.entries(value.materials).map(([id, count]) => `${cell(result.itemNames[id] ?? id)} (${cell(id)}) × ${count}`).join('、') || '—'}；龙门币 ${value.lmd}；经验 ${value.exp}`;
-  const lines = [`# ${cell(result.operator?.name ?? '培养成本待核')}`, `状态：${result.status}；模式：${result.mode}；快照读取：${cell(result.snapshot.readAt ?? '未知')}`];
+  const lines = [`# ${cell(result.operator?.name ?? '培养成本待核')}`, `状态：${result.status}；模式：${result.mode}；快照读取：${cell(result.snapshot.readAt ?? '未知')}`,
+    ...(result.selection ? [cell(result.selection.line)] : [])];
   if (result.issues.length) lines.push(`待核：${result.issues.map(cell).join('、')}`);
   if (result.candidates.length > 1) lines.push(`候选：${result.candidates.map(c => `${cell(c.name)} (${cell(c.id)})`).join('、')}`);
   lines.push('', '| 步骤 | 成本 |', '| --- | --- |', ...result.steps.map(s => `| ${cell(s.from)} → ${cell(s.to)} | ${cost(s.cost)} |`));
@@ -262,11 +267,16 @@ export function formatOperatorCostMarkdown(result: CostResult): string {
 export async function queryOperatorCost(input: unknown, options: { home?: string; fetcher?: typeof fetch } = {}): Promise<CostResult> {
   const request = object(input);
   const settings = await readSettings(options.home);
-  const file = typeof request.snapshotFile === 'string' ? resolve(request.snapshotFile) : settings.privateDirectory ? join(settings.privateDirectory, 'account-snapshot.json') : null;
-  if (!file) throw new Error('cost-snapshot-directory-required');
-  let snapshot: unknown;
-  try { snapshot = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error('cost-snapshot-unavailable'); }
-  return calculateOperatorCost(await loadOperatorCostTables(options.fetcher), snapshot, request);
+  if (!settings.privateDirectory) throw new Error('cost-snapshot-directory-required');
+  // Skill level, mastery and modules come only from a snapshot that has them (OB-9): selectSnapshot picks one whole file.
+  const target = request.target && typeof request.target === 'object' ? request.target as ObjectValue : {};
+  const needed: SnapshotDomain[] = ['operators', ...(['skillLevel', 'mastery', 'modules'].some(key => target[key] !== undefined) ? ['skills' as const] : [])];
+  let selection: SnapshotSelection;
+  try { selection = await selectSnapshot(settings.privateDirectory, needed, typeof request.snapshotFile === 'string' ? request.snapshotFile : undefined); }
+  catch (error) { if (error instanceof SnapshotSelectionError) throw new Error('cost-snapshot-unavailable'); throw error; }
+  const result = calculateOperatorCost(await loadOperatorCostTables(options.fetcher), selection.snapshot, request);
+  const { source, readAt, chosen, lacking } = selection;
+  return { ...result, selection: { source, readAt, chosen, lacking, line: snapshotSourceLine(selection) } };
 }
 
 const entryPath = process.argv[1] && process.argv[1] !== '-' ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
@@ -275,5 +285,10 @@ if (entryPath && await realpath(fileURLToPath(import.meta.url)) === entryPath) {
     if (process.argv[2] !== 'query') throw new Error('cost-action-invalid');
     const input = await readStdinJson({ maxBytes: null, invalidCode: 'cost-input-invalid' }); const result = await queryOperatorCost(input);
     console.log(object(input).format === 'markdown' ? formatOperatorCostMarkdown(result) : JSON.stringify(result));
-  } catch (error) { const code = stdinJsonCode(error) ?? (error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : 'cost-input-invalid'); console.error(JSON.stringify({ error: code })); process.exitCode = 1; }
+  } catch (error) {
+    // Known refusals keep their codes; settings that cannot be read and anything unclassified say what to check (item 10),
+    // instead of being reported as an invalid request.
+    const code = stdinJsonCode(error) ?? (error instanceof Error && /^cost-[a-z-]+(?::[A-Za-z]+)?$/.test(error.message) ? error.message : null);
+    console.error(JSON.stringify(code ? { error: code } : checkRequiredFor('operator-cost', error))); process.exitCode = 1;
+  }
 }

@@ -57,3 +57,18 @@
 独立 R2 再次实际读取上述固定 building_data，确认 basicSpeedBuff=0.05，响应 hash 与本页一致；固定 InfrastTrainingTask 自定义助手选择未要求候选具有训练技能。原计算把训练室技能过滤结果当助手全集，错误漏掉只有其他房间技能的完整可用助手。修复保留完整已持有候选，再在候选内部筛训练技能；已知零额外技能或全部锁定时仍计基础项，3600 秒示例为 ceil(3600/1.05)=3429。
 
 缺角色/建筑条目、残缺技能资料、未知房间或未知训练解锁继续待核，不从过滤后的空数组推断零加成。明确其他房间技能的解锁未知不能变成训练速度；该房间资料完整时不影响基础项。房间识别复用 base-query 已有词表，未改其查询行为。以上是 R2 错误修复及既有未知语义，不是新增游戏限制；公式/助手实际就位仍未实机验证。
+
+## 32：缺料时 OperProgress 自动加工（v6.21.4、v6.22.0）
+
+2026-11-16 只读核对 MaaAssistantArknights 公开源码（`gh api` 拉取，未运行任何下载的代码）。v6.21.4 的 tag 解引用为 `52d0b2acaca116585b02e1e6a9da303460f81a24`（维护者在用），v6.22.0 为 `901e01c600f4895ac4e7e48a9b471fc9f52af301`（本页其他条目钉住的同一提交）。下面链接用 v6.22.0；v6.21.4 的 `OperProgressProcessTask.cpp` 行号整体 +4，合成插件与 `MaterialSynthesis.json` 两版逐字节相同。修复会话另对两版的专精缺料分支复核过一次。
+
+| 来源 | 核对结论 |
+| --- | --- |
+| [OperProgressProcessTask.cpp#L583-L610](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp#L583-L610)（v6.21.4 [#L587-L614](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/52d0b2acaca116585b02e1e6a9da303460f81a24/src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp#L587-L614)） | 专精确认面板上技能书、材料 1、材料 2 三个槽逐个检测缺料红字，命中就调用 `synthesize_missing_material`；三槽处理完仍缺料返回 `ResourceInsufficient`，不点确认、不开训 |
+| [OperProgressProcessTask.cpp#L1042-L1089](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp#L1042-L1089) | 点开材料、点游戏「跳转加工站」，再运行 `MaterialSynthesisTaskPlugin`；跳转按钮不可用时返回 `FormulaLocked` |
+| [MaterialSynthesisTaskPlugin.cpp#L19-L22](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/MiniGame/MaterialSynthesisTaskPlugin.cpp#L19-L22)、[#L138-L179](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/MiniGame/MaterialSynthesisTaskPlugin.cpp#L138-L179)、[#L200-L225](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/MiniGame/MaterialSynthesisTaskPlugin.cpp#L200-L225) | 递归合成下级材料（深度 8、操作 64 次、单批 24 个）；没有加工站干员或心情不足时换人，源码里没有换回的步骤；源码不读龙门币 |
+| [OperProgressProcessTask.cpp#L619-L650](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp#L619-L650) | `OperProgressDetail` 中 `ResourceInsufficient`、`FormulaLocked` 记为 `result: Failed`；现有核对按 Failed 记未知、不重放 |
+| [OperProgressTask.cpp#L25-L27](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/Interface/OperProgressTask.cpp#L25-L27)、[AsstOperProgressTask.cs#L40-L56](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaWpfGui/Models/AsstTasks/AsstOperProgressTask.cs#L40-L56) | 计划只接受 role、name、elite、skill_level、skill_mastery；GUI 只序列化 `plans`。没有关掉合成的参数 |
+| [InfrastTrainingTask.cpp#L305](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/901e01c600f4895ac4e7e48a9b471fc9f52af301/src/MaaCore/Task/Infrast/InfrastTrainingTask.cpp#L305) | 基建训练室任务不引用合成插件；`continue_training=false` 只换人不开新训，所以本项目的预入驻、换助手、观察都不会触发合成 |
+
+据此，开训门在用户批准加工时接受加工能补齐的缺口（见规格「默认值及其来源」的 32 行）。未核实：设备上的缺料识别；每种专精材料在游戏里是否都有加工入口；龙门币不足时的表现；被换掉的加工站干员；补不齐时部分下级材料可能已经被加工（按循环顺序推断）。
