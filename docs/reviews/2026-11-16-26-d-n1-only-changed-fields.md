@@ -27,4 +27,12 @@
 
 ## 第 2 轮
 
-范围：从 `480fc86` 起的记录修复提交（只改 `docs/release-payload-verification.md` 和本文件）。待审查：复核 P3-1、P3-2 两处更正与批次证据相符，前后评测的记录与清单和 `run.json` 一致，本记录与第 1 轮结论一致。
+范围：`480fc86..8ee313c`（只改 `docs/release-payload-verification.md` 和本文件），并复核变基：`2c9f520..480fc86` 与第 1 轮的 `a6e306a..a5a5ac7` 内容逐文件相同，`configuration.md` 在 `a5a5ac7` 和 `480fc86` 是同一个 blob。一名新的独立审查员。结论 GO：P3 1，没有 P1、P2。
+
+| 编号 | 发现 | 结论 | 理由 |
+| --- | --- | --- | --- |
+| R2-P3-1（P3） | 上面 P3-1 的修复说明写「已只读核对这 8 次运行的 `run.json`：载荷提交……」；`run.json` 没有载荷提交字段，提交在同一批次的 `manifest.json`，`run.json` 只经 `payloadFingerprint` 与它对应。写下的事实和次数都对 | 拒绝，判为弱点，不修 | 次数、运行 id 和结论都与证据相符，只是把一项核对的出处写成了同一批次目录里的另一个文件；没有门禁或结论依赖它 |
+
+审查员实际核对：变基前后的改动相同；在变基后的头上 `npm run typecheck` 通过，`docs-consistency`、`consumption-grant`、`maa-config` 共 193 项全部通过；四批的清单（模型、宿主版本、认证、运行器指纹 `5408aba3…`、载荷提交和摘要）与记录一致；`compare batch-LQzEgy batch-4GYJr1` 退出码 0、总体 `pass`；修复后 7 次运行的写入请求都只带两项；P3-2 列出的场景数按场景模块逐个枚举相符。
+
+本包的审查到此结束，没有未关闭的 P1、P2。
