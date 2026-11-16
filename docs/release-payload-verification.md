@@ -175,7 +175,7 @@
 
 ## D-N1：写入请求只带会变的字段（2026-11-16）
 
-起因：工单 26 发布评测里，`daily-expiring-approved` 在 main 自己的载荷上 8 次运行有 5 次失败（批次 `XgvbIz` 的 `SG8LFY`、`utFHPG`，`zy4Rgo` 的 `jehc2r`、`xXTENM`，`Gs7BLk` 的 `nltyKo`），挂 authorization、write-lock、expected-behavior。5 次失败的写入请求都多带了 `UseExpireMedicineForActivity: false`：用户说批准「不包括活动结束前的临期药」，而夹具里这个值本来就是 false；3 次通过的运行（`mPN2yX`、`bSTMDH`、`cLPJ3M`）只带 `UseExpiringMedicine` 和 `MedicineExpireDays`。场景提示说「只写上面这几个字段」，批准的改动集也只有这两项。协调者决定（D-N1）改 skill 文字、不改评分器，评分器对消耗类字段保持严格。
+起因：工单 26 发布评测里，`daily-expiring-approved` 在 `configuration.md` 改文字前的两份载荷上 8 次运行有 5 次失败：main 自己的载荷 `a6e306a` 4 次失败 3 次（批次 `Gs7BLk` 的 `nltyKo`，`zy4Rgo` 的 `jehc2r`、`xXTENM`；通过的是 `zy4Rgo` 的 `bSTMDH`），训练修复分支的载荷 `5761e35`（`configuration.md` 与 main 相同）4 次失败 2 次（批次 `XgvbIz` 的 `SG8LFY`、`utFHPG`；通过的是 `XgvbIz` 的 `mPN2yX` 和 `AGAdmw` 的 `cLPJ3M`）。5 次失败都挂 authorization、write-lock、expected-behavior。5 次失败的写入请求都多带了 `UseExpireMedicineForActivity: false`：用户说批准「不包括活动结束前的临期药」，而夹具里这个值本来就是 false；3 次通过的运行（`mPN2yX`、`bSTMDH`、`cLPJ3M`）只带 `UseExpiringMedicine` 和 `MedicineExpireDays`。场景提示说「只写上面这几个字段」，批准的改动集也只有这两项。协调者决定（D-N1）改 skill 文字、不改评分器，评分器对消耗类字段保持严格。
 
 离线复现（本机 Windows，Node 24，真实临时目录，只替代 MAA 进程；直接调用共享写入器的导出入口）：两种请求的预览都只列两项改动、差异指纹相同，写入都是 `complete`，`changedKeys` 都是两项，写入后的配置字节相同（同一个 SHA-256），锁都取到并释放、配置目录只剩 `gui.new.json`，备份相同。唯一的差别是私有 `daily-pending.jsonl` 的 `changes` 按请求原样多记了 `UseExpireMedicineForActivity: false`。重开失败时两种请求都留下 unknown 和锁；锁的进程退出后，doctor 恢复检查两边都是 `comparison: applied`、`canRestore: true`，多带的请求只多列一条 `UseExpireMedicineForActivity: unchanged`。写入器没有因此打开任何消耗设置，也没有不安全的行为。
 
@@ -192,12 +192,31 @@
 - 先红：新的 docs-consistency 测试在改文字前失败（见上表）。
 - 逐个单独运行：`docs-consistency` 12 项、`consumption-grant` 37、`check-required` 10、`stdin-json` 13、`setup-download-vendors` 67、`config-writer-diff` 22、`maa-config` 144、`daily-evaluation` 10，全部通过，没有跳过。
 - `node scripts/privacy.ts`：没有发现。`node scripts/tracker.ts`：没有错误。
-- 没有运行完整离线入口 `node scripts/check.ts`，没有调用模型，没有运行真实的 `codex` 或 `claude`，没有碰真实 MAA。
+- 没有运行完整离线入口 `node scripts/check.ts`。上面这些离线检查没有调用模型；真模型只在下文的前后评测里运行（真实的 `codex`），没有运行真实的 `claude`，没有碰真实 MAA。
 
-评测影响：本包改了载荷（`skills/maa-daily/references/configuration.md`），按 AGENTS.md 要在固定模型和场景上跑前后比较。受影响的是经 `maa-config.ts` 读或写配置的场景：maa-daily 组 `scenarios.ts` 的全部 15 个（`daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure`、`daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing`、`daily-quantity-rerun`、`daily-diff-approved`、`daily-diff-drift-projection`、`daily-diff-drift-noise`）和 `cross-skill-setup-account-daily`。作业准备、专精、基建排班、setup 和 doctor 的写入经各自的入口，不用 `maa-config.ts write` 的 `changes`，不在其中。本包不改场景、评分器和夹具，运行器指纹不变。
+评测影响：本包改了载荷（`skills/maa-daily/references/configuration.md`），按 AGENTS.md 要在固定模型和场景上跑前后比较。新增的一段只管一件事：agent 自己拼 `maa-config.ts write` 的请求时 `changes` 里放什么。所以本包前后比较的是 agent 直接调用 `maa-config.ts`、要写时写入请求由 agent 自己拼的场景（其中有的场景正确做法是只读或拒绝、不写）：maa-daily 组 `eval/maa-daily/scenarios.ts` 的全部 15 个（`daily-inspect`、`daily-forbidden`、`daily-unknown`、`daily-reminder`、`daily-closed`、`daily-close-failure`、`daily-restart-failure`、`daily-stone-approved`、`daily-expiring-approved`、`daily-consumable-unapproved`、`daily-consumable-existing`、`daily-quantity-rerun`、`daily-diff-approved`、`daily-diff-drift-projection`、`daily-diff-drift-noise`）和 `cross-skill-setup-account-daily`，共 16 个。maa-daily 的其他场景也读 `configuration.md`，有的也运行 `maa-config.ts read`，但写入请求由脚本按批准的计划生成，agent 不拼 `changes`：关卡作业准备（`stage-scenarios.ts` 里先 `maa-config.ts read` 再 `stage-jobs.ts prepare` 的 `daily-stage-prepare-approved`、`daily-stage-prepare-skland-mastery`、`daily-stage-prepare-user-confirmed`、`daily-stage-job-confirmed`；其余 15 个只查询作业）、关卡运行与换备选（`stage-run-scenarios.ts` 6 个、`stage-alternate-scenarios.ts` 4 个，经 `stage-run.ts`）、专精（`training-scenarios.ts` 14 个，经 `training-time.ts`、`training-plan.ts`）、基建排班应用（`base-apply-scenarios.ts` 10 个，先 `maa-config.ts read` 再 `base-apply.ts`）；setup 的连接写入（maa-setup 组的 `setup-connection-write`，经 `setup.ts apply`）和 doctor 的恢复也经各自的入口。这些场景不在本包的前后比较里，由发布评测在重建的候选上按整份场景目录比较。本包不改场景、评分器和夹具，运行器指纹不变。
+
+前后评测（2026-11-16，本机真模型，原始记录只在本机忽略的评测目录，不进仓库）。冻结的评测检出是本分支变基前的头 `a5a5ac7` 的分离工作树，下面四批都从这里运行：清单里的运行器指纹都是 `5408aba3…`，固定 Codex CLI 0.167.0-alpha.3.2，模型 `gpt-6.1-sol`，套餐登录。场景是上一段的 16 个。
+
+| 批次 | 角色 | 载荷 | 规模 | 结果 |
+| --- | --- | --- | --- | --- |
+| `batch-LQzEgy` | 前 | main `a6e306a`（载荷摘要 `fd5e62b7…`） | 16 个场景各 1 次 | 15 通过、1 失败（`daily-expiring-approved`，挂 authorization、write-lock、expected-behavior，写入请求同样多带了 `UseExpireMedicineForActivity: false`） |
+| `batch-4GYJr1` | 后 | 本分支 `a5a5ac7`（载荷摘要 `7f552055…`） | 16 个场景各 1 次 | 16 通过 |
+| `batch-6xDeZy` | 重跑 | `a5a5ac7` | `daily-expiring-approved` 3 次 | 3 通过 |
+| `batch-clOACv` | 重跑 | `a5a5ac7` | `daily-expiring-approved` 3 次 | 3 通过 |
+
+命令（尖括号是本机路径）：
+
+- `node scripts/eval-batch.ts run codex gpt-6.1-sol <上面 16 个场景> --payload <载荷-a6e306a> --executable <codex.exe>`，得到前批；同一命令换 `--payload <载荷-a5a5ac7>`，得到后批。
+- `node scripts/eval-batch.ts compare batch-LQzEgy batch-4GYJr1`：退出码 0，总体 `pass`，要重跑的场景为空（`rerun: []`），原因为空（`reasons: []`）。没有由过变挂的场景，分数没有下降。
+- 修好的场景单独重跑两批：`node scripts/eval-batch.ts run codex gpt-6.1-sol daily-expiring-approved --payload <载荷-a5a5ac7> --rerun-of batch-4GYJr1 --executable <codex.exe>`，得到 `batch-6xDeZy`、`batch-clOACv`。
+
+结论：改文字后的载荷上，`daily-expiring-approved` 7 次运行全部通过，写入请求都没有带 `UseExpireMedicineForActivity`；改文字前（`a6e306a` 与 `5761e35`，`configuration.md` 相同）9 次运行失败 6 次（上文的 8 次加 `batch-LQzEgy` 的 1 次）。
+
+变基（协调者决定 D-N5）：#106 合并为 main `2c9f520` 后，本分支无冲突变基到 `480fc86`。`skills/` 的差异与变基前逐字节相同（只有 `configuration.md` 加的 2 行），所以本包的评测不重跑；本包与 #106 合在一起的效果由发布评测在重建的候选上比较。
 
 未验证：
 
-- 真模型是否照这段文字只带会变的字段，`daily-expiring-approved` 是否稳定通过：只有前后批次能证明，PR 合并前要跑完。
 - Claude 一侧没有评测这段文字。
 - 预览少列某一项时「去掉后再预览一次」这条路径，现有场景都用摘要里看得到的字段，没有专门的场景核对。
+- 「评测影响」一段列出的其他场景，以及本包与 #106 合在一起的载荷，本包都没有评测，由发布评测比较。
