@@ -11,6 +11,9 @@
 | [FrostN0v0/nonebot-plugin-skland](https://github.com/FrostN0v0/nonebot-plugin-skland/tree/b88a9a9cf931be0ae63ff839a101ebe5ff9aa7a7)（MIT，2026-11-09 提交） | `b88a9a9cf931be0ae63ff839a101ebe5ff9aa7a7` | `api/login.py`、`api/request.py`、`services/auth.py`、`schemas/binding.py`、`schemas/cred.py`、`schemas/arknights/card.py`、`schemas/arknights/models/` 下的 `chars.py`、`status.py`、`base.py`、`building.py`、`recruit.py` 和 `buildings/*.py`、`tests/test_auth.py` |
 | [OriginiumLab/MAA-PRTS](https://github.com/OriginiumLab/MAA-PRTS/tree/305d3b6bdef58f06989586d59ac2fed2ba7e0f8f)（MIT） | `305d3b6bdef58f06989586d59ac2fed2ba7e0f8f` | `backend/core/skland.py`、`backend/core/updater.py` 的 `build_snapshot`、`backend/core/operbox.py` |
 | [arkntools/arknights-toolbox](https://github.com/arkntools/arknights-toolbox/tree/721a15599eb132b37bb38edd0fdca615eb57fc4e)（MIT） | `721a15599eb132b37bb38edd0fdca615eb57fc4e` | `src/utils/skland.js`、`src/store/skland.js`、`src/views/Material/index.js` 里导入森空岛仓库的部分 |
+| [gxy12345/arknights-plugin](https://github.com/gxy12345/arknights-plugin/tree/0797776bc4615aaea35ef0162444a8e92e458ce8)（MIT，2026-11-16 读） | `0797776bc4615aaea35ef0162444a8e92e458ce8` | `model/playerView.js` 的 `trainingInfo`（32 后续：训练室状态） |
+| [IJNKAWAKAZE/arknights_bot](https://github.com/IJNKAWAKAZE/arknights_bot/tree/3c747b3b4e1333b6f3dea80cd1315f14aea64ad7)（GPL-3.0，2026-11-16 读，只对照字段，不取代码） | `3c747b3b4e1333b6f3dea80cd1315f14aea64ad7` | `src/core/web/base.go` 训练室部分 |
+| [AEtherside/rhodes-headquarters](https://github.com/AEtherside/rhodes-headquarters/tree/54dae0e933ac117a633cc90226b5354979987140)（MIT，2026-11-16 读） | `54dae0e933ac117a633cc90226b5354979987140` | `src/types/building.ts` 的 `BuildingTraining`、`e2e/mocks/info.json` 的 `building.training` |
 
 官方表态：截至 2026-11-13 没有找到鹰角网络对第三方调用森空岛接口的公开表态；本次另做了一次网络检索，结果相同。
 
@@ -43,6 +46,7 @@
 | 仓库物品 | `GET /api/v1/game/cultivate/player?uid=…` 的 `items[]`：`id`、`count`；`count` 可能是字符串 | 只有 arknights-toolbox（`Number(count)`）；`player/info` 的模型里没有物品 | 单一来源；采用。接口返回的物品范围未核对，未列出的物品仍是未知 |
 | 龙门币 | 没有找到单独字段。游戏物品 ID `4001` 是龙门币（11 已核对，见[account 来源核对](account-sources.md)） | — | 只在养成接口的 `items` 里出现 `4001` 时采用，否则未知。是否会出现未验证 |
 | 基建房间、驻员、心情 | `player/info` 的 `building`：`control`、`powers`、`manufactures`、`tradings`、`dormitories`、`meeting`、`hire`、`training`，各房间 `slotId`、`level`、`chars[]`（`charId`、`ap`、`lastApAddTime`）；训练室为 `trainee`、`trainer` | nonebot `buildings/*.py` | 采用。心情 `ap` 的满值 8,640,000（nonebot 以此判断已休满）。nonebot 的 `Building` 把 `meeting`、`hire`、`training` 声明为可选（默认 None），其余房间字段为必需：这三项缺失视为未建造，其余缺失视为结构不符 |
+| 训练室在练的技能与剩余时间（32 后续） | `building.training.trainee.targetSkill`（受训者技能序号，从 0 计；-1 表示受训者在室但没在练）和 `building.training.remainSecs`（读取时剩余秒数） | nonebot `buildings/training.py`（`targetSkill` -1 为「空闲中」，0–2 为一到三技能）；arknights-plugin `trainingInfo`（`skills[targetSkill]`，`targetSkill<0` 为「未选择专精技能」，剩余秒数扣掉查询后经过的时间，`<=0` 为「专精已完成」，`>0` 为「专精训练中」）；arknights_bot 按序号取技能；rhodes-headquarters 的类型同名，其接口样例里受训者 `targetSkill:-1`、`remainSecs:0` | 采用，两项都合法才写进快照的受训者条目，否则记 `invalid-training-state`、不写。训练查询只把「森空岛快照、受训者是这名干员、`targetSkill` 等于技能序号减 1、`remainSecs` 大于 0」当作这一档进行中；只有受训者在室不算（样例里就有闲着的受训者）。未用真实回复核对 |
 | 当前理智、公招槽位计时 | `status.ap`、`recruit[]` | nonebot `Status`、`Recruit` | 字段存在，但不写进快照：验收第 3 条只要求干员、仓库、龙门币和基建，理智是随时变化的状态 |
 | 理智药等药剂；凭证和各类券；逐关通关状态 | 三个项目里都没有找到 | — | 快照里写成无来源（`coverage` 的 `medicine`、`vouchers`、`stageClears` 为 `unavailable`、`no-source`）。`status.mainStageProgress` 只是主线进度，不推断逐关通关 |
 
@@ -56,5 +60,6 @@
 
 - 真实服务：需要维护者在本机用自己的 token 运行一次 `skland-account.ts inspect`，对照森空岛 App 的显示，核对换取、签名（空的 `platform`/`dId`/`vName`、不冒充客户端 UA）、两级刷新、各字段和计数起点。
 - 拒绝信号：需要一个已失效的 token 的真实回复，确认换取失败时的 `status` 取值，以及 10000、10002 现在的含义。
+- 训练室状态（32 后续）：`targetSkill`、`remainSecs` 的含义来自三个客户端和一份接口样例，没有用维护者的真实回复核对；需要在训练室有人在练、闲着、刚练完三种情况下各读一次，对照游戏内显示。
 - 养成接口的物品范围、是否返回 `4001`；技能列表顺序是否等于第 1–3 技能；锁定模组的 `level` 含义。
 - 森空岛数据相对游戏内的滞后。

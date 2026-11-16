@@ -6,7 +6,7 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 
 1. `targets` 按用户给定顺序列出明确目标。每项使用[成本接口](cost.md)的 `name`、可选 `operatorId`、`target` 和可选 `current`，不放 `mode`。同名歧义、缺练度或成本时先核对；任一目标总成本未知时不分配共享库存。相同干员重复出现需合并目标，避免重复收取晋升或前置成本，不自行选择较高目标。
 2. 快照未提供的库存可在 `inventory: {source: "user-confirmed", items: {物品ID: 数量}, lmd: 数量}` 补齐。只传用户确认的事实；明确 0 与未知不同，已知冲突返回待核。`items` 不放 `4001`，龙门币用 `lmd`。不要根据识别完成或未列物品推断全库存为零。
-3. 配方条件在 `progress` 中补充，须 `source: "user-confirmed"`。`rooms` 是房间类型到等级数组，例如 `WORKSHOP: [3]` 表示一间三级加工站；按配方的等级和房间数核对。`stageRanks` 使用公开 `requireStages.stageId/rank` 原字段，值 0–2；工具返回关卡 ID 与公开关卡代码以便核对。所读来源只证明配方门槛为 2，不证明星数对应；不要把用户给出的星数自行换算为原码，也不要让普通用户猜数字。缺事实时说明具体配方/关卡条件待核；仅有带真实依据的明确补充时录入。能查询到配方不等于当前已解锁。
+3. 配方条件在 `progress` 中补充，须 `source: "user-confirmed"`。`rooms` 是房间类型到等级数组，例如 `WORKSHOP: [3]` 表示一间三级加工站；按配方的等级和房间数核对。`stageRanks` 使用公开 `requireStages.stageId/rank` 原字段，值 0–2；工具返回关卡 ID 与公开关卡代码以便核对。所读来源只证明配方门槛为 2，不证明星数对应；不要把用户给出的星数自行换算为原码，也不要让普通用户猜数字。用户只说「这些关卡都通关了」时，不填 `stageRanks`，把工具报出的关卡 ID 原样写进 `confirmedStages`（见下文）。缺事实时说明具体配方/关卡条件待核；仅有带真实依据的明确补充时录入。能查询到配方不等于当前已解锁。
 4. 仅对实际相关的券核对有效性：`progress.voucherValidity` 按券 ID 给 `true`（用户确认当前有效）或 `false`（用户确认当前不可用）。五类支持券的有效性均须确认，未确认或数量未知不算已核覆盖。`*_perm` 只标 `permanent-name-inference`，不能由名字或缺 expiry 推定有效；两类限时券为 `timed-explicit`。同名但不同 ID 的券不可混算。零库存无需再追问有效性。
 5. 返回 `needs-input` 时 `raw/comparison` 为 null，不宣称已满足。`partial` 表示比较中仍有未知；只陈述已核覆盖及具体待核项。`ok` 只是选定方案的输入与算术已知，仍可能有正缺口，也不证明游戏此刻可执行。保留当前心情、生产排队、模组任务/信赖等未核实状态。
 
@@ -28,6 +28,17 @@ Node 24 调用相邻 `../maa-core/scripts/cultivation-gaps.ts query`，通过标
 {"targets":[{"name":"合成干员","target":{"elite":1,"level":1}}],"progress":{"source":"user-confirmed","rooms":{"WORKSHOP":[3]},"stageRanks":{"stage_synthetic":2},"voucherValidity":{"premium_material_voucher_perm":true}},"format":"markdown"}
 ```
 
-`format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1，输出脱敏错误码。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
+配方的房间条件：用户确认的 `progress.rooms` 优先；没确认的房间用快照基建（完整读取时）里同类房间的等级，例如制造站 → `MANUFACTURE`，结果 `inputSources.rooms` 写明每个房间等级来自 `user-confirmed` 还是 `snapshot`；加工站（`WORKSHOP`）快照里没有，仍要用户确认。关卡条件报成 `stage:<ID>:unknown`（`stageCodes` 给关卡代号）时，用户一句话确认「这些都通关了」，就把报出的这些 ID 原样写进 `progress.confirmedStages:[...]`；只接受某个配方确实要求的关卡 ID，其余以 `progress:confirmedStages:invalid` 拒绝。没给 `snapshotFile` 时按需要的内容选快照（干员、技能专精、仓库、基建）：用共用的选快照规则，和训练读同一份：默认快照缺、而森空岛快照完整覆盖所缺的内容时整份读森空岛快照，不合并（`skland-covers`）；默认快照有仓库数量而森空岛读取时间早于它的仓库扫描时间，或森空岛快照没有仓库时，仍用默认快照（`maa-inventory-newer` 或 `maa-default`）；默认快照里没有仓库数量时不比时间。结果的 `snapshotUsed` 写明文件、来源、读取时间、选择原因（`chosen`）和缺的内容（`lacking`）。
+
+`format` 为 `json`（默认）或 `markdown`，同一计算结果渲染；模板中文，按保存的回复语言转述。退出 0 仍需检查 `status`。非法命令/JSON、快照不可读或主源失败退出 1：标准输入本身不合格时输出 `{ok:false,error:<代码>}`；其余输出共用的核对项（见 maa-core「调用方的约定」）：`{ok:false,status:"check-required",reason,check,alternatives}`，`reason` 是稳定代码，`check` 是要核对什么，`alternatives` 是替代做法；读不到的是哪一份公开表时写在 `details.detail`。按 `check` 核对并把 `alternatives` 告诉用户，不输出路径或原始系统信息。数值、来源和待核项齐全后结束查询，不自动保存或执行建议。
 
 共享导出：`calculateCultivationGaps(tables, snapshot, input)`、`queryCultivationGaps(input, {home?, fetcher?})`、`formatCultivationGapsMarkdown(result)`。`fetcher` 只注入网络边界；测试用真实临时文件及合成数据。配方来源由 `craftingSources` 固定，成本来源沿用 `operatorCostSources`；不随 skill 打包游戏表。来源细节在仓库 `docs/crafting-sources.md`。
+
+## 展开到基础材料（工单 32）
+
+维护者 2026-11-16：缺口要说到基础材料，龙门币和其他缺口都是推进中逐步补齐的，不能据此判断计划。`comparison.craft.decomposition` 把开启加工方案里还缺的成品（含覆盖路线因条件未确认而没算进去的部分）按现有库存逐级拆到基础材料：
+
+- `short` 是还要获取的基础材料（刷关或其他途径），`fromStock` 是加工能用上的现有库存，`steps` 是建议的加工，`craftingLmd` 是补齐缺口还要的加工费，`lmdGap` 是龙门币总缺口（直接需求加全部加工费减库存，库存未知时为 null）。龙门币不够不会让展开停下，单列为缺口。
+- 配方条件没确认时照样展开，`assumptions` 列出所依据的假设（`stage:<关卡ID>:unknown`、`room:WORKSHOP:unknown`、`inventory:<物品>:assumed-zero`）。回复时把这些标成假设，或者用一个问题一次问清（关卡用返回的公开关卡代码，例如「这些关卡你都通关了吗：…；加工站几级？」），不要逐个追问，也不要因此不给展开。用户确认后再把事实放进 `progress` 重新计算。已确认未解锁的配方（`pending`）按成品获取。
+- `vouchers` 是不依赖数量的材料券建议：每种券能兑换的缺口按缺得多的排序。回复时先问用户各券数量和是否有效；用户不回答，就按这个顺序给建议（例如「有这种券的话，优先换 X」），不编造数量，也不把券算进已核覆盖。
+- 回复里说清还缺什么（成品、基础材料、龙门币），并说明可以在推进中逐步补齐；不要说计划不可行、不能计算或要调整顺序，除非用户问的就是顺序。展开只是建议，不加工、不兑换。

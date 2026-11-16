@@ -64,7 +64,9 @@ test('a draft keeps the given order, takes every number from the shared gap calc
   assert.deepEqual(report.items.map(item => item.id), ['S1', 'S2']);
   const markdown = formatCultivationReportMarkdown(result.state);
   assert.match(markdown, /【待审查】/);
-  assert.match(markdown, /库存按此顺序可支持到第 1 步/);
+  // Ticket 32: coverage is stated as how far stock reaches now; the rest is a gap to fill while the plan runs, with its base materials.
+  assert.match(markdown, /现有库存按此顺序已覆盖到第 1 步；从第 2 步起还有材料或龙门币缺口，可以在推进中逐步补齐/);
+  assert.match(markdown, /加工展开到基础材料/); assert.doesNotMatch(markdown, /不足以完成/);
   assert.match(markdown, /推荐理由（推断）：肉鸽里经常用到，先补精一/);
   assert.match(markdown, /本步花费（工具计算）/);
 });

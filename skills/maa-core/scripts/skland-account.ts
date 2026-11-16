@@ -139,6 +139,17 @@ function operators(info: Record<string, unknown>): { operators: Operator[]; cove
 const rooms: [string, BaseRoom['type'], boolean, boolean][] = [['control', 'control', true, false], ['powers', 'power', false, false],
   ['manufactures', 'manufacture', false, false], ['tradings', 'trading', false, false], ['dormitories', 'dormitory', false, false],
   ['meeting', 'meeting', true, true], ['hire', 'hire', true, true], ['training', 'training', true, true]];
+/**
+ * Ticket 32 follow-on item 7: the trainee's skill in training (0-based; -1 is a trainee sitting idle) and the seconds left at
+ * read time, as the public clients read them (nonebot-plugin-skland `Trainee.targetSkill`/`Training.remainSecs`,
+ * arknights-plugin, arknights_bot; see docs/skland-account-sources.md). Kept only when both are valid; never guessed.
+ */
+function trainingState(skill: unknown, seconds: unknown, issues: Set<string>): { targetSkill?: number; remainSecs?: number } {
+  if (skill === undefined && seconds === undefined) return {};
+  if (Number.isSafeInteger(skill) && Number(skill) >= -1 && Number(skill) <= 2 && Number.isSafeInteger(seconds) && Number(seconds) >= 0 && Number(seconds) <= 31 * 86400)
+    return { targetSkill: Number(skill), remainSecs: Number(seconds) };
+  issues.add('invalid-training-state'); return {};
+}
 function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; coverage: Coverage } {
   if (info.building === undefined || info.building === null) return { base: null, coverage: { status: 'invalid', issues: ['not-returned'] } };
   try {
@@ -156,7 +167,7 @@ function base(info: Record<string, unknown>): { base: AccountSnapshot['base']; c
         const room = object(raw);
         if (typeof room.slotId !== 'string' || !/^[A-Za-z0-9_]{1,96}$/.test(room.slotId)) throw new Error('invalid-slot');
         const operators = type === 'training'
-          ? [...(room.trainer ? [stationed(room.trainer, 'trainer')] : []), ...(room.trainee ? [stationed(room.trainee, 'trainee')] : [])]
+          ? [...(room.trainer ? [stationed(room.trainer, 'trainer')] : []), ...(room.trainee ? [Object.assign(stationed(room.trainee, 'trainee'), trainingState(object(room.trainee).targetSkill, room.remainSecs, issues))] : [])]
           : list(room.chars).map(entry => stationed(entry));
         result.push({ type, slotId: room.slotId, level: field(room.level, 'room-level', 1, 5, issues), operators });
       }

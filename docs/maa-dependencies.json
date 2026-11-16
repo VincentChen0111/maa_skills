@@ -955,6 +955,39 @@
       "deviceVerified": []
     },
     {
+      "id": "mastery-training-crafting",
+      "behaviour": "专精缺材料时 OperProgress 自动跳到加工站合成、没有开关：按加工站页面显示的需求数合成到满足为止（只补缺的部分），逐级合成下级材料，消耗下级材料、加工费和加工站干员心情，可能换掉加工站干员；配方未解锁返回 FormulaLocked，合成后仍缺返回 ResourceInsufficient、不开训",
+      "skills": [
+        "maa-core",
+        "maa-daily"
+      ],
+      "tickets": [
+        "24"
+      ],
+      "evidence": [
+        "docs/training-sources.md"
+      ],
+      "sources": [
+        {
+          "path": "src/MaaCore/Task/OperProgress/OperProgressProcessTask.cpp",
+          "blob": "df8252f1437c7efd2a5a3c987a44a786aca408af"
+        },
+        {
+          "path": "src/MaaCore/Task/Interface/OperProgressTask.cpp",
+          "blob": "05e14e39f6e18b050fd63eb50e4cfb600750b165"
+        },
+        {
+          "path": "src/MaaCore/Task/MiniGame/MaterialSynthesisTaskPlugin.cpp",
+          "blob": "1bdf175d26aadbe50210ae869bf7e9632f613504"
+        }
+      ],
+      "sourceVerified": [
+        "6.21.4",
+        "6.22.0"
+      ],
+      "deviceVerified": []
+    },
+    {
       "id": "fight-stone-expiring-medicine",
       "behaviour": "Fight 任务的碎石与临期药：FightTask.cs 的 UseStone、StoneCount、UseStoneAllowSave、UseExpiringMedicine、MedicineExpireDays、UseExpireMedicineForActivity，读入配置时 UseStoneAllowSave 不为 true 就把 UseStone 置为 false；界面打开碎石而没开允许保存时在内存里把碎石开关设为 null（仅本次），理智药数量设为 999，理智药原来关着就把理智药开关设成同一个值，写盘时这两个 null 键被省略（见 config-save-null-omission）；doctor 的字段检查接受缺键和显式 null 的理智药开关（Issue #82、#89）；界面把开关不为 false 的理智药和碎石数量、临期天数换算成 MaaCore 的 medicine、stone、medicine_expire_days；MaaCore 按游戏显示的页面用理智药或碎石，临期药确认上限 9999，碎石上限为数量；界面的临期天数范围 1–30",
       "skills": [
