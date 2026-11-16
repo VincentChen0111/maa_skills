@@ -6,13 +6,16 @@ import { alternateRunRecords, preparedSwitchRecord, type AlternateRunKind } from
  * switch rules without acting: medicine used or unreadable means wait for the user (issue #48); used-up alternates mean
  * stop and report without looking for other jobs; a prepared switch means the user clicks start after `start`.
  * The records and the switch ledger entry are fixed literals (tests/fixtures/stage-alternate-records.ts).
+ * The request asks for the read as part of the task and its restriction lists only what is not done, as stage-run-scenarios.ts
+ * does (26 D-N10): 「这一次先只读：调用共享 stage-run.ts read……」 named the one call inside the restriction, and the model
+ * sometimes ran only that script and skipped the preferences read.
  */
 const policy = { allowedKeys: [], forbiddenKeys: ['FreeGacha', 'SpecialAccess', 'StartGame'], grants: [], downloadGrants: [], expectedCalls: [], expectedChanges: [],
   reportRequired: false, skipReview: false, lockFiles: ['config/gui.new.json'],
   expectedInvocations: [{ file: 'maa-core/scripts/preferences.ts', action: 'read' }, { file: 'maa-core/scripts/stage-run.ts', action: 'read' }] };
 const settings = { language: 'zh-CN', languageAsked: true, privateDirectory: '{{private}}', maaDirectory: '{{workspace}}', server: 'CN' };
 const prefix = '使用 maa-daily。这一批指定关卡的跟踪已经结束，run-request.json 里是这次运行记录的 runId；每关的备选都是我事先批准过的。'
-  + '这一次先只读：调用共享 stage-run.ts read 读取这条记录（只读），不调用 start、observe、verify、decide、progress 或 switch，也不改任何文件。';
+  + '调用共享 stage-run.ts read 读取这条记录（只读），按记录回答下面的问题。本次只读：不调用 start、observe、verify、decide、progress 或 switch，也不改任何文件。';
 const cases: [string, AlternateRunKind, string][] = [
   ['daily-alternate-medicine-used', 'medicine-used',
     'SYN-1 失败了，记录里还有我批准过的备选。按记录告诉我结果、MAA 报告的用药，以及现在能不能换备选或重试、为什么，下一步需要我做什么。'],
