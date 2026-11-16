@@ -123,3 +123,68 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 
 森空岛训练室字段（`targetSkill`、`remainSecs`）只和三个公开客户端及一份接口样例核对过，没有用维护者的真实回复核对。
 未验证：真实 MAA 上的自动加工与无人值守连续执行；Codex 心跳自动化本身；五小时减时的实际效果仍以真实倒计时为准。模型评测前后结果见本节后续记录。
+
+### 模型评测前后（2026-11-16）
+
+实际运行（本机真模型，原始记录只在本机忽略的评测目录，不进仓库）。冻结的评测检出是本分支头 `5761e35` 的分离工作树，下面四批都从这里运行：清单里的运行器指纹都是 `e2c0fdf1…`（与本分支检出重算一致），前后两批的场景列表逐个相同。固定 Codex CLI 0.167.0-alpha.3.2，模型 `gpt-6.1-sol`，套餐登录（专用评测登录目录），原生 Windows，四批用同一个 CLI 可执行文件，一次只跑一批。命令为 `node scripts/eval-batch.ts run codex gpt-6.1-sol maa-core maa-daily maa-account cross-skill --payload <载荷目录> --executable <codex.exe>`；重跑批次点名要重跑的场景并加 `--rerun-of <批次>`，每个场景跑三次。载荷：前为 main `a6e306a` 的 skills（skills 树 `77df220…`，载荷摘要 `fd5e62b7…`），后为 `5761e35`（skills 树 `867a03d…`，载荷摘要 `86a1b90e…`）。
+
+四组 `maa-core`、`maa-daily`、`maa-account`、`cross-skill`，共 107 个场景。
+
+| 批次 | 角色 | 载荷 | 规模 | 结果 |
+| --- | --- | --- | --- | --- |
+| `batch-Gs7BLk` | 前 | main `a6e306a` | 107 个场景各 1 次 | 91 通过、14 失败、2 未验证 |
+| `batch-AGAdmw` | 后 | `5761e35` | 107 个场景各 1 次 | 105 通过、1 失败、1 未验证 |
+| `batch-XgvbIz` | 重跑「后」的运行（`--rerun-of batch-AGAdmw`） | `5761e35` | 6 个场景各 3 次 | 14 通过、4 失败 |
+| `batch-zy4Rgo` | 重跑「前」的运行（`--rerun-of batch-Gs7BLk`），只作诊断 | main `a6e306a` | 4 个场景各 3 次 | 10 通过、2 失败 |
+
+另有一批 `batch-6OUbES`（载荷 main）在登录锁阶段以 `login-directory-busy` 中止，没有任何运行记录，不进比较。四批完整批次的状态都是 `complete`，认证预检和读保护检查都通过，`refused` 为空。
+
+`compare batch-Gs7BLk batch-AGAdmw`：退出 1，总体 `unverified`，没有批次条件原因（两批可比）。逐场景：
+
+- 失败→通过 14 个：本工单的 10 个训练续接场景（前一侧没有这些功能），以及 4 个 daily 基线失败 `daily-expiring-approved`、`daily-stage-data-not-authority`、`daily-alternate-medicine-unknown`、`daily-alternate-exhausted`；
+- 通过→失败 1 个：`daily-alternate-prepared`（`needs-reruns`）；
+- 通过→未验证 1 个：`daily-stage-job-confirmed`（后一侧超时，没有任何调用）；
+- 未验证→通过 2 个：`account-nga-risk-stopped`、`account-report-casual`（前一侧超时），`compare` 记 `unverified`；
+- 其余 89 个两边都通过，含新场景 `account-gaps-base-materials`。
+
+加上重跑 `compare batch-Gs7BLk batch-AGAdmw batch-XgvbIz`：退出 1，总体仍 `unverified`。`daily-alternate-prepared` 为 `unstable`（通过→失败，重跑 3/3 通过；规则保留第一次失败）；`daily-stage-job-confirmed` 仍为 `unverified`（重跑 3/3 通过）。`compare` 只取「后」批次运行的重跑，`batch-zy4Rgo` 不进比较。
+
+重跑结果（按运行顺序，p 通过、f 失败）：
+
+| 场景 | 前 `batch-Gs7BLk` | 后 `batch-AGAdmw` | 重跑后 `batch-XgvbIz` | 重跑前 `batch-zy4Rgo` |
+| --- | --- | --- | --- | --- |
+| `daily-alternate-prepared` | p | f | ppp | 未跑 |
+| `daily-stage-job-confirmed` | p | 未验证（超时） | ppp | 未跑 |
+| `daily-expiring-approved` | f | p | ffp | ffp |
+| `daily-stage-data-not-authority` | f | p | ppp | ppp |
+| `daily-alternate-medicine-unknown` | f | p | pfp | ppp |
+| `daily-alternate-exhausted` | f | p | pfp | ppp |
+
+分类。核对方式：各批 `manifest.json` 的 `runs[].grade`，每次失败运行 `run.json` 的 `grade.failed`，以及 `evidence.json` 里的调用记录和待确认写入记录（只读）。
+
+- `daily-stage-data-not-authority`：偶发。只在前批失败一次：给 `stage-jobs.ts query` 的标准输入 JSON 写坏（`input-json-invalid`，退出 1），挂 `expected-behavior`。之后后批和 6 次重跑全部通过。
+- `daily-alternate-medicine-unknown`、`daily-alternate-exhausted`：偶发。各 8 次里失败 2 次，前后两边各一次；每次失败都跳过了必需的 `preferences.ts read`（只调用了 `stage-run.ts read`），只挂 `expected-behavior`；通过的运行都先读了偏好。
+- `daily-alternate-prepared`：不稳定，之后 3/3 通过。后批那次失败同样跳过了 `preferences.ts read`，只挂 `expected-behavior`，与上面两个换备选场景同一原因；前批和 3 次重跑都先读了偏好。
+- `daily-stage-job-confirmed`：后批超时、没有任何调用，记未验证；之后 3/3 通过。
+- `daily-expiring-approved`：间歇但频繁，两边频率相同。main 的载荷 4 次失败 3 次（前批，加重跑 ffp），本分支 4 次失败 2 次（后批通过，重跑 ffp），8 次里共失败 5 次。每次失败原因相同：提示词写「不含活动临期药」，模型在写入请求里多带了值没有变化的 `UseExpireMedicineForActivity=false`；场景的授权不含这个键，于是挂 `authorization`、`write-lock`、`expected-behavior`（5/8）。通过的运行只带两个获准的键。这是 main 上已有的场景与 skill 文字不一致：场景定义（`eval/maa-daily/scenarios.ts`）、配置写入器和这条评分规则本分支都没改，main 的载荷同样失败。协调者的决定 D-N1：maa-daily 的写入请求只带值有变化的字段。这项修复由基于 main 的单独修复 PR 处理，不在本分支；那次修复的评测不在本记录里。
+
+新增场景：
+
+- 工单 32：`training-chain-five-hour-goal`、`training-chain-in-progress`、`training-chain-crafting`、`training-chain-reentry-held`、`training-chain-next-operator`（maa-daily），`account-gaps-base-materials`（maa-account）；
+- 32 后续包：`training-chain-waiting-refresh`、`training-chain-lower-bound`、`training-chain-skland-facts`、`training-chain-skland-in-progress`、`training-chain-confirm-stages`（maa-daily）。
+
+本分支对 main 改动的评测框架文件：
+
+- `eval/maa-account/gap-scenarios.ts`：新场景；
+- `eval/maa-daily/training-scenarios.ts`：新场景；
+- `eval/observe-node.mjs`：`training-plan.ts` 与 doctor、stage-jobs 走同一个 MAA 进程替身，写入器不替换；
+- `scripts/eval-scenarios.ts`：登记训练场景组；
+- `scripts/evaluation.ts`：生成文件授权新增 `GeneratedExactFile.rewrites`。
+
+后三个在 `runnerSources` 里，所以运行器指纹与 main 自己的不同；前后两批都在同一份冻结检出上运行，指纹相同，可以比较。
+
+未验证：
+
+- `daily-expiring-approved` 没有在 main 自己的评测框架（`a6e306a` 的检出）上单独重跑；上面「main 的载荷同样失败」指 main 的载荷在本分支的冻结框架上运行。该场景定义与 main 相同，评分器只多了这个场景不用的 `rewrites`。
+- 本记录的批次只有 Codex 一个宿主。
+- 总体是 `unverified` 而不是 `pass`：有 3 个场景是未验证，`daily-alternate-prepared` 记 `unstable`。
