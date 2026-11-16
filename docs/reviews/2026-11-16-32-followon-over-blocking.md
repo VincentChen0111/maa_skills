@@ -132,3 +132,25 @@ FO3-1 修复：`calculateTraining` 有计划证据、查询写的档次恰为计
 冻结 `913dd78` 全量离线检查 1355 通过、0 失败、2 跳过。
 
 本包审查结束：没有未关闭的 P1、P2。
+
+## 合并前收尾包
+
+范围 `fc96eae..14f5cdc`，两个提交：CI 修复 `5761e35`（R3-1 的 apply 命令行测试只在 Windows 跑；MAA 进程边界在其他平台先以 `maa-process-platform-unavailable` 停下）和评测记录 `14f5cdc`（`docs/training-verification.md` 记录改动前后评测与重跑分类，工单 24 加对应条目）。
+
+### 第 1 轮结果
+
+一名新的独立审查员。结论 GO：P3 2，没有 P1、P2，没有安全类发现。
+
+| 编号 | 发现 | 结论 | 理由 |
+| --- | --- | --- | --- |
+| EV-1（P3） | 验证记录两处（`compare batch-Gs7BLk batch-AGAdmw` 的逐场景一条和分类一条）说 `daily-stage-job-confirmed` 后批超时那次「没有任何调用」；该运行的 `evidence.json` 有一次 shell 调用，读了 skill 的 `SKILL.md`，没有调用脚本（`events` 为空） | 接受 | 验证记录写的事实与证据不符；维护者和发布审查依赖这份记录 |
+| EV-2（P3） | `daily-expiring-approved` 标为「两边频率相同」，同一句给出 main 的载荷 4 次失败 3 次、本分支 4 次失败 2 次 | 接受 | 验证记录写的事实与证据不符；维护者和发布审查依赖这份记录 |
+
+修复（本次修复提交，只改文档）：
+
+- EV-1：两处改为后批在超时前只用一次 shell 调用读了 `SKILL.md`、没有调用任何脚本；分类一条补上 180 秒超时和 `events` 为空。已只读核对后批 `batch-AGAdmw` 中场景为 `daily-stage-job-confirmed` 的运行：`reason` 为 `timeout`，`durationMs` 180027，`transcript.calls` 只有这一次读取，`events`、`changes` 为空。
+- EV-2：标签改为「main 的载荷失败至少一样多（3/4 对 2/4）」，保留结论：失败不是本分支造成的。
+
+### 第 2 轮结果
+
+待第 2 轮复核本次修复。

@@ -143,7 +143,7 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 
 - 失败→通过 14 个：本工单的 10 个训练续接场景（前一侧没有这些功能），以及 4 个 daily 基线失败 `daily-expiring-approved`、`daily-stage-data-not-authority`、`daily-alternate-medicine-unknown`、`daily-alternate-exhausted`；
 - 通过→失败 1 个：`daily-alternate-prepared`（`needs-reruns`）；
-- 通过→未验证 1 个：`daily-stage-job-confirmed`（后一侧超时，没有任何调用）；
+- 通过→未验证 1 个：`daily-stage-job-confirmed`（后一侧超时：只用一次 shell 调用读了 skill 的 `SKILL.md`，没有调用任何脚本）；
 - 未验证→通过 2 个：`account-nga-risk-stopped`、`account-report-casual`（前一侧超时），`compare` 记 `unverified`；
 - 其余 89 个两边都通过，含新场景 `account-gaps-base-materials`。
 
@@ -165,8 +165,8 @@ node scripts/training-smoke.ts <临时安装后的maa-core目录>
 - `daily-stage-data-not-authority`：偶发。只在前批失败一次：给 `stage-jobs.ts query` 的标准输入 JSON 写坏（`input-json-invalid`，退出 1），挂 `expected-behavior`。之后后批和 6 次重跑全部通过。
 - `daily-alternate-medicine-unknown`、`daily-alternate-exhausted`：偶发。各 8 次里失败 2 次，前后两边各一次；每次失败都跳过了必需的 `preferences.ts read`（只调用了 `stage-run.ts read`），只挂 `expected-behavior`；通过的运行都先读了偏好。
 - `daily-alternate-prepared`：不稳定，之后 3/3 通过。后批那次失败同样跳过了 `preferences.ts read`，只挂 `expected-behavior`，与上面两个换备选场景同一原因；前批和 3 次重跑都先读了偏好。
-- `daily-stage-job-confirmed`：后批超时、没有任何调用，记未验证；之后 3/3 通过。
-- `daily-expiring-approved`：间歇但频繁，两边频率相同。main 的载荷 4 次失败 3 次（前批，加重跑 ffp），本分支 4 次失败 2 次（后批通过，重跑 ffp），8 次里共失败 5 次。每次失败原因相同：提示词写「不含活动临期药」，模型在写入请求里多带了值没有变化的 `UseExpireMedicineForActivity=false`；场景的授权不含这个键，于是挂 `authorization`、`write-lock`、`expected-behavior`（5/8）。通过的运行只带两个获准的键。这是 main 上已有的场景与 skill 文字不一致：场景定义（`eval/maa-daily/scenarios.ts`）、配置写入器和这条评分规则本分支都没改，main 的载荷同样失败。协调者的决定 D-N1：maa-daily 的写入请求只带值有变化的字段。这项修复由基于 main 的单独修复 PR 处理，不在本分支；那次修复的评测不在本记录里。
+- `daily-stage-job-confirmed`：后批在 180 秒时超时，记未验证：之前只有一次 shell 调用，读了 skill 的 `SKILL.md`，没有调用任何脚本（`evidence.json` 的 `events` 为空）；之后 3/3 通过。
+- `daily-expiring-approved`：间歇但频繁，main 的载荷失败至少一样多（3/4 对 2/4）。main 的载荷 4 次失败 3 次（前批，加重跑 ffp），本分支 4 次失败 2 次（后批通过，重跑 ffp），8 次里共失败 5 次。每次失败原因相同：提示词写「不含活动临期药」，模型在写入请求里多带了值没有变化的 `UseExpireMedicineForActivity=false`；场景的授权不含这个键，于是挂 `authorization`、`write-lock`、`expected-behavior`（5/8）。通过的运行只带两个获准的键。这是 main 上已有的场景与 skill 文字不一致：场景定义（`eval/maa-daily/scenarios.ts`）、配置写入器和这条评分规则本分支都没改，main 的载荷同样失败。协调者的决定 D-N1：maa-daily 的写入请求只带值有变化的字段。这项修复由基于 main 的单独修复 PR 处理，不在本分支；那次修复的评测不在本记录里。
 
 新增场景：
 
