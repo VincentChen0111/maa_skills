@@ -39,9 +39,9 @@ test('the read-only request names every other stage-run action it excludes, so t
 
 /**
  * 26 D-N8, D-N9: 「这一次先只读：调用共享 stage-run.ts read……」 put the one call it names inside the read-only restriction, and the
- * model sometimes ran only that script, skipping the preferences read the skill and the grader require (6 of 27 runs on the
- * unchanged skill, 19 of 40 with #108's skill text). The stage-run.ts prompts ask for the same call as part of the task and let
- * the restriction list only what is not done: 0 of 24. 26 H (R8c) was the same class (「不调用其他动作」 excluded that read).
+ * model sometimes ran only that script, skipping the preferences read the skill and the grader require (on the unchanged
+ * skill 6 of 27 runs when D-N8 counted them, 7 of 30 with the rerun batch-xulpJw; 19 of 40 with #108's skill text). The
+ * stage-run.ts prompts ask for the same call as part of the task and let the restriction list only what is not done: 0 of 24. 26 H (R8c) was the same class (「不调用其他动作」 excluded that read).
  * One predicate for every scenario prompt: a restriction (只读, 仅, 只) followed by a colon names no call to make, no prompt says
  * 只调用 or 只运行, and none excludes 「其他动作」. It returns the offending sentences.
  */
